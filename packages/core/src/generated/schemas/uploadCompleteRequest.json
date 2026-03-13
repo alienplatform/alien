@@ -1,0 +1,1 @@
+{"type":"object","description":"Request to mark upload as complete","required":["size"],"properties":{"size":{"type":"integer","format":"int64","description":"Size of uploaded data","minimum":0}},"x-readme-ref-name":"UploadCompleteRequest"}

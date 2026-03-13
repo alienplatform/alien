@@ -1,0 +1,134 @@
+{
+  "id": "container-cluster/execute",
+  "description": "Runtime permissions for Horizon VMs: cross-account image pull and per-container service account impersonation.",
+  "platforms": {
+    "aws": [
+      // Cross-account ECR image pull from managing account's registry
+      {
+        "grant": {
+          "actions": [
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:GetAuthorizationToken"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          }
+        }
+      },
+      // Per-container SA impersonation: VM assumes any SA role in this stack
+      {
+        "grant": {
+          "actions": [
+            "sts:AssumeRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // Cross-project artifact registry image pull from managing project
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${managingProjectId}",
+            "condition": {
+              "title": "Container cluster image pull",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
+            }
+          },
+          "resource": {
+            "scope": "projects/${managingProjectId}",
+            "condition": {
+              "title": "Container cluster image pull",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
+            }
+          }
+        }
+      },
+      // Per-container SA impersonation: VM generates access tokens for container SAs
+      {
+        "grant": {
+          "permissions": [
+            "iam.serviceAccounts.getAccessToken",
+            "iam.serviceAccounts.generateAccessToken"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // Cross-subscription ACR image pull from managing subscription
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read"
+          ],
+          "dataActions": [
+            "Microsoft.ContainerRegistry/registries/pull/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      },
+      // Per-container managed identity impersonation: VM acquires tokens for container MIs
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/token/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

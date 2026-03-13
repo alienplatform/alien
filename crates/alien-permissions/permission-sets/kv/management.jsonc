@@ -1,0 +1,76 @@
+{
+  "id": "kv/management",
+  "description": "Allows managing KV store configuration and monitoring",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "dynamodb:DescribeTable",
+            "dynamodb:ListTables",
+            "dynamodb:DescribeTimeToLive",
+            "dynamodb:UpdateTimeToLive",
+            "dynamodb:ListTagsOfResource",
+            "dynamodb:TagResource",
+            "dynamodb:UntagResource",
+            "dynamodb:DescribeContinuousBackups",
+            "dynamodb:UpdateContinuousBackups"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "datastore.databases.get",
+            "datastore.databases.list",
+            "datastore.entities.get",
+            "datastore.entities.list",
+            "datastore.indexes.get",
+            "datastore.indexes.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/tableServices/read",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/read",
+            "Microsoft.Storage/storageAccounts/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

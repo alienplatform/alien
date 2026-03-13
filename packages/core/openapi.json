@@ -1,0 +1,4560 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "alien-core",
+    "description": "Alien Developer Platform",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "AgentStatus": {
+        "type": "object",
+        "description": "Status of a single agent in the dev server",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "resources",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp when agent was created"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlienError",
+                "description": "Error if this agent has failed"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Agent ID (e.g., ag_xyz123)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Agent name (from --agent-name flag)"
+          },
+          "resources": {
+            "type": "object",
+            "description": "Resources deployed by this agent (keyed by resource name)",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DevResourceInfo"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeploymentStatus",
+            "description": "Deployment status (running, provisioning, etc.)"
+          }
+        }
+      },
+      "AlienError": {
+        "type": "object",
+        "description": "Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "internal"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A unique identifier for the type of error.\n\nThis should be a short, machine-readable string that can be used\nby clients to programmatically handle different error types.\nExamples: \"NOT_FOUND\", \"VALIDATION_ERROR\", \"TIMEOUT\"",
+            "example": "NOT_FOUND",
+            "maxLength": 128
+          },
+          "context": {
+            "description": "Additional diagnostic information about the error context.\n\nThis optional field can contain structured data providing more details\nabout the error, such as validation errors, request parameters that\ncaused the issue, or other relevant context information."
+          },
+          "httpStatusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "HTTP status code for this error.\n\nUsed when converting the error to an HTTP response. If None, falls back to\nthe error type's default status code or 500.",
+            "maximum": 599,
+            "minimum": 100
+          },
+          "internal": {
+            "type": "boolean",
+            "description": "Indicates if this is an internal error that should not be exposed to users.\n\nWhen `true`, this error contains sensitive information or implementation\ndetails that should not be shown to end-users. Such errors should be\nlogged for debugging but replaced with generic error messages in responses."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error message.\n\nThis message should be clear and actionable for developers or end-users,\nproviding context about what went wrong and potentially how to fix it.",
+            "example": "Item not found.",
+            "maxLength": 16384
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Indicates whether the operation that caused the error should be retried.\n\nWhen `true`, the error is transient and the operation might succeed\nif attempted again. When `false`, retrying the same operation is\nunlikely to succeed without changes.",
+            "default": false
+          },
+          "source": {
+            "description": "The underlying error that caused this error, creating an error chain.\n\nThis allows for proper error propagation and debugging by maintaining\nthe full context of how an error occurred through multiple layers\nof an application."
+          }
+        }
+      },
+      "AlienEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Loading configuration file",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "LoadingConfiguration"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Operation finished successfully",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Finished"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stack packaging event",
+            "required": [
+              "stack",
+              "type"
+            ],
+            "properties": {
+              "stack": {
+                "type": "string",
+                "description": "Name of the stack being built"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BuildingStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Running build-time preflight checks and mutations",
+            "required": [
+              "stack",
+              "platform",
+              "type"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "description": "Platform being targeted"
+              },
+              "stack": {
+                "type": "string",
+                "description": "Name of the stack being checked"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RunningPreflights"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Downloading alien runtime event",
+            "required": [
+              "targetTriple",
+              "url",
+              "type"
+            ],
+            "properties": {
+              "targetTriple": {
+                "type": "string",
+                "description": "Target triple for the runtime"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DownloadingAlienRuntime"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "description": "URL being downloaded from"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Resource build event (function, container, or worker)",
+            "required": [
+              "resourceName",
+              "resourceType",
+              "type"
+            ],
+            "properties": {
+              "relatedResources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "All resource names sharing this build (for deduped container groups)"
+              },
+              "resourceName": {
+                "type": "string",
+                "description": "Name of the resource being built"
+              },
+              "resourceType": {
+                "type": "string",
+                "description": "Type of the resource: \"function\", \"container\", \"worker\""
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BuildingResource"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Image build event",
+            "required": [
+              "image",
+              "type"
+            ],
+            "properties": {
+              "image": {
+                "type": "string",
+                "description": "Name of the image being built"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BuildingImage"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Image push event",
+            "required": [
+              "image",
+              "type"
+            ],
+            "properties": {
+              "image": {
+                "type": "string",
+                "description": "Name of the image being pushed"
+              },
+              "progress": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PushProgress",
+                    "description": "Progress information for the push operation"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PushingImage"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pushing stack images to registry",
+            "required": [
+              "stack",
+              "platform",
+              "type"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "description": "Target platform"
+              },
+              "stack": {
+                "type": "string",
+                "description": "Name of the stack being pushed"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PushingStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pushing resource images to registry",
+            "required": [
+              "resourceName",
+              "resourceType",
+              "type"
+            ],
+            "properties": {
+              "resourceName": {
+                "type": "string",
+                "description": "Name of the resource being pushed"
+              },
+              "resourceType": {
+                "type": "string",
+                "description": "Type of the resource: \"function\", \"container\", \"worker\""
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PushingResource"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Creating a release on the platform",
+            "required": [
+              "project",
+              "type"
+            ],
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "Project name"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "CreatingRelease"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Code compilation event (rust, typescript, etc.)",
+            "required": [
+              "language",
+              "type"
+            ],
+            "properties": {
+              "language": {
+                "type": "string",
+                "description": "Language being compiled (rust, typescript, etc.)"
+              },
+              "progress": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Current progress/status line from the build output"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "CompilingCode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "nextState",
+              "type"
+            ],
+            "properties": {
+              "nextState": {
+                "$ref": "#/components/schemas/StackState",
+                "description": "The resulting state of the stack after the step."
+              },
+              "suggestedDelayMs": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "An suggested duration to wait before executing the next step.",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "StackStep"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Generating CloudFormation template",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "GeneratingCloudFormationTemplate"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Generating infrastructure template",
+            "required": [
+              "platform",
+              "type"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "description": "Platform for which the template is being generated"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "GeneratingTemplate"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Provisioning a new agent",
+            "required": [
+              "agentId",
+              "releaseId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "description": "ID of the agent being provisioned"
+              },
+              "releaseId": {
+                "type": "string",
+                "description": "ID of the release being deployed to the agent"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ProvisioningAgent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Updating an existing agent",
+            "required": [
+              "agentId",
+              "releaseId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "description": "ID of the agent being updated"
+              },
+              "releaseId": {
+                "type": "string",
+                "description": "ID of the new release being deployed to the agent"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "UpdatingAgent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Deleting an agent",
+            "required": [
+              "agentId",
+              "releaseId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "description": "ID of the agent being deleted"
+              },
+              "releaseId": {
+                "type": "string",
+                "description": "ID of the release that was running on the agent"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DeletingAgent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Starting a debug session for an agent",
+            "required": [
+              "agentId",
+              "debugSessionId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "description": "ID of the agent being debugged"
+              },
+              "debugSessionId": {
+                "type": "string",
+                "description": "ID of the debug session"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DebuggingAgent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Preparing environment for deployment",
+            "required": [
+              "strategyName",
+              "type"
+            ],
+            "properties": {
+              "strategyName": {
+                "type": "string",
+                "description": "Name of the deployment strategy being used"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PreparingEnvironment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Deploying stack with alien-infra",
+            "required": [
+              "stackName",
+              "type"
+            ],
+            "properties": {
+              "stackName": {
+                "type": "string",
+                "description": "Name of the stack being deployed"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DeployingStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Running test function after deployment",
+            "required": [
+              "stackName",
+              "type"
+            ],
+            "properties": {
+              "stackName": {
+                "type": "string",
+                "description": "Name of the stack being tested"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RunningTestFunction"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Cleaning up deployed stack resources",
+            "required": [
+              "stackName",
+              "strategyName",
+              "type"
+            ],
+            "properties": {
+              "stackName": {
+                "type": "string",
+                "description": "Name of the stack being cleaned up"
+              },
+              "strategyName": {
+                "type": "string",
+                "description": "Name of the deployment strategy being used for cleanup"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "CleaningUpStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Cleaning up deployment environment",
+            "required": [
+              "stackName",
+              "strategyName",
+              "type"
+            ],
+            "properties": {
+              "stackName": {
+                "type": "string",
+                "description": "Name of the stack being cleaned up"
+              },
+              "strategyName": {
+                "type": "string",
+                "description": "Name of the deployment strategy being used for cleanup"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "CleaningUpEnvironment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Setting up platform context",
+            "required": [
+              "platformName",
+              "type"
+            ],
+            "properties": {
+              "platformName": {
+                "type": "string",
+                "description": "Name of the platform (e.g., \"AWS\", \"GCP\")"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SettingUpPlatformContext"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Ensuring docker repository exists",
+            "required": [
+              "repositoryName",
+              "type"
+            ],
+            "properties": {
+              "repositoryName": {
+                "type": "string",
+                "description": "Name of the docker repository"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "EnsuringDockerRepository"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Deploying CloudFormation stack",
+            "required": [
+              "cfnStackName",
+              "currentStatus",
+              "type"
+            ],
+            "properties": {
+              "cfnStackName": {
+                "type": "string",
+                "description": "Name of the CloudFormation stack"
+              },
+              "currentStatus": {
+                "type": "string",
+                "description": "Current stack status"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DeployingCloudFormationStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Assuming AWS IAM role",
+            "required": [
+              "roleArn",
+              "type"
+            ],
+            "properties": {
+              "roleArn": {
+                "type": "string",
+                "description": "ARN of the role to assume"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "AssumingRole"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Importing stack state from CloudFormation",
+            "required": [
+              "cfnStackName",
+              "type"
+            ],
+            "properties": {
+              "cfnStackName": {
+                "type": "string",
+                "description": "Name of the CloudFormation stack"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ImportingStackStateFromCloudFormation"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Deleting CloudFormation stack",
+            "required": [
+              "cfnStackName",
+              "currentStatus",
+              "type"
+            ],
+            "properties": {
+              "cfnStackName": {
+                "type": "string",
+                "description": "Name of the CloudFormation stack"
+              },
+              "currentStatus": {
+                "type": "string",
+                "description": "Current stack status"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DeletingCloudFormationStack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Emptying S3 buckets before stack deletion",
+            "required": [
+              "bucketNames",
+              "type"
+            ],
+            "properties": {
+              "bucketNames": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Names of the S3 buckets being emptied"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "EmptyingBuckets"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Represents all possible events in the Alien system"
+      },
+      "ArtifactRegistry": {
+        "type": "object",
+        "description": "Represents an artifact registry for storing container images and other build artifacts.\nThis is a high-level wrapper resource that provides a cloud-agnostic interface over\nAWS ECR, GCP Artifact Registry, and Azure Container Registry.\n\n# Platform Mapping\n- **AWS**: Implicitly exists as the AWS account and region\n- **GCP**: Explicitly configured per project and location (Artifact Registry API enabled)\n- **Azure**: Explicitly provisioned Azure Container Registry instance\n\nThe actual repository management and permissions are handled through the bindings API.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier for the artifact registry. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ArtifactRegistryOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned ArtifactRegistry.",
+        "required": [
+          "registryId",
+          "registryEndpoint"
+        ],
+        "properties": {
+          "pullRole": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Role/principal identifier for pull-only access.\n- AWS: IAM role ARN (e.g., \"arn:aws:iam::123456789012:role/my-stack-my-registry-pull\")\n- GCP: Service account email (e.g., \"my-stack-my-registry-pull@my-project.iam.gserviceaccount.com\")\n- Azure: Managed identity resource ID (e.g., \"/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-registry-pull\")"
+          },
+          "pushRole": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Role/principal identifier for push and pull access.\n- AWS: IAM role ARN (e.g., \"arn:aws:iam::123456789012:role/my-stack-my-registry-push\")\n- GCP: Service account email (e.g., \"my-stack-my-registry-push@my-project.iam.gserviceaccount.com\")\n- Azure: Managed identity resource ID (e.g., \"/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-registry-push\")"
+          },
+          "registryEndpoint": {
+            "type": "string",
+            "description": "The registry endpoint for docker operations.\n- AWS: ECR registry URL (e.g., \"123456789012.dkr.ecr.us-west-2.amazonaws.com\")\n- GCP: Artifact Registry URL (e.g., \"us-central1-docker.pkg.dev/my-project\")\n- Azure: Container registry login server (e.g., \"myregistry.azurecr.io\")"
+          },
+          "registryId": {
+            "type": "string",
+            "description": "The platform-specific registry identifier.\n- AWS: Account and region (e.g., \"123456789012:us-west-2\")\n- GCP: Full registry name (e.g., \"projects/my-project/locations/us-central1\")\n- Azure: Registry resource ID (e.g., \"/subscriptions/.../resourceGroups/.../providers/Microsoft.ContainerRegistry/registries/myregistry\")"
+          }
+        }
+      },
+      "AwsCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "certificateArn"
+        ],
+        "properties": {
+          "certificateArn": {
+            "type": "string"
+          }
+        }
+      },
+      "AwsManagementConfig": {
+        "type": "object",
+        "description": "AWS management configuration extracted from stack settings",
+        "required": [
+          "managingRoleArn"
+        ],
+        "properties": {
+          "managingRoleArn": {
+            "type": "string",
+            "description": "The managing AWS IAM role ARN that can assume cross-account roles"
+          }
+        }
+      },
+      "AwsPlatformPermission": {
+        "type": "object",
+        "description": "AWS-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_AwsBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AzureCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "keyVaultCertificateId"
+        ],
+        "properties": {
+          "keyVaultCertificateId": {
+            "type": "string"
+          }
+        }
+      },
+      "AzureManagementConfig": {
+        "type": "object",
+        "description": "Azure management configuration extracted from stack settings",
+        "required": [
+          "managingTenantId",
+          "managementPrincipalId"
+        ],
+        "properties": {
+          "managementPrincipalId": {
+            "type": "string",
+            "description": "The principal ID of the service principal in the management account"
+          },
+          "managingTenantId": {
+            "type": "string",
+            "description": "The managing Azure Tenant ID for cross-tenant access"
+          }
+        }
+      },
+      "AzurePlatformPermission": {
+        "type": "object",
+        "description": "Azure-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_AzureBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BaseResource": {
+        "type": "object",
+        "description": "Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BaseResourceOutputs": {
+        "type": "object",
+        "description": "Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BindingConfiguration_AwsBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_AzureBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_GcpBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GcpCondition",
+                    "description": "Optional condition for filtering resources"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GcpCondition",
+                    "description": "Optional condition for filtering resources"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BodySpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Inline base64-encoded body",
+            "required": [
+              "inlineBase64",
+              "mode"
+            ],
+            "properties": {
+              "inlineBase64": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Storage-backed body",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "storage"
+                ]
+              },
+              "size": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Size of the body in bytes",
+                "minimum": 0
+              },
+              "storageGetRequest": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PresignedRequest",
+                    "description": "Pre-signed request for retrieving the body (for deployments)"
+                  }
+                ]
+              },
+              "storagePutUsed": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Indicates storage upload was used for response submission"
+              }
+            }
+          }
+        ],
+        "description": "Body specification supporting inline and storage modes"
+      },
+      "Build": {
+        "type": "object",
+        "description": "Represents a build resource that executes bash scripts to build code.\nBuilds are designed to be stateless and can be triggered on-demand to compile,\ntest, or package application code.",
+        "required": [
+          "id",
+          "links",
+          "permissions"
+        ],
+        "properties": {
+          "computeType": {
+            "$ref": "#/components/schemas/ComputeType",
+            "description": "Amount of compute resources allocated to the build."
+          },
+          "environment": {
+            "type": "object",
+            "description": "Key-value pairs to set as environment variables for the build.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifier for the build resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "List of resource references this build depends on."
+          },
+          "permissions": {
+            "type": "string",
+            "description": "Permission profile name that defines the permissions granted to this build.\nThis references a profile defined in the stack's permission definitions."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BuildConfig": {
+        "type": "object",
+        "description": "Configuration for starting a build.",
+        "required": [
+          "image",
+          "script",
+          "timeoutSeconds"
+        ],
+        "properties": {
+          "computeType": {
+            "$ref": "#/components/schemas/ComputeType",
+            "description": "Amount of compute resources allocated to the build."
+          },
+          "environment": {
+            "type": "object",
+            "description": "Key-value pairs to set as environment variables for the build.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "image": {
+            "type": "string",
+            "description": "Base container image to use for the build environment."
+          },
+          "monitoring": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MonitoringConfig",
+                "description": "Optional monitoring configuration for sending build logs"
+              }
+            ]
+          },
+          "script": {
+            "type": "string",
+            "description": "Bash script to execute for the build."
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum execution time for the build in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "BuildOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Build.",
+        "required": [
+          "identifier"
+        ],
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "The platform-specific build project identifier (ARN for AWS, project ID for GCP, resource ID for Azure)."
+          }
+        }
+      },
+      "BuildStatus": {
+        "type": "string",
+        "description": "Status of a build execution.",
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "TIMED_OUT"
+        ]
+      },
+      "CommandResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Command executed successfully",
+            "required": [
+              "response",
+              "status"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/BodySpec",
+                "description": "Response data (JSON, can be large)"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "success"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Command failed with an error",
+            "required": [
+              "code",
+              "message",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Error code"
+              },
+              "details": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional additional details"
+              },
+              "message": {
+                "type": "string",
+                "description": "Error message"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Command response from deployment"
+      },
+      "CommandState": {
+        "type": "string",
+        "description": "Command states in the ARC protocol lifecycle",
+        "enum": [
+          "PENDING_UPLOAD",
+          "PENDING",
+          "DISPATCHED",
+          "SUCCEEDED",
+          "FAILED",
+          "EXPIRED"
+        ]
+      },
+      "CommandStatusResponse": {
+        "type": "object",
+        "description": "Response to status queries",
+        "required": [
+          "commandId",
+          "state",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current attempt number",
+            "minimum": 0
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "response": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse",
+                "description": "Response data (only for succeeded/failed state)"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Current command state"
+          }
+        }
+      },
+      "ComputeType": {
+        "type": "string",
+        "description": "Compute type for build resources.",
+        "enum": [
+          "small",
+          "medium",
+          "large",
+          "x-large"
+        ]
+      },
+      "Container": {
+        "type": "object",
+        "description": "Container resource for running long-running container workloads.\n\nA Container defines a deployable unit that runs on a ContainerCluster.\nHorizon handles scheduling replicas across machines, autoscaling based on\nvarious metrics, and service discovery.\n\n## Example\n\n```rust\nuse alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, ContainerPort, ExposeProtocol};\n\nlet container = Container::new(\"api\".to_string())\n    .cluster(\"compute\".to_string())\n    .code(ContainerCode::Image {\n        image: \"myapp:latest\".to_string(),\n    })\n    .cpu(ResourceSpec { min: \"0.5\".to_string(), desired: \"1\".to_string() })\n    .memory(ResourceSpec { min: \"512Mi\".to_string(), desired: \"1Gi\".to_string() })\n    .port(8080)\n    .expose_port(8080, ExposeProtocol::Http)\n    .autoscaling(ContainerAutoscaling {\n        min: 2,\n        desired: 3,\n        max: 10,\n        target_cpu_percent: Some(70.0),\n        target_memory_percent: None,\n        target_http_in_flight_per_replica: Some(100),\n        max_http_p95_latency_ms: None,\n    })\n    .permissions(\"container-execution\".to_string())\n    .build();\n```",
+        "required": [
+          "id",
+          "links",
+          "ports",
+          "code",
+          "cpu",
+          "memory",
+          "permissions"
+        ],
+        "properties": {
+          "autoscaling": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContainerAutoscaling",
+                "description": "Autoscaling configuration (only for stateless containers)"
+              }
+            ]
+          },
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ContainerCluster resource ID that this container runs on.\nIf None, will be auto-assigned by ContainerClusterMutation at deployment time."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ContainerCode",
+            "description": "Container code (image or source)"
+          },
+          "command": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Command to override image default"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/ResourceSpec",
+            "description": "CPU resource requirements"
+          },
+          "environment": {
+            "type": "object",
+            "description": "Environment variables",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "ephemeralStorage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ephemeral storage requirement (e.g., \"10Gi\")"
+          },
+          "gpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContainerGpuSpec",
+                "description": "GPU requirements (optional)"
+              }
+            ]
+          },
+          "healthCheck": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HealthCheck",
+                "description": "Health check configuration"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "Resource links (dependencies)"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/ResourceSpec",
+            "description": "Memory resource requirements (must use Ki/Mi/Gi/Ti suffix)"
+          },
+          "permissions": {
+            "type": "string",
+            "description": "Permission profile name"
+          },
+          "persistentStorage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PersistentStorage",
+                "description": "Persistent storage configuration (only for stateful containers)"
+              }
+            ]
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Capacity group to run on (must exist in the cluster)\nIf not specified, containers are scheduled to any available group."
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerPort"
+            },
+            "description": "Container ports to expose (at least one required)"
+          },
+          "replicas": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Fixed replica count (for stateful containers or stateless without autoscaling)",
+            "minimum": 0
+          },
+          "stateful": {
+            "type": "boolean",
+            "description": "Whether container is stateful (gets stable ordinals, optional persistent volumes)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContainerAutoscaling": {
+        "type": "object",
+        "description": "Autoscaling configuration for stateless containers.",
+        "required": [
+          "min",
+          "desired",
+          "max"
+        ],
+        "properties": {
+          "desired": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Initial desired replicas at container creation",
+            "minimum": 0
+          },
+          "max": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum replicas under load",
+            "minimum": 0
+          },
+          "maxHttpP95LatencyMs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Maximum acceptable p95 HTTP latency in milliseconds"
+          },
+          "min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minimum replicas (always running)",
+            "minimum": 0
+          },
+          "targetCpuPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Target CPU utilization percentage for scaling (default: 70%)"
+          },
+          "targetHttpInFlightPerReplica": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Target in-flight HTTP requests per replica",
+            "minimum": 0
+          },
+          "targetMemoryPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Target memory utilization percentage for scaling (default: 80%)"
+          }
+        }
+      },
+      "ContainerCode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Container image reference",
+            "required": [
+              "image",
+              "type"
+            ],
+            "properties": {
+              "image": {
+                "type": "string",
+                "description": "Container image (e.g., `postgres:16`, `ghcr.io/myorg/myimage:latest`)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Source code to be built",
+            "required": [
+              "src",
+              "toolchain",
+              "type"
+            ],
+            "properties": {
+              "src": {
+                "type": "string",
+                "description": "The source directory to build from"
+              },
+              "toolchain": {
+                "$ref": "#/components/schemas/ToolchainConfig",
+                "description": "Toolchain configuration with type-safe options"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "source"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Specifies the source of the container's executable code."
+      },
+      "ContainerGpuSpec": {
+        "type": "object",
+        "description": "GPU specification for a container.",
+        "required": [
+          "type",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of GPUs required (1-8)",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string",
+            "description": "GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")"
+          }
+        }
+      },
+      "ContainerOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Container.",
+        "required": [
+          "name",
+          "status",
+          "currentReplicas",
+          "desiredReplicas",
+          "internalDns",
+          "replicas"
+        ],
+        "properties": {
+          "currentReplicas": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of current replicas",
+            "minimum": 0
+          },
+          "desiredReplicas": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Desired number of replicas",
+            "minimum": 0
+          },
+          "internalDns": {
+            "type": "string",
+            "description": "Internal DNS name (e.g., \"api.svc\")"
+          },
+          "loadBalancerEndpoint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LoadBalancerEndpoint",
+                "description": "Load balancer endpoint information for DNS management (optional).\nUsed by the DNS controller to create custom domain mappings."
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Container name in Horizon"
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReplicaStatus"
+            },
+            "description": "Status of each replica"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContainerStatus",
+            "description": "Current container status"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public URL (if exposed publicly)"
+          }
+        }
+      },
+      "ContainerPort": {
+        "type": "object",
+        "description": "Container port configuration.",
+        "required": [
+          "port"
+        ],
+        "properties": {
+          "expose": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExposeProtocol",
+                "description": "Optional exposure protocol (if None, port is internal-only)"
+              }
+            ]
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Port number",
+            "minimum": 0
+          }
+        }
+      },
+      "ContainerStatus": {
+        "type": "string",
+        "description": "Container status in Horizon.",
+        "enum": [
+          "pending",
+          "running",
+          "stopped",
+          "failing"
+        ]
+      },
+      "CreateCommandRequest": {
+        "type": "object",
+        "description": "Request to create a new ARC command",
+        "required": [
+          "deploymentId",
+          "command",
+          "params"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command name (e.g., \"generate-report\", \"sync-data\")"
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional deadline for command completion"
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Target deployment identifier"
+          },
+          "idempotencyKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional idempotency key"
+          },
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "description": "Command parameters (JSON, can be large)"
+          }
+        }
+      },
+      "CreateCommandResponse": {
+        "type": "object",
+        "description": "Response to command creation",
+        "required": [
+          "commandId",
+          "state",
+          "inlineAllowedUpTo",
+          "next"
+        ],
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "description": "Unique command identifier"
+          },
+          "inlineAllowedUpTo": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum inline body size allowed",
+            "minimum": 0
+          },
+          "next": {
+            "type": "string",
+            "description": "Next action for client: \"upload\" | \"poll\""
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Current command state"
+          },
+          "storageUpload": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageUpload",
+                "description": "Storage upload info (only for storage mode)"
+              }
+            ]
+          }
+        }
+      },
+      "CustomCertificateConfig": {
+        "type": "object",
+        "description": "Platform-specific certificate references for custom domains.",
+        "properties": {
+          "aws": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AwsCustomCertificateConfig",
+                "description": "AWS ACM certificate ARN"
+              }
+            ]
+          },
+          "azure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AzureCustomCertificateConfig",
+                "description": "Azure Key Vault certificate ID"
+              }
+            ]
+          },
+          "gcp": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GcpCustomCertificateConfig",
+                "description": "GCP Certificate Manager certificate name"
+              }
+            ]
+          }
+        }
+      },
+      "CustomDomainConfig": {
+        "type": "object",
+        "description": "Custom domain configuration for a single resource.",
+        "required": [
+          "domain",
+          "certificate"
+        ],
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/CustomCertificateConfig",
+            "description": "Customer-provided certificate reference."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Fully qualified domain name to use."
+          }
+        }
+      },
+      "DeploymentModel": {
+        "type": "string",
+        "description": "Deployment model: how updates are delivered to the remote environment.",
+        "enum": [
+          "push",
+          "pull"
+        ]
+      },
+      "DeploymentStatus": {
+        "type": "string",
+        "description": "Deployment status in the deployment lifecycle",
+        "enum": [
+          "pending",
+          "initial-setup",
+          "initial-setup-failed",
+          "provisioning",
+          "provisioning-failed",
+          "running",
+          "refresh-failed",
+          "update-pending",
+          "updating",
+          "update-failed",
+          "delete-pending",
+          "deleting",
+          "delete-failed",
+          "deleted"
+        ]
+      },
+      "DevResourceInfo": {
+        "type": "object",
+        "description": "Information about a deployed resource",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "resourceType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource type (\"function\" | \"container\")"
+          },
+          "url": {
+            "type": "string",
+            "description": "Resource URL (e.g., http://localhost:8080)"
+          }
+        }
+      },
+      "DevStatus": {
+        "type": "object",
+        "description": "Overall status of the dev server",
+        "required": [
+          "pid",
+          "platform",
+          "stackId",
+          "stateDir",
+          "apiUrl",
+          "startedAt",
+          "status",
+          "agents",
+          "lastUpdated"
+        ],
+        "properties": {
+          "agents": {
+            "type": "object",
+            "description": "Agents being managed by this dev server (keyed by agent name)",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgentStatus"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "apiUrl": {
+            "type": "string",
+            "description": "Dev server API URL (e.g., http://localhost:9090)"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlienError",
+                "description": "Global error if dev server itself has an error"
+              }
+            ]
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of last status update"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Dev server process ID",
+            "minimum": 0
+          },
+          "platform": {
+            "type": "string",
+            "description": "Platform (always \"local\" for dev server)"
+          },
+          "stackId": {
+            "type": "string",
+            "description": "Stack ID (always \"dev\" for dev server)"
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp when dev server started"
+          },
+          "stateDir": {
+            "type": "string",
+            "description": "Path to state directory"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DevStatusState",
+            "description": "Overall dev server status"
+          }
+        }
+      },
+      "DevStatusState": {
+        "type": "string",
+        "description": "Overall dev server status",
+        "enum": [
+          "initializing",
+          "ready",
+          "error",
+          "shuttingDown"
+        ]
+      },
+      "DomainSettings": {
+        "type": "object",
+        "description": "Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.",
+        "properties": {
+          "customDomains": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Custom domain configuration per resource ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CustomDomainConfig"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Envelope": {
+        "type": "object",
+        "description": "ARC envelope sent to deployments",
+        "required": [
+          "protocol",
+          "deploymentId",
+          "commandId",
+          "attempt",
+          "command",
+          "params",
+          "responseHandling"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number (starts at 1)",
+            "minimum": 0
+          },
+          "command": {
+            "type": "string",
+            "description": "Command name (e.g., \"generate-report\", \"sync-data\")"
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Unique command identifier"
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Command deadline"
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Target deployment identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "description": "Command parameters (JSON, can be large)"
+          },
+          "protocol": {
+            "type": "string",
+            "description": "Protocol version identifier"
+          },
+          "responseHandling": {
+            "$ref": "#/components/schemas/ResponseHandling",
+            "description": "Response handling configuration"
+          }
+        }
+      },
+      "EventChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A new event was created",
+            "required": [
+              "id",
+              "createdAt",
+              "event",
+              "state",
+              "type"
+            ],
+            "properties": {
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the event was created"
+              },
+              "event": {
+                "$ref": "#/components/schemas/AlienEvent",
+                "description": "The actual event data"
+              },
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the event"
+              },
+              "parentId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Parent event ID if this is a child event"
+              },
+              "state": {
+                "$ref": "#/components/schemas/EventState",
+                "description": "Initial state of the event"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An existing event was updated",
+            "required": [
+              "id",
+              "updatedAt",
+              "event",
+              "type"
+            ],
+            "properties": {
+              "event": {
+                "$ref": "#/components/schemas/AlienEvent",
+                "description": "The new event data"
+              },
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the event"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "updated"
+                ]
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the event was updated"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An event's state changed",
+            "required": [
+              "id",
+              "updatedAt",
+              "newState",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the event"
+              },
+              "newState": {
+                "$ref": "#/components/schemas/EventState",
+                "description": "The new state"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stateChanged"
+                ]
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the state changed"
+              }
+            }
+          }
+        ],
+        "description": "Represents a change to an event"
+      },
+      "EventState": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Event has no specific state (simple events)",
+            "enum": [
+              "none"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Event has started (for scoped events)",
+            "enum": [
+              "started"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Event completed successfully",
+            "enum": [
+              "success"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Event failed with an error",
+            "required": [
+              "failed"
+            ],
+            "properties": {
+              "failed": {
+                "type": "object",
+                "description": "Event failed with an error",
+                "properties": {
+                  "error": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/AlienError",
+                        "description": "Error details"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Represents the state of an event"
+      },
+      "ExposeProtocol": {
+        "type": "string",
+        "description": "Protocol for exposed ports.",
+        "enum": [
+          "http",
+          "tcp"
+        ]
+      },
+      "Function": {
+        "type": "object",
+        "description": "Represents a serverless function that executes code in response to triggers or direct invocations.\nFunctions are the primary compute resource in serverless applications, designed to be stateless and ephemeral.",
+        "required": [
+          "id",
+          "links",
+          "triggers",
+          "permissions",
+          "code"
+        ],
+        "properties": {
+          "arcEnabled": {
+            "type": "boolean",
+            "description": "Whether the function can be invoked via ARC (Alien Remote Call) protocol from the control plane.\nWhen enabled, the necessary queue infrastructure is automatically created for the target platform.",
+            "default": false
+          },
+          "code": {
+            "$ref": "#/components/schemas/FunctionCode",
+            "description": "Code for the function, either a pre-built image or source code to be built."
+          },
+          "concurrencyLimit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Maximum number of concurrent executions allowed for the function.\nNone means platform default applies.",
+            "minimum": 0
+          },
+          "environment": {
+            "type": "object",
+            "description": "Key-value pairs to set as environment variables for the function.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifier for the function. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          },
+          "ingress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ingress",
+                "description": "Controls network accessibility of the function."
+              }
+            ],
+            "default": "private"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "List of resource references this function depends on."
+          },
+          "memoryMb": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Memory allocated to the function in megabytes (MB).\nConstraints: 128‑32768 MB (platform-specific limits may apply)\nDefault: 256",
+            "default": 256,
+            "minimum": 0
+          },
+          "permissions": {
+            "type": "string",
+            "description": "Permission profile name that defines the permissions granted to this function.\nThis references a profile defined in the stack's permission definitions."
+          },
+          "readinessProbe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReadinessProbe",
+                "description": "Optional readiness probe configuration.\nOnly applicable for functions with Public ingress.\nWhen configured, the probe will be executed after provisioning/update to verify the function is ready."
+              }
+            ]
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum execution time for the function in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 30",
+            "default": 180,
+            "minimum": 0
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunctionTrigger"
+            },
+            "description": "List of triggers that define what events automatically invoke this function.\nIf empty, the function is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the function will be automatically invoked when any of the specified trigger conditions are met."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FunctionCode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Container image.",
+            "required": [
+              "image",
+              "type"
+            ],
+            "properties": {
+              "image": {
+                "type": "string",
+                "description": "Container image (e.g., `ghcr.io/myorg/myimage:latest`)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Source code to be built.",
+            "required": [
+              "src",
+              "toolchain",
+              "type"
+            ],
+            "properties": {
+              "src": {
+                "type": "string",
+                "description": "The source directory to build from"
+              },
+              "toolchain": {
+                "$ref": "#/components/schemas/ToolchainConfig",
+                "description": "Toolchain configuration with type-safe options"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "source"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Specifies the source of the function's executable code.\nThis can be a pre-built container image or source code that the system will build."
+      },
+      "FunctionOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Function.",
+        "required": [
+          "functionName"
+        ],
+        "properties": {
+          "functionName": {
+            "type": "string",
+            "description": "The name of the function."
+          },
+          "identifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ARN or platform-specific identifier."
+          },
+          "loadBalancerEndpoint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LoadBalancerEndpoint",
+                "description": "Load balancer endpoint information for DNS management (optional).\nUsed by the DNS controller to create custom domain mappings."
+              }
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The invocation URL (if applicable, e.g., for public ingress or specific platforms)."
+          }
+        }
+      },
+      "FunctionTrigger": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Function triggered by queue messages (always 1 message per invocation)",
+            "required": [
+              "queue",
+              "type"
+            ],
+            "properties": {
+              "queue": {
+                "$ref": "#/components/schemas/ResourceRef",
+                "description": "Reference to the queue resource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "queue"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Function triggered by storage events (future implementation)",
+            "required": [
+              "storage",
+              "events",
+              "type"
+            ],
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Events to trigger on (e.g., [\"created\", \"deleted\"])"
+              },
+              "storage": {
+                "$ref": "#/components/schemas/ResourceRef",
+                "description": "Reference to the storage resource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "storage"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Function triggered by scheduled events (future implementation)",
+            "required": [
+              "cron",
+              "type"
+            ],
+            "properties": {
+              "cron": {
+                "type": "string",
+                "description": "Cron expression for scheduling"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "schedule"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Defines what triggers a function execution"
+      },
+      "GcpCondition": {
+        "type": "object",
+        "description": "GCP IAM condition",
+        "required": [
+          "title",
+          "expression"
+        ],
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GcpCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "certificateName"
+        ],
+        "properties": {
+          "certificateName": {
+            "type": "string"
+          }
+        }
+      },
+      "GcpManagementConfig": {
+        "type": "object",
+        "description": "GCP management configuration extracted from stack settings",
+        "required": [
+          "serviceAccountEmail"
+        ],
+        "properties": {
+          "serviceAccountEmail": {
+            "type": "string",
+            "description": "Service account email for management roles"
+          }
+        }
+      },
+      "GcpPlatformPermission": {
+        "type": "object",
+        "description": "GCP-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_GcpBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
+      },
+      "HealthCheck": {
+        "type": "object",
+        "description": "HTTP health check configuration.",
+        "properties": {
+          "failureThreshold": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of consecutive failures before marking replica unhealthy",
+            "minimum": 0
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method to use for health check"
+          },
+          "path": {
+            "type": "string",
+            "description": "HTTP endpoint path to check (e.g., \"/health\", \"/ready\")"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Port to check (defaults to container port if not specified)",
+            "minimum": 0
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Request timeout in seconds (1-5)",
+            "minimum": 0
+          }
+        }
+      },
+      "HeartbeatsMode": {
+        "type": "string",
+        "description": "How heartbeat health checks are handled.",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "HttpMethod": {
+        "type": "string",
+        "description": "HTTP method for readiness probe requests.",
+        "enum": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE",
+          "HEAD",
+          "OPTIONS",
+          "PATCH"
+        ]
+      },
+      "ImagePullCredentials": {
+        "type": "object",
+        "description": "Image pull credentials for container registries",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "Password for the container registry"
+          },
+          "username": {
+            "type": "string",
+            "description": "Username for the container registry"
+          }
+        }
+      },
+      "Ingress": {
+        "type": "string",
+        "description": "Controls network accessibility of the function.",
+        "enum": [
+          "public",
+          "private"
+        ]
+      },
+      "Kv": {
+        "type": "object",
+        "description": "Represents a key-value storage resource that provides a minimal, platform-agnostic API\ncompatible across DynamoDB, Firestore, Redis, and Azure Table Storage.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier for the KV store. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "KvOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned KV store.",
+        "required": [
+          "storeName"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Platform-specific endpoint URL for direct access (if applicable)."
+          },
+          "identifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Platform-specific identifier (e.g., DynamoDB table ARN, Redis endpoint)."
+          },
+          "storeName": {
+            "type": "string",
+            "description": "The name of the KV store (may be platform-specific)."
+          }
+        }
+      },
+      "LeaseInfo": {
+        "type": "object",
+        "description": "Lease information",
+        "required": [
+          "leaseId",
+          "leaseExpiresAt",
+          "commandId",
+          "attempt",
+          "envelope"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number",
+            "minimum": 0
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "envelope": {
+            "$ref": "#/components/schemas/Envelope",
+            "description": "ARC envelope to process"
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When lease expires"
+          },
+          "leaseId": {
+            "type": "string",
+            "description": "Unique lease identifier"
+          }
+        }
+      },
+      "LeaseRequest": {
+        "type": "object",
+        "description": "Request for acquiring leases",
+        "required": [
+          "deploymentId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment identifier"
+          },
+          "leaseSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lease duration in seconds",
+            "minimum": 0
+          },
+          "maxLeases": {
+            "type": "integer",
+            "description": "Maximum number of leases to acquire",
+            "minimum": 0
+          }
+        }
+      },
+      "LeaseResponse": {
+        "type": "object",
+        "description": "Response to lease acquisition",
+        "required": [
+          "leases"
+        ],
+        "properties": {
+          "leases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeaseInfo"
+            },
+            "description": "Acquired leases (empty array if none available)"
+          }
+        }
+      },
+      "LifecycleRule": {
+        "type": "object",
+        "description": "Defines a rule for managing the lifecycle of objects within a storage bucket.",
+        "required": [
+          "days"
+        ],
+        "properties": {
+          "days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of days after which objects matching the rule expire.",
+            "minimum": 0
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional prefix to filter objects the rule applies to. If None, applies to all objects."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LoadBalancerEndpoint": {
+        "type": "object",
+        "description": "Load balancer endpoint information for DNS management.\nThis is optional metadata used by the DNS controller to create domain mappings.",
+        "required": [
+          "dnsName"
+        ],
+        "properties": {
+          "dnsName": {
+            "type": "string",
+            "description": "The DNS name of the load balancer endpoint (e.g., ALB DNS, API Gateway domain)."
+          },
+          "hostedZoneId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "AWS Route53 hosted zone ID (for ALIAS records). Only set on AWS."
+          }
+        }
+      },
+      "LocalOperation": {
+        "type": "string",
+        "description": "Local filesystem operations",
+        "enum": [
+          "put",
+          "get",
+          "delete"
+        ]
+      },
+      "ManagementConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsManagementConfig",
+                "description": "AWS management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "aws"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS management configuration"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpManagementConfig",
+                "description": "GCP management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "gcp"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP management configuration"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagementConfig",
+                "description": "Azure management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "azure"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure management configuration"
+          },
+          {
+            "type": "object",
+            "description": "Kubernetes management configuration (minimal for now)",
+            "required": [
+              "platform"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "kubernetes"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Agent Manager's ServiceAccount."
+      },
+      "ManagementPermissions": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Auto-derived permissions only (default)\nUses resource lifecycles to determine management permissions:\n- Frozen resources: `<type>/management`\n- Live/LiveOnSetup resources: `<type>/provision`",
+            "enum": [
+              "auto"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Add permissions to auto-derived baseline",
+            "required": [
+              "extend"
+            ],
+            "properties": {
+              "extend": {
+                "$ref": "#/components/schemas/PermissionProfile",
+                "description": "Add permissions to auto-derived baseline"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Replace auto-derived permissions entirely",
+            "required": [
+              "override"
+            ],
+            "properties": {
+              "override": {
+                "$ref": "#/components/schemas/PermissionProfile",
+                "description": "Replace auto-derived permissions entirely"
+              }
+            }
+          }
+        ],
+        "description": "Management permissions configuration for stack management access"
+      },
+      "MessagePayload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "JSON-serializable value",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "json"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "UTF-8 text payload",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "JSON-first message payload that supports both structured JSON and UTF-8 text"
+      },
+      "MonitoringConfig": {
+        "type": "object",
+        "description": "Configuration for monitoring and observability.",
+        "required": [
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "description": "The monitoring endpoint URL (e.g., \"https://otel-collector.example.com:4318\")"
+          },
+          "headers": {
+            "type": "object",
+            "description": "Optional HTTP headers to include in requests to the monitoring endpoint",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "logsUri": {
+            "type": "string",
+            "description": "Optional URI path for logs (defaults to \"/v1/logs\")"
+          },
+          "tlsEnabled": {
+            "type": "boolean",
+            "description": "Whether to enable TLS/HTTPS (defaults to true)"
+          },
+          "tlsVerify": {
+            "type": "boolean",
+            "description": "Whether to verify TLS certificates (defaults to true)"
+          }
+        }
+      },
+      "NetworkSettings": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use the cloud provider's default VPC/network.\n\nDesigned for fast dev/test provisioning. No isolated VPC is created, so there\nis nothing to wait for or clean up. VMs receive ephemeral public IPs for internet\naccess — no NAT gateway is provisioned.\n\n- **AWS**: Discovers the account's default VPC. Subnets are public with auto-assigned IPs.\n- **GCP**: Discovers the project's `default` network and regional subnet. Instance\n  templates include an `AccessConfig` to assign an ephemeral external IP.\n- **Azure**: Azure has no default VNet, so one is created along with a NAT Gateway.\n  VMs stay private and use NAT for egress.\n\nNot recommended for production. Use `Create` instead.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "use-default"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Create a new isolated VPC/VNet with a managed NAT gateway.\n\nAll networking infrastructure is provisioned by Alien and cleaned up on delete.\nVMs use private IPs only; all outbound traffic routes through the NAT gateway.\n\nRecommended for production deployments.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "availability_zones": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of availability zones (default: 2).",
+                "minimum": 0
+              },
+              "cidr": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "VPC/VNet CIDR block. If not specified, auto-generated from stack ID\nto reduce conflicts (e.g., \"10.{hash}.0.0/16\")."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VPC (AWS).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (NAT, proxy, VPN, etc.).",
+            "required": [
+              "vpc_id",
+              "public_subnet_ids",
+              "private_subnet_ids",
+              "type"
+            ],
+            "properties": {
+              "private_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of private subnets"
+              },
+              "public_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of public subnets (required for public ingress)"
+              },
+              "security_group_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional security group IDs to use"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vpc-aws"
+                ]
+              },
+              "vpc_id": {
+                "type": "string",
+                "description": "The ID of the existing VPC"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VPC (GCP).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (Cloud NAT, proxy, VPN, etc.).",
+            "required": [
+              "network_name",
+              "subnet_name",
+              "region",
+              "type"
+            ],
+            "properties": {
+              "network_name": {
+                "type": "string",
+                "description": "The name of the existing VPC network"
+              },
+              "region": {
+                "type": "string",
+                "description": "The region of the subnet"
+              },
+              "subnet_name": {
+                "type": "string",
+                "description": "The name of the subnet to use"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vpc-gcp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VNet (Azure).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (NAT Gateway, proxy, VPN, etc.).",
+            "required": [
+              "vnet_resource_id",
+              "public_subnet_name",
+              "private_subnet_name",
+              "type"
+            ],
+            "properties": {
+              "private_subnet_name": {
+                "type": "string",
+                "description": "Name of the private subnet within the VNet"
+              },
+              "public_subnet_name": {
+                "type": "string",
+                "description": "Name of the public subnet within the VNet"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vnet-azure"
+                ]
+              },
+              "vnet_resource_id": {
+                "type": "string",
+                "description": "The full resource ID of the existing VNet"
+              }
+            }
+          }
+        ],
+        "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
+      },
+      "PermissionGrant": {
+        "type": "object",
+        "description": "Grant permissions for a specific cloud platform",
+        "properties": {
+          "actions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "AWS IAM actions (only for AWS)"
+          },
+          "dataActions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Azure actions (only for Azure)"
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GCP permissions (only for GCP)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionProfile": {
+        "type": "object",
+        "description": "Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/PermissionSetReference"
+          }
+        },
+        "propertyNames": {
+          "type": "string"
+        }
+      },
+      "PermissionSet": {
+        "type": "object",
+        "description": "A permission set that can be applied across different cloud platforms",
+        "required": [
+          "id",
+          "description",
+          "platforms"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what this permission set allows"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the permission set (e.g., \"storage/data-read\")"
+          },
+          "platforms": {
+            "$ref": "#/components/schemas/PlatformPermissions",
+            "description": "Platform-specific permission configurations"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionSetReference": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Reference to a built-in permission set by name (e.g., \"storage/data-read\")"
+          },
+          {
+            "$ref": "#/components/schemas/PermissionSet",
+            "description": "Inline permission set definition"
+          }
+        ],
+        "description": "Reference to a permission set - either by name or inline definition"
+      },
+      "PermissionsConfig": {
+        "type": "object",
+        "description": "Combined permissions configuration that contains both profiles and management",
+        "required": [
+          "profiles"
+        ],
+        "properties": {
+          "management": {
+            "$ref": "#/components/schemas/ManagementPermissions",
+            "description": "Management permissions configuration for stack management access"
+          },
+          "profiles": {
+            "type": "object",
+            "description": "Permission profiles that define access control for compute services\nKey is the profile name, value is the permission configuration",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PersistentStorage": {
+        "type": "object",
+        "description": "Persistent storage configuration for stateful containers.",
+        "required": [
+          "size",
+          "mountPath"
+        ],
+        "properties": {
+          "iops": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "IOPS (for storage types that support it)",
+            "minimum": 0
+          },
+          "mountPath": {
+            "type": "string",
+            "description": "Mount path inside the container"
+          },
+          "size": {
+            "type": "string",
+            "description": "Storage size (e.g., \"100Gi\", \"500Gi\")"
+          },
+          "storageType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Storage type (e.g., \"gp3\", \"io2\" for AWS, \"pd-ssd\" for GCP)"
+          },
+          "throughput": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Throughput in MiB/s (for storage types that support it)",
+            "minimum": 0
+          }
+        }
+      },
+      "Platform": {
+        "type": "string",
+        "description": "Represents the target cloud platform.",
+        "enum": [
+          "aws",
+          "gcp",
+          "azure",
+          "kubernetes",
+          "local",
+          "test"
+        ]
+      },
+      "PlatformPermissions": {
+        "type": "object",
+        "description": "Platform-specific permission configurations",
+        "properties": {
+          "aws": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AwsPlatformPermission"
+            },
+            "description": "AWS permission configurations"
+          },
+          "azure": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AzurePlatformPermission"
+            },
+            "description": "Azure permission configurations"
+          },
+          "gcp": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GcpPlatformPermission"
+            },
+            "description": "GCP permission configurations"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PresignedOperation": {
+        "type": "string",
+        "description": "The type of operation a presigned request performs",
+        "enum": [
+          "put",
+          "get",
+          "delete"
+        ]
+      },
+      "PresignedRequest": {
+        "type": "object",
+        "description": "A presigned request that can be serialized, stored, and executed later.\nHides implementation details for different storage backends.",
+        "required": [
+          "backend",
+          "expiration",
+          "operation",
+          "path"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/PresignedRequestBackend",
+            "description": "The storage backend this request targets"
+          },
+          "expiration": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this presigned request expires"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/PresignedOperation",
+            "description": "The operation this request performs"
+          },
+          "path": {
+            "type": "string",
+            "description": "The path this request operates on"
+          }
+        }
+      },
+      "PresignedRequestBackend": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "HTTP-based request (AWS S3, GCP GCS, Azure Blob)",
+            "required": [
+              "url",
+              "method",
+              "headers",
+              "type"
+            ],
+            "properties": {
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "method": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "http"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Local filesystem operation",
+            "required": [
+              "filePath",
+              "operation",
+              "type"
+            ],
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/LocalOperation"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Storage backend representation for different presigned request types"
+      },
+      "PushProgress": {
+        "type": "object",
+        "description": "Progress information for image push operations",
+        "required": [
+          "operation",
+          "layersUploaded",
+          "totalLayers",
+          "bytesUploaded",
+          "totalBytes"
+        ],
+        "properties": {
+          "bytesUploaded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes uploaded so far",
+            "minimum": 0
+          },
+          "layersUploaded": {
+            "type": "integer",
+            "description": "Number of layers uploaded so far",
+            "minimum": 0
+          },
+          "operation": {
+            "type": "string",
+            "description": "Current operation being performed"
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total bytes to upload",
+            "minimum": 0
+          },
+          "totalLayers": {
+            "type": "integer",
+            "description": "Total number of layers to upload",
+            "minimum": 0
+          }
+        }
+      },
+      "Queue": {
+        "type": "object",
+        "description": "Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier for the queue. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QueueMessage": {
+        "type": "object",
+        "description": "Standardized queue message structure used by alien-runtime\n\nThis structure contains commonly available metadata across all platforms\nand a JSON-first payload that handles both structured data and plain text.",
+        "required": [
+          "id",
+          "payload",
+          "receiptHandle",
+          "timestamp",
+          "source"
+        ],
+        "properties": {
+          "attemptCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Delivery attempt count (from ApproximateReceiveCount/deliveryCount, if available)",
+            "minimum": 0
+          },
+          "attributes": {
+            "type": "object",
+            "description": "Message attributes/properties (flattened from messageAttributes/attributes/properties)",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique message identifier (from messageId/ce-id)"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/MessagePayload",
+            "description": "JSON-first message payload"
+          },
+          "receiptHandle": {
+            "type": "string",
+            "description": "Platform-specific receipt handle for acknowledgment"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source queue/topic name (derived from ARN/source/topic)"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Message timestamp (from SentTimestamp/ce-time/enqueuedTimeUtc)"
+          }
+        }
+      },
+      "QueueOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Queue.",
+        "required": [
+          "queueName"
+        ],
+        "properties": {
+          "identifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Platform-specific identifier or URL (e.g., SQS URL, Pub/Sub topic/subscription)."
+          },
+          "queueName": {
+            "type": "string",
+            "description": "The name of the queue (platform-specific physical name)."
+          }
+        }
+      },
+      "ReadinessProbe": {
+        "type": "object",
+        "description": "Configuration for HTTP-based readiness probe.\nThis probe is executed after function provisioning/update to verify the function is ready to serve traffic.\nOnly works with functions that have Public ingress.",
+        "properties": {
+          "method": {
+            "$ref": "#/components/schemas/HttpMethod",
+            "description": "HTTP method to use for the probe request.\nDefault: GET"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to request for the probe (e.g., \"/health\", \"/ready\").\nDefault: \"/\""
+          }
+        }
+      },
+      "ReleaseRequest": {
+        "type": "object",
+        "description": "Request to release a lease",
+        "required": [
+          "leaseId"
+        ],
+        "properties": {
+          "leaseId": {
+            "type": "string",
+            "description": "Lease identifier to release"
+          }
+        }
+      },
+      "RemoteStackManagement": {
+        "type": "object",
+        "description": "Represents cross-account management access configuration for a stack deployed\non AWS, GCP, or Azure platforms. This resource sets up the necessary IAM/RBAC\nconfiguration to allow another cloud account to manage the stack.\n\nMaps to:\n- AWS: Cross-account IAM role with management permissions\n- GCP: Service account with management permissions and impersonation rights\n- Azure: Lighthouse registration definition and assignment\n\nThis resource is automatically created for AWS, GCP, and Azure platforms\nwhen the stack needs to be managed by another account. The management account\nand identity information comes from the platform configuration.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier for the remote stack management. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteStackManagementOutputs": {
+        "type": "object",
+        "description": "Resource outputs for RemoteStackManagement.\nDifferent platforms will provide different outputs based on their implementation.",
+        "required": [
+          "managementResourceId",
+          "accessConfiguration"
+        ],
+        "properties": {
+          "accessConfiguration": {
+            "type": "string",
+            "description": "Platform-specific access configuration\nFor AWS: The role ARN to assume\nFor GCP: The service account email to impersonate\nFor Azure: The lighthouse registration assignment ID"
+          },
+          "managementResourceId": {
+            "type": "string",
+            "description": "Platform-specific management resource identifier\nFor AWS: The ARN of the created cross-account role\nFor GCP: The email of the created service account\nFor Azure: The resource ID of the lighthouse registration"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReplicaStatus": {
+        "type": "object",
+        "description": "Status of a single container replica.",
+        "required": [
+          "replicaId",
+          "healthy"
+        ],
+        "properties": {
+          "containerIp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Container IP address (for service discovery)"
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "Whether the replica is healthy"
+          },
+          "machineId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Machine ID the replica is running on"
+          },
+          "ordinal": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Ordinal (for stateful containers)",
+            "minimum": 0
+          },
+          "replicaId": {
+            "type": "string",
+            "description": "Replica ID (e.g., \"api-0\", \"api-1\")"
+          }
+        }
+      },
+      "ResourceEntry": {
+        "type": "object",
+        "required": [
+          "config",
+          "lifecycle",
+          "dependencies"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/BaseResource",
+            "description": "Resource configuration (can be any type of resource)"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "Additional dependencies for this resource beyond those defined in the resource itself.\nThe total dependencies are: resource.get_dependencies() + this list"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ResourceLifecycle",
+            "description": "Lifecycle management configuration for this resource"
+          },
+          "remoteAccess": {
+            "type": "boolean",
+            "description": "Enable remote bindings for this resource (BYOB use case).\nWhen true, binding params are synced to StackState's `remote_binding_params`.\nDefault: false (prevents sensitive data in synced state)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ResourceLifecycle": {
+        "type": "string",
+        "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
+        "enum": [
+          "frozen",
+          "live",
+          "live-on-setup"
+        ]
+      },
+      "ResourceRef": {
+        "type": "object",
+        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        }
+      },
+      "ResourceSpec": {
+        "type": "object",
+        "description": "Resource specification with min/desired values.",
+        "required": [
+          "min",
+          "desired"
+        ],
+        "properties": {
+          "desired": {
+            "type": "string",
+            "description": "Desired resource allocation (used by scheduler)"
+          },
+          "min": {
+            "type": "string",
+            "description": "Minimum resource allocation"
+          }
+        }
+      },
+      "ResourceStatus": {
+        "type": "string",
+        "description": "Represents the high-level status of a resource during its lifecycle.",
+        "enum": [
+          "pending",
+          "provisioning",
+          "provision-failed",
+          "running",
+          "updating",
+          "update-failed",
+          "deleting",
+          "delete-failed",
+          "deleted",
+          "refresh-failed"
+        ]
+      },
+      "ResourceType": {
+        "type": "string",
+        "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
+        "examples": [
+          "function",
+          "storage",
+          "queue",
+          "redis",
+          "postgres"
+        ]
+      },
+      "ResponseHandling": {
+        "type": "object",
+        "description": "Response handling configuration for deployments",
+        "required": [
+          "maxInlineBytes",
+          "submitResponseUrl",
+          "storageUploadRequest"
+        ],
+        "properties": {
+          "maxInlineBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum response body size that can be submitted inline",
+            "minimum": 0
+          },
+          "storageUploadRequest": {
+            "$ref": "#/components/schemas/PresignedRequest",
+            "description": "Pre-signed request for uploading large response bodies"
+          },
+          "submitResponseUrl": {
+            "type": "string",
+            "description": "URL where deployments submit responses"
+          }
+        }
+      },
+      "ScheduledEvent": {
+        "type": "object",
+        "description": "Represents a scheduled event trigger, typically from a cron job or timer.\n\nThis struct aims to provide a common representation for scheduled events\nacross different providers like AWS CloudWatch Events, Google Cloud Scheduler,\nand Azure Timer Triggers.",
+        "required": [
+          "timestamp"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The timestamp when the event was scheduled or triggered."
+          }
+        }
+      },
+      "ServiceAccount": {
+        "type": "object",
+        "description": "Represents a non-human identity that can be assumed by compute services\nsuch as Lambda, Cloud Run, ECS, Container Apps, etc.\n\nMaps to:\n- AWS: IAM Role\n- GCP: Service Account\n- Azure: User-assigned Managed Identity\n\nThe ServiceAccount is automatically created from permission profiles in the stack\nand contains the resolved permission sets for both stack-level and resource-scoped access.",
+        "required": [
+          "id",
+          "stackPermissionSets"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          },
+          "stackPermissionSets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionSet"
+            },
+            "description": "Stack-level permission sets that apply to all resources in the stack.\nThese are derived from the \"*\" scope in the permission profile.\nResource-scoped permissions are handled by individual resource controllers."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceAccountOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned ServiceAccount.",
+        "required": [
+          "identity",
+          "resourceId"
+        ],
+        "properties": {
+          "identity": {
+            "type": "string",
+            "description": "The platform-specific identifier of the service account\n- AWS: Role ARN\n- GCP: Service Account email\n- Azure: Managed Identity client ID"
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "The platform-specific resource name/ID\n- AWS: Role name\n- GCP: Service Account unique ID\n- Azure: Managed Identity resource ID"
+          }
+        }
+      },
+      "Stack": {
+        "type": "object",
+        "description": "A bag of resources, unaware of any cloud.",
+        "required": [
+          "id",
+          "resources"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the stack"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/PermissionsConfig",
+            "description": "Combined permissions configuration containing both profiles and management"
+          },
+          "resources": {
+            "type": "object",
+            "description": "Map of resource IDs to their configurations and lifecycle settings",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StackRef": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Reference to the current stack being built",
+            "enum": [
+              "current"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Reference to another stack by ID",
+            "required": [
+              "external"
+            ],
+            "properties": {
+              "external": {
+                "type": "string",
+                "description": "Reference to another stack by ID"
+              }
+            }
+          }
+        ],
+        "description": "Reference to a stack for management permissions"
+      },
+      "StackResourceState": {
+        "type": "object",
+        "description": "Represents the state of a single resource within the stack for a specific platform.",
+        "required": [
+          "type",
+          "status",
+          "config"
+        ],
+        "properties": {
+          "_internal": {
+            "description": "The platform-specific resource controller that manages this resource's lifecycle.\nThis is None when the resource status is Pending.\nStored as JSON to make the struct serializable and movable to alien-core."
+          },
+          "config": {
+            "$ref": "#/components/schemas/BaseResource",
+            "description": "The current resource configuration."
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlienError",
+                "description": "Stores the last error encountered during a failed step transition."
+              }
+            ]
+          },
+          "isExternallyProvisioned": {
+            "type": "boolean",
+            "description": "True if the resource was provisioned by an external system (e.g., CloudFormation).\nDefaults to false, indicating dynamic provisioning by the executor."
+          },
+          "lastFailedState": {
+            "description": "Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core."
+          },
+          "lifecycle": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceLifecycle",
+                "description": "The lifecycle of the resource (Frozen, Live, LiveOnSetup).\nDefaults to Live if not specified."
+              }
+            ]
+          },
+          "outputs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResourceOutputs",
+                "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name)."
+              }
+            ]
+          },
+          "previousConfig": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResource",
+                "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails."
+              }
+            ]
+          },
+          "remoteBindingParams": {
+            "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "retryAttempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tracks consecutive retry attempts for the current state transition.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResourceStatus",
+            "description": "High-level status derived from the internal state."
+          },
+          "type": {
+            "type": "string",
+            "description": "The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE)."
+          }
+        }
+      },
+      "StackSettings": {
+        "type": "object",
+        "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\nagent is deployed and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Agent Manager's ServiceAccount).",
+        "properties": {
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel",
+            "description": "Deployment model: push (Agent Manager) or pull (Operator).\nDefault: Push for cloud platforms.\nKubernetes and Local platforms only support Pull."
+          },
+          "domains": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainSettings",
+                "description": "Domain configuration (future)."
+              }
+            ]
+          },
+          "heartbeats": {
+            "$ref": "#/components/schemas/HeartbeatsMode",
+            "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
+          },
+          "network": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NetworkSettings",
+                "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC."
+              }
+            ]
+          },
+          "telemetry": {
+            "$ref": "#/components/schemas/TelemetryMode",
+            "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
+          },
+          "updates": {
+            "$ref": "#/components/schemas/UpdatesMode",
+            "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
+          }
+        }
+      },
+      "StackState": {
+        "type": "object",
+        "description": "Represents the collective state of all resources in a stack, including platform and pending actions.",
+        "required": [
+          "platform",
+          "resources",
+          "resourcePrefix"
+        ],
+        "properties": {
+          "platform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "The target platform for this stack state."
+          },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "A prefix used for resource naming to ensure uniqueness across deployments."
+          },
+          "resources": {
+            "type": "object",
+            "description": "The state of individual resources, keyed by resource ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StackResourceState"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StackStatus": {
+        "type": "string",
+        "description": "Represents the overall status of a stack based on its resource states.",
+        "enum": [
+          "pending",
+          "in_progress",
+          "running",
+          "deleted",
+          "failure"
+        ]
+      },
+      "Storage": {
+        "type": "object",
+        "description": "Represents an object storage bucket.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Name of the the storage bucket.\nFor names with dots, each dot-separated label must be ≤ 63 characters."
+          },
+          "lifecycleRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LifecycleRule"
+            },
+            "description": "List of rules for automatic object management (e.g., expiration).\nDefault: `[]` (empty list)"
+          },
+          "publicRead": {
+            "type": "boolean",
+            "description": "Allows public read access to objects without authentication.\nDefault: `false`"
+          },
+          "versioning": {
+            "type": "boolean",
+            "description": "Enables object versioning.\nDefault: `false`"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StorageEvent": {
+        "type": "object",
+        "description": "Represents an event triggered by an action in an object storage service.\n\nThis struct provides a generic representation for events from services like\nAWS S3, Google Cloud Storage (GCS), and Azure Blob Storage.",
+        "required": [
+          "eventType",
+          "bucketName",
+          "objectKey",
+          "timestamp"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "The name of the bucket or container where the event occurred."
+          },
+          "contentType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional content type (MIME type) of the object."
+          },
+          "copySource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional information about the source object for copy events."
+          },
+          "currentTier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional current storage tier for TierChanged or Restored events."
+          },
+          "etag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional ETag or hash of the object content."
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/StorageEventType",
+            "description": "The type of storage event."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Optional metadata associated with the object.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "objectKey": {
+            "type": "string",
+            "description": "The key or path of the object involved in the event."
+          },
+          "previousTier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional previous storage tier for TierChanged or Restored events."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional region where the event originated."
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional size of the object in bytes.",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The timestamp when the event occurred."
+          },
+          "versionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional version or sequencer identifier for the event or object state."
+          }
+        }
+      },
+      "StorageEventType": {
+        "type": "string",
+        "description": "Represents the type of storage event that occurred.",
+        "enum": [
+          "created",
+          "deleted",
+          "copied",
+          "metadataUpdated",
+          "restored",
+          "tierChanged",
+          "unknown"
+        ]
+      },
+      "StorageEvents": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/StorageEvent"
+        },
+        "description": "A wrapper type for a list of storage events."
+      },
+      "StorageOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Storage bucket.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "The globally unique name of the bucket."
+          }
+        }
+      },
+      "StorageUpload": {
+        "type": "object",
+        "description": "Storage upload information",
+        "required": [
+          "putRequest",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Expiration time for upload URL"
+          },
+          "putRequest": {
+            "$ref": "#/components/schemas/PresignedRequest",
+            "description": "Pre-signed request for uploading command params"
+          }
+        }
+      },
+      "SubmitResponseRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CommandResponse",
+            "description": "The command response"
+          }
+        ],
+        "description": "Request to submit a command response (from deployment)"
+      },
+      "TelemetryMode": {
+        "type": "string",
+        "description": "How telemetry (logs, metrics, traces) is handled.",
+        "enum": [
+          "off",
+          "auto",
+          "approval-required"
+        ]
+      },
+      "ToolchainConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Rust with Cargo build system",
+            "required": [
+              "binaryName",
+              "type"
+            ],
+            "properties": {
+              "binaryName": {
+                "type": "string",
+                "description": "Name of the binary to build and run"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rust"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "TypeScript/JavaScript compiled to single executable with Bun",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "binaryName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of the compiled binary (defaults to package.json name if not specified)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "typescript"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Docker build from Dockerfile",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "buildArgs": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Build arguments for docker build",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "dockerfile": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Dockerfile path relative to src (default: \"Dockerfile\")"
+              },
+              "target": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Multi-stage build target"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "docker"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Configuration for different programming language toolchains.\nEach toolchain provides type-safe build configuration and auto-detection capabilities."
+      },
+      "UpdatesMode": {
+        "type": "string",
+        "description": "How updates are delivered to the agent.",
+        "enum": [
+          "auto",
+          "approval-required"
+        ]
+      },
+      "UploadCompleteRequest": {
+        "type": "object",
+        "description": "Request to mark upload as complete",
+        "required": [
+          "size"
+        ],
+        "properties": {
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of uploaded data",
+            "minimum": 0
+          }
+        }
+      },
+      "UploadCompleteResponse": {
+        "type": "object",
+        "description": "Response to upload completion",
+        "required": [
+          "commandId",
+          "state"
+        ],
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Updated command state"
+          }
+        }
+      },
+      "Vault": {
+        "type": "object",
+        "description": "Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for functions and services.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the vault. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "VaultOutputs": {
+        "type": "object",
+        "description": "Outputs generated by a successfully provisioned Vault.",
+        "required": [
+          "vaultId"
+        ],
+        "properties": {
+          "vaultId": {
+            "type": "string",
+            "description": "Platform-specific vault identifier.\n- AWS: Account and region (e.g., \"123456789012:us-west-2\") - implicit reference to Secrets Manager\n- GCP: Project and location (e.g., \"projects/my-project/locations/us-central1\") - implicit reference to Secret Manager\n- Azure: Key Vault resource ID (e.g., \"/subscriptions/.../resourceGroups/.../providers/Microsoft.KeyVault/vaults/my-vault\")"
+          }
+        }
+      }
+    }
+  }
+}

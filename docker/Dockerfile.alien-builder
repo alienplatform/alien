@@ -1,0 +1,82 @@
+# Multi-platform build image for Alien builds
+# Based on Chainguard's Wolfi base with Rust, Python, Node.js, and FluentBit
+FROM cgr.dev/chainguard/wolfi-base:latest
+
+# Get build platform info
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+# Install required packages using apk
+RUN apk add --no-cache \
+    build-base \
+    cargo-auditable \
+    rust-audit-info \
+    nodejs \
+    npm \
+    fluent-bit \
+    python-3.12 \
+    py3-pip \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    bash \
+    pnpm \
+    yarn \
+    bun \
+    rustup \
+    pkgconf \
+    jq \
+    git-lfs \
+    openssl-dev \
+    libffi-dev
+
+# Set working directory
+WORKDIR /workspace
+
+# Create a non-root user for builds
+RUN addgroup -g 1000 builder && \
+    adduser -D -s /bin/sh -u 1000 -G builder builder && \
+    chown -R builder:builder /workspace
+
+# Switch to non-root user
+USER builder
+
+# Set environment variables for Rust/Cargo
+ENV CARGO_HOME=/home/builder/.cargo
+ENV RUSTUP_HOME=/home/builder/.rustup
+ENV PATH=$CARGO_HOME/bin:$PATH
+
+# Initialize rustup and install stable toolchain
+RUN rustup-init -y --no-modify-path --profile minimal --default-toolchain stable \
+    && echo 'source $CARGO_HOME/env' >> /home/builder/.bashrc \
+    && . $CARGO_HOME/env \
+    && rustup default stable
+
+RUN . $CARGO_HOME/env && rustup target add \
+    aarch64-unknown-linux-musl \
+    x86_64-unknown-linux-musl
+
+# Install cargo-zigbuild using pre-built binary to avoid cross-compilation issues
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
+        export ARCH="x86_64"; \
+    elif [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        export ARCH="aarch64"; \
+    else \
+        export ARCH="x86_64"; \
+    fi && \
+    mkdir -p /home/builder/.cargo/bin && \
+    curl -L "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.20.1/cargo-zigbuild-v0.20.1.${ARCH}-unknown-linux-musl.tar.gz" | tar -xz -C /tmp && \
+    cp /tmp/cargo-zigbuild /home/builder/.cargo/bin/cargo-zigbuild && \
+    chmod +x /home/builder/.cargo/bin/cargo-zigbuild
+
+# Verify installations
+RUN . $CARGO_HOME/env && \
+    rustc --version && \
+    cargo --version && \
+    node --version && \
+    python3 --version && \
+    fluent-bit --version
+
+# Default command
+CMD ["/bin/sh"]

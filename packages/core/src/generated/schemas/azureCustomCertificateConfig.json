@@ -1,0 +1,1 @@
+{"type":"object","required":["keyVaultCertificateId"],"properties":{"keyVaultCertificateId":{"type":"string"}},"x-readme-ref-name":"AzureCustomCertificateConfig"}

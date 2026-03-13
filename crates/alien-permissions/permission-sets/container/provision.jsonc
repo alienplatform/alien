@@ -1,0 +1,236 @@
+{
+  "id": "container/provision",
+  "description": "Allows creating container infrastructure (load balancers, volumes, certificates). Derived from AwsContainerController, GcpContainerController, AzureContainerController API calls.",
+  "platforms": {
+    "aws": [
+      // Load Balancer (ALB/NLB) for exposed containers
+      {
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:CreateLoadBalancer",
+            "elasticloadbalancing:DeleteLoadBalancer",
+            "elasticloadbalancing:CreateTargetGroup",
+            "elasticloadbalancing:DeleteTargetGroup",
+            "elasticloadbalancing:CreateListener",
+            "elasticloadbalancing:DeleteListener"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*"
+            ]
+          }
+        }
+      },
+      // EBS Volumes for stateful containers with .persistentStorage()
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateVolume",
+            "ec2:DeleteVolume",
+            "ec2:DescribeVolumes",
+            "ec2:CreateTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          }
+        }
+      },
+      // Security group for LB (created by container controller, not cluster)
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateSecurityGroup",
+            "ec2:DeleteSecurityGroup",
+            "ec2:AuthorizeSecurityGroupIngress"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          }
+        }
+      },
+      // ACM certificates for HTTPS containers
+      {
+        "grant": {
+          "actions": [
+            "acm:ImportCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // HTTP(S) Load Balancer chain for exposed containers
+      {
+        "grant": {
+          "permissions": [
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
+            "compute.healthChecks.create",
+            "compute.healthChecks.delete",
+            "compute.healthChecks.get",
+            "compute.networkEndpointGroups.create",
+            "compute.networkEndpointGroups.delete",
+            "compute.networkEndpointGroups.get",
+            "compute.backendServices.create",
+            "compute.backendServices.delete",
+            "compute.backendServices.get",
+            "compute.backendServices.update",
+            "compute.urlMaps.create",
+            "compute.urlMaps.delete",
+            "compute.urlMaps.get",
+            "compute.targetHttpsProxies.create",
+            "compute.targetHttpsProxies.delete",
+            "compute.targetHttpsProxies.get",
+            "compute.globalAddresses.create",
+            "compute.globalAddresses.delete",
+            "compute.globalAddresses.get",
+            "compute.globalForwardingRules.create",
+            "compute.globalForwardingRules.delete",
+            "compute.globalForwardingRules.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed container provision",
+              "expression": "resource.name.startsWith('projects/${projectName}/')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // Persistent Disks for stateful containers
+      {
+        "grant": {
+          "permissions": [
+            "compute.disks.create",
+            "compute.disks.delete",
+            "compute.disks.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed disks",
+              "expression": "resource.type == 'compute.googleapis.com/Disk' && resource.name.startsWith('projects/${projectName}/')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // Load Balancer + Public IP for exposed containers
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/loadBalancers/write",
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Network/loadBalancers/delete",
+            "Microsoft.Network/publicIPAddresses/write",
+            "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/publicIPAddresses/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Managed Disks for stateful containers
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/disks/write",
+            "Microsoft.Compute/disks/read",
+            "Microsoft.Compute/disks/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Key Vault certificate for HTTPS containers
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

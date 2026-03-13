@@ -1,0 +1,77 @@
+{
+  // Allows reading data from KV stores (runtime access for functions)
+  "id": "kv/data-read",
+  "description": "Allows reading data from key-value stores",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+            "dynamodb:Scan",
+            "dynamodb:DescribeTable"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "datastore.entities.get",
+            "datastore.entities.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "KV data read access",
+              "expression": "resource.type == 'datastore.googleapis.com/Entity' && resource.name.startsWith('projects/${projectName}/databases/(default)/documents/kv-${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "KV data read access",
+              "expression": "resource.type == 'datastore.googleapis.com/Entity' && resource.name.startsWith('projects/${projectName}/databases/(default)/documents/kv-${stackPrefix}-${resourceName}/')"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/tableServices/read"
+          ],
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

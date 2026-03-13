@@ -1,0 +1,19 @@
+# DeleteProjectRequest
+
+## Example Usage
+
+```typescript
+import { DeleteProjectRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: DeleteProjectRequest = {
+  idOrName: "my-project",
+  workspace: "my-workspace",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idOrName`                                                                                                                                                                | *string*                                                                                                                                                                  | :heavy_check_mark:                                                                                                                                                        | Project ID or name.                                                                                                                                                       | my-project                                                                                                                                                                |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |

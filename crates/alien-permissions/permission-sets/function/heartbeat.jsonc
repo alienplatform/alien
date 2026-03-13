@@ -1,0 +1,123 @@
+{
+  "id": "function/heartbeat",
+  "description": "Allows readonly monitoring and health checks for function resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "lambda:GetFunction",
+            "lambda:GetFunctionConfiguration",
+            "lambda:ListVersionsByFunction",
+            "lambda:ListAliases",
+            "lambda:GetPolicy",
+            "lambda:ListTags",
+            "lambda:GetFunctionUrlConfig",
+            "lambda:GetCodeSigningConfig",
+            "lambda:GetFunctionEventInvokeConfig",
+            "lambda:GetEventSourceMapping",
+            "lambda:ListEventSourceMappings"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:GetAuthorizationToken"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "run.services.get",
+            "run.services.list",
+            "run.services.getIamPolicy",
+            "run.revisions.get",
+            "run.revisions.list",
+            "run.operations.get",
+            "run.operations.list",
+            "run.locations.list",
+            "run.configurations.get",
+            "run.configurations.list",
+            "run.routes.get",
+            "run.routes.list",
+            "run.executions.get",
+            "run.executions.list",
+            "run.tasks.get",
+            "run.tasks.list",
+            "run.services.listEffectiveTags",
+            "run.services.listTagBindings",
+            "resourcemanager.projects.get",
+            "run.jobs.getIamPolicy",
+            "pubsub.subscriptions.get",
+            "iam.serviceAccounts.getIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed function management",
+              "expression": "(resource.type == 'run.googleapis.com/Service' && resource.name.startsWith('projects/${projectName}/locations/${region}/services/${stackPrefix}-')) || (resource.type == 'run.googleapis.com/Job' && resource.name.startsWith('projects/${projectName}/locations/${region}/jobs/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/containerApps/read",
+            "Microsoft.App/containerApps/revisions/read",
+            "Microsoft.App/containerApps/revisions/replicas/read",
+            "Microsoft.App/containerApps/authConfigs/read",
+            "Microsoft.App/containerApps/sourceControls/read",
+            "Microsoft.App/managedEnvironments/daprComponents/read",
+            "Microsoft.App/managedEnvironments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

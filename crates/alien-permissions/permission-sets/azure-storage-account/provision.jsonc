@@ -1,0 +1,25 @@
+{
+  "id": "azure-storage-account/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on Azure storage accounts",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/write",
+            "Microsoft.Storage/storageAccounts/delete",
+            "Microsoft.Storage/storageAccounts/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

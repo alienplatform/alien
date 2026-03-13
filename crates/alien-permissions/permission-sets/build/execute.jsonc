@@ -1,0 +1,86 @@
+{
+  "id": "build/execute",
+  "description": "Allows starting, stopping, and monitoring build executions",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "codebuild:StartBuild",
+            "codebuild:StartBuildBatch",
+            "codebuild:StopBuild",
+            "codebuild:StopBuildBatch",
+            "codebuild:RetryBuild",
+            "codebuild:RetryBuildBatch",
+            "codebuild:BatchGetBuilds",
+            "codebuild:BatchGetBuildBatches",
+            "codebuild:ListBuildsForProject"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "cloudbuild.builds.create",
+            "cloudbuild.builds.update",
+            "cloudbuild.builds.approve",
+            "cloudbuild.builds.get",
+            "cloudbuild.builds.list",
+            "iam.serviceAccounts.actAs"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed build execution",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${stackPrefix}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Resource specific build execution",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${resourceName}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${resourceName}-'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/jobs/start/action",
+            "Microsoft.App/jobs/stop/action",
+            "Microsoft.App/jobs/executions/read",
+            "Microsoft.App/jobs/read"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

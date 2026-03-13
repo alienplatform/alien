@@ -1,0 +1,340 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ArtifactRegistry resource configuration > can be used in stack permissions 1`] = `
+{
+  "id": "registry-stack",
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "protected-registry": [
+          "artifact-registry/data-read",
+          "artifact-registry/data-write",
+        ],
+      },
+    },
+  },
+  "resources": {
+    "protected-registry": {
+      "config": {
+        "id": "protected-registry",
+        "type": "artifact-registry",
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "registry-user": {
+      "config": {
+        "code": {
+          "image": "docker.io/library/rust:latest",
+          "type": "image",
+        },
+        "environment": {},
+        "id": "registry-user",
+        "ingress": "private",
+        "links": [],
+        "memoryMb": 256,
+        "permissions": "execution",
+        "timeoutSeconds": 180,
+        "type": "function",
+      },
+      "dependencies": [],
+      "lifecycle": "live",
+    },
+  },
+}
+`;
+
+exports[`ArtifactRegistry resource configuration > creates an artifact registry 1`] = `
+Resource {
+  "config": {
+    "id": "test-registry",
+    "type": "artifact-registry",
+  },
+}
+`;
+
+exports[`Build resource configuration > creates a build with all configuration options 1`] = `
+Resource {
+  "config": {
+    "computeType": "large",
+    "environment": {
+      "BUILD_TARGET": "release",
+      "CUSTOM_VAR": "test-value",
+      "NODE_ENV": "production",
+    },
+    "id": "comprehensive-build",
+    "links": [
+      {
+        "id": "test-registry",
+        "type": "artifact-registry",
+      },
+      {
+        "id": "test-storage",
+        "type": "storage",
+      },
+    ],
+    "permissions": "builder",
+    "type": "build",
+  },
+}
+`;
+
+exports[`Build resource configuration > creates a minimal build with defaults 1`] = `
+Resource {
+  "config": {
+    "environment": {},
+    "id": "minimal-build",
+    "links": [],
+    "permissions": "default",
+    "type": "build",
+  },
+}
+`;
+
+exports[`Permissions system > creates a stack with custom permission sets 1`] = `
+{
+  "id": "permissions-stack",
+  "permissions": {
+    "management": {
+      "extend": {
+        "*": [
+          "function/management",
+        ],
+      },
+    },
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+          {
+            "description": "Custom storage access permissions",
+            "id": "custom-storage-access",
+            "platforms": {
+              "aws": [
+                {
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:s3:::\${stackPrefix}-*",
+                      ],
+                    },
+                  },
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject",
+                      "s3:PutObject",
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  },
+  "resources": {
+    "test-function": {
+      "config": {
+        "code": {
+          "image": "docker.io/library/rust:latest",
+          "type": "image",
+        },
+        "environment": {},
+        "id": "test-function",
+        "ingress": "private",
+        "links": [],
+        "memoryMb": 256,
+        "permissions": "execution",
+        "timeoutSeconds": 180,
+        "type": "function",
+      },
+      "dependencies": [],
+      "lifecycle": "live",
+    },
+  },
+}
+`;
+
+exports[`Stack builder validation > builds and validates a complex stack with permissions 1`] = `
+{
+  "id": "my-test-stack",
+  "permissions": {
+    "management": {
+      "extend": {
+        "*": [
+          "function/management",
+          "storage/management",
+        ],
+      },
+    },
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+        ],
+        "my-test-bucket": [
+          "storage/data-write",
+        ],
+      },
+    },
+  },
+  "resources": {
+    "my-test-bucket": {
+      "config": {
+        "id": "my-test-bucket",
+        "lifecycleRules": [],
+        "publicRead": true,
+        "type": "storage",
+        "versioning": false,
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "my-test-function": {
+      "config": {
+        "code": {
+          "image": "docker.io/library/rust:latest",
+          "type": "image",
+        },
+        "environment": {
+          "RUST_LOG": "info,alien_runtime_test_server=debug,alien_runtime=debug",
+        },
+        "id": "my-test-function",
+        "ingress": "public",
+        "links": [
+          {
+            "id": "my-test-bucket",
+            "type": "storage",
+          },
+        ],
+        "memoryMb": 512,
+        "permissions": "execution",
+        "timeoutSeconds": 30,
+        "type": "function",
+      },
+      "dependencies": [],
+      "lifecycle": "live",
+    },
+  },
+}
+`;
+
+exports[`Stack builder validation > builds and validates a stack with Build and ArtifactRegistry resources 1`] = `
+{
+  "id": "build-stack",
+  "permissions": {
+    "management": {
+      "extend": {
+        "*": [
+          "build/management",
+          "storage/management",
+          "artifact-registry/management",
+        ],
+      },
+    },
+    "profiles": {
+      "builder": {
+        "*": [
+          "artifact-registry/data-read",
+          "artifact-registry/data-write",
+        ],
+        "build-storage": [
+          "storage/data-read",
+          "storage/data-write",
+        ],
+      },
+    },
+  },
+  "resources": {
+    "build-storage": {
+      "config": {
+        "id": "build-storage",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false,
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "my-artifact-registry": {
+      "config": {
+        "id": "my-artifact-registry",
+        "type": "artifact-registry",
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "my-build": {
+      "config": {
+        "computeType": "medium",
+        "environment": {
+          "BUILD_TARGET": "release",
+          "NODE_ENV": "production",
+        },
+        "id": "my-build",
+        "links": [
+          {
+            "id": "my-artifact-registry",
+            "type": "artifact-registry",
+          },
+          {
+            "id": "build-storage",
+            "type": "storage",
+          },
+        ],
+        "permissions": "builder",
+        "type": "build",
+      },
+      "dependencies": [],
+      "lifecycle": "live",
+    },
+  },
+}
+`;
+
+exports[`Stack builder validation > builds and validates a stack with function source 1`] = `
+{
+  "id": "my-source-stack",
+  "permissions": {
+    "management": {
+      "extend": {
+        "*": [
+          "function/management",
+        ],
+      },
+    },
+    "profiles": {
+      "execution": {
+        "*": [
+          "function/execute",
+        ],
+      },
+    },
+  },
+  "resources": {
+    "my-source-function": {
+      "config": {
+        "code": {
+          "src": "./app",
+          "toolchain": {
+            "type": "typescript",
+          },
+          "type": "source",
+        },
+        "environment": {},
+        "id": "my-source-function",
+        "ingress": "private",
+        "links": [],
+        "memoryMb": 256,
+        "permissions": "execution",
+        "timeoutSeconds": 15,
+        "type": "function",
+      },
+      "dependencies": [],
+      "lifecycle": "live",
+    },
+  },
+}
+`;

@@ -1,0 +1,14 @@
+# Terraform state files
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+
+# Lock file (changes every rebuild in local dev)
+.terraform.lock.hcl
+
+# Local provider plugins
+terraform.d/
+
+# Crash log files
+crash.log
+crash.*.log

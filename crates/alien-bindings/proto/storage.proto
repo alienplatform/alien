@@ -1,0 +1,445 @@
+syntax = "proto3";
+
+package alien_bindings.storage;
+
+import "google/protobuf/timestamp.proto";
+
+// Service to interact with Storage bindings.
+service StorageService {
+    // Retrieves data for a given object in a storage binding, with options.
+    // The first part of the stream will be GetResponsePart.Metadata, followed by GetResponsePart.ChunkData.
+    rpc Get(StorageGetRequest) returns (stream GetResponsePart);
+
+    // Uploads data to a storage binding using a stream.
+    // The first chunk in the stream must be metadata including PutMultipartOptions.
+    rpc PutMultipart(stream StoragePutMultipartChunkRequest) returns (StoragePutResponse);
+
+    // Uploads data to a storage binding in a single message, with PutOptions.
+    rpc Put(StoragePutRequest) returns (StoragePutResponse);
+
+    // Deletes an object from a storage binding.
+    rpc Delete(StorageDeleteRequest) returns (StorageOperationResponse);
+
+    // Lists objects in a storage binding, optionally filtered by a prefix and offset.
+    // Returns a stream of object metadata.
+    rpc List(StorageListRequest) returns (stream StorageObjectMeta);
+
+    // Lists objects and common prefixes (directories) with a delimiter.
+    rpc ListWithDelimiter(StorageListWithDelimiterRequest) returns (StorageListResultProto);
+
+    // Retrieves metadata for an object in a storage binding.
+    rpc Head(StorageHeadRequest) returns (StorageObjectMeta);
+
+    // Gets the base directory path for a storage binding.
+    rpc GetBaseDir(StorageGetBaseDirRequest) returns (StorageGetBaseDirResponse);
+
+    // Gets the underlying URL for a storage binding.
+    rpc GetUrl(StorageGetUrlRequest) returns (StorageGetUrlResponse);
+
+    // Copies an object within the same storage binding.
+    rpc Copy(StorageCopyRequest) returns (StorageOperationResponse);
+
+    // Renames (moves) an object within the same storage binding.
+    rpc Rename(StorageRenameRequest) returns (StorageOperationResponse);
+
+    // Copies an object if the destination does not exist.
+    rpc CopyIfNotExists(StorageCopyRequest) returns (StorageOperationResponse);
+
+    // Renames (moves) an object if the destination does not exist.
+    rpc RenameIfNotExists(StorageRenameRequest) returns (StorageOperationResponse);
+
+    // Generates a signed URL for an object that allows access without authentication.
+    rpc SignedUrl(StorageSignedUrlRequest) returns (StorageSignedUrlResponse);
+}
+
+// Common Option Messages
+
+// Represents a byte range for a get operation.
+// Maps to std::ops::Range<usize> within object_store::GetRange::Bounded.
+message StorageRange {
+    // Start of the range (inclusive), 0-indexed.
+    // Maps to the start of std::ops::Range<usize>.
+    uint64 start = 1;
+    // End of the range (exclusive), 0-indexed.
+    // Maps to the end of std::ops::Range<usize>.
+    uint64 end = 2;
+}
+
+// Specifies a range for a get operation, mapping to object_store::GetRange.
+message StorageGetRangeOption {
+    oneof range_type {
+        // A specific bounded range (e.g., bytes 0-99).
+        // Corresponds to object_store::GetRange::Bounded(start..end).
+        StorageRange bounded = 1;
+        // A range starting from an offset relative to the beginning of the object.
+        // Corresponds to object_store::GetRange::Offset(offset).
+        uint64 offset_from_start = 2;
+        // A range representing a suffix of the object with a specific length.
+        // Corresponds to object_store::GetRange::Suffix(length).
+        uint64 suffix_length = 3;
+    }
+}
+
+// Options for a get operation, mapping to object_store::GetOptions.
+message StorageGetOptions {
+    // Succeeds if the object's ETag matches this value.
+    // Maps to object_store::GetOptions::if_match.
+    optional string if_match = 1;
+    // Succeeds if the object's ETag does not match this value.
+    // Maps to object_store::GetOptions::if_none_match.
+    optional string if_none_match = 2;
+    // Succeeds if the object has been modified since this timestamp.
+    // Maps to object_store::GetOptions::if_modified_since.
+    optional google.protobuf.Timestamp if_modified_since = 3;
+    // Succeeds if the object has not been modified since this timestamp.
+    // Maps to object_store::GetOptions::if_unmodified_since.
+    optional google.protobuf.Timestamp if_unmodified_since = 4;
+    // Specifies a byte range to retrieve.
+    // Maps to object_store::GetOptions::range.
+    optional StorageGetRangeOption range = 5;
+    // Retrieves a specific version of the object, if versioning is supported.
+    // Maps to object_store::GetOptions::version.
+    optional string version = 6;
+    // If true, only metadata is fetched (like a HEAD request), not the content.
+    // Maps to object_store::GetOptions::head.
+    bool head = 7;
+}
+
+// Defines the behavior for a put operation if the object already exists.
+// Maps to object_store::PutMode.
+enum StoragePutModeEnum {
+    // Overwrites the object if it exists. This is the default behavior.
+    // Maps to object_store::PutMode::Overwrite.
+    PUT_MODE_OVERWRITE = 0;
+    // Fails the operation if the object already exists.
+    // Maps to object_store::PutMode::Create.
+    PUT_MODE_CREATE = 1;
+    // Updates the object only if the provided version details match the existing object's version.
+    // Requires `update_version_details` in `StoragePutOptions`.
+    // Maps to object_store::PutMode::Update.
+    PUT_MODE_UPDATE = 2;
+}
+
+// Specifies version details (ETag and/or version ID) for conditional updates.
+// Maps to object_store::UpdateVersion.
+message StorageUpdateVersion {
+    // The ETag of the object version to update.
+    // Maps to object_store::UpdateVersion::e_tag.
+    optional string e_tag = 1;
+    // The version ID of the object version to update.
+    // Maps to object_store::UpdateVersion::version.
+    optional string version = 2;
+}
+
+// Represents a single tag (key-value pair).
+// Maps to a key-value pair within object_store::TagSet.
+message StorageTag {
+    // The tag key.
+    string key = 1;
+    // The tag value.
+    string value = 2;
+}
+
+// A collection of tags.
+// Maps to object_store::TagSet.
+message StorageTagSet {
+    // List of tags.
+    repeated StorageTag tags = 1;
+}
+
+// Represents a key-value pair for an object attribute.
+// Used to construct an object_store::Attributes map.
+message StorageAttributeKeyValuePair {
+    // The attribute key.
+    // Standard keys map to specific object_store::Attribute variants:
+    // - "content-disposition" -> object_store::Attribute::ContentDisposition
+    // - "content-encoding"    -> object_store::Attribute::ContentEncoding
+    // - "content-language"    -> object_store::Attribute::ContentLanguage
+    // - "content-type"        -> object_store::Attribute::ContentType
+    // - "cache-control"       -> object_store::Attribute::CacheControl
+    // User-defined metadata keys must be prefixed with "metadata:".
+    // For example, "metadata:my_custom_key" will be mapped to
+    // object_store::Attribute::Metadata("my_custom_key").
+    string key = 1;
+    // The attribute value.
+    // Maps to object_store::AttributeValue.
+    string value = 2;
+}
+
+// A collection of storage attributes.
+// Maps to object_store::Attributes.
+message StorageAttributesMap {
+    // List of attribute key-value pairs.
+    repeated StorageAttributeKeyValuePair pairs = 1;
+}
+
+// Options for non-streaming put (put_opts).
+// Maps to object_store::PutOptions.
+message StoragePutOptions {
+    // Specifies the behavior if the object already exists or if a specific version should be updated.
+    // Defaults to PUT_MODE_OVERWRITE.
+    // Maps to object_store::PutOptions::mode.
+    StoragePutModeEnum mode = 1;
+    // Details for conditional updates based on ETag or version.
+    // Only used if mode is PUT_MODE_UPDATE.
+    // Maps to the argument of object_store::PutMode::Update.
+    optional StorageUpdateVersion update_version_details = 2;
+    // A set of tags to associate with the object.
+    // Maps to object_store::PutOptions::tags.
+    optional StorageTagSet tags = 3;
+    // Additional object attributes (e.g., Content-Type, Cache-Control, custom metadata).
+    // Maps to object_store::PutOptions::attributes.
+    optional StorageAttributesMap attributes = 4;
+}
+
+// Options for streaming put (put_multipart_opts).
+// Maps to object_store::PutMultipartOpts.
+message StoragePutMultipartOptions {
+    // A set of tags to associate with the object during a multipart upload.
+    // Maps to object_store::PutMultipartOpts::tags.
+    optional StorageTagSet tags = 1;
+    // Additional object attributes (e.g., Content-Type, Cache-Control, custom metadata)
+    // for a multipart upload. Maps to object_store::PutMultipartOpts::attributes.
+    optional StorageAttributesMap attributes = 2;
+}
+
+
+// StorageGet (replaces old StorageGet)
+// Request for retrieving an object from storage.
+message StorageGetRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path to the object within the binding.
+    // Maps to object_store::path::Path.
+    string path = 2;
+    // Optional parameters for the get operation.
+    // Maps to object_store::GetOptions.
+    optional StorageGetOptions options = 3;
+}
+
+// A chunk of data from a storage object stream.
+message StorageChunkResponse {
+    // Bytes of the object chunk.
+    // Corresponds to Bytes from the object_store::GetResult stream.
+    bytes chunk_data = 1;
+}
+
+// New message for Get RPC stream
+message GetResponsePart {
+  oneof part {
+    StorageObjectMeta metadata = 1; // First message in the stream
+    bytes chunk_data = 2;         // Subsequent data chunks
+  }
+}
+
+// StoragePutMultipart (replaces old StoragePutStream)
+// A request part for a streaming multipart put operation.
+// Can be either metadata (first message) or a data chunk.
+message StoragePutMultipartChunkRequest {
+    oneof part {
+        // Metadata for the streaming put, must be the first message in the stream.
+        StoragePutMultipartMetadata metadata = 1;
+        // A chunk of the object's data for a part of the multipart upload.
+        // Corresponds to data passed to object_store::MultipartUpload::put_part.
+        bytes chunk_data = 2;
+    }
+}
+
+// Metadata for a streaming multipart put operation.
+message StoragePutMultipartMetadata {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path where the object will be stored.
+    // Maps to object_store::path::Path.
+    string path = 2;
+    // Optional parameters for the multipart put operation.
+    // Maps to object_store::PutMultipartOpts.
+    optional StoragePutMultipartOptions options = 3;
+}
+
+// Response for a put operation (both simple and streaming).
+// Maps to object_store::PutResult.
+message StoragePutResponse {
+    // The ETag of the uploaded object, if available.
+    // Maps to object_store::PutResult::e_tag.
+    optional string e_tag = 1;
+    // The version ID of the uploaded object, if versioning is supported and available.
+    // Maps to object_store::PutResult::version.
+    optional string version = 2;
+}
+
+// StoragePut (replaces old StoragePutSimple)
+// Request for uploading an object in a single message.
+message StoragePutRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path where the object will be stored.
+    // Maps to object_store::path::Path.
+    string path = 2;
+    // The entire object data.
+    // Maps to object_store::PutPayload.
+    bytes data = 3;
+    // Optional parameters for the put operation.
+    // Maps to object_store::PutOptions.
+    optional StoragePutOptions options = 4;
+}
+
+// StorageDelete
+// Request for deleting an object from storage.
+message StorageDeleteRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path to the object to delete.
+    // Maps to object_store::path::Path.
+    string path = 2;
+}
+
+// Generic response for operations that don't return specific data on success (e.g., Delete, Copy, Rename).
+message StorageOperationResponse {
+    // Empty on success. Errors are indicated by gRPC status codes.
+}
+
+// StorageList
+// Request for listing objects in a storage binding.
+message StorageListRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Optional prefix to filter listed objects. Only objects whose paths start with this prefix will be returned.
+    // Maps to the `prefix` argument in object_store::ObjectStore::list.
+    optional string prefix = 2;
+    // Optional offset for pagination. If provided, listing will start after this object path.
+    // Maps to the `offset` argument in object_store::ObjectStore::list_with_offset.
+    optional string offset = 3;
+}
+
+// Metadata for a single object in storage.
+// Maps to object_store::ObjectMeta.
+message StorageObjectMeta {
+    // The full path (location) of the object.
+    // Maps to object_store::ObjectMeta::location.
+    string location = 1;
+    // Timestamp of the last modification.
+    // Maps to object_store::ObjectMeta::last_modified.
+    google.protobuf.Timestamp last_modified = 2;
+    // Size of the object in bytes.
+    // Maps to object_store::ObjectMeta::size.
+    uint64 size = 3;
+    // The ETag of the object, if available.
+    // Maps to object_store::ObjectMeta::e_tag.
+    optional string e_tag = 4;
+    // The version ID of the object, if versioning is supported and available.
+    // Maps to object_store::ObjectMeta::version.
+    optional string version = 5;
+}
+
+// StorageListWithDelimiter
+// Request for listing objects and common prefixes (simulating directories).
+message StorageListWithDelimiterRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Optional prefix to filter listed objects and common prefixes.
+    // Maps to the `prefix` argument in object_store::ObjectStore::list_with_delimiter.
+    optional string prefix = 2;
+}
+
+// Result of a list operation with a delimiter.
+// Maps to object_store::ListResult.
+message StorageListResultProto {
+    // List of common prefixes (simulating directories) found under the specified prefix.
+    // Maps to object_store::ListResult::common_prefixes.
+    repeated string common_prefixes = 1;
+    // List of object metadata found under the specified prefix (excluding those within common_prefixes).
+    // Maps to object_store::ListResult::objects.
+    repeated StorageObjectMeta objects = 2;
+}
+
+// StorageHead
+// Request for retrieving metadata of an object.
+message StorageHeadRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path to the object.
+    // Maps to object_store::path::Path.
+    string path = 2;
+}
+
+// StorageGetBaseDir
+// Request for getting the base directory of a storage binding. (Alien specific)
+message StorageGetBaseDirRequest {
+    // Name of the storage binding.
+    string binding_name = 1;
+}
+
+// Response containing the base directory path. (Alien specific)
+message StorageGetBaseDirResponse {
+    // The base directory path.
+    string path = 1;
+}
+
+// StorageGetUrl
+// Request for getting the underlying URL of a storage binding. (Alien specific)
+message StorageGetUrlRequest {
+    // Name of the storage binding.
+    string binding_name = 1;
+}
+
+// Response containing the URL. (Alien specific)
+message StorageGetUrlResponse {
+    // The underlying URL.
+    string url = 1;
+}
+
+// StorageCopy & StorageRename
+// Request for copying an object.
+message StorageCopyRequest {
+    // Name of the storage binding to use (operation is within the same binding).
+    string binding_name = 1;
+    // Path of the source object.
+    // Maps to object_store::path::Path.
+    string from_path = 2;
+    // Path of the destination object.
+    // Maps to object_store::path::Path.
+    string to_path = 3;
+}
+
+// Request for renaming (moving) an object.
+message StorageRenameRequest {
+    // Name of the storage binding to use (operation is within the same binding).
+    string binding_name = 1;
+    // Path of the source object.
+    // Maps to object_store::path::Path.
+    string from_path = 2;
+    // Path of the destination object.
+    // Maps to object_store::path::Path.
+    string to_path = 3;
+}
+
+// HTTP method for signed URL requests.
+enum StorageHttpMethod {
+    HTTP_METHOD_GET = 0;
+    HTTP_METHOD_PUT = 1;
+    HTTP_METHOD_POST = 2;
+    HTTP_METHOD_DELETE = 3;
+    HTTP_METHOD_HEAD = 4;
+}
+
+// StorageSignedUrlRequest
+// Request for generating a signed URL for an object.
+message StorageSignedUrlRequest {
+    // Name of the storage binding to use.
+    string binding_name = 1;
+    // Path to the object within the binding.
+    // Maps to object_store::path::Path.
+    string path = 2;
+    // HTTP method for the signed URL.
+    StorageHttpMethod http_method = 3;
+    // Expiration time for the signed URL.
+    google.protobuf.Timestamp expiration_time = 4;
+}
+
+// StorageSignedUrlResponse
+// Response containing the generated signed URL.
+message StorageSignedUrlResponse {
+    // The generated signed URL.
+    string url = 1;
+} 

@@ -1,0 +1,102 @@
+{
+  "id": "function/execute",
+  "description": "Runtime permissions that functions need when executing (pulling images, accessing logs, etc.)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "logs:CreateLogGroup",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*:*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}:*"
+            ]
+          }
+        }
+      },
+      // TODO: Only add this if function ingress == public
+      {
+        "grant": {
+          "actions": [
+            "lambda:GetFunctionUrlConfig"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "logging.logEntries.create",
+            "run.services.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${managingProjectId}",
+            "condition": {
+              "title": "Function runtime access",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
+            }
+          },
+          "resource": {
+            "scope": "projects/${managingProjectId}",
+            "condition": {
+              "title": "Function runtime access",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read",
+            "Microsoft.App/containerApps/read"
+          ],
+          "dataActions": [
+            "Microsoft.ContainerRegistry/registries/pull/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

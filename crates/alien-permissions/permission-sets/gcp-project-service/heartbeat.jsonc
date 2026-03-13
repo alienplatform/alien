@@ -1,0 +1,23 @@
+{
+  "id": "gcp-project-service/heartbeat",
+  "description": "Allows readonly monitoring and health checks for gcp-project-service resources",
+  "platforms": {
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "serviceusage.services.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ]
+  }
+}

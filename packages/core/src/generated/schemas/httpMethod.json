@@ -1,0 +1,1 @@
+{"type":"string","description":"HTTP method for readiness probe requests.","enum":["GET","POST","PUT","DELETE","HEAD","OPTIONS","PATCH"],"x-readme-ref-name":"HttpMethod"}

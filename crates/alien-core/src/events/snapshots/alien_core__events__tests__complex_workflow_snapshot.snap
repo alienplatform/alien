@@ -1,0 +1,19 @@
+---
+source: crates/alien-core/src/events/mod.rs
+expression: snapshot_data
+---
+[
+    "Created: id=event-1, parent=None, event=TestBuildingStack { stack: \"production-stack\" }, state=Started",
+    "Created: id=event-2, parent=Some(\"event-1\"), event=TestBuildingImage { image: \"api-service\" }, state=Started",
+    "Created: id=event-3, parent=Some(\"event-2\"), event=TestBuildImage { image: \"api-service\", stage: \"download-deps\" }, state=None",
+    "Created: id=event-4, parent=Some(\"event-2\"), event=TestBuildImage { image: \"api-service\", stage: \"compile\" }, state=None",
+    "Created: id=event-5, parent=Some(\"event-2\"), event=TestBuildImage { image: \"api-service\", stage: \"optimize\" }, state=None",
+    "Created: id=event-6, parent=Some(\"event-2\"), event=TestBuildImage { image: \"api-service\", stage: \"build\" }, state=None",
+    "StateChanged: id=event-2, new_state=Success",
+    "Created: id=event-7, parent=Some(\"event-1\"), event=TestPushImage { image: \"api-service\" }, state=None",
+    "Created: id=event-8, parent=Some(\"event-1\"), event=TestDeployingStack { stack: \"api-service\" }, state=Started",
+    "Created: id=event-9, parent=Some(\"event-8\"), event=TestCreatingResource { resource_type: \"LoadBalancer\", resource_name: \"api-lb\", details: Some(\"Updating target groups\") }, state=None",
+    "Created: id=event-10, parent=Some(\"event-8\"), event=TestPerformingHealthCheck { target: \"https://api.example.com/health\", check_type: \"HTTP\" }, state=None",
+    "StateChanged: id=event-8, new_state=Success",
+    "StateChanged: id=event-1, new_state=Success",
+]

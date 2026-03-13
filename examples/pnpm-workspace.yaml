@@ -1,0 +1,5 @@
+packages:
+  - endpoint-agent
+  - minimal-cloud-agent
+  - byoc-database
+  - github-agent/packages/remote-agent

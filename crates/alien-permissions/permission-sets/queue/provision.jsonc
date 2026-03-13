@@ -1,0 +1,90 @@
+{
+  // Allows creating and deleting queues (deployment/provisioning operations)
+  "id": "queue/provision",
+  "description": "Allows creating and deleting message queues during deployment",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:CreateQueue",
+            "sqs:DeleteQueue",
+            "sqs:GetQueueAttributes",
+            "sqs:SetQueueAttributes",
+            "sqs:ListQueues",
+            "sqs:TagQueue",
+            "sqs:UntagQueue"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.update"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue provision access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue provision access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/write",
+            "Microsoft.ServiceBus/namespaces/delete",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.ServiceBus/checkNameAvailability/action"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
+          }
+        }
+      }
+    ]
+  }
+}

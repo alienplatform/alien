@@ -1,0 +1,41 @@
+[package]
+name = "byocdb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Alien bindings (gRPC client mode - connects to alien-runtime)
+alien-bindings = { workspace = true, default-features = false, features = ["grpc"] }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Web framework
+axum = { workspace = true, features = ["tokio", "http1", "json"] }
+tokio = { workspace = true, features = ["full"] }
+tower = { version = "0.5.2" }
+tower-http = { version = "0.6.2", features = ["cors", "trace"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# OpenAPI
+utoipa = { workspace = true, features = ["axum_extras"] }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# Object storage
+object_store = { workspace = true }
+bytes = { workspace = true }
+
+# Utilities
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+
+[dev-dependencies]
+

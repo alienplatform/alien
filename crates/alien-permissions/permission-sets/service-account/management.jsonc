@@ -1,0 +1,76 @@
+{
+  "id": "service-account/management",
+  "description": "Allows managing service account policies and permissions (read-only metadata access)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRole",
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies",
+            "iam:ListAttachedRolePolicies",
+            "iam:ListRoleTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "iam.serviceAccounts.get",
+            "iam.serviceAccounts.list",
+            "iam.serviceAccounts.getIamPolicy",
+            "iam.roles.get",
+            "iam.roles.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Service account management access",
+              "expression": "(resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')) || (resource.type == 'iam.googleapis.com/Role' && resource.name.startsWith('projects/${projectName}/roles/${stackPrefix}_'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleAssignments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}
+

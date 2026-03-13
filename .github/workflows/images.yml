@@ -1,0 +1,95 @@
+name: Images Publish
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Build alien-runtime binaries
+        run: |
+          cargo zigbuild -p alien-runtime --bin alien-runtime \
+            --target aarch64-unknown-linux-musl \
+            --target x86_64-unknown-linux-musl \
+            --release
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata (alien-base)
+        id: meta_base
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/aliendotdev/alien-base
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=tag
+
+      - name: Publish alien-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.alien-base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_base.outputs.tags }}
+          labels: ${{ steps.meta_base.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-builder)
+        id: meta_builder
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/aliendotdev/alien-builder
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=tag
+
+      - name: Publish alien-builder
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.alien-builder
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_builder.outputs.tags }}
+          labels: ${{ steps.meta_builder.outputs.labels }}
+          provenance: true
+          sbom: true

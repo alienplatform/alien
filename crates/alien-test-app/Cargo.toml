@@ -1,0 +1,24 @@
+[package]
+name = "alien-test-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "alien-test-app"
+path = "src/bin/main.rs"
+
+[dependencies]
+alien-bindings = { workspace = true, features = ["grpc"] }
+alien-error = { workspace = true, features = ["axum"] }
+axum = { workspace = true, features = ["macros", "tokio", "http1", "http2"] }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+

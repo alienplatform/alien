@@ -1,0 +1,16 @@
+{
+  "name": "test-app",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run ./src/index.ts",
+    "build": "bun build ./src/index.ts --outfile dist/app.js --target bun --minify"
+  },
+  "dependencies": {
+    "@aliendotdev/bindings": "workspace:^",
+    "hono": "^4.7.10"
+  },
+  "devDependencies": {
+    "@aliendotdev/core": "workspace:^",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "kv/heartbeat",
+  "description": "Allows readonly monitoring and health checks for kv resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "dynamodb:DescribeTable",
+            "dynamodb:ListTables",
+            "dynamodb:DescribeTimeToLive",
+            "dynamodb:ListTagsOfResource",
+            "dynamodb:DescribeContinuousBackups"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "datastore.databases.get",
+            "datastore.databases.list",
+            "datastore.entities.get",
+            "datastore.entities.list",
+            "datastore.indexes.get",
+            "datastore.indexes.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/tableServices/read",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/read",
+            "Microsoft.Storage/storageAccounts/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

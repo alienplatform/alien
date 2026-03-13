@@ -1,0 +1,30 @@
+[test-groups]
+# Define a group for tests that require exclusive Docker access
+docker-access-tests = { max-threads = 1 }
+# Define a group for OTLP tests that modify global tracing state and env vars
+otlp-tests = { max-threads = 1 }
+# Define a group for Lambda tests that spawn cargo lambda watch processes
+lambda-tests = { max-threads = 1 }
+# Define a group for function integration tests that run bun install (race condition on concurrent installs)
+function-integration-tests = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# Apply this rule to tests in the 'build_push_tests.rs' file
+filter = 'test(~build_push_tests::)'
+test-group = 'docker-access-tests'
+
+[[profile.default.overrides]]
+# OTLP tests must run serially - they modify global tracing state and env vars
+filter = 'test(~otlp_logging::)'
+test-group = 'otlp-tests'
+
+[[profile.default.overrides]]
+# Lambda tests must run serially - they spawn cargo lambda watch processes that conflict
+# The test() predicate matches test names, not module paths, so we match any test starting with test_lambda
+filter = 'package(alien-runtime) and test(test_lambda)'
+test-group = 'lambda-tests'
+
+[[profile.default.overrides]]
+# Function integration tests must run serially - they run bun install which has race conditions on concurrent installs
+filter = 'binary(function_integration)'
+test-group = 'function-integration-tests'

@@ -1,0 +1,23 @@
+{
+  "id": "azure-resource-group/heartbeat",
+  "description": "Allows readonly monitoring and health checks for azure-resource-group resources",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

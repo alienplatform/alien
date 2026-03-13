@@ -1,0 +1,140 @@
+{
+  "id": "artifact-registry/push",
+  "description": "Allows pushing and pulling container images to/from artifact registries",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "ecr:BatchCheckLayerAvailability",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:BatchGetImage",
+            "ecr:GetAuthorizationToken",
+            "ecr:DescribeRepositories",
+            "ecr:DescribeImages",
+            "ecr:ListImages",
+            "ecr:CompleteLayerUpload",
+            "ecr:UploadLayerPart",
+            "ecr:InitiateLayerUpload",
+            "ecr:PutImage"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "sts:AssumeRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-push"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-push"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.tags.get",
+            "artifactregistry.tags.list",
+            "artifactregistry.versions.get",
+            "artifactregistry.versions.list",
+            "artifactregistry.repositories.uploadArtifacts",
+            "artifactregistry.tags.create",
+            "artifactregistry.tags.update",
+            "artifactregistry.tags.delete",
+            "artifactregistry.versions.delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}/locations/${region}",
+            "condition": {
+              "title": "Stack prefixed artifact registry push",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}",
+            "condition": {
+              "title": "Resource specific artifact registry push",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${resourceName}-')"
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": [
+            "iam.serviceAccounts.actAs",
+            "iam.serviceAccounts.getAccessToken"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Artifact registry push service accounts",
+              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Resource specific artifact registry push service account",
+              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}-push@')"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/write",
+            "Microsoft.ContainerRegistry/registries/metadata/read",
+            "Microsoft.ContainerRegistry/registries/metadata/write"
+          ],
+          "dataActions": [
+            "Microsoft.ContainerRegistry/registries/pull/read",
+            "Microsoft.ContainerRegistry/registries/push/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

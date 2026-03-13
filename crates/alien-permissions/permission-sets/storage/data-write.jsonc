@@ -1,0 +1,101 @@
+{
+  "id": "storage/data-write",
+  "description": "Allows reading and writing data to storage buckets and containers",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "s3:ListBucket",
+            "s3:GetObject",
+            "s3:GetObjectVersion",
+            "s3:GetObjectAcl",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:DeleteObjectVersion",
+            "s3:PutObjectAcl",
+            "s3:PutObjectTagging",
+            "s3:RestoreObject"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:s3:::${stackPrefix}-*",
+              "arn:aws:s3:::${stackPrefix}-*/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:s3:::${resourceName}",
+              "arn:aws:s3:::${resourceName}/*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "storage.buckets.get",
+            "storage.objects.get",
+            "storage.objects.list",
+            "storage.objects.getIamPolicy",
+            "storage.multipartUploads.list",
+            "storage.multipartUploads.listParts",
+            "iam.serviceAccounts.signBlob",
+            "storage.objects.create",
+            "storage.objects.update",
+            "storage.objects.delete",
+            "storage.objects.setIamPolicy",
+            "storage.objects.restore",
+            "storage.objects.setRetention",
+            "storage.objects.overrideUnlockedRetention",
+            "storage.multipartUploads.create",
+            "storage.multipartUploads.abort"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed storage write access",
+              "expression": "(resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/${projectName}/buckets/${stackPrefix}-')) || (resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/${projectName}/buckets/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write"
+          ],
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+            "Microsoft.Storage/storageAccounts/listKeys/action",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

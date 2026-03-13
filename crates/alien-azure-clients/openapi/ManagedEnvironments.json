@@ -1,0 +1,1758 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2025-01-01",
+    "title": "ContainerApps API Client"
+  },
+  "security": [
+    {
+      "azure_auth": [
+        "user_impersonation"
+      ]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_environments_by_subscription": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/55f240e3-3d66-44f6-8358-4e4f3d7a2e51/providers/Microsoft.App/workloadProfileStates/GP1",
+              "name": "GP1",
+              "type": "/providers/Microsoft.App/workloadProfileStates",
+              "properties": {
+                "minimumCount": 3,
+                "maximumCount": 10,
+                "currentCount": 3
+              }
+            },
+            {
+              "id": "/subscriptions/55f240e3-3d66-44f6-8358-4e4f3d7a2e51/providers/Microsoft.App/workloadProfileStates/MO3",
+              "name": "MO3",
+              "type": "/providers/Microsoft.App/workloadProfileStates",
+              "properties": {
+                "minimumCount": 0,
+                "maximumCount": 2,
+                "currentCount": 0
+              }
+            }
+          ]
+        }
+      },
+      "List_environments_by_resource_group": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1",
+              "name": "jlaw-demo1",
+              "type": "Microsoft.App/managedEnvironments",
+              "location": "North Central US",
+              "tags": {},
+              "properties": {
+                "provisioningState": "Succeeded",
+                "defaultDomain": "jlaw-demo1.k4apps.io",
+                "staticIp": "20.42.33.145",
+                "zoneRedundant": true,
+                "vnetConfiguration": {
+                  "infrastructureSubnetId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/RGName/providers/Microsoft.Network/virtualNetworks/VNetName/subnets/subnetName1"
+                },
+                "customDomainConfiguration": {
+                  "customDomainVerificationId": "custom domain verification id",
+                  "dnsSuffix": "www.my-name.com",
+                  "subjectName": "CN=www.my-name.com",
+                  "expirationDate": "2022-11-06T04:00:00Z",
+                  "thumbprint": "CERTIFICATE_THUMBPRINT"
+                },
+                "eventStreamEndpoint": "testEndpoint",
+                "workloadProfiles": [
+                  {
+                    "name": "My-GP-01",
+                    "workloadProfileType": "GeneralPurpose",
+                    "minimumCount": 3,
+                    "maximumCount": 12
+                  },
+                  {
+                    "name": "My-MO-01",
+                    "workloadProfileType": "MemoryOptimized",
+                    "minimumCount": 3,
+                    "maximumCount": 6
+                  },
+                  {
+                    "name": "My-CO-01",
+                    "workloadProfileType": "ComputeOptimized",
+                    "minimumCount": 3,
+                    "maximumCount": 6
+                  },
+                  {
+                    "name": "My-consumption-01",
+                    "workloadProfileType": "Consumption"
+                  }
+                ],
+                "infrastructureResourceGroup": "capp-svc-jlaw-demo1-northcentralus"
+              }
+            },
+            {
+              "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/demo1",
+              "name": "demo1",
+              "type": "Microsoft.App/managedEnvironments",
+              "location": "North Central US",
+              "tags": {},
+              "properties": {
+                "provisioningState": "Succeeded",
+                "defaultDomain": "demo1.k4apps.io",
+                "staticIp": "52.142.21.61",
+                "zoneRedundant": true,
+                "customDomainConfiguration": {
+                  "customDomainVerificationId": "custom domain verification id",
+                  "dnsSuffix": "www.my-name2.com",
+                  "subjectName": "CN=www.my-name2.com",
+                  "expirationDate": "2022-11-06T04:00:00Z",
+                  "thumbprint": "CERTIFICATE_THUMBPRINT"
+                },
+                "eventStreamEndpoint": "testEndpoint",
+                "vnetConfiguration": {
+                  "infrastructureSubnetId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/RGName/providers/Microsoft.Network/virtualNetworks/VNetName/subnets/subnetName1"
+                },
+                "infrastructureResourceGroup": "capp-svc-demo1-northcentralus"
+              }
+            }
+          ]
+        }
+      },
+      "Get_environments_by_name": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1",
+          "name": "jlaw-demo1",
+          "type": "Microsoft.App/managedEnvironments",
+          "location": "North Central US",
+          "tags": {},
+          "properties": {
+            "provisioningState": "Succeeded",
+            "defaultDomain": "jlaw-demo1.k4apps.io",
+            "staticIp": "20.42.33.145",
+            "zoneRedundant": true,
+            "vnetConfiguration": {
+              "infrastructureSubnetId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/RGName/providers/Microsoft.Network/virtualNetworks/VNetName/subnets/subnetName1"
+            },
+            "customDomainConfiguration": {
+              "customDomainVerificationId": "custom domain verification id",
+              "dnsSuffix": "www.my-name.com",
+              "subjectName": "CN=www.my-name.com",
+              "expirationDate": "2022-11-06T04:00:00Z",
+              "thumbprint": "CERTIFICATE_THUMBPRINT"
+            },
+            "eventStreamEndpoint": "testEndpoint",
+            "workloadProfiles": [
+              {
+                "name": "My-GP-01",
+                "workloadProfileType": "GeneralPurpose",
+                "minimumCount": 3,
+                "maximumCount": 12
+              },
+              {
+                "name": "My-MO-01",
+                "workloadProfileType": "MemoryOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-CO-01",
+                "workloadProfileType": "ComputeOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-consumption-01",
+                "workloadProfileType": "Consumption"
+              }
+            ],
+            "kedaConfiguration": {
+              "version": "2.8.1"
+            },
+            "daprConfiguration": {
+              "version": "1.9"
+            },
+            "infrastructureResourceGroup": "capp-svc-jlaw-demo1-northcentralus",
+            "peerAuthentication": {
+              "mtls": {
+                "enabled": true
+              }
+            },
+            "peerTrafficConfiguration": {
+              "encryption": {
+                "enabled": true
+              }
+            }
+          }
+        }
+      },
+      "Create_environments": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv",
+          "name": "testcontainerenv",
+          "type": "Microsoft.App/managedEnvironments",
+          "location": "East US",
+          "identity": {
+            "type": "SystemAssigned, UserAssigned",
+            "principalId": "00000000-0000-0000-0000-000000000000",
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "userAssignedIdentities": {
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso-resources/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-identity": {
+                "principalId": "00000000-0000-0000-0000-000000000000",
+                "clientId": "00000000-0000-0000-0000-000000000000"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "InitializationInProgress",
+            "defaultDomain": "testcontainerenv.k4apps.io",
+            "staticIp": "1.2.3.4",
+            "appLogsConfiguration": {
+              "logAnalyticsConfiguration": {
+                "customerId": "string"
+              }
+            },
+            "zoneRedundant": true,
+            "vnetConfiguration": {
+              "infrastructureSubnetId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/RGName/providers/Microsoft.Network/virtualNetworks/VNetName/subnets/subnetName1"
+            },
+            "customDomainConfiguration": {
+              "customDomainVerificationId": "custom domain verification id",
+              "dnsSuffix": "www.my-name.com",
+              "subjectName": "CN=www.my-name.com",
+              "expirationDate": "2022-11-06T04:00:00Z",
+              "thumbprint": "CERTIFICATE_THUMBPRINT"
+            },
+            "eventStreamEndpoint": "testEndpoint",
+            "workloadProfiles": [
+              {
+                "name": "My-GP-01",
+                "workloadProfileType": "GeneralPurpose",
+                "minimumCount": 3,
+                "maximumCount": 12
+              },
+              {
+                "name": "My-MO-01",
+                "workloadProfileType": "MemoryOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-CO-01",
+                "workloadProfileType": "ComputeOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-consumption-01",
+                "workloadProfileType": "Consumption"
+              }
+            ],
+            "infrastructureResourceGroup": "capp-svc-testcontainerenv-eastus",
+            "peerAuthentication": {
+              "mtls": {
+                "enabled": true
+              }
+            }
+          }
+        }
+      },
+      "Create_environment_with_custom_infrastructureResourceGroup": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv",
+          "name": "testcontainerenv",
+          "type": "Microsoft.App/managedEnvironments",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "InitializationInProgress",
+            "defaultDomain": "testcontainerenv.k4apps.io",
+            "staticIp": "1.2.3.4",
+            "appLogsConfiguration": {
+              "logAnalyticsConfiguration": {
+                "customerId": "string"
+              }
+            },
+            "zoneRedundant": true,
+            "vnetConfiguration": {
+              "infrastructureSubnetId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/RGName/providers/Microsoft.Network/virtualNetworks/VNetName/subnets/subnetName1"
+            },
+            "customDomainConfiguration": {
+              "customDomainVerificationId": "custom domain verification id",
+              "dnsSuffix": "www.my-name.com",
+              "subjectName": "CN=www.my-name.com",
+              "expirationDate": "2022-11-06T04:00:00Z",
+              "thumbprint": "CERTIFICATE_THUMBPRINT"
+            },
+            "eventStreamEndpoint": "testEndpoint",
+            "workloadProfiles": [
+              {
+                "name": "My-GP-01",
+                "workloadProfileType": "GeneralPurpose",
+                "minimumCount": 3,
+                "maximumCount": 12
+              },
+              {
+                "name": "My-MO-01",
+                "workloadProfileType": "MemoryOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-CO-01",
+                "workloadProfileType": "ComputeOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-consumption-01",
+                "workloadProfileType": "Consumption"
+              }
+            ],
+            "infrastructureResourceGroup": "myInfrastructureRgName"
+          }
+        }
+      },
+      "Patch_Managed_Environment": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1",
+          "name": "jlaw-demo1",
+          "type": "Microsoft.App/managedEnvironments",
+          "location": "North Central US",
+          "tags": {},
+          "properties": {
+            "provisioningState": "Succeeded",
+            "defaultDomain": "jlaw-demo1.k4apps.io",
+            "staticIp": "20.42.33.145",
+            "zoneRedundant": true,
+            "customDomainConfiguration": {
+              "customDomainVerificationId": "custom domain verification id",
+              "dnsSuffix": "www.my-name.com",
+              "subjectName": "CN=www.my-name.com",
+              "expirationDate": "2022-11-06T04:00:00Z",
+              "thumbprint": "CERTIFICATE_THUMBPRINT"
+            },
+            "eventStreamEndpoint": "testEndpoint",
+            "workloadProfiles": [
+              {
+                "name": "My-GP-01",
+                "workloadProfileType": "GeneralPurpose",
+                "minimumCount": 3,
+                "maximumCount": 12
+              },
+              {
+                "name": "My-MO-01",
+                "workloadProfileType": "MemoryOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-CO-01",
+                "workloadProfileType": "ComputeOptimized",
+                "minimumCount": 3,
+                "maximumCount": 6
+              },
+              {
+                "name": "My-consumption-01",
+                "workloadProfileType": "Consumption"
+              }
+            ],
+            "infrastructureResourceGroup": "capp-svc-jlaw-demo1-northcentralus"
+          }
+        }
+      },
+      "List_Certificates_by_Managed_Environment": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/certificates/certificate-firendly-name",
+              "name": "certificate-firendly-name",
+              "type": "Microsoft.App/ManagedEnvironments/Certificates",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "subjectName": "my-subject-name.company.country.net",
+                "subjectAlternativeNames": [
+                  "CN=my-subject-name.com"
+                ],
+                "issuer": "Issuer Name",
+                "issueDate": "2021-11-06T04:00:00Z",
+                "expirationDate": "2022-11-06T04:00:00Z",
+                "thumbprint": "CERTIFICATE_THUMBPRINT",
+                "valid": true
+              }
+            },
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/certificates/certificate-firendly-name",
+              "name": "certificate-firendly-name",
+              "type": "Microsoft.App/ManagedEnvironments/Certificates",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "subjectName": "my-subject-name.company.country.net",
+                "subjectAlternativeNames": [
+                  "CN=my-subject-name.com"
+                ],
+                "issuer": "Issuer Name",
+                "issueDate": "2021-11-06T04:00:00Z",
+                "expirationDate": "2022-11-06T04:00:00Z",
+                "thumbprint": "CERTIFICATE_THUMBPRINT",
+                "valid": true
+              }
+            }
+          ]
+        }
+      },
+      "Get_Certificate": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name",
+          "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+          "location": "East US",
+          "properties": {
+            "subjectName": "CN=my-subject-name.company.country.net",
+            "provisioningState": "Succeeded",
+            "domainControlValidation": "CNAME"
+          }
+        }
+      },
+      "Create_or_Update_Certificate": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name",
+          "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+          "location": "East US",
+          "properties": {
+            "subjectName": "CN=my-subject-name.company.country.net",
+            "provisioningState": "Pending",
+            "domainControlValidation": "CNAME"
+          }
+        }
+      },
+      "Create_or_Update_Certificate_using_Managed_Identity": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/Certificates/certificate-firendly-name",
+          "type": "Microsoft.App/ManagedEnvironments/Certificates",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "subjectName": "my-subject-name.company.country.net",
+            "subjectAlternativeNames": [
+              "CN=my-subject-name.com"
+            ],
+            "certificateKeyVaultProperties": {
+              "identity": "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/test-rg/providers/microsoft.managedidentity/userassignedidentities/test-user-mi",
+              "keyVaultUrl": "https://xxxxxxxx.vault.azure.net/certificates/certName"
+            },
+            "issuer": "Issuer Name",
+            "issueDate": "2021-11-06T04:00:00Z",
+            "expirationDate": "2022-11-06T04:00:00Z",
+            "thumbprint": "CERTIFICATE_THUMBPRINT",
+            "valid": true
+          }
+        }
+      },
+      "Patch_Certificate": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/certificates/certificate-firendly-name",
+          "type": "Microsoft.App/ManagedEnvironments/Certificates",
+          "location": "East US",
+          "tags": {
+            "tag1": "value1",
+            "tag2": "value2"
+          },
+          "properties": {
+            "provisioningState": "Succeeded",
+            "subjectName": "my-subject-name.company.country.net",
+            "subjectAlternativeNames": [
+              "CN=my-subject-name.com"
+            ],
+            "issuer": "Issuer Name",
+            "issueDate": "2021-11-06T04:00:00Z",
+            "expirationDate": "2022-11-06T04:00:00Z",
+            "thumbprint": "CERTIFICATE_THUMBPRINT",
+            "valid": true
+          }
+        }
+      },
+      "Patch_Managed_Certificate": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name",
+          "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+          "location": "East US",
+          "properties": {
+            "subjectName": "CN=my-subject-name.company.country.net",
+            "provisioningState": "Succeeded",
+            "domainControlValidation": "CNAME"
+          }
+        }
+      },
+      "List_Managed_Certificates_by_Managed_Environment": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name",
+              "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+              "location": "East US",
+              "properties": {
+                "subjectName": "CN=my-subject-name.company.country.net",
+                "provisioningState": "Succeeded",
+                "domainControlValidation": "CNAME"
+              }
+            },
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name-root",
+              "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+              "location": "East US",
+              "properties": {
+                "subjectName": "CN=company.country.net",
+                "provisioningState": "Succeeded",
+                "domainControlValidation": "HTTP"
+              }
+            },
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/testcontainerenv/managedCertificates/certificate-firendly-name-txt",
+              "type": "Microsoft.App/ManagedEnvironments/managedCertificates",
+              "location": "East US",
+              "properties": {
+                "subjectName": "CN=txt.company.country.net",
+                "provisioningState": "Succeeded",
+                "domainControlValidation": "TXT"
+              }
+            }
+          ]
+        }
+      },
+      "ContainerApps_CheckNameAvailability": {
+        "value": {
+          "nameAvailable": true,
+          "reason": "None",
+          "message": ""
+        }
+      },
+      "Certificates_CheckNameAvailability": {
+        "value": {
+          "nameAvailable": true,
+          "reason": "None",
+          "message": ""
+        }
+      },
+      "Get_Managed_Environment_Auth_Token": {
+        "value": {
+          "id": "/subscriptions/651f8027-33e8-4ec4-97b4-f6e9f3dc8744/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/testenv",
+          "name": "testenv",
+          "type": "Microsoft.App/environments/accesstoken",
+          "location": "East US",
+          "properties": {
+            "token": "testToken",
+            "expires": "2022-07-14T19:22:50.3080223Z"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "description": "The ID of the target subscription.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List environments by subscription": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "List environments by resource group": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Get environments by name": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Create environments": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create environment with custom infrastructureResourceGroup": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Delete environment by name": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Patch Managed Environment": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Certificates by Managed Environment": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get Certificate": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Certificate": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Certificate using Managed Identity": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Delete Certificate": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Patch Certificate": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Patch Managed Certificate": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Managed Certificates by Managed Environment": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "ContainerApps_CheckNameAvailability": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Certificates_CheckNameAvailability": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get Managed Environment Auth Token": {
+            "value": "651f8027-33e8-4ec4-97b4-f6e9f3dc8744"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "description": "The API version to use for this operation.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List environments by subscription": {
+            "value": "2025-01-01"
+          },
+          "List environments by resource group": {
+            "value": "2025-01-01"
+          },
+          "Get environments by name": {
+            "value": "2025-01-01"
+          },
+          "Create environments": {
+            "value": "2025-01-01"
+          },
+          "Create environment with custom infrastructureResourceGroup": {
+            "value": "2025-01-01"
+          },
+          "Delete environment by name": {
+            "value": "2025-01-01"
+          },
+          "Patch Managed Environment": {
+            "value": "2025-01-01"
+          },
+          "List Certificates by Managed Environment": {
+            "value": "2025-01-01"
+          },
+          "Get Certificate": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Certificate": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Certificate using Managed Identity": {
+            "value": "2025-01-01"
+          },
+          "Delete Certificate": {
+            "value": "2025-01-01"
+          },
+          "Patch Certificate": {
+            "value": "2025-01-01"
+          },
+          "Patch Managed Certificate": {
+            "value": "2025-01-01"
+          },
+          "List Managed Certificates by Managed Environment": {
+            "value": "2025-01-01"
+          },
+          "ContainerApps_CheckNameAvailability": {
+            "value": "2025-01-01"
+          },
+          "Certificates_CheckNameAvailability": {
+            "value": "2025-01-01"
+          },
+          "Get Managed Environment Auth Token": {
+            "value": "2025-01-01"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "description": "The name of the resource group. The name is case insensitive.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List environments by resource group": {
+            "value": "examplerg"
+          },
+          "Get environments by name": {
+            "value": "examplerg"
+          },
+          "Create environments": {
+            "value": "examplerg"
+          },
+          "Create environment with custom infrastructureResourceGroup": {
+            "value": "examplerg"
+          },
+          "Delete environment by name": {
+            "value": "examplerg"
+          },
+          "Patch Managed Environment": {
+            "value": "examplerg"
+          },
+          "List Certificates by Managed Environment": {
+            "value": "examplerg"
+          },
+          "Get Certificate": {
+            "value": "examplerg"
+          },
+          "Create or Update Certificate": {
+            "value": "examplerg"
+          },
+          "Create or Update Certificate using Managed Identity": {
+            "value": "examplerg"
+          },
+          "Delete Certificate": {
+            "value": "examplerg"
+          },
+          "Patch Certificate": {
+            "value": "examplerg"
+          },
+          "Patch Managed Certificate": {
+            "value": "examplerg"
+          },
+          "List Managed Certificates by Managed Environment": {
+            "value": "examplerg"
+          },
+          "ContainerApps_CheckNameAvailability": {
+            "value": "examplerg"
+          },
+          "Certificates_CheckNameAvailability": {
+            "value": "examplerg"
+          },
+          "Get Managed Environment Auth Token": {
+            "value": "rg"
+          },
+          "List environments by subscription": {
+            "value": "examplerg"
+          }
+        }
+      }
+    },
+    "requestBodies": {
+      "ManagedEnvironment": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ManagedEnvironment"
+            }
+          }
+        },
+        "description": "Configuration details of the Environment.",
+        "required": true
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AppLogsConfiguration": {
+        "description": "Configuration of application logs",
+        "type": "object",
+        "properties": {
+          "destination": {
+            "description": "Logs destination, can be 'log-analytics', 'azure-monitor' or 'none'",
+            "type": "string"
+          },
+          "logAnalyticsConfiguration": {
+            "$ref": "#/components/schemas/LogAnalyticsConfiguration"
+          }
+        }
+      },
+      "KedaConfiguration": {
+        "type": "object",
+        "description": "Configuration properties Keda component",
+        "properties": {
+          "version": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The version of Keda"
+          }
+        }
+      },
+      "DaprConfiguration": {
+        "type": "object",
+        "description": "Configuration properties Dapr component",
+        "properties": {
+          "version": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The version of Dapr"
+          }
+        }
+      },
+      "VnetConfiguration": {
+        "type": "object",
+        "description": "Configuration properties for apps environment to join a Virtual Network",
+        "properties": {
+          "internal": {
+            "type": "boolean",
+            "description": "Boolean indicating the environment only has an internal load balancer. These environments do not have a public static IP resource. They must provide infrastructureSubnetId if enabling this property",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          },
+          "infrastructureSubnetId": {
+            "type": "string",
+            "description": "Resource ID of a subnet for infrastructure components. Must not overlap with any other provided IP ranges.",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          },
+          "dockerBridgeCidr": {
+            "type": "string",
+            "description": "CIDR notation IP range assigned to the Docker bridge, network. Must not overlap with any other provided IP ranges.",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          },
+          "platformReservedCidr": {
+            "type": "string",
+            "description": "IP range in CIDR notation that can be reserved for environment infrastructure IP addresses. Must not overlap with any other provided IP ranges.",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          },
+          "platformReservedDnsIP": {
+            "type": "string",
+            "description": " An IP address from the IP range defined by platformReservedCidr that will be reserved for the internal DNS server.",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          }
+        }
+      },
+      "Mtls": {
+        "type": "object",
+        "description": "Configuration properties for mutual TLS authentication",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Boolean indicating whether the mutual TLS authentication is enabled"
+          }
+        }
+      },
+      "ManagedEnvironment": {
+        "description": "An environment for hosting container apps",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Kind of the Environment."
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ManagedServiceIdentity"
+          },
+          "properties": {
+            "description": "Managed environment resource specific properties",
+            "type": "object",
+            "properties": {
+              "provisioningState": {
+                "description": "Provisioning state of the Environment.",
+                "enum": [
+                  "Succeeded",
+                  "Failed",
+                  "Canceled",
+                  "Waiting",
+                  "InitializationInProgress",
+                  "InfrastructureSetupInProgress",
+                  "InfrastructureSetupComplete",
+                  "ScheduledForDelete",
+                  "UpgradeRequested",
+                  "UpgradeFailed"
+                ],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "EnvironmentProvisioningState",
+                  "modelAsString": true
+                }
+              },
+              "daprAIInstrumentationKey": {
+                "type": "string",
+                "description": "Azure Monitor instrumentation key used by Dapr to export Service to Service communication telemetry",
+                "x-ms-secret": true
+              },
+              "daprAIConnectionString": {
+                "type": "string",
+                "description": "Application Insights connection string used by Dapr to export Service to Service communication telemetry",
+                "x-ms-secret": true
+              },
+              "vnetConfiguration": {
+                "$ref": "#/components/schemas/VnetConfiguration"
+              },
+              "deploymentErrors": {
+                "description": "Any errors that occurred during deployment or deployment validation",
+                "type": "string",
+                "readOnly": true
+              },
+              "defaultDomain": {
+                "description": "Default Domain Name for the cluster",
+                "type": "string",
+                "readOnly": true
+              },
+              "staticIp": {
+                "description": "Static IP of the Environment",
+                "type": "string",
+                "readOnly": true
+              },
+              "appLogsConfiguration": {
+                "$ref": "#/components/schemas/AppLogsConfiguration"
+              },
+              "zoneRedundant": {
+                "description": "Whether or not this Managed Environment is zone-redundant.",
+                "type": "boolean",
+                "x-ms-mutability": [
+                  "create",
+                  "read"
+                ]
+              },
+              "customDomainConfiguration": {
+                "$ref": "#/components/schemas/CustomDomainConfiguration"
+              },
+              "eventStreamEndpoint": {
+                "description": "The endpoint of the eventstream of the Environment.",
+                "type": "string",
+                "readOnly": true
+              },
+              "workloadProfiles": {
+                "description": "Workload profiles configured for the Managed Environment.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/WorkloadProfile"
+                },
+                "x-ms-identifiers": [
+                  "name"
+                ]
+              },
+              "kedaConfiguration": {
+                "$ref": "#/components/schemas/KedaConfiguration"
+              },
+              "daprConfiguration": {
+                "$ref": "#/components/schemas/DaprConfiguration"
+              },
+              "infrastructureResourceGroup": {
+                "description": "Name of the platform-managed resource group created for the Managed Environment to host infrastructure resources. If a subnet ID is provided, this resource group will be created in the same subscription as the subnet.",
+                "type": "string",
+                "x-ms-mutability": [
+                  "create",
+                  "read"
+                ]
+              },
+              "peerAuthentication": {
+                "description": "Peer authentication settings for the Managed Environment",
+                "type": "object",
+                "properties": {
+                  "mtls": {
+                    "$ref": "#/components/schemas/Mtls"
+                  }
+                }
+              },
+              "peerTrafficConfiguration": {
+                "description": "Peer traffic settings for the Managed Environment",
+                "type": "object",
+                "properties": {
+                  "encryption": {
+                    "description": "Peer traffic encryption settings for the Managed Environment",
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean",
+                        "description": "Boolean indicating whether the peer traffic encryption is enabled"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "ManagedEnvironmentsCollection": {
+        "description": "Collection of Environments",
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedEnvironment"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "LogAnalyticsConfiguration": {
+        "description": "Log Analytics configuration, must only be provided when destination is configured as 'log-analytics'",
+        "type": "object",
+        "properties": {
+          "customerId": {
+            "description": "Log analytics customer id",
+            "type": "string"
+          },
+          "sharedKey": {
+            "description": "Log analytics customer key",
+            "type": "string",
+            "x-ms-mutability": [
+              "create",
+              "update"
+            ],
+            "x-ms-secret": true
+          }
+        }
+      },
+      "EnvironmentAuthToken": {
+        "description": "Environment Auth Token.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Environment auth token resource specific properties",
+            "type": "object",
+            "properties": {
+              "token": {
+                "description": "Auth token value.",
+                "type": "string",
+                "x-ms-secret": true,
+                "readOnly": true
+              },
+              "expires": {
+                "description": "Token expiration date.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "WorkloadProfile": {
+        "description": "Workload profile to scope container app execution.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/WorkloadProfileName"
+          },
+          "workloadProfileType": {
+            "$ref": "#/components/schemas/WorkloadProfileType"
+          },
+          "minimumCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The minimum capacity."
+          },
+          "maximumCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The maximum capacity."
+          }
+        },
+        "required": [
+          "name",
+          "workloadProfileType"
+        ]
+      },
+      "workloadProfileStates": {
+        "description": "Collection of all the workload Profile States for a Managed Environment..",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Workload Profile resource specific properties.",
+            "type": "object",
+            "properties": {
+              "minimumCount": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Minimum count of instances."
+              },
+              "maximumCount": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Maximum count of nodes."
+              },
+              "currentCount": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Current count of nodes."
+              }
+            }
+          }
+        }
+      },
+      "workloadProfileStatesCollection": {
+        "description": "Collection of workloadProfileStates",
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/workloadProfileStates"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "DefaultErrorResponse": {
+        "description": "App Service error response.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "description": "Error model.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Standardized string to programmatically identify the error.",
+                "type": "string",
+                "readOnly": true
+              },
+              "message": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "target": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "details": {
+                "type": "array",
+                "description": "Details or the error",
+                "items": {
+                  "description": "Detailed errors.",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "description": "Standardized string to programmatically identify the error.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "message": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "target": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    }
+                  },
+                  "readOnly": true
+                },
+                "x-ms-identifiers": [
+                  "code"
+                ]
+              },
+              "innererror": {
+                "description": "More information to debug error.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "readOnly": true
+          }
+        }
+      },
+      "systemData": {
+        "type": "object",
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "properties": {
+          "createdBy": {
+            "type": "string",
+            "description": "The identity that created the resource."
+          },
+          "createdByType": {
+            "type": "string",
+            "description": "The type of identity that created the resource.",
+            "enum": [
+              "User",
+              "Application",
+              "ManagedIdentity",
+              "Key"
+            ],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The timestamp of resource creation (UTC)."
+          },
+          "lastModifiedBy": {
+            "type": "string",
+            "description": "The identity that last modified the resource."
+          },
+          "lastModifiedByType": {
+            "type": "string",
+            "description": "The type of identity that last modified the resource.",
+            "enum": [
+              "User",
+              "Application",
+              "ManagedIdentity",
+              "Key"
+            ],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "type": "string",
+            "description": "The timestamp of resource last modification (UTC)"
+          }
+        },
+        "readOnly": true
+      },
+      "Resource": {
+        "type": "object",
+        "title": "Resource",
+        "description": "Common fields that are returned in the response for all Azure Resource Manager resources",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "arm-id",
+            "description": "Fully qualified resource ID for the resource. E.g. \"/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}\"",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the resource",
+            "readOnly": true
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of the resource. E.g. \"Microsoft.Compute/virtualMachines\" or \"Microsoft.Storage/storageAccounts\"",
+            "readOnly": true
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "TrackedResource": {
+        "type": "object",
+        "title": "Tracked Resource",
+        "description": "The resource model definition for an Azure Resource Manager tracked top level resource which has 'tags' and a 'location'",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "description": "Resource tags.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-mutability": [
+              "read",
+              "create",
+              "update"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "description": "The geo-location where the resource lives",
+            "x-ms-mutability": [
+              "read",
+              "create"
+            ]
+          }
+        },
+        "required": [
+          "location"
+        ],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      },
+      "ManagedServiceIdentityType": {
+        "type": "string",
+        "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
+        "enum": [
+          "None",
+          "SystemAssigned",
+          "UserAssigned",
+          "SystemAssigned,UserAssigned"
+        ],
+        "x-ms-enum": {
+          "name": "ManagedServiceIdentityType",
+          "modelAsString": true
+        }
+      },
+      "UserAssignedIdentity": {
+        "type": "object",
+        "description": "User assigned identity properties",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The principal ID of the assigned identity.",
+            "readOnly": true
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The client ID of the assigned identity.",
+            "readOnly": true
+          }
+        }
+      },
+      "UserAssignedIdentities": {
+        "type": "object",
+        "title": "User-Assigned Identities",
+        "description": "The set of user assigned identities associated with the resource. The userAssignedIdentities dictionary keys will be ARM resource ids in the form: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}. The dictionary values can be empty objects ({}) in requests.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/UserAssignedIdentity"
+        }
+      },
+      "ManagedServiceIdentity": {
+        "type": "object",
+        "description": "Managed service identity (system assigned and/or user assigned identities)",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The service principal ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The tenant ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/ManagedServiceIdentityType"
+          },
+          "userAssignedIdentities": {
+            "$ref": "#/components/schemas/UserAssignedIdentities"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "CertificateKeyVaultProperties": {
+        "description": "Properties for a certificate stored in a Key Vault.",
+        "type": "object",
+        "properties": {
+          "identity": {
+            "description": "Resource ID of a managed identity to authenticate with Azure Key Vault, or System to use a system-assigned identity.",
+            "type": "string"
+          },
+          "keyVaultUrl": {
+            "description": "URL pointing to the Azure Key Vault secret that holds the certificate.",
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "CustomDomainConfiguration": {
+        "type": "object",
+        "description": "Configuration properties for apps environment custom domain",
+        "properties": {
+          "customDomainVerificationId": {
+            "description": "Id used to verify domain name ownership",
+            "type": "string",
+            "readOnly": true
+          },
+          "dnsSuffix": {
+            "type": "string",
+            "description": "Dns suffix for the environment domain",
+            "x-ms-mutability": [
+              "create",
+              "read"
+            ]
+          },
+          "certificateKeyVaultProperties": {
+            "$ref": "#/components/schemas/CertificateKeyVaultProperties"
+          },
+          "certificateValue": {
+            "format": "byte",
+            "description": "PFX or PEM blob",
+            "type": "string",
+            "x-ms-secret": true
+          },
+          "certificatePassword": {
+            "description": "Certificate password",
+            "type": "string",
+            "x-ms-secret": true
+          },
+          "expirationDate": {
+            "description": "Certificate expiration date.",
+            "type": "string",
+            "readOnly": true
+          },
+          "thumbprint": {
+            "description": "Certificate thumbprint.",
+            "type": "string",
+            "readOnly": true
+          },
+          "subjectName": {
+            "description": "Subject name of the certificate.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "WorkloadProfileName": {
+        "description": "Workload profile name for container apps to execute on.",
+        "type": "string"
+      },
+      "WorkloadProfileType": {
+        "description": "Workload profile type for container apps to execute on.",
+        "type": "string"
+      },
+      "Certificate": {
+        "description": "Certificate used for Custom Domain bindings of Container Apps in a Managed Environment",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Certificate resource specific properties",
+            "type": "object",
+            "properties": {
+              "provisioningState": {
+                "description": "Provisioning state of the certificate.",
+                "enum": [
+                  "Succeeded",
+                  "Failed",
+                  "Canceled",
+                  "DeleteFailed",
+                  "Pending"
+                ],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "CertificateProvisioningState",
+                  "modelAsString": true
+                }
+              },
+              "certificateKeyVaultProperties": {
+                "$ref": "#/components/schemas/CertificateKeyVaultProperties"
+              },
+              "password": {
+                "description": "Certificate password.",
+                "type": "string",
+                "x-ms-mutability": [
+                  "create"
+                ],
+                "x-ms-secret": true
+              },
+              "subjectName": {
+                "description": "Subject name of the certificate.",
+                "type": "string",
+                "readOnly": true
+              },
+              "subjectAlternativeNames": {
+                "description": "Subject alternative names the certificate applies to.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "readOnly": true
+              },
+              "value": {
+                "format": "byte",
+                "description": "PFX or PEM blob",
+                "type": "string",
+                "x-ms-mutability": [
+                  "create"
+                ],
+                "x-ms-secret": true
+              },
+              "issuer": {
+                "description": "Certificate issuer.",
+                "type": "string",
+                "readOnly": true
+              },
+              "issueDate": {
+                "description": "Certificate issue Date.",
+                "type": "string",
+                "readOnly": true
+              },
+              "expirationDate": {
+                "description": "Certificate expiration date.",
+                "type": "string",
+                "readOnly": true
+              },
+              "thumbprint": {
+                "description": "Certificate thumbprint.",
+                "type": "string",
+                "readOnly": true
+              },
+              "valid": {
+                "description": "Is the certificate valid?.",
+                "type": "boolean",
+                "readOnly": true
+              },
+              "publicKeyHash": {
+                "description": "Public key hash.",
+                "type": "string",
+                "readOnly": true
+              }
+            }
+          }
+        },
+        "x-ms-client-flatten": true
+      },
+      "CertificateCollection": {
+        "description": "Collection of Certificates.",
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Certificate"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "CertificatePatch": {
+        "description": "A certificate to update",
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Application-specific metadata in the form of key-value pairs."
+          }
+        }
+      },
+      "ManagedCertificate": {
+        "description": "Managed certificates used for Custom Domain bindings of Container Apps in a Managed Environment",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Certificate resource specific properties",
+            "type": "object",
+            "properties": {
+              "provisioningState": {
+                "description": "Provisioning state of the certificate.",
+                "enum": [
+                  "Succeeded",
+                  "Failed",
+                  "Canceled",
+                  "DeleteFailed",
+                  "Pending"
+                ],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "CertificateProvisioningState",
+                  "modelAsString": true
+                }
+              },
+              "subjectName": {
+                "description": "Subject name of the certificate.",
+                "type": "string"
+              },
+              "error": {
+                "description": "Any error occurred during the certificate provision.",
+                "type": "string",
+                "readOnly": true
+              },
+              "domainControlValidation": {
+                "description": "Selected type of domain control validation for managed certificates.",
+                "enum": [
+                  "CNAME",
+                  "HTTP",
+                  "TXT"
+                ],
+                "type": "string",
+                "x-ms-enum": {
+                  "name": "ManagedCertificateDomainControlValidation",
+                  "modelAsString": true
+                }
+              },
+              "validationToken": {
+                "description": "A TXT token used for DNS TXT domain control validation when issuing this type of managed certificates.",
+                "type": "string",
+                "readOnly": true
+              }
+            }
+          }
+        },
+        "x-ms-client-flatten": true
+      },
+      "ManagedCertificatePatch": {
+        "description": "A managed certificate to update",
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Application-specific metadata in the form of key-value pairs."
+          }
+        }
+      },
+      "ManagedCertificateCollection": {
+        "description": "Collection of Managed Certificates.",
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedCertificate"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "CheckNameAvailabilityRequest": {
+        "type": "object",
+        "description": "The check availability request body.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the resource for which availability needs to be checked."
+          },
+          "type": {
+            "type": "string",
+            "description": "The resource type."
+          }
+        }
+      },
+      "CheckNameAvailabilityResponse": {
+        "type": "object",
+        "description": "The check availability result.",
+        "properties": {
+          "nameAvailable": {
+            "type": "boolean",
+            "description": "Indicates if the resource name is available."
+          },
+          "reason": {
+            "type": "string",
+            "description": "The reason why the given name is not available.",
+            "enum": [
+              "Invalid",
+              "AlreadyExists"
+            ],
+            "x-ms-enum": {
+              "name": "CheckNameAvailabilityReason",
+              "modelAsString": true
+            }
+          },
+          "message": {
+            "type": "string",
+            "description": "Detailed reason why the given name is available."
+          }
+        }
+      },
+      "ProxyResource": {
+        "type": "object",
+        "title": "Proxy Resource",
+        "description": "The resource model definition for a Azure Resource Manager proxy resource. It will not have tags and a location",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      }
+    }
+  }
+}

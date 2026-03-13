@@ -1,0 +1,1 @@
+{"type":"object","description":"GPU specification for a container.","required":["type","count"],"properties":{"count":{"type":"integer","format":"int32","description":"Number of GPUs required (1-8)","minimum":0},"type":{"type":"string","description":"GPU type identifier (e.g., \"nvidia-a100\", \"nvidia-t4\")"}},"x-readme-ref-name":"ContainerGpuSpec"}

@@ -1,0 +1,1 @@
+{"type":"string","description":"Compute type for build resources.","enum":["small","medium","large","x-large"],"x-readme-ref-name":"ComputeType"}

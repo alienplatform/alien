@@ -1,0 +1,1 @@
+{"type":"object","description":"Resource specification with min/desired values.","required":["min","desired"],"properties":{"desired":{"type":"string","description":"Desired resource allocation (used by scheduler)"},"min":{"type":"string","description":"Minimum resource allocation"}},"x-readme-ref-name":"ResourceSpec"}

@@ -1,0 +1,114 @@
+{
+  "id": "build/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on build projects",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "codebuild:CreateProject",
+            "codebuild:DeleteProject",
+            "codebuild:UpdateProject",
+            "codebuild:BatchGetProjects",
+            "codebuild:ListBuildsForProject",
+            "codebuild:ListCuratedEnvironmentImages",
+            "codebuild:GetResourcePolicy",
+            "codebuild:PutResourcePolicy",
+            "codebuild:DeleteResourcePolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:PassRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "cloudbuild.workerpools.create",
+            "cloudbuild.workerpools.delete",
+            "cloudbuild.workerpools.update",
+            "cloudbuild.workerpools.get",
+            "cloudbuild.workerpools.list",
+            "cloudbuild.builds.create",
+            "cloudbuild.builds.update",
+            "cloudbuild.workerpools.use",
+            "cloudbuild.builds.get",
+            "cloudbuild.builds.list",
+            "cloudbuild.operations.get",
+            "cloudbuild.operations.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed build provision",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${stackPrefix}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Resource specific build provision",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${resourceName}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${resourceName}-'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/jobs/write",
+            "Microsoft.App/jobs/delete",
+            "Microsoft.App/managedEnvironments/read",
+            "Microsoft.App/managedEnvironments/write",
+            "Microsoft.App/jobs/read",
+            "Microsoft.App/jobs/executions/read",
+            "Microsoft.App/jobs/listSecrets/action"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

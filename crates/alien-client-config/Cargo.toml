@@ -1,0 +1,38 @@
+[package]
+name = "alien-client-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Cloud client configuration and credential loading for Alien"
+license.workspace = true
+
+[features]
+default = []
+all-platforms = ["aws", "gcp", "azure", "kubernetes"]
+aws = ["dep:alien-aws-clients"]
+gcp = ["dep:alien-gcp-clients"]
+azure = ["dep:alien-azure-clients"]
+kubernetes = ["dep:alien-k8s-clients"]
+test-utils = ["alien-core/test-utils"]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-client-core = { workspace = true }
+alien-aws-clients = { workspace = true, optional = true }
+alien-gcp-clients = { workspace = true, optional = true }
+alien-azure-clients = { workspace = true, optional = true }
+alien-k8s-clients = { workspace = true, optional = true }
+
+async-trait = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+

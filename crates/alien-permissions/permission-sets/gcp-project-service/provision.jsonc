@@ -1,0 +1,25 @@
+{
+  "id": "gcp-project-service/provision",
+  "description": "Allows enabling, disabling, and managing GCP project services",
+  "platforms": {
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "serviceusage.services.enable",
+            "serviceusage.services.disable",
+            "serviceusage.services.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ]
+  }
+}

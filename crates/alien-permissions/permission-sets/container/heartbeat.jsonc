@@ -1,0 +1,62 @@
+{
+  "id": "container/heartbeat",
+  "description": "Allows readonly health monitoring for containers and their cloud infrastructure (LB target health, volume status).",
+  "platforms": {
+    "aws": [
+      // Read-only: LB target health (are containers receiving traffic?)
+      // and volume status (are persistent volumes attached?)
+      {
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:DescribeTargetHealth",
+            "ec2:DescribeVolumes"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "compute.backendServices.get",
+            "compute.disks.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Compute/disks/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

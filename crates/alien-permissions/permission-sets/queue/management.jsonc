@@ -1,0 +1,84 @@
+{
+  // Allows managing queue configuration and monitoring (advanced operations)
+  "id": "queue/management",
+  "description": "Allows managing queue configuration, attributes, and monitoring",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:GetQueueAttributes",
+            "sqs:SetQueueAttributes",
+            "sqs:ListQueueTags",
+            "sqs:TagQueue",
+            "sqs:UntagQueue",
+            "sqs:PurgeQueue"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.topics.list",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.update",
+            "pubsub.subscriptions.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue management access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue management access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/authorizationRules/read"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
+          }
+        }
+      }
+    ]
+  }
+}

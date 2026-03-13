@@ -1,0 +1,39 @@
+---
+source: crates/alien-permissions/tests/aws_cloudformation.rs
+expression: result
+---
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FunctionExecute1",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        {
+          "Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+        }
+      ]
+    },
+    {
+      "Sid": "FunctionExecute2",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": [
+        {
+          "Fn::Sub": "arn:aws:ecr:*:${ManagingAccountId}:repository/*"
+        }
+      ],
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "my-external-id"
+        }
+      }
+    }
+  ]
+}

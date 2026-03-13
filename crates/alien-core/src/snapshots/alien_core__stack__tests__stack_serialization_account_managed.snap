@@ -1,0 +1,60 @@
+---
+source: crates/alien-core/src/stack.rs
+expression: stack
+---
+{
+  "id": "test-stack",
+  "resources": {
+    "my-bucket": {
+      "config": {
+        "type": "storage",
+        "id": "my-bucket",
+        "publicRead": true,
+        "versioning": false,
+        "lifecycleRules": []
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "my-function": {
+      "config": {
+        "type": "function",
+        "id": "my-function",
+        "links": [
+          {
+            "type": "storage",
+            "id": "my-bucket"
+          }
+        ],
+        "triggers": [],
+        "permissions": "execution",
+        "code": {
+          "type": "image",
+          "image": "rust:latest"
+        },
+        "memoryMb": 256,
+        "timeoutSeconds": 180,
+        "environment": {},
+        "ingress": "private",
+        "arcEnabled": false,
+        "concurrencyLimit": null,
+        "readinessProbe": null
+      },
+      "lifecycle": "live",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+          "storage/data-write"
+        ]
+      }
+    },
+    "management": "auto"
+  }
+}

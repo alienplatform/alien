@@ -1,0 +1,1 @@
+{"type":"string","description":"Represents the overall status of a stack based on its resource states.","enum":["pending","in_progress","running","deleted","failure"],"x-readme-ref-name":"StackStatus"}

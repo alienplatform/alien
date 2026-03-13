@@ -1,0 +1,1590 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "ManagedServicesClient",
+    "version": "2022-10-01",
+    "description": "The specification for ManagedServices."
+  },
+  "security": [
+    {
+      "azure_auth": [
+        "user_impersonation"
+      ]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "Get_Registration_Definition": {
+        "value": {
+          "properties": {
+            "description": "Test",
+            "registrationDefinitionName": "DefinitionName",
+            "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+            "authorizations": [
+              {
+                "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+              },
+              {
+                "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "User Access Administrator",
+                "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                "delegatedRoleDefinitionIds": [
+                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                ]
+              }
+            ],
+            "eligibleAuthorizations": [
+              {
+                "justInTimeAccessPolicy": {
+                  "multiFactorAuthProvider": "Azure",
+                  "maximumActivationDuration": "PT8H",
+                  "managedByTenantApprovers": [
+                    {
+                      "principalId": "d9b22cd6-6407-43cc-8c60-07c56df0b51a",
+                      "principalIdDisplayName": "Approver Group"
+                    }
+                  ]
+                },
+                "principalId": "3e0ed8c6-e902-4fc5-863c-e3ddbb2ae2a2",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "ae349356-3a1b-4a5e-921d-050484c6347e"
+              }
+            ],
+            "provisioningState": "Succeeded",
+            "manageeTenantId": "0e06d6a3-55ae-40a3-ac29-350808980808",
+            "manageeTenantName": "Test customer",
+            "managedByTenantName": "Test Tenant"
+          },
+          "plan": {
+            "name": "addesai-plan",
+            "product": "test",
+            "publisher": "marketplace-test",
+            "version": "1.0.0"
+          },
+          "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-6e081c90ada2",
+          "type": "Microsoft.ManagedServices/registrationDefinitions",
+          "name": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+        }
+      },
+      "Put_Registration_Definition": {
+        "value": {
+          "properties": {
+            "description": "Test",
+            "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+            "registrationDefinitionName": "DefinitionName",
+            "authorizations": [
+              {
+                "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+              },
+              {
+                "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "User Access Administrator",
+                "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                "delegatedRoleDefinitionIds": [
+                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                ]
+              }
+            ],
+            "eligibleAuthorizations": [
+              {
+                "justInTimeAccessPolicy": {
+                  "multiFactorAuthProvider": "Azure",
+                  "maximumActivationDuration": "PT8H",
+                  "managedByTenantApprovers": [
+                    {
+                      "principalId": "d9b22cd6-6407-43cc-8c60-07c56df0b51a",
+                      "principalIdDisplayName": "Approver Group"
+                    }
+                  ]
+                },
+                "principalId": "3e0ed8c6-e902-4fc5-863c-e3ddbb2ae2a2",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "ae349356-3a1b-4a5e-921d-050484c6347e"
+              }
+            ],
+            "provisioningState": "Succeeded",
+            "managedByTenantName": "Test Tenant"
+          },
+          "plan": {
+            "name": "addesai-plan",
+            "product": "test",
+            "publisher": "marketplace-test",
+            "version": "1.0.0"
+          },
+          "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-6e081c90ada2",
+          "type": "Microsoft.ManagedServices/registrationDefinitions",
+          "name": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+        }
+      },
+      "Get_Registration_Assignment": {
+        "value": {
+          "properties": {
+            "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+            "provisioningState": "Succeeded",
+            "registrationDefinition": {
+              "properties": {
+                "description": "Test",
+                "managedByTenantId": "83abe5cd-bcc3-441a-bd86-e6a75360cecc",
+                "registrationDefinitionName": "DefinitionName",
+                "authorizations": [
+                  {
+                    "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                  },
+                  {
+                    "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "User Access Administrator",
+                    "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                    "delegatedRoleDefinitionIds": [
+                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                    ]
+                  }
+                ],
+                "eligibleAuthorizations": [
+                  {
+                    "justInTimeAccessPolicy": {
+                      "multiFactorAuthProvider": "Azure",
+                      "maximumActivationDuration": "PT8H"
+                    },
+                    "principalId": "3e0ed8c6-e902-4fc5-863c-e3ddbb2ae2a2",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "ae349356-3a1b-4a5e-921d-050484c6347e"
+                  }
+                ],
+                "provisioningState": "Succeeded",
+                "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                "managedByTenantName": "Contoso Corp."
+              },
+              "plan": {
+                "name": "addesai-plan",
+                "product": "test",
+                "publisher": "marketplace-test",
+                "version": "1.0.0"
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+              "type": "Microsoft.ManagedServices/registrationDefinitions",
+              "name": "26c128c2-fefa-4340-9bb1-8e081c90ada2"
+            }
+          },
+          "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/484a7d5f-9729-4b87-bc9b-26610985a013",
+          "type": "Microsoft.ManagedServices/registrationAssignments",
+          "name": "484a7d5f-9729-4b87-bc9b-26610985a013"
+        }
+      },
+      "Put_Registration_Assignment": {
+        "value": {
+          "properties": {
+            "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+            "provisioningState": "Succeeded"
+          },
+          "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/484a7d5f-9729-4b87-bc9b-26610985a013",
+          "type": "Microsoft.ManagedServices/registrationAssignments",
+          "name": "484a7d5f-9729-4b87-bc9b-26610985a013"
+        }
+      },
+      "Get_Registration_Definitions": {
+        "value": {
+          "properties": {
+            "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+            "authorizations": [
+              {
+                "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+              },
+              {
+                "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "User Access Administrator",
+                "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                "delegatedRoleDefinitionIds": [
+                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                ]
+              }
+            ],
+            "offerDisplayName": "Marketplace Test Offer",
+            "publisherDisplayName": "Marketplace Test Publisher",
+            "planDisplayName": "Test Plan"
+          },
+          "plan": {
+            "name": "test-plan",
+            "product": "test",
+            "publisher": "marketplace-test",
+            "version": "1.0.0"
+          },
+          "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/marketplaceRegistrationDefinitions/marketplace-test.test.test-plan.1.0.0",
+          "type": "Microsoft.ManagedServices/marketplaceRegistrationDefinitions",
+          "name": "marketplace-test.test.test-plan.1.0.0"
+        }
+      },
+      "Get_Registration_Definitions_with_ManagedByTenantId_eq_filter": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "description": "Test",
+                "registrationDefinitionName": "DefinitionName",
+                "authorizations": [
+                  {
+                    "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                  },
+                  {
+                    "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "User Access Administrator",
+                    "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                    "delegatedRoleDefinitionIds": [
+                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                    ]
+                  }
+                ],
+                "eligibleAuthorizations": [
+                  {
+                    "justInTimeAccessPolicy": {
+                      "multiFactorAuthProvider": "Azure",
+                      "maximumActivationDuration": "PT8H",
+                      "managedByTenantApprovers": [
+                        {
+                          "principalId": "d9b22cd6-6407-43cc-8c60-07c56df0b51a",
+                          "principalIdDisplayName": "Approver Group"
+                        }
+                      ]
+                    },
+                    "principalId": "3e0ed8c6-e902-4fc5-863c-e3ddbb2ae2a2",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "ae349356-3a1b-4a5e-921d-050484c6347e"
+                  }
+                ],
+                "provisioningState": "Succeeded",
+                "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+                "managedByTenantName": "Contoso Corp."
+              },
+              "plan": {
+                "name": "addesai-plan",
+                "product": "test",
+                "publisher": "marketplace-test",
+                "version": "1.0.0"
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-6e081c90ada2",
+              "type": "Microsoft.ManagedServices/registrationDefinitions",
+              "name": "26c128c2-fefa-4340-9bb1-6e081c90ada2",
+              "systemData": {
+                "createdBy": "testuser@outlook.com",
+                "createdByType": "User",
+                "createdAt": "2021-11-22T19:56:05.0703382Z",
+                "lastModifiedBy": "testuser@outlook.com",
+                "lastModifiedByType": "User",
+                "lastModifiedAt": "2021-11-22T19:56:05.0703382Z"
+              }
+            }
+          ]
+        }
+      },
+      "Get_Registration_Definitions_with_ManagedByTenantId_in_filter": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "description": "Test",
+                "registrationDefinitionName": "DefinitionName",
+                "authorizations": [
+                  {
+                    "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                  },
+                  {
+                    "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "User Access Administrator",
+                    "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                    "delegatedRoleDefinitionIds": [
+                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                    ]
+                  }
+                ],
+                "eligibleAuthorizations": [
+                  {
+                    "justInTimeAccessPolicy": {
+                      "multiFactorAuthProvider": "Azure",
+                      "maximumActivationDuration": "PT8H",
+                      "managedByTenantApprovers": [
+                        {
+                          "principalId": "d9b22cd6-6407-43cc-8c60-07c56df0b51a",
+                          "principalIdDisplayName": "Approver Group"
+                        }
+                      ]
+                    },
+                    "principalId": "3e0ed8c6-e902-4fc5-863c-e3ddbb2ae2a2",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "ae349356-3a1b-4a5e-921d-050484c6347e"
+                  }
+                ],
+                "provisioningState": "Succeeded",
+                "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+                "managedByTenantName": "Contoso Corp."
+              },
+              "plan": {
+                "name": "addesai-plan",
+                "product": "test",
+                "publisher": "marketplace-test",
+                "version": "1.0.0"
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-6e081c90ada2",
+              "type": "Microsoft.ManagedServices/registrationDefinitions",
+              "name": "26c128c2-fefa-4340-9bb1-6e081c90ada2",
+              "systemData": {
+                "createdBy": "testuser@outlook.com",
+                "createdByType": "User",
+                "createdAt": "2021-11-22T19:56:05.0703382Z",
+                "lastModifiedBy": "testuser@outlook.com",
+                "lastModifiedByType": "User",
+                "lastModifiedAt": "2021-11-22T19:56:05.0703382Z"
+              }
+            },
+            {
+              "properties": {
+                "description": "Test 2",
+                "registrationDefinitionName": "DefinitionName",
+                "authorizations": [
+                  {
+                    "principalId": "a2e38003-c234-42dc-a769-3ca55be53098",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                  }
+                ],
+                "provisioningState": "Succeeded",
+                "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                "managedByTenantId": "de83f4a9-a76a-4025-a91a-91171923eac7",
+                "managedByTenantName": "Test Corp."
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8a82-a144ahf49dea/providers/Microsoft.ManagedServices/registrationDefinitions/2a60751f-03d6-45a1-8797-24678246d54d",
+              "type": "Microsoft.ManagedServices/registrationDefinitions",
+              "name": "2a60751f-03d6-45a1-8797-24678246d54d",
+              "systemData": {
+                "createdBy": "testuser@msp.com",
+                "createdByType": "User",
+                "createdAt": "2021-11-21T08:56:05.0703382Z",
+                "lastModifiedBy": "testuser@msp.com",
+                "lastModifiedByType": "User",
+                "lastModifiedAt": "2021-11-22T08:56:05.0703382Z"
+              }
+            }
+          ]
+        }
+      },
+      "Get_Registration_Assignments": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                "provisioningState": "Succeeded",
+                "registrationDefinition": {
+                  "properties": {
+                    "description": "Test",
+                    "registrationDefinitionName": "DefinitionName",
+                    "authorizations": [
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "Support User",
+                        "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                      },
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "User Access Administrator",
+                        "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                        "delegatedRoleDefinitionIds": [
+                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                        ]
+                      }
+                    ],
+                    "eligibleAuthorizations": [
+                      {
+                        "principalId": "700bddf4-2c3b-4cd1-bb02-6a2c622524f4",
+                        "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                        "justInTimeAccessPolicy": {
+                          "multiFactorAuthProvider": "Azure",
+                          "maximumActivationDuration": "PT8H"
+                        }
+                      }
+                    ],
+                    "provisioningState": "Succeeded",
+                    "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                    "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                    "managedByTenantId": "83abe5cd-bcc3-441a-bd86-e6a75360cecc",
+                    "managedByTenantName": "Contoso Corp."
+                  },
+                  "plan": {
+                    "name": "addesai-plan",
+                    "product": "test",
+                    "publisher": "marketplace-test",
+                    "version": "1.0.0"
+                  },
+                  "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                  "type": "Microsoft.ManagedServices/registrationDefinitions",
+                  "name": "26c128c2-fefa-4340-9bb1-8e081c90ada2"
+                }
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/484a7d5f-9729-4b87-bc9b-26610985a013",
+              "type": "Microsoft.ManagedServices/registrationAssignments",
+              "name": "484a7d5f-9729-4b87-bc9b-26610985a013"
+            }
+          ]
+        }
+      },
+      "Get_Registration_Assignments_with_ManagedByTenantId_eq_filter": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                "provisioningState": "Succeeded",
+                "registrationDefinition": {
+                  "properties": {
+                    "description": "Test",
+                    "registrationDefinitionName": "DefinitionName",
+                    "authorizations": [
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "Support User",
+                        "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                      },
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "User Access Administrator",
+                        "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                        "delegatedRoleDefinitionIds": [
+                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                        ]
+                      }
+                    ],
+                    "eligibleAuthorizations": [
+                      {
+                        "principalId": "700bddf4-2c3b-4cd1-bb02-6a2c622524f4",
+                        "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                        "justInTimeAccessPolicy": {
+                          "multiFactorAuthProvider": "Azure",
+                          "maximumActivationDuration": "PT8H"
+                        }
+                      }
+                    ],
+                    "provisioningState": "Succeeded",
+                    "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                    "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                    "managedByTenantId": "83abe5cd-bcc3-441a-bd86-e6a75360cecc",
+                    "managedByTenantName": "Contoso Corp."
+                  },
+                  "plan": {
+                    "name": "addesai-plan",
+                    "product": "test",
+                    "publisher": "marketplace-test",
+                    "version": "1.0.0"
+                  },
+                  "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                  "type": "Microsoft.ManagedServices/registrationDefinitions",
+                  "name": "26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                  "systemData": {
+                    "createdBy": "testuser@outlook.com",
+                    "createdByType": "User",
+                    "createdAt": "2021-11-22T19:56:05.0703382Z",
+                    "lastModifiedBy": "testuser@outlook.com",
+                    "lastModifiedByType": "User",
+                    "lastModifiedAt": "2021-11-22T19:56:05.0703382Z"
+                  }
+                }
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/484a7d5f-9729-4b87-bc9b-26610985a013",
+              "type": "Microsoft.ManagedServices/registrationAssignments",
+              "name": "484a7d5f-9729-4b87-bc9b-26610985a013"
+            }
+          ]
+        }
+      },
+      "Get_Registration_Assignments_with_ManagedByTenantId_in_filter": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                "provisioningState": "Succeeded",
+                "registrationDefinition": {
+                  "properties": {
+                    "description": "Test",
+                    "registrationDefinitionName": "DefinitionName",
+                    "authorizations": [
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "Support User",
+                        "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                      },
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "User Access Administrator",
+                        "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                        "delegatedRoleDefinitionIds": [
+                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                        ]
+                      }
+                    ],
+                    "eligibleAuthorizations": [
+                      {
+                        "principalId": "700bddf4-2c3b-4cd1-bb02-6a2c622524f4",
+                        "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                        "justInTimeAccessPolicy": {
+                          "multiFactorAuthProvider": "Azure",
+                          "maximumActivationDuration": "PT8H"
+                        }
+                      }
+                    ],
+                    "provisioningState": "Succeeded",
+                    "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                    "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                    "managedByTenantId": "83abe5cd-bcc3-441a-bd86-e6a75360cec",
+                    "managedByTenantName": "Contoso Corp."
+                  },
+                  "plan": {
+                    "name": "addesai-plan",
+                    "product": "test",
+                    "publisher": "marketplace-test",
+                    "version": "1.0.0"
+                  },
+                  "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                  "type": "Microsoft.ManagedServices/registrationDefinitions",
+                  "name": "26c128c2-fefa-4340-9bb1-8e081c90ada2",
+                  "systemData": {
+                    "createdBy": "testuser@outlook.com",
+                    "createdByType": "User",
+                    "createdAt": "2021-11-22T19:56:05.0703382Z",
+                    "lastModifiedBy": "testuser@outlook.com",
+                    "lastModifiedByType": "User",
+                    "lastModifiedAt": "2021-11-22T19:56:05.0703382Z"
+                  }
+                }
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/484a7d5f-9729-4b87-bc9b-26610985a013",
+              "type": "Microsoft.ManagedServices/registrationAssignments",
+              "name": "484a7d5f-9729-4b87-bc9b-26610985a013"
+            },
+            {
+              "properties": {
+                "registrationDefinitionId": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/67aa1d7b-30ac-4ec2-be0b-ce30751468f2",
+                "provisioningState": "Succeeded",
+                "registrationDefinition": {
+                  "properties": {
+                    "description": "Test",
+                    "registrationDefinitionName": "DefinitionName",
+                    "authorizations": [
+                      {
+                        "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                        "principalIdDisplayName": "Support User",
+                        "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                      }
+                    ],
+                    "provisioningState": "Succeeded",
+                    "manageeTenantId": "01c0bcd5-4f47-4e4b-b492-418b7e2a8854",
+                    "manageeTenantName": "test_test_aad_SbtFhyGiLHPFm",
+                    "managedByTenantId": "de83f4a9-a76a-4025-a91a-91171923eac7",
+                    "managedByTenantName": "Test Corp."
+                  },
+                  "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationDefinitions/67aa1d7b-30ac-4ec2-be0b-ce30751468f2",
+                  "type": "Microsoft.ManagedServices/registrationDefinitions",
+                  "name": "67aa1d7b-30ac-4ec2-be0b-ce30751468f2",
+                  "systemData": {
+                    "createdBy": "testuser@outlook.com",
+                    "createdByType": "User",
+                    "createdAt": "2021-11-22T19:56:05.0703382Z",
+                    "lastModifiedBy": "testuser@outlook.com",
+                    "lastModifiedByType": "User",
+                    "lastModifiedAt": "2021-11-22T19:56:05.0703382Z"
+                  }
+                }
+              },
+              "id": "/subscriptions/0afefe50-734e-4610-8c82-a144aff49dea/providers/Microsoft.ManagedServices/registrationAssignments/f6e721b2-7576-44d3-9182-03143fce94c0",
+              "type": "Microsoft.ManagedServices/registrationAssignments",
+              "name": "f6e721b2-7576-44d3-9182-03143fce94c0"
+            }
+          ]
+        }
+      },
+      "Get_Marketplace_Registration_Definitions_At_Tenant_Scope": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+                "authorizations": [
+                  {
+                    "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "Support User",
+                    "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                  },
+                  {
+                    "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                    "principalIdDisplayName": "User Access Administrator",
+                    "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                    "delegatedRoleDefinitionIds": [
+                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                    ]
+                  }
+                ],
+                "eligibleAuthorizations": [],
+                "offerDisplayName": "Marketplace Test Offer",
+                "publisherDisplayName": "Marketplace Test Publisher",
+                "planDisplayName": "Test Plan"
+              },
+              "plan": {
+                "name": "test-plan",
+                "product": "test",
+                "publisher": "marketplace-test",
+                "version": "1.0.0"
+              },
+              "id": "/providers/Microsoft.ManagedServices/marketplaceRegistrationDefinitions/marketplace-test.test.test-plan.1.0.0",
+              "type": "Microsoft.ManagedServices/marketplaceRegistrationDefinitions",
+              "name": "marketplace-test.test.test-plan.1.0.0"
+            }
+          ]
+        }
+      },
+      "Get_Marketplace_Registration_Definition_At_Tenant_Scope": {
+        "value": {
+          "properties": {
+            "managedByTenantId": "83ace5cd-bcc3-441a-hd86-e6a75360cecc",
+            "authorizations": [
+              {
+                "principalId": "f98g86a2-4cc4-4e6d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "Support User",
+                "roleDefinitionId": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+              },
+              {
+                "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
+                "principalIdDisplayName": "User Access Administrator",
+                "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                "delegatedRoleDefinitionIds": [
+                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                ]
+              }
+            ],
+            "eligibleAuthorizations": [],
+            "offerDisplayName": "Marketplace Test Offer",
+            "publisherDisplayName": "Marketplace Test Publisher",
+            "planDisplayName": "Test Plan"
+          },
+          "plan": {
+            "name": "test-plan",
+            "product": "test",
+            "publisher": "marketplace-test",
+            "version": "1.0.0"
+          },
+          "id": "/providers/Microsoft.ManagedServices/marketplaceRegistrationDefinitions/marketplace-test.test.test-plan.1.0.0",
+          "type": "Microsoft.ManagedServices/marketplaceRegistrationDefinitions",
+          "name": "marketplace-test.test.test-plan.1.0.0"
+        }
+      },
+      "Get_Registration_Operations": {
+        "value": {
+          "value": [
+            {
+              "name": "Microsoft.ManagedServices/registrationDefinitions/read",
+              "display": {
+                "provider": "Microsoft Managed Services",
+                "resource": "Managed Services Registration Definition",
+                "operation": "List Managed Services Registration Definitions",
+                "description": "Retrieves a list of Managed Services registration definitions."
+              }
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "ScopeParameter": {
+        "name": "scope",
+        "in": "path",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "x-ms-skip-url-encoding": true,
+        "description": "The scope of the resource.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Definition": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Delete Registration Definition": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Put Registration Definition": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Assignment": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Delete Registration Assignment": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Put Registration Assignment": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Definitions": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Definitions with ManagedByTenantId eq filter": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Definitions with ManagedByTenantId in filter": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Assignments": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Assignments with ManagedByTenantId eq filter": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Assignments with ManagedByTenantId in filter": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          },
+          "Get Registration Operations": {
+            "value": "subscription/0afefe50-734e-4610-8a82-a144ahf49dea"
+          }
+        }
+      },
+      "MarketplaceIdentifier": {
+        "name": "marketplaceIdentifier",
+        "in": "path",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "description": "The Azure Marketplace identifier. Expected formats: {publisher}.{product[-preview]}.{planName}.{version} or {publisher}.{product[-preview]}.{planName} or {publisher}.{product[-preview]} or {publisher}).",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Definitions": {
+            "value": "publisher.product.planName.version"
+          },
+          "Get Marketplace Registration Definition At Tenant Scope": {
+            "value": "publisher.product.planName.version"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "The API version to use for this operation.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Definition": {
+            "value": "2022-10-01"
+          },
+          "Delete Registration Definition": {
+            "value": "2022-10-01"
+          },
+          "Put Registration Definition": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Assignment": {
+            "value": "2022-10-01"
+          },
+          "Delete Registration Assignment": {
+            "value": "2022-10-01"
+          },
+          "Put Registration Assignment": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Definitions": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Definitions with ManagedByTenantId eq filter": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Definitions with ManagedByTenantId in filter": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Assignments": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Assignments with ManagedByTenantId eq filter": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Assignments with ManagedByTenantId in filter": {
+            "value": "2022-10-01"
+          },
+          "Get Marketplace Registration Definitions At Tenant Scope": {
+            "value": "2022-10-01"
+          },
+          "Get Marketplace Registration Definition At Tenant Scope": {
+            "value": "2022-10-01"
+          },
+          "Get Registration Operations": {
+            "value": "2022-10-01"
+          }
+        }
+      },
+      "RegistrationAssignmentIdParameter": {
+        "name": "registrationAssignmentId",
+        "in": "path",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "description": "The GUID of the registration assignment.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Assignment": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          },
+          "Delete Registration Assignment": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          },
+          "Put Registration Assignment": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          }
+        }
+      },
+      "registrationDefinitionIdParameter": {
+        "name": "registrationDefinitionId",
+        "in": "path",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "description": "The GUID of the registration definition.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Definition": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          },
+          "Delete Registration Definition": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          },
+          "Put Registration Definition": {
+            "value": "26c128c2-fefa-4340-9bb1-6e081c90ada2"
+          }
+        }
+      },
+      "ExpandRegistrationDefinition": {
+        "name": "$expandRegistrationDefinition",
+        "in": "query",
+        "x-ms-parameter-location": "method",
+        "description": "The flag indicating whether to return the registration definition details along with the registration assignment details.",
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "Filter": {
+        "name": "$filter",
+        "in": "query",
+        "x-ms-parameter-location": "method",
+        "description": "The filter query parameter to filter managed services resources by.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get Registration Definitions with ManagedByTenantId eq filter": {
+            "value": "%24filter%3DmanagedByTenantId+eq+%2783ace5cd-bcc3-441a-hd86-e6a75360cecc%27"
+          },
+          "Get Registration Definitions with ManagedByTenantId in filter": {
+            "value": "%24filter%3DmanagedByTenantId+in+%28%2783ace5cd-bcc3-441a-hd86-e6a75360cecc%27%2C+%27de83f4a9-a76a-4025-a91a-91171923eac7%27%29"
+          },
+          "Get Registration Assignments with ManagedByTenantId eq filter": {
+            "value": "%24filter%3DmanagedByTenantId+eq+%2783abe5cd-bcc3-441a-bd86-e6a75360cecc%27"
+          },
+          "Get Registration Assignments with ManagedByTenantId in filter": {
+            "value": "%24filter%3DmanagedByTenantId+in+%28%2783abe5cd-bcc3-441a-bd86-e6a75360cec%27%2C+%27de83f4a9-a76a-4025-a91a-91171923eac7%27%29"
+          },
+          "Get Registration Definitions": {
+            "value": "planIdentifier eq 'publisher.offerIdentifier.planName.version'"
+          },
+          "Get Marketplace Registration Definitions At Tenant Scope": {
+            "value": "planIdentifier eq 'publisher.offerIdentifier.planName.version'"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "The Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RegistrationDefinition": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/RegistrationDefinitionProperties"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The fully qualified path of the registration definition."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the Azure resource (Microsoft.ManagedServices/registrationDefinitions)."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the registration definition."
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true,
+        "type": "object",
+        "description": "The registration definition."
+      },
+      "RegistrationDefinitionProperties": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "The description of the registration definition."
+          },
+          "authorizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Authorization"
+            },
+            "description": "The collection of authorization objects describing the access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+          },
+          "eligibleAuthorizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleAuthorization"
+            },
+            "description": "The collection of eligible authorization objects describing the just-in-time access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+          },
+          "registrationDefinitionName": {
+            "type": "string",
+            "description": "The name of the registration definition."
+          },
+          "managedByTenantId": {
+            "type": "string",
+            "description": "The identifier of the managedBy tenant."
+          },
+          "provisioningState": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The current provisioning state of the registration definition.",
+            "enum": [
+              "NotSpecified",
+              "Accepted",
+              "Running",
+              "Ready",
+              "Creating",
+              "Created",
+              "Deleting",
+              "Deleted",
+              "Canceled",
+              "Failed",
+              "Succeeded",
+              "Updating"
+            ],
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "manageeTenantId": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The identifier of the managed tenant."
+          },
+          "manageeTenantName": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the managed tenant."
+          },
+          "managedByTenantName": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the managedBy tenant."
+          }
+        },
+        "required": [
+          "managedByTenantId",
+          "authorizations"
+        ],
+        "type": "object",
+        "description": "The properties of a registration definition."
+      },
+      "RegistrationDefinitionList": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "readOnly": true,
+            "items": {
+              "$ref": "#/components/schemas/RegistrationDefinition"
+            },
+            "description": "The list of registration definitions."
+          },
+          "nextLink": {
+            "description": "The link to the next page of registration definitions.",
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "description": "The list of registration definitions."
+      },
+      "RegistrationAssignment": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/RegistrationAssignmentProperties"
+          },
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The fully qualified path of the registration assignment."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the Azure resource (Microsoft.ManagedServices/registrationAssignments)."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the registration assignment."
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true,
+        "type": "object",
+        "description": "The registration assignment."
+      },
+      "RegistrationAssignmentProperties": {
+        "properties": {
+          "registrationDefinitionId": {
+            "type": "string",
+            "description": "The fully qualified path of the registration definition."
+          },
+          "provisioningState": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The current provisioning state of the registration assignment.",
+            "enum": [
+              "NotSpecified",
+              "Accepted",
+              "Running",
+              "Ready",
+              "Creating",
+              "Created",
+              "Deleting",
+              "Deleted",
+              "Canceled",
+              "Failed",
+              "Succeeded",
+              "Updating"
+            ],
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "registrationDefinition": {
+            "readOnly": true,
+            "properties": {
+              "properties": {
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "description": "The description of the registration definition."
+                  },
+                  "authorizations": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Authorization"
+                    },
+                    "description": "The collection of authorization objects describing the access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+                  },
+                  "eligibleAuthorizations": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/EligibleAuthorization"
+                    },
+                    "description": "The collection of eligible authorization objects describing the just-in-time access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+                  },
+                  "registrationDefinitionName": {
+                    "type": "string",
+                    "description": "The name of the registration definition."
+                  },
+                  "provisioningState": {
+                    "type": "string",
+                    "description": "The current provisioning state of the registration definition.",
+                    "enum": [
+                      "NotSpecified",
+                      "Accepted",
+                      "Running",
+                      "Ready",
+                      "Creating",
+                      "Created",
+                      "Deleting",
+                      "Deleted",
+                      "Canceled",
+                      "Failed",
+                      "Succeeded",
+                      "Updating"
+                    ],
+                    "x-ms-enum": {
+                      "name": "ProvisioningState",
+                      "modelAsString": true
+                    }
+                  },
+                  "manageeTenantId": {
+                    "type": "string",
+                    "description": "The identifier of the managed tenant."
+                  },
+                  "manageeTenantName": {
+                    "type": "string",
+                    "description": "The name of the managed tenant."
+                  },
+                  "managedByTenantId": {
+                    "type": "string",
+                    "description": "The identifier of the managedBy tenant."
+                  },
+                  "managedByTenantName": {
+                    "type": "string",
+                    "description": "The name of the managedBy tenant."
+                  }
+                },
+                "description": "The properties of the registration definition associated with the registration assignment."
+              },
+              "plan": {
+                "$ref": "#/components/schemas/Plan"
+              },
+              "id": {
+                "readOnly": true,
+                "type": "string",
+                "description": "The fully qualified path of the registration definition."
+              },
+              "type": {
+                "readOnly": true,
+                "type": "string",
+                "description": "The type of the Azure resource (Microsoft.ManagedServices/registrationDefinitions)."
+              },
+              "name": {
+                "readOnly": true,
+                "type": "string",
+                "description": "The name of the registration definition."
+              },
+              "systemData": {
+                "$ref": "#/components/schemas/systemData"
+              }
+            },
+            "type": "object",
+            "description": "The registration definition associated with the registration assignment."
+          }
+        },
+        "required": [
+          "registrationDefinitionId"
+        ],
+        "type": "object",
+        "description": "The properties of the registration assignment."
+      },
+      "RegistrationAssignmentList": {
+        "properties": {
+          "value": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistrationAssignment"
+            },
+            "description": "The list of registration assignments."
+          },
+          "nextLink": {
+            "description": "The link to the next page of registration assignments.",
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "description": "The list of registration assignments."
+      },
+      "MarketplaceRegistrationDefinition": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/MarketplaceRegistrationDefinitionProperties"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The fully qualified path of the marketplace registration definition."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the Azure resource (Microsoft.ManagedServices/marketplaceRegistrationDefinitions)."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the marketplace registration definition."
+          }
+        },
+        "x-ms-azure-resource": true,
+        "type": "object"
+      },
+      "MarketplaceRegistrationDefinitionProperties": {
+        "properties": {
+          "managedByTenantId": {
+            "type": "string",
+            "description": "The identifier of the managedBy tenant."
+          },
+          "authorizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Authorization"
+            },
+            "description": "The collection of authorization objects describing the access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+          },
+          "eligibleAuthorizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleAuthorization"
+            },
+            "description": "The collection of eligible authorization objects describing the just-in-time access Azure Active Directory principals in the managedBy tenant will receive on the delegated resource in the managed tenant."
+          },
+          "offerDisplayName": {
+            "type": "string",
+            "description": "The marketplace offer display name."
+          },
+          "publisherDisplayName": {
+            "type": "string",
+            "description": "The marketplace publisher display name."
+          },
+          "planDisplayName": {
+            "type": "string",
+            "description": "The marketplace plan display name."
+          }
+        },
+        "required": [
+          "managedByTenantId",
+          "authorizations"
+        ],
+        "type": "object",
+        "description": "The properties of the marketplace registration definition."
+      },
+      "MarketplaceRegistrationDefinitionList": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "readOnly": true,
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceRegistrationDefinition"
+            },
+            "description": "The list of marketplace registration definitions."
+          },
+          "nextLink": {
+            "description": "The link to the next page of marketplace registration definitions.",
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "description": "The list of marketplace registration definitions."
+      },
+      "Plan": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Azure Marketplace plan name."
+          },
+          "publisher": {
+            "type": "string",
+            "description": "Azure Marketplace publisher ID."
+          },
+          "product": {
+            "type": "string",
+            "description": "Azure Marketplace product code."
+          },
+          "version": {
+            "type": "string",
+            "description": "Azure Marketplace plan's version."
+          }
+        },
+        "required": [
+          "name",
+          "publisher",
+          "product",
+          "version"
+        ],
+        "type": "object",
+        "description": "The details for the Managed Services offer’s plan in Azure Marketplace."
+      },
+      "Operation": {
+        "properties": {
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The operation name with the format: {provider}/{resource}/{operation}"
+          },
+          "display": {
+            "readOnly": true,
+            "description": "The object that represents the operation.",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "description": "The service provider."
+              },
+              "resource": {
+                "type": "string",
+                "description": "The resource on which the operation is performed."
+              },
+              "operation": {
+                "type": "string",
+                "description": "The operation type."
+              },
+              "description": {
+                "type": "string",
+                "description": "The description of the operation."
+              }
+            }
+          }
+        },
+        "type": "object",
+        "description": "The object that describes a single Microsoft.ManagedServices operation."
+      },
+      "OperationList": {
+        "properties": {
+          "value": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "description": "The list of Microsoft.ManagedServices operations."
+          }
+        },
+        "type": "object",
+        "description": "The list of the operations."
+      },
+      "Authorization": {
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "The identifier of the Azure Active Directory principal."
+          },
+          "principalIdDisplayName": {
+            "type": "string",
+            "description": "The display name of the Azure Active Directory principal."
+          },
+          "roleDefinitionId": {
+            "type": "string",
+            "description": "The identifier of the Azure built-in role that defines the permissions that the Azure Active Directory principal will have on the projected scope."
+          },
+          "delegatedRoleDefinitionIds": {
+            "type": "array",
+            "description": "The delegatedRoleDefinitionIds field is required when the roleDefinitionId refers to the User Access Administrator Role. It is the list of role definition ids which define all the permissions that the user in the authorization can assign to other principals.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "principalId",
+          "roleDefinitionId"
+        ],
+        "type": "object",
+        "description": "The Azure Active Directory principal identifier and Azure built-in role that describes the access the principal will receive on the delegated resource in the managed tenant."
+      },
+      "EligibleAuthorization": {
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "The identifier of the Azure Active Directory principal."
+          },
+          "principalIdDisplayName": {
+            "type": "string",
+            "description": "The display name of the Azure Active Directory principal."
+          },
+          "roleDefinitionId": {
+            "type": "string",
+            "description": "The identifier of the Azure built-in role that defines the permissions that the Azure Active Directory principal will have on the projected scope."
+          },
+          "justInTimeAccessPolicy": {
+            "$ref": "#/components/schemas/JustInTimeAccessPolicy"
+          }
+        },
+        "required": [
+          "principalId",
+          "roleDefinitionId"
+        ],
+        "type": "object",
+        "description": "The Azure Active Directory principal identifier, Azure built-in role, and just-in-time access policy that describes the just-in-time access the principal will receive on the delegated resource in the managed tenant."
+      },
+      "EligibleApprover": {
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "The identifier of the Azure Active Directory principal."
+          },
+          "principalIdDisplayName": {
+            "type": "string",
+            "description": "The display name of the Azure Active Directory principal."
+          }
+        },
+        "required": [
+          "principalId"
+        ],
+        "type": "object",
+        "description": "Defines the Azure Active Directory principal that can approve any just-in-time access requests by the principal defined in the EligibleAuthorization."
+      },
+      "JustInTimeAccessPolicy": {
+        "properties": {
+          "multiFactorAuthProvider": {
+            "type": "string",
+            "description": "The multi-factor authorization provider to be used for just-in-time access requests.",
+            "enum": [
+              "Azure",
+              "None"
+            ],
+            "x-ms-enum": {
+              "name": "MultiFactorAuthProvider",
+              "modelAsString": true
+            },
+            "default": "None"
+          },
+          "maximumActivationDuration": {
+            "type": "string",
+            "format": "duration",
+            "description": "The maximum access duration in ISO 8601 format for just-in-time access requests.",
+            "default": "PT8H"
+          },
+          "managedByTenantApprovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibleApprover"
+            },
+            "description": "The list of managedByTenant approvers for the eligible authorization."
+          }
+        },
+        "required": [
+          "multiFactorAuthProvider"
+        ],
+        "type": "object",
+        "description": "Just-in-time access policy setting."
+      },
+      "ErrorDefinition": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The error code."
+          },
+          "message": {
+            "type": "string",
+            "description": "The error message indicating why the operation failed."
+          },
+          "details": {
+            "description": "The internal error details.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDefinition"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object",
+        "description": "The error response indicating why the incoming request wasn’t able to be processed"
+      },
+      "ErrorResponse": {
+        "description": "Error response.",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDefinition"
+          }
+        }
+      },
+      "systemData": {
+        "type": "object",
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "properties": {
+          "createdBy": {
+            "type": "string",
+            "description": "The identity that created the resource."
+          },
+          "createdByType": {
+            "type": "string",
+            "description": "The type of identity that created the resource.",
+            "enum": [
+              "User",
+              "Application",
+              "ManagedIdentity",
+              "Key"
+            ],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The timestamp of resource creation (UTC)."
+          },
+          "lastModifiedBy": {
+            "type": "string",
+            "description": "The identity that last modified the resource."
+          },
+          "lastModifiedByType": {
+            "type": "string",
+            "description": "The type of identity that last modified the resource.",
+            "enum": [
+              "User",
+              "Application",
+              "ManagedIdentity",
+              "Key"
+            ],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "type": "string",
+            "description": "The timestamp of resource last modification (UTC)"
+          }
+        },
+        "readOnly": true
+      }
+    }
+  }
+}

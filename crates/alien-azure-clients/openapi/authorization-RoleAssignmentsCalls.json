@@ -1,0 +1,750 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "AuthorizationManagementClient",
+    "version": "2022-04-01",
+    "description": "Role based access control provides you a way to apply granular level policy administration down to individual resources or resource groups. These operations enable you to manage role assignments. A role assignment grants access to Azure Active Directory users."
+  },
+  "security": [
+    {
+      "azure_auth": [
+        "user_impersonation"
+      ]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_role_assignments_for_subscription": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+            }
+          ]
+        }
+      },
+      "List_role_assignments_for_resource_group": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+            },
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.Authorization/roleAssignments/96786e4b-dede-4c2e-8736-8ab911987f08",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "96786e4b-dede-4c2e-8736-8ab911987f08"
+            }
+          ]
+        }
+      },
+      "List_role_assignments_for_a_resource": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+            },
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.Authorization/roleAssignments/96786e4b-dede-4c2e-8736-8ab911987f08",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "96786e4b-dede-4c2e-8736-8ab911987f08"
+            },
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.DocumentDb/databaseAccounts/test-db-account"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.DocumentDb/databaseAccounts/test-db-account/providers/Microsoft.Authorization/roleAssignments/05c5a614-a7d6-4502-b150-c2fb455033ff",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+            }
+          ]
+        }
+      },
+      "Get_role_assignment_by_scope_and_name": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+        }
+      },
+      "Create_role_assignment_for_subscription": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/05c5a614-a7d6-4502-b150-c2fb455033ff",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+        }
+      },
+      "Create_role_assignment_for_resource_group": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.Authorization/roleAssignments/05c5a614-a7d6-4502-b150-c2fb455033ff",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+        }
+      },
+      "Create_role_assignment_for_resource": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.DocumentDb/databaseAccounts/test-db-account"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.DocumentDb/databaseAccounts/test-db-account/providers/Microsoft.Authorization/roleAssignments/05c5a614-a7d6-4502-b150-c2fb455033ff",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+        }
+      },
+      "Delete_role_assignment": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+        }
+      },
+      "List_role_assignments_for_scope": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+                "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+                "principalType": "User",
+                "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+              },
+              "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+            }
+          ]
+        }
+      },
+      "Get_role_assignment_by_ID": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+        }
+      },
+      "Create_or_update_role_assignment_by_ID": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+        }
+      },
+      "Delete_role_assignment_by_ID": {
+        "value": {
+          "properties": {
+            "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/0b5fe924-9a61-425c-96af-cfe6e287ca2d",
+            "principalId": "ce2ce14e-85d7-4629-bdbc-454d0519d987",
+            "principalType": "User",
+            "scope": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "id": "/subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747",
+          "type": "Microsoft.Authorization/roleAssignments",
+          "name": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+        }
+      }
+    },
+    "parameters": {
+      "RoleAssignmentFilterParameter": {
+        "name": "$filter",
+        "in": "query",
+        "required": false,
+        "description": "The filter to apply on the operation. Use $filter=atScope() to return all role assignments at or above the scope. Use $filter=principalId eq {id} to return all role assignments at, above or below the scope for the specified principal.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "allowReserved": true
+      },
+      "RoleAssignmentNameParameter": {
+        "name": "roleAssignmentName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the role assignment. It can be any valid GUID.",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get role assignment by scope and name": {
+            "value": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+          },
+          "Create role assignment for subscription": {
+            "value": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+          },
+          "Create role assignment for resource group": {
+            "value": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+          },
+          "Create role assignment for resource": {
+            "value": "05c5a614-a7d6-4502-b150-c2fb455033ff"
+          },
+          "Delete role assignment": {
+            "value": "b0f43c54-e787-4862-89b1-a653fa9cf747"
+          }
+        }
+      },
+      "RoleAssignmentIdParameter": {
+        "name": "roleAssignmentId",
+        "in": "path",
+        "required": true,
+        "description": "The fully qualified ID of the role assignment including scope, resource name, and resource type. Format: /{scope}/providers/Microsoft.Authorization/roleAssignments/{roleAssignmentName}. Example: /subscriptions/<SUB_ID>/resourcegroups/<RESOURCE_GROUP>/providers/Microsoft.Authorization/roleAssignments/<ROLE_ASSIGNMENT_NAME>",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get role assignment by ID": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747"
+          },
+          "Create or update role assignment by ID": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747"
+          },
+          "Delete role assignment by ID": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/providers/Microsoft.Authorization/roleAssignments/b0f43c54-e787-4862-89b1-a653fa9cf747"
+          }
+        }
+      },
+      "TenantIdQueryParameter": {
+        "name": "tenantId",
+        "in": "query",
+        "required": false,
+        "description": "Tenant ID for cross-tenant request",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PaginationSkipToken": {
+        "name": "$skipToken",
+        "in": "query",
+        "required": false,
+        "description": "The skipToken to apply on the operation. Use $skipToken={skiptoken} to return paged role assignments following the skipToken passed. Only supported on provider level calls.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "allowReserved": true
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "required": true,
+        "description": "The ID of the target subscription.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List role assignments for subscription": {
+            "value": "a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "List role assignments for resource group": {
+            "value": "a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "List role assignments for a resource": {
+            "value": "a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "The API version to use for this operation.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List role assignments for subscription": {
+            "value": "2022-04-01"
+          },
+          "List role assignments for resource group": {
+            "value": "2022-04-01"
+          },
+          "List role assignments for a resource": {
+            "value": "2022-04-01"
+          },
+          "Get role assignment by scope and name": {
+            "value": "2022-04-01"
+          },
+          "Create role assignment for subscription": {
+            "value": "2022-04-01"
+          },
+          "Create role assignment for resource group": {
+            "value": "2022-04-01"
+          },
+          "Create role assignment for resource": {
+            "value": "2022-04-01"
+          },
+          "Delete role assignment": {
+            "value": "2022-04-01"
+          },
+          "List role assignments for scope": {
+            "value": "2022-04-01"
+          },
+          "Get role assignment by ID": {
+            "value": "2022-04-01"
+          },
+          "Create or update role assignment by ID": {
+            "value": "2022-04-01"
+          },
+          "Delete role assignment by ID": {
+            "value": "2022-04-01"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the resource group. The name is case insensitive.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List role assignments for resource group": {
+            "value": "testrg"
+          },
+          "List role assignments for a resource": {
+            "value": "testrg"
+          }
+        }
+      },
+      "ResourceProviderNamespaceParameter": {
+        "name": "resourceProviderNamespace",
+        "in": "path",
+        "required": true,
+        "description": "The namespace of the resource provider.",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "List role assignments for a resource": {
+            "value": "Microsoft.DocumentDb"
+          }
+        }
+      },
+      "ResourceTypeParameter": {
+        "name": "resourceType",
+        "in": "path",
+        "required": true,
+        "description": "The resource type name. For example the type name of a web app is 'sites' (from Microsoft.Web/sites).",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "List role assignments for a resource": {
+            "value": "databaseAccounts"
+          }
+        }
+      },
+      "ResourceNameParameter": {
+        "name": "resourceName",
+        "in": "path",
+        "required": true,
+        "description": "The resource name.",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "List role assignments for a resource": {
+            "value": "test-db-account"
+          }
+        }
+      },
+      "ScopeParameter": {
+        "name": "scope",
+        "in": "path",
+        "required": true,
+        "description": "The scope of the operation or resource. Valid scopes are: subscription (format: '/subscriptions/{subscriptionId}'), resource group (format: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}', or resource (format: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/[{parentResourcePath}/]{resourceType}/{resourceName}'",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get role assignment by scope and name": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "Create role assignment for subscription": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "Create role assignment for resource group": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg"
+          },
+          "Create role assignment for resource": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2/resourceGroups/testrg/providers/Microsoft.DocumentDb/databaseAccounts/test-db-account"
+          },
+          "Delete role assignment": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          },
+          "List role assignments for scope": {
+            "value": "subscriptions/a925f2f7-5c63-4b7b-8799-25a5f97bc3b2"
+          }
+        }
+      }
+    },
+    "requestBodies": {
+      "RoleAssignmentCreateParameters": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RoleAssignmentCreateParameters"
+            }
+          }
+        },
+        "description": "Parameters for the role assignment.",
+        "required": true,
+        "x-ms-parameter-location": "method"
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ValidationResponseErrorInfo": {
+        "type": "object",
+        "description": "Failed validation result details",
+        "properties": {
+          "code": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Error code indicating why validation failed"
+          },
+          "message": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Message indicating why validation failed"
+          }
+        }
+      },
+      "ValidationResponse": {
+        "type": "object",
+        "description": "Validation response",
+        "properties": {
+          "isValid": {
+            "readOnly": true,
+            "type": "boolean",
+            "description": "Whether or not validation succeeded"
+          },
+          "errorInfo": {
+            "$ref": "#/components/schemas/ValidationResponseErrorInfo"
+          }
+        }
+      },
+      "RoleAssignmentFilter": {
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "Returns role assignment of the specific principal."
+          }
+        },
+        "type": "object",
+        "description": "Role Assignments filter"
+      },
+      "RoleAssignmentListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleAssignment"
+            },
+            "description": "Role assignment list."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The skipToken to use for getting the next set of results."
+          }
+        },
+        "type": "object",
+        "description": "Role assignment list operation result."
+      },
+      "RoleAssignmentProperties": {
+        "properties": {
+          "scope": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The role assignment scope."
+          },
+          "roleDefinitionId": {
+            "type": "string",
+            "description": "The role definition ID."
+          },
+          "principalId": {
+            "type": "string",
+            "description": "The principal ID."
+          },
+          "principalType": {
+            "type": "string",
+            "description": "The principal type of the assigned principal ID.",
+            "enum": [
+              "User",
+              "Group",
+              "ServicePrincipal",
+              "ForeignGroup",
+              "Device"
+            ],
+            "default": "User",
+            "x-ms-enum": {
+              "name": "PrincipalType",
+              "modelAsString": true
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of role assignment"
+          },
+          "condition": {
+            "type": "string",
+            "description": "The conditions on the role assignment. This limits the resources it can be assigned to. e.g.: @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:ContainerName] StringEqualsIgnoreCase 'foo_storage_container'"
+          },
+          "conditionVersion": {
+            "type": "string",
+            "description": "Version of the condition. Currently the only accepted value is '2.0'"
+          },
+          "createdOn": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Time it was created"
+          },
+          "updatedOn": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Time it was updated"
+          },
+          "createdBy": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Id of the user who created the assignment"
+          },
+          "updatedBy": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Id of the user who updated the assignment"
+          },
+          "delegatedManagedIdentityResourceId": {
+            "type": "string",
+            "description": "Id of the delegated managed identity resource"
+          }
+        },
+        "required": [
+          "roleDefinitionId",
+          "principalId"
+        ],
+        "type": "object",
+        "description": "Role assignment properties."
+      },
+      "RoleAssignment": {
+        "x-ms-azure-resource": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role assignment ID."
+          },
+          "name": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role assignment name."
+          },
+          "type": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role assignment type."
+          },
+          "properties": {
+            "$ref": "#/components/schemas/RoleAssignmentProperties"
+          }
+        },
+        "type": "object",
+        "description": "Role Assignments"
+      },
+      "RoleAssignmentCreateParameters": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/RoleAssignmentProperties"
+          }
+        },
+        "required": [
+          "properties"
+        ],
+        "type": "object",
+        "description": "Role assignment create parameters."
+      },
+      "ErrorDetail": {
+        "description": "The error detail.",
+        "type": "object",
+        "properties": {
+          "code": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error code."
+          },
+          "message": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error message."
+          },
+          "target": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error target."
+          },
+          "details": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "x-ms-identifiers": [
+              "message",
+              "target"
+            ],
+            "description": "The error details."
+          },
+          "additionalInfo": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorAdditionalInfo"
+            },
+            "x-ms-identifiers": [],
+            "description": "The error additional info."
+          }
+        }
+      },
+      "ErrorAdditionalInfo": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The additional info type."
+          },
+          "info": {
+            "readOnly": true,
+            "type": "object",
+            "description": "The additional info."
+          }
+        },
+        "description": "The resource management error additional info."
+      },
+      "ErrorResponse": {
+        "title": "Error response",
+        "description": "Common error response for all Azure Resource Manager APIs to return error details for failed operations. (This also follows the OData error response format.).",
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      }
+    }
+  }
+}

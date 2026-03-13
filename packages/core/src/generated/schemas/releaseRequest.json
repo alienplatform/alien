@@ -1,0 +1,1 @@
+{"type":"object","description":"Request to release a lease","required":["leaseId"],"properties":{"leaseId":{"type":"string","description":"Lease identifier to release"}},"x-readme-ref-name":"ReleaseRequest"}

@@ -1,0 +1,108 @@
+name: Cloud Client Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      aws: ${{ steps.filter.outputs.aws }}
+      gcp: ${{ steps.filter.outputs.gcp }}
+      azure: ${{ steps.filter.outputs.azure }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            aws:
+              - 'crates/alien-aws-clients/**'
+              - 'crates/alien-client-core/**'
+              - 'crates/alien-client-config/**'
+              - 'crates/alien-error/**'
+              - 'crates/alien-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            gcp:
+              - 'crates/alien-gcp-clients/**'
+              - 'crates/alien-client-core/**'
+              - 'crates/alien-client-config/**'
+              - 'crates/alien-error/**'
+              - 'crates/alien-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            azure:
+              - 'crates/alien-azure-clients/**'
+              - 'crates/alien-client-core/**'
+              - 'crates/alien-client-config/**'
+              - 'crates/alien-error/**'
+              - 'crates/alien-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+
+  aws:
+    needs: [changes]
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && needs.changes.outputs.aws == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.aws == 'true' && !github.event.pull_request.head.repo.fork)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: 1password/install-cli-action@v1
+      - name: Load .env.test from 1Password
+        run: op document get "alien-test-env" --vault Engineering --output .env.test
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - run: cargo test -p alien-aws-clients --tests
+
+  gcp:
+    needs: [changes]
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && needs.changes.outputs.gcp == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.gcp == 'true' && !github.event.pull_request.head.repo.fork)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: 1password/install-cli-action@v1
+      - name: Load .env.test from 1Password
+        run: op document get "alien-test-env" --vault Engineering --output .env.test
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - run: cargo test -p alien-gcp-clients --tests --features gcp
+
+  azure:
+    needs: [changes]
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && needs.changes.outputs.azure == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.azure == 'true' && !github.event.pull_request.head.repo.fork)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: 1password/install-cli-action@v1
+      - name: Load .env.test from 1Password
+        run: op document get "alien-test-env" --vault Engineering --output .env.test
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - run: cargo test -p alien-azure-clients --tests

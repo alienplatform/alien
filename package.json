@@ -1,0 +1,44 @@
+{
+  "name": "alien",
+  "private": "true",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "turbo build",
+    "build:images": "echo 'Use GitHub Actions workflows (.github/workflows/images*.yml) for canonical image builds'",
+    "generate": "turbo run generate",
+    "generate:platform-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/platform/openapi.json --out client-sdks/platform/typescript && pnpm -C ./client-sdks/platform/typescript build",
+    "generate:manager-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/manager/openapi.json --out client-sdks/manager/typescript && pnpm -C ./client-sdks/manager/typescript build",
+    "test": "turbo test",
+    "test:e2e": "pnpm -C tests/e2e test",
+    "test:e2e:local": "pnpm -C tests/e2e test:local",
+    "test:e2e:aws": "pnpm -C tests/e2e test:aws",
+    "test:e2e:gcp": "pnpm -C tests/e2e test:gcp",
+    "test:e2e:azure": "pnpm -C tests/e2e test:azure",
+    "test:examples": "./scripts/test-examples-published.sh",
+    "test:examples:published-strict": "pnpm -C examples install --force --frozen-lockfile --config.link-workspace-packages=false --config.prefer-workspace-packages=false && cargo build -p alien-cli --bin alien && pnpm -C examples test:projects",
+    "test:examples:local": "./scripts/test-examples-local.sh",
+    "changeset": "changeset",
+    "version:npm": "changeset version",
+    "test:ts": "turbo test:ts --concurrency 15",
+    "format-and-lint": "biome check .",
+    "format-and-lint:fix": "biome check . --write"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.7",
+    "@biomejs/biome": "1.9.4",
+    "turbo": "^2.5.8"
+  },
+  "packageManager": "pnpm@10.11.0",
+  "pnpm": {
+    "overrides": {
+      "@aliendotdev/commands-client": "file:packages/commands-client",
+      "@aliendotdev/core": "file:packages/core",
+      "@aliendotdev/typescript-config": "file:packages/config-typescript",
+      "@aliendotdev/testing": "file:packages/testing",
+      "@aliendotdev/bindings": "file:packages/bindings",
+      "@aliendotdev/platform-api": "file:client-sdks/platform/typescript",
+      "@deepstore/client": "^0.1.0"
+    }
+  }
+}

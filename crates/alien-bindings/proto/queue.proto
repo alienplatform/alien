@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package alien_bindings.queue;
+
+// Queue service for message queue operations
+service QueueService {
+    // Send a message to the queue
+    rpc Send(SendRequest) returns (SendResponse);
+
+    // Receive messages from the queue
+    rpc Receive(ReceiveRequest) returns (ReceiveResponse);
+
+    // Acknowledge processing of a message (permanently removes from queue)
+    rpc Ack(AckRequest) returns (AckResponse);
+}
+
+// Messages for Send
+message SendRequest {
+    // Name of the Queue binding to use
+    string binding_name = 1;
+    // Queue name to send to
+    string queue = 2;
+    // Message payload
+    MessagePayload message = 3;
+}
+
+message SendResponse {
+    // Empty response on success
+}
+
+// Messages for Receive
+message ReceiveRequest {
+    // Name of the Queue binding to use
+    string binding_name = 1;
+    // Queue name to receive from
+    string queue = 2;
+    // Maximum number of messages to receive (1-10)
+    uint32 max_messages = 3;
+}
+
+message ReceiveResponse {
+    // List of received messages
+    repeated QueueMessage messages = 1;
+}
+
+// Messages for Ack
+message AckRequest {
+    // Name of the Queue binding to use
+    string binding_name = 1;
+    // Queue name
+    string queue = 2;
+    // Receipt handle for acknowledgment
+    string receipt_handle = 3;
+}
+
+message AckResponse {
+    // Empty response on success
+}
+
+// Message payload types
+message MessagePayload {
+    oneof payload {
+        // JSON-serializable value (as JSON string)
+        string json = 1;
+        // UTF-8 text payload
+        string text = 2;
+    }
+}
+
+// Queue message with receipt handle
+message QueueMessage {
+    // Message payload
+    MessagePayload payload = 1;
+    // Opaque receipt handle for acknowledgment
+    string receipt_handle = 2;
+}

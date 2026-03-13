@@ -1,0 +1,1 @@
+{"type":"object","description":"GCP IAM condition","required":["title","expression"],"properties":{"expression":{"type":"string"},"title":{"type":"string"}},"additionalProperties":false,"x-readme-ref-name":"GcpCondition"}

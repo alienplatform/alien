@@ -1,0 +1,39 @@
+---
+source: crates/alien-core/src/events/mod.rs
+expression: hierarchy
+---
+[
+    (
+        "event-1",
+        None,
+        "TestBuildingStack { stack: \"root-stack\" }",
+    ),
+    (
+        "event-2",
+        Some(
+            "event-1",
+        ),
+        "TestBuildingImage { image: \"app1\" }",
+    ),
+    (
+        "event-3",
+        Some(
+            "event-2",
+        ),
+        "TestBuildImage { image: \"app1\", stage: \"compile\" }",
+    ),
+    (
+        "event-4",
+        Some(
+            "event-3",
+        ),
+        "TestBuildImage { image: \"app1\", stage: \"optimize\" }",
+    ),
+    (
+        "event-5",
+        Some(
+            "event-1",
+        ),
+        "TestBuildingImage { image: \"app2\" }",
+    ),
+]

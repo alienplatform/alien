@@ -1,0 +1,83 @@
+[package]
+name = "alien-bindings"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = ["grpc", "all-platforms"]
+all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
+aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
+gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
+azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
+kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
+local = ["object_store/fs", "dep:container-registry", "dep:oci-client", "dep:sec", "dep:sled", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
+test = []  # Test platform support - fast mock implementations without real cloud APIs
+grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tokio-stream", "dep:tonic-reflection", "dep:async-stream"]
+openapi = ["dep:utoipa"]
+platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_agent)
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true, features = ["tls-webpki-roots"] }
+alien-error = { workspace = true }
+alien-core = { workspace = true }
+alien-client-core = { workspace = true }
+alien-client-config = { workspace = true }
+alien-aws-clients = { workspace = true, optional = true }
+alien-gcp-clients = { workspace = true, optional = true }
+alien-azure-clients = { workspace = true, optional = true }
+alien-k8s-clients = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "io-util"] }
+url = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+alien-platform-api = { path = "../../client-sdks/platform/rust", default-features = false, features = ["rustls"], optional = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+utoipa = { workspace = true, optional = true }
+
+# Local
+container-registry = { workspace = true, features = ["test-support"], optional = true }
+oci-client = { workspace = true, default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+sec = { workspace = true, optional = true }
+sled = { version = "0.34", optional = true }
+sha2 = { workspace = true, optional = true }
+
+# AWS
+base64 = { workspace = true, optional = true }
+
+# gRPC
+tonic = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+prost-types = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+tonic-reflection = { workspace = true, optional = true }
+async-stream = { workspace = true, optional = true }
+
+# Kubernetes
+k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
+
+[dev-dependencies]
+dotenvy = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
+temp-env = { workspace = true, features = ["async_closure"] }
+workspace_root = { workspace = true }
+serde_json = { workspace = true }
+rstest = { workspace = true }
+test-context = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+base64 = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

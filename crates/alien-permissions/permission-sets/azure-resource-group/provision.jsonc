@@ -1,0 +1,25 @@
+{
+  "id": "azure-resource-group/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on Azure resource groups",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/write",
+            "Microsoft.Resources/subscriptions/resourceGroups/delete",
+            "Microsoft.Resources/subscriptions/resourceGroups/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

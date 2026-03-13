@@ -1,0 +1,53 @@
+{
+  "name": "@aliendotdev/core",
+  "version": "1.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./tests": {
+      "import": "./dist/tests/index.js",
+      "types": "./dist/tests/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "npm run build",
+    "test": "vitest run",
+    "test:ts": "tsc --noEmit",
+    "generate": "rm -rf src/generated && cargo run --quiet --bin schema_exporter --features=clap,openapi -p alien-core -- --output openapi.json && npx --yes @kubb/cli@^3.11.1 generate",
+    "format-and-lint": "biome check .",
+    "format-and-lint:fix": "biome check . --write"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@aliendotdev/typescript-config": "workspace:^",
+    "@biomejs/biome": "^1.9.4",
+    "@kubb/core": "^3.14.0",
+    "@kubb/oas": "^3.14.0",
+    "@kubb/plugin-oas": "^3.14.0",
+    "@kubb/plugin-zod": "^3.14.0",
+    "@types/node": "^24.0.15",
+    "tsdown": "^0.13.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  },
+  "dependencies": {
+    "@openapi-contrib/json-schema-to-openapi-schema": "^4.0.0",
+    "serialize-error": "^12.0.0",
+    "zod": "4.3.2"
+  }
+}

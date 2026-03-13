@@ -1,0 +1,58 @@
+name: Generated Drift
+
+on:
+  pull_request:
+    paths:
+      - 'packages/core/**'
+      - 'packages/bindings/**'
+      - 'crates/alien-core/**'
+      - 'crates/alien-bindings/proto/**'
+      - 'client-sdks/platform/openapi.json'
+      - 'client-sdks/manager/openapi.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Speakeasy CLI
+        run: npm install -g speakeasy@latest
+
+      - name: Verify Speakeasy CLI
+        run: speakeasy --version
+
+      - name: Regenerate code
+        run: |
+          pnpm generate
+          pnpm generate:platform-api
+          pnpm generate:manager-api
+
+      - name: Assert no generated drift
+        run: git diff --exit-code

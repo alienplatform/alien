@@ -1,0 +1,19 @@
+# GetPackageRequest
+
+## Example Usage
+
+```typescript
+import { GetPackageRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: GetPackageRequest = {
+  id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
+  workspace: "my-workspace",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                                                                                                                                                      | *string*                                                                                                                                                                  | :heavy_check_mark:                                                                                                                                                        | Unique identifier for the package.                                                                                                                                        | pkg_jebo2o5jmm7raefl2m1pe3cz                                                                                                                                              |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |

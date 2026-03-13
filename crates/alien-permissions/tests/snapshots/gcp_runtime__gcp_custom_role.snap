@@ -1,0 +1,15 @@
+---
+source: crates/alien-permissions/tests/gcp_runtime.rs
+expression: result
+---
+{
+  "title": "Storage Data Read",
+  "description": "Allows reading data from storage resources",
+  "stage": "GA",
+  "includedPermissions": [
+    "storage.objects.get",
+    "storage.objects.list",
+    "storage.buckets.get"
+  ],
+  "name": "projects/my-project/roles/storageDataRead"
+}

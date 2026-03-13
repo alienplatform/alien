@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package alien_bindings.wait_until;
+
+import "google/protobuf/duration.proto";
+
+// Service for coordinating wait_until tasks between application and runtime.
+service WaitUntilService {
+    // Application notifies runtime that it has registered a new task.
+    rpc NotifyTaskRegistered(NotifyTaskRegisteredRequest) returns (NotifyTaskRegisteredResponse);
+    
+    // Application calls this to wait for a drain signal from runtime.
+    // This is a blocking call that returns when runtime decides it's time to drain.
+    rpc WaitForDrainSignal(WaitForDrainSignalRequest) returns (WaitForDrainSignalResponse);
+    
+    // Application notifies runtime that it has completed draining all tasks.
+    rpc NotifyDrainComplete(NotifyDrainCompleteRequest) returns (NotifyDrainCompleteResponse);
+    
+    // Runtime can query how many tasks are currently registered (for monitoring).
+    rpc GetTaskCount(GetTaskCountRequest) returns (GetTaskCountResponse);
+}
+
+// Request to notify runtime about a new registered task.
+message NotifyTaskRegisteredRequest {
+    // Unique identifier for the application instance.
+    string application_id = 1;
+    // Optional task description for debugging.
+    optional string task_description = 2;
+}
+
+message NotifyTaskRegisteredResponse {
+    // Success confirmation.
+    bool success = 1;
+}
+
+// Request to wait for drain signal from runtime.
+message WaitForDrainSignalRequest {
+    // Unique identifier for the application instance.
+    string application_id = 1;
+    // Optional timeout for how long to wait for drain signal.
+    google.protobuf.Duration timeout = 2;
+}
+
+message WaitForDrainSignalResponse {
+    // Whether a drain was requested.
+    bool should_drain = 1;
+    // Optional timeout for how long the application has to drain.
+    google.protobuf.Duration drain_timeout = 2;
+    // Reason for the drain request (e.g., "lambda_invoke_end", "sigterm").
+    string drain_reason = 3;
+}
+
+// Request to notify that draining is complete.
+message NotifyDrainCompleteRequest {
+    // Unique identifier for the application instance.
+    string application_id = 1;
+    // Number of tasks that were drained.
+    uint32 tasks_drained = 2;
+    // Whether all tasks completed successfully.
+    bool success = 3;
+    // Optional error message if draining failed.
+    optional string error_message = 4;
+}
+
+message NotifyDrainCompleteResponse {
+    // Acknowledgment from runtime.
+    bool acknowledged = 1;
+}
+
+// Request to get current task count.
+message GetTaskCountRequest {
+    // Unique identifier for the application instance.
+    string application_id = 1;
+}
+
+message GetTaskCountResponse {
+    // Number of currently registered tasks.
+    uint32 task_count = 1;
+} 

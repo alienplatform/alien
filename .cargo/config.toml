@@ -1,0 +1,6 @@
+[build]
+rustflags = ["-Z", "threads=8", "--cfg", "tokio_unstable"]
+rustdocflags = ["--cfg", "tokio_unstable"]
+
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', "-Z", "threads=8"]

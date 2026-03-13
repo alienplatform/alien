@@ -1,0 +1,68 @@
+[package]
+name = "alien-local"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-runtime = { workspace = true }
+alien-bindings = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Database
+sled = { workspace = true }
+
+# Object storage
+object_store = { workspace = true, features = ["http"] }
+
+# Container registry
+container-registry = { workspace = true }
+
+# Docker client
+bollard = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+
+# Secret type for container registry
+sec = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Time
+chrono = { workspace = true, features = ["serde"] }
+
+# Port allocation
+port_check = { workspace = true }
+
+# OCI image extraction
+dockdash = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true, features = ["json"] }
+
+# URL encoding
+urlencoding = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+dockdash = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+workspace_root = { workspace = true }
+alien-build = { workspace = true }

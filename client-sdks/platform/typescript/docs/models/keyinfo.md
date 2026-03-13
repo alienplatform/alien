@@ -1,0 +1,45 @@
+# KeyInfo
+
+## Example Usage
+
+```typescript
+import { KeyInfo } from "@aliendotdev/platform-api/models";
+
+let value: KeyInfo = {
+  id: "apikey_ye96yxs1tjnrrwulp8frh",
+  description: "carpool ha fiercely brr decongestant ew",
+  keyPrefix: "<value>",
+  type: "manager",
+  role: "<value>",
+  workspaceId: "<id>",
+  projectId: "<id>",
+  deploymentId: null,
+  deploymentGroupId: "<id>",
+  managerId: null,
+  enabled: false,
+  createdAt: new Date("2026-10-14T21:34:35.370Z"),
+  expiresAt: new Date("2025-12-06T17:54:43.268Z"),
+  lastUsedAt: new Date("2025-08-16T08:23:11.867Z"),
+  revokedAt: new Date("2026-05-29T18:50:17.810Z"),
+};
+```
+
+## Fields
+
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the api key.                                                            | apikey_ye96yxs1tjnrrwulp8frh                                                                  |
+| `description`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `keyPrefix`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `type`                                                                                        | [models.CreateAPIKeyResponseType](../models/createapikeyresponsetype.md)                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `role`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `projectId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deploymentId`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deploymentGroupId`                                                                           | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `managerId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `enabled`                                                                                     | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `expiresAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `lastUsedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `revokedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

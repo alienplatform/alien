@@ -1,0 +1,197 @@
+{
+  "id": "function/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on functions",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "lambda:CreateFunction",
+            "lambda:DeleteFunction",
+            "lambda:AddPermission",
+            "lambda:RemovePermission",
+            "lambda:CreateFunctionUrlConfig",
+            "lambda:DeleteFunctionUrlConfig",
+            "lambda:UpdateCodeSigningConfig",
+            "lambda:TagResource",
+            "lambda:UntagResource",
+            "lambda:UpdateFunctionCode",
+            "lambda:UpdateFunctionConfiguration",
+            "lambda:PublishVersion",
+            "lambda:CreateAlias",
+            "lambda:DeleteAlias",
+            "lambda:UpdateAlias",
+            "lambda:PutFunctionConcurrency",
+            "lambda:DeleteFunctionConcurrency",
+            "lambda:PutFunctionEventInvokeConfig",
+            "lambda:DeleteFunctionEventInvokeConfig",
+            "lambda:GetFunction",
+            "lambda:GetFunctionConfiguration",
+            "lambda:ListVersionsByFunction",
+            "lambda:ListAliases",
+            "lambda:GetPolicy",
+            "lambda:ListTags",
+            "lambda:GetFunctionUrlConfig",
+            "lambda:GetCodeSigningConfig",
+            "lambda:GetFunctionEventInvokeConfig",
+            "lambda:CreateEventSourceMapping",
+            "lambda:DeleteEventSourceMapping",
+            "lambda:GetEventSourceMapping",
+            "lambda:ListEventSourceMappings",
+            "lambda:UpdateEventSourceMapping"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:PassRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:GetAuthorizationToken"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:*:${managingAccountId}:repository/*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "run.services.create",
+            "run.services.delete",
+            "run.jobs.create",
+            "run.jobs.delete",
+            "run.locations.list",
+            "resourcemanager.projects.get",
+            "iam.serviceAccounts.actAs",
+            "run.services.get",
+            "run.services.list",
+            "run.services.getIamPolicy",
+            "run.revisions.get",
+            "run.revisions.list",
+            "run.operations.get",
+            "run.operations.list",
+            "run.configurations.get",
+            "run.configurations.list",
+            "run.routes.get",
+            "run.routes.list",
+            "run.executions.get",
+            "run.executions.list",
+            "run.tasks.get",
+            "run.tasks.list",
+            "run.services.listEffectiveTags",
+            "run.services.listTagBindings",
+            "run.services.update",
+            "run.services.setIamPolicy",
+            "run.jobs.update",
+            "run.jobs.getIamPolicy",
+            "run.jobs.setIamPolicy",
+            "run.operations.delete",
+            "run.revisions.delete",
+            "run.executions.delete",
+            "run.services.createTagBinding",
+            "run.services.deleteTagBinding",
+            "run.jobs.createTagBinding",
+            "run.jobs.deleteTagBinding",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.update",
+            "iam.serviceAccounts.getIamPolicy",
+            "iam.serviceAccounts.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed function provision",
+              "expression": "(resource.type == 'run.googleapis.com/Service' && resource.name.startsWith('projects/${projectName}/locations/${region}/services/${stackPrefix}-')) || (resource.type == 'run.googleapis.com/Job' && resource.name.startsWith('projects/${projectName}/locations/${region}/jobs/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/containerApps/write",
+            "Microsoft.App/containerApps/delete",
+            "Microsoft.App/containerApps/authConfigs/write",
+            "Microsoft.App/containerApps/authConfigs/delete",
+            "Microsoft.App/containerApps/sourceControls/write",
+            "Microsoft.App/containerApps/sourceControls/delete",
+            "Microsoft.App/containerApps/listSecrets/action",
+            "Microsoft.App/containerApps/read",
+            "Microsoft.App/containerApps/revisions/read",
+            "Microsoft.App/containerApps/revisions/replicas/read",
+            "Microsoft.App/containerApps/authConfigs/read",
+            "Microsoft.App/containerApps/sourceControls/read",
+            "Microsoft.App/containerApps/revisions/activate/action",
+            "Microsoft.App/containerApps/revisions/deactivate/action",
+            "Microsoft.App/containerApps/revisions/restart/action",
+            "Microsoft.App/managedEnvironments/daprComponents/write",
+            "Microsoft.App/managedEnvironments/daprComponents/delete",
+            "Microsoft.App/managedEnvironments/daprComponents/read",
+            "Microsoft.App/managedEnvironments/read"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

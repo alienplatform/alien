@@ -1,0 +1,77 @@
+{
+  // Allows reading messages from queues (runtime access for functions)
+  "id": "queue/data-read",
+  "description": "Allows reading messages from message queues",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:ReceiveMessage",
+            "sqs:GetQueueAttributes",
+            "sqs:GetQueueUrl"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.subscriptions.consume",
+            "pubsub.subscriptions.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue data read access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue data read access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": [
+            "Microsoft.ServiceBus/namespaces/messages/receive/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

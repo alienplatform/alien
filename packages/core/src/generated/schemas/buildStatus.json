@@ -1,0 +1,1 @@
+{"type":"string","description":"Status of a build execution.","enum":["QUEUED","RUNNING","SUCCEEDED","FAILED","CANCELLED","TIMED_OUT"],"x-readme-ref-name":"BuildStatus"}

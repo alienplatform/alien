@@ -1,0 +1,18 @@
+# CreateCommandRequest
+
+## Example Usage
+
+```typescript
+import { CreateCommandRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: CreateCommandRequest = {
+  workspace: "my-workspace",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |
+| `createCommandRequest`                                                                                                                                                    | [models.CreateCommandRequest](../../models/createcommandrequest.md)                                                                                                       | :heavy_minus_sign:                                                                                                                                                        | N/A                                                                                                                                                                       |                                                                                                                                                                           |

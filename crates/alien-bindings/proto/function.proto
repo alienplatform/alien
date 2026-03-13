@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package alien_bindings.function;
+
+// Function service for direct function-to-function invocation
+service FunctionService {
+    // Invoke a function with HTTP request data
+    rpc Invoke(InvokeRequest) returns (InvokeResponse);
+
+    // Get the public URL of the function, if available
+    rpc GetFunctionUrl(GetFunctionUrlRequest) returns (GetFunctionUrlResponse);
+}
+
+// Messages for Invoke
+message InvokeRequest {
+    // Name of the Function binding to use
+    string binding_name = 1;
+    // Target function identifier (name, ARN, URL, etc.)
+    string target_function = 2;
+    // HTTP method
+    string method = 3;
+    // Request path
+    string path = 4;
+    // HTTP headers
+    map<string, string> headers = 5;
+    // Request body bytes
+    bytes body = 6;
+    // Optional timeout for the invocation in seconds
+    optional uint64 timeout_seconds = 7;
+}
+
+message InvokeResponse {
+    // HTTP status code
+    uint32 status = 1;
+    // HTTP response headers
+    map<string, string> headers = 2;
+    // Response body bytes
+    bytes body = 3;
+}
+
+// Messages for GetFunctionUrl
+message GetFunctionUrlRequest {
+    // Name of the Function binding to use
+    string binding_name = 1;
+}
+
+message GetFunctionUrlResponse {
+    // The public URL if available
+    optional string url = 1;
+}
+

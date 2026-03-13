@@ -1,0 +1,69 @@
+{
+  "id": "container/management",
+  "description": "Allows managing containers and inspecting their cloud infrastructure (LB targets, volumes). Container orchestration itself is via Horizon API.",
+  "platforms": {
+    "aws": [
+      // Read-only inspection of LB health and volume status for operational visibility
+      {
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:DescribeLoadBalancers",
+            "elasticloadbalancing:DescribeTargetGroups",
+            "elasticloadbalancing:DescribeTargetHealth",
+            "elasticloadbalancing:DescribeListeners",
+            "ec2:DescribeVolumes"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // Read-only inspection of LB and disk resources
+      {
+        "grant": {
+          "permissions": [
+            "compute.backendServices.get",
+            "compute.healthChecks.get",
+            "compute.globalForwardingRules.get",
+            "compute.disks.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // Read-only inspection of LB and disk resources
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Compute/disks/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

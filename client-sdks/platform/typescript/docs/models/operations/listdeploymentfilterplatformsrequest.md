@@ -1,0 +1,19 @@
+# ListDeploymentFilterPlatformsRequest
+
+## Example Usage
+
+```typescript
+import { ListDeploymentFilterPlatformsRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: ListDeploymentFilterPlatformsRequest = {
+  workspace: "my-workspace",
+  project: "my-project",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |
+| `project`                                                                                                                                                                 | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Filter by project ID or name.                                                                                                                                             | my-project                                                                                                                                                                |

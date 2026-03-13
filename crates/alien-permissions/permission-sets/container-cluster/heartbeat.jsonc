@@ -1,0 +1,72 @@
+{
+  "id": "container-cluster/heartbeat",
+  "description": "Allows readonly health checks and instance inspection for ContainerCluster resources.",
+  "platforms": {
+    "aws": [
+      // ASG status — the Ready handler polls DescribeAutoScalingGroups for health.
+      // ec2:DescribeInstances — inspect individual EC2 instances (status, IPs, tags).
+      // These are read-only Describe actions; AWS requires Resource: "*" for them.
+      {
+        "grant": {
+          "actions": [
+            "autoscaling:DescribeAutoScalingGroups",
+            "ec2:DescribeInstances",
+            "ec2:DescribeInstanceStatus",
+            "ec2:DescribeTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "compute.instanceGroupManagers.list",
+            "compute.instanceGroupManagers.get",
+            "compute.instances.list",
+            "compute.instances.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed container cluster heartbeat",
+              "expression": "(resource.type == 'compute.googleapis.com/InstanceGroupManager' || resource.type == 'compute.googleapis.com/Instance') && resource.name.startsWith('projects/${projectName}/')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

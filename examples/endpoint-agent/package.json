@@ -1,0 +1,19 @@
+{
+  "name": "@aliendotdev/example-endpoint-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aliendotdev/core": "^1.0.1"
+  },
+  "devDependencies": {
+    "@aliendotdev/testing": "^0.1.0",
+    "@types/node": "^22.10.5",
+    "typescript": "~5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

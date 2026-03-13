@@ -1,0 +1,72 @@
+{
+  // Allows reading secrets from vault (runtime access for functions)
+  "id": "vault/data-read",
+  "description": "Allows reading secrets from vault (runtime access for functions)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "ssm:GetParameter"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "secretmanager.versions.access",
+            "secretmanager.secrets.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Vault data read access",
+              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Vault data read access",
+              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-${resourceName}-')"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+            "Microsoft.KeyVault/vaults/secrets/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

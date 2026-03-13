@@ -1,0 +1,54 @@
+[package]
+name = "alien-gcp-clients"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+alien-client-core = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bon = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+base64 = { workspace = true }
+urlencoding = { workspace = true }
+url = { workspace = true }
+async-trait = { workspace = true }
+mockall = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+
+# GCP specific dependencies
+jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"] }
+
+[dev-dependencies]
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = { workspace = true }
+workspace_root = { workspace = true }
+dotenvy = { workspace = true }
+test-context = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+rcgen = { version = "0.13", features = ["pem"] }
+
+[dev-dependencies.tracing-subscriber]
+workspace = true
+
+[features]
+default = []
+gcp = []  # Feature flag for running integration tests against real GCP
+test-utils = ["dep:mockall"]
+openapi = ["dep:utoipa"]

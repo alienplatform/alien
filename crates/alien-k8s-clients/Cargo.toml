@@ -1,0 +1,47 @@
+[package]
+name = "alien-k8s-clients"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+test-utils = []
+
+[dependencies]
+alien-client-core = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "fs"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+base64 = { workspace = true }
+urlencoding = { workspace = true }
+backon = { workspace = true }
+serde_path_to_error = "0.1.17"
+async-trait = { workspace = true }
+
+# Kubernetes specific dependencies
+k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+
+[dev-dependencies]
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = { workspace = true }
+workspace_root = { workspace = true }
+dotenvy = { workspace = true }
+test-context = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies.tracing-subscriber]
+workspace = true

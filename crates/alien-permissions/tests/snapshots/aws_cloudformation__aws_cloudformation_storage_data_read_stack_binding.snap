@@ -1,0 +1,26 @@
+---
+source: crates/alien-permissions/tests/aws_cloudformation.rs
+expression: result
+---
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StorageDataRead",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        {
+          "Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*"
+        },
+        {
+          "Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*/*"
+        }
+      ]
+    }
+  ]
+}

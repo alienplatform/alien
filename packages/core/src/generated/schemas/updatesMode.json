@@ -1,0 +1,1 @@
+{"type":"string","description":"How updates are delivered to the agent.","enum":["auto","approval-required"],"x-readme-ref-name":"UpdatesMode"}

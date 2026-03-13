@@ -1,0 +1,34 @@
+# ListDeploymentContainerInstanceEventsEvent
+
+## Example Usage
+
+```typescript
+import { ListDeploymentContainerInstanceEventsEvent } from "@aliendotdev/platform-api/models/operations";
+
+let value: ListDeploymentContainerInstanceEventsEvent = {
+  eventId: "<id>",
+  type: "warning",
+  reason: "<value>",
+  involvedObject: {
+    type: "<value>",
+    id: "<id>",
+  },
+  firstTimestamp: "<value>",
+  lastTimestamp: "<value>",
+  count: 85424,
+};
+```
+
+## Fields
+
+| Field                                                                                                                                            | Type                                                                                                                                             | Required                                                                                                                                         | Description                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `eventId`                                                                                                                                        | *string*                                                                                                                                         | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `type`                                                                                                                                           | [operations.ListDeploymentContainerInstanceEventsType](../../models/operations/listdeploymentcontainerinstanceeventstype.md)                     | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `reason`                                                                                                                                         | *string*                                                                                                                                         | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `message`                                                                                                                                        | *string*                                                                                                                                         | :heavy_minus_sign:                                                                                                                               | N/A                                                                                                                                              |
+| `involvedObject`                                                                                                                                 | [operations.ListDeploymentContainerInstanceEventsInvolvedObject](../../models/operations/listdeploymentcontainerinstanceeventsinvolvedobject.md) | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `firstTimestamp`                                                                                                                                 | *string*                                                                                                                                         | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `lastTimestamp`                                                                                                                                  | *string*                                                                                                                                         | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `count`                                                                                                                                          | *number*                                                                                                                                         | :heavy_check_mark:                                                                                                                               | N/A                                                                                                                                              |
+| `additionalProperties`                                                                                                                           | Record<string, *any*>                                                                                                                            | :heavy_minus_sign:                                                                                                                               | N/A                                                                                                                                              |

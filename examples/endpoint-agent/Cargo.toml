@@ -1,0 +1,47 @@
+[package]
+name = "endpoint-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Alien bindings
+alien-bindings = { workspace = true, features = ["grpc"] }
+
+# Error handling
+thiserror = { workspace = true }
+alien-error = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# HTTP server (TODO: Remove once Worker resource is implemented - Workers don't need HTTP)
+hyper = { version = "1.5.2", features = ["server", "http1"] }
+hyper-util = { version = "0.1.10", features = ["tokio", "server"] }
+http-body-util = "0.1.2"
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# Encrypted database
+turso = "0.3.2"
+
+# Utilities
+chrono = { workspace = true, features = ["serde"] }
+rand = "0.8.5"
+
+# File monitoring
+notify = "7.0.0"
+
+# Hash computation
+blake3 = "1.5.5"
+
+# Regex for PII detection
+regex = "1.11.1"
+
+[dev-dependencies]
+

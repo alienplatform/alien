@@ -1,0 +1,76 @@
+[package]
+name = "alien-commands"
+version = "0.1.0"
+edition = "2021"
+description = "Alien Commands protocol implementation"
+license = "MIT"
+
+[features]
+default = ["server", "runtime"]
+server = [
+    "alien-bindings",
+    "reqwest",
+    "axum",
+    "uuid",
+    "http",
+    "object_store",
+    "alien-aws-clients",
+    "alien-gcp-clients",
+    "alien-azure-clients",
+    "tokio",
+]
+runtime = [
+    "alien-bindings", 
+    "reqwest",
+    "bytes",
+    "futures",
+]
+openapi = ["utoipa", "alien-error/openapi", "alien-bindings/openapi", "alien-core/openapi"]
+test-utils = [
+    "server",
+    "runtime", 
+    "tempfile",
+    "tokio",
+    "alien-bindings/local",
+]
+
+[dependencies]
+# Core dependencies (always available)
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+alien-error = { workspace = true, features = ["axum"] }
+tracing = "0.1"
+url = "2.5"
+
+# Server feature dependencies
+alien-bindings = { workspace = true, optional = true }
+alien-aws-clients = { workspace = true, optional = true }
+alien-gcp-clients = { workspace = true, optional = true }
+alien-azure-clients = { workspace = true, optional = true }
+alien-client-core = { workspace = true, optional = true }
+axum = { workspace = true, features = ["macros", "json", "tokio", "http1"], optional = true }
+uuid = { workspace = true, features = ["v4", "serde"], optional = true }
+http = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
+
+# Runtime feature dependencies  
+reqwest = { workspace = true, features = ["json"], optional = true }
+bytes = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+# Core types - always available
+alien-core = { workspace = true }
+
+# OpenAPI feature dependencies
+utoipa = { workspace = true, features = ["axum_extras", "chrono"], optional = true }
+
+# Test utilities feature dependencies
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["full"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-test = "0.4"

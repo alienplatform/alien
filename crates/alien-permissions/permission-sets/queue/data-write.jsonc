@@ -1,0 +1,80 @@
+{
+  // Allows sending messages to queues and acknowledging messages (runtime access for functions)
+  "id": "queue/data-write",
+  "description": "Allows sending messages to queues and acknowledging received messages",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:SendMessage",
+            "sqs:DeleteMessage",
+            "sqs:ChangeMessageVisibility",
+            "sqs:GetQueueAttributes",
+            "sqs:GetQueueUrl"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.publish",
+            "pubsub.subscriptions.consume",
+            "pubsub.subscriptions.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue data write access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Queue data write access",
+              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": [
+            "Microsoft.ServiceBus/namespaces/messages/send/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

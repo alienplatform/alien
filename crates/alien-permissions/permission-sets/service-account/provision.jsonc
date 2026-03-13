@@ -1,0 +1,85 @@
+{
+  "id": "service-account/provision",
+  "description": "Allows provisioning and creating service accounts/roles/managed identities",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "iam:CreateRole",
+            "iam:PutRolePolicy",
+            "iam:GetRole",
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies",
+            "iam:ListAttachedRolePolicies",
+            "iam:TagRole",
+            "iam:UntagRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "iam.serviceAccounts.create",
+            "iam.serviceAccounts.get",
+            "iam.serviceAccounts.update",
+            "iam.roles.create",
+            "iam.roles.get",
+            "iam.roles.update",
+            "resourcemanager.projects.getIamPolicy",
+            "resourcemanager.projects.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Service account provision access",
+              "expression": "(resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')) || (resource.type == 'iam.googleapis.com/Role' && resource.name.startsWith('projects/${projectName}/roles/${stackPrefix}_'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleDefinitions/write",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}
+

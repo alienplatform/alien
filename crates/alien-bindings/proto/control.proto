@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package alien_bindings.control;
+
+import "google/protobuf/timestamp.proto";
+
+// Service for runtime-application control communication.
+// The runtime hosts this service, and applications connect to it.
+service ControlService {
+    // App registers that it has an HTTP server listening on a port
+    rpc RegisterHttpServer(RegisterHttpServerRequest) returns (RegisterHttpServerResponse);
+    
+    // App registers an event handler for a specific resource
+    rpc RegisterEventHandler(RegisterEventHandlerRequest) returns (RegisterEventHandlerResponse);
+    
+    // App waits for tasks - this is a server-streaming RPC
+    // Runtime sends tasks as they arrive, app processes them
+    rpc WaitForTasks(WaitForTasksRequest) returns (stream Task);
+    
+    // App sends result for a processed task
+    rpc SendTaskResult(SendTaskResultRequest) returns (SendTaskResultResponse);
+}
+
+message RegisterHttpServerRequest {
+    // The port the application's HTTP server is listening on
+    uint32 port = 1;
+}
+
+message RegisterHttpServerResponse {
+    bool success = 1;
+}
+
+message RegisterEventHandlerRequest {
+    // Handler type: "storage", "cron", "queue", "command"
+    string handler_type = 1;
+    // Resource name: bucket name, schedule name, queue name, or command name
+    string resource_name = 2;
+}
+
+message RegisterEventHandlerResponse {
+    bool success = 1;
+}
+
+message WaitForTasksRequest {
+    // Unique identifier for the application instance
+    string application_id = 1;
+}
+
+// Task delivered to the application
+message Task {
+    // Unique task ID for correlation
+    string task_id = 1;
+    
+    oneof payload {
+        StorageEvent storage_event = 2;
+        CronEvent cron_event = 3;
+        QueueMessage queue_message = 4;
+        ArcCommand arc_command = 5;
+    }
+}
+
+message StorageEvent {
+    // The object key that triggered the event
+    string key = 1;
+    // Event type: "created", "deleted", "modified"  
+    string event_type = 2;
+    // Bucket/container name
+    string bucket = 3;
+    // Object size in bytes (for created/modified)
+    uint64 size = 4;
+    // Content type (for created/modified)
+    string content_type = 5;
+    // Event timestamp
+    google.protobuf.Timestamp timestamp = 6;
+}
+
+message CronEvent {
+    // Name of the schedule that triggered
+    string schedule_name = 1;
+    // When it was scheduled to run
+    google.protobuf.Timestamp scheduled_time = 2;
+}
+
+message QueueMessage {
+    // Message ID
+    string id = 1;
+    // Message payload (JSON bytes)
+    bytes payload = 2;
+    // Receipt handle for acknowledgment
+    string receipt_handle = 3;
+    // Source queue name
+    string source = 4;
+    // Delivery attempt count
+    uint32 attempt_count = 5;
+    // Message timestamp
+    google.protobuf.Timestamp timestamp = 6;
+}
+
+message ArcCommand {
+    // Unique command ID
+    string command_id = 1;
+    // Command name (e.g., "generate-report")
+    string command_name = 2;
+    // Command parameters (JSON bytes)
+    bytes params = 3;
+    // Attempt number (starts at 1)
+    uint32 attempt = 4;
+    // Deadline for completion (RFC3339)
+    google.protobuf.Timestamp deadline = 5;
+    // URL to submit response to
+    string response_url = 6;
+    // URL to upload large response bodies
+    string storage_upload_url = 7;
+    // Maximum inline response size
+    uint64 max_inline_bytes = 8;
+}
+
+message SendTaskResultRequest {
+    // The task ID this result is for
+    string task_id = 1;
+    
+    oneof result {
+        TaskSuccess success = 2;
+        TaskError error = 3;
+    }
+}
+
+message TaskSuccess {
+    // Response data (JSON bytes, for ARC commands)
+    bytes response_data = 1;
+}
+
+message TaskError {
+    // Error code
+    string code = 1;
+    // Error message
+    string message = 2;
+}
+
+message SendTaskResultResponse {
+    bool acknowledged = 1;
+}
+

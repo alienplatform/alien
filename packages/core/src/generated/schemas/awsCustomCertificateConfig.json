@@ -1,0 +1,1 @@
+{"type":"object","required":["certificateArn"],"properties":{"certificateArn":{"type":"string"}},"x-readme-ref-name":"AwsCustomCertificateConfig"}

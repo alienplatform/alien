@@ -1,0 +1,1 @@
+{"type":"string","description":"Command states in the ARC protocol lifecycle","enum":["PENDING_UPLOAD","PENDING","DISPATCHED","SUCCEEDED","FAILED","EXPIRED"],"x-readme-ref-name":"CommandState"}

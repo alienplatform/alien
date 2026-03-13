@@ -1,0 +1,19 @@
+# DeleteDeploymentRequest
+
+## Example Usage
+
+```typescript
+import { DeleteDeploymentRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: DeleteDeploymentRequest = {
+  id: "ag_pnj2da55wi5sxbdcav9t273je",
+  workspace: "my-workspace",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                                                                                                                                                      | *string*                                                                                                                                                                  | :heavy_check_mark:                                                                                                                                                        | Unique identifier for the deployment.                                                                                                                                     | ag_pnj2da55wi5sxbdcav9t273je                                                                                                                                              |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |

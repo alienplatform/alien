@@ -1,0 +1,64 @@
+[workspace]
+allow_dirty = false
+changelog_update = true
+dependencies_update = true
+git_release_enable = true
+git_tag_enable = true
+pr_labels = ["release", "rust"]
+pr_name = "chore(rust): release crates"
+
+[[package]]
+name = "alien-cli"
+release = false
+
+[[package]]
+name = "alien-cli-common"
+release = false
+
+[[package]]
+name = "alien-runtime"
+release = false
+
+[[package]]
+name = "alien-manager"
+release = false
+
+[[package]]
+name = "alien-infra"
+release = false
+
+[[package]]
+name = "alien-build"
+release = false
+
+[[package]]
+name = "alien-deployment"
+release = false
+
+[[package]]
+name = "alien-local"
+release = false
+
+[[package]]
+name = "alien-preflights"
+release = false
+
+[[package]]
+name = "alien-test-app"
+release = false
+
+[[package]]
+name = "alien-test-server"
+release = false
+
+[[package]]
+name = "byocdb"
+release = false
+
+[[package]]
+name = "endpoint-agent"
+release = false
+
+[[package]]
+name = "dockdash"
+release = false

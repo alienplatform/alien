@@ -1,0 +1,19 @@
+# GetManagerRequest
+
+## Example Usage
+
+```typescript
+import { GetManagerRequest } from "@aliendotdev/platform-api/models/operations";
+
+let value: GetManagerRequest = {
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  workspace: "my-workspace",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                     | Type                                                                                                                                                                      | Required                                                                                                                                                                  | Description                                                                                                                                                               | Example                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                                                                                                                                                      | *string*                                                                                                                                                                  | :heavy_check_mark:                                                                                                                                                        | Unique identifier for a manager.                                                                                                                                          | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                              |
+| `workspace`                                                                                                                                                               | *string*                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                        | Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace. | my-workspace                                                                                                                                                              |

@@ -1,0 +1,23 @@
+{
+  "id": "azure-storage-account/management",
+  "description": "Allows managing Azure storage account configuration, metadata, and monitoring",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

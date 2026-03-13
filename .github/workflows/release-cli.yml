@@ -1,0 +1,102 @@
+name: Release alien CLI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
+  R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'alien-v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Extract version from tag: alien-v0.1.0 -> 0.1.0
+            TAG="${GITHUB_REF#refs/tags/alien-v}"
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build alien CLI (x86_64)
+        run: |
+          cargo zigbuild -p alien-cli --release \
+            --target x86_64-unknown-linux-musl
+
+      - name: Build alien CLI (aarch64)
+        run: |
+          cargo zigbuild -p alien-cli --release \
+            --target aarch64-unknown-linux-musl
+
+      - name: Upload to R2 (versioned + latest)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          S3="aws s3 --endpoint-url ${R2_ENDPOINT}"
+
+          # Upload versioned
+          $S3 cp \
+            target/x86_64-unknown-linux-musl/release/alien \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien"
+
+          $S3 cp \
+            target/aarch64-unknown-linux-musl/release/alien \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien"
+
+          # Copy to latest
+          $S3 cp \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien" \
+            "s3://${R2_BUCKET}/alien/latest/linux-x86_64/alien"
+
+          $S3 cp \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien" \
+            "s3://${R2_BUCKET}/alien/latest/linux-aarch64/alien"
+
+      - name: Purge Cloudflare cache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"prefix_purge":["https://releases.alien.dev/alien/latest/"]}'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            target/x86_64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien

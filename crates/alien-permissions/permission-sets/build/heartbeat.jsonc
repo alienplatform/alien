@@ -1,0 +1,79 @@
+{
+  "id": "build/heartbeat",
+  "description": "Allows readonly monitoring and health checks for build resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "codebuild:BatchGetProjects",
+            "codebuild:ListBuildsForProject",
+            "codebuild:ListCuratedEnvironmentImages",
+            "codebuild:GetResourcePolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "cloudbuild.workerpools.get",
+            "cloudbuild.workerpools.list",
+            "cloudbuild.builds.get",
+            "cloudbuild.builds.list",
+            "cloudbuild.operations.get",
+            "cloudbuild.operations.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed build management",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${stackPrefix}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${stackPrefix}-'))"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Resource specific build management",
+              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${resourceName}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${resourceName}-'))"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/jobs/read",
+            "Microsoft.App/jobs/executions/read",
+            "Microsoft.App/managedEnvironments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

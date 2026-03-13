@@ -1,0 +1,112 @@
+{
+  "id": "artifact-registry/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on artifact registries",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
+            "ecr:SetRepositoryPolicy",
+            "ecr:DeleteRepositoryPolicy",
+            "ecr:TagResource",
+            "ecr:UntagResource",
+            "ecr:PutLifecyclePolicy",
+            "ecr:DeleteLifecyclePolicy",
+            "ecr:PutImageScanningConfiguration",
+            "ecr:PutImageTagMutability",
+            "ecr:DescribeRepositories",
+            "ecr:DescribeImages",
+            "ecr:ListImages",
+            "ecr:DescribeImageScanFindings",
+            "ecr:GetRepositoryPolicy",
+            "ecr:ListTagsForResource",
+            "ecr:DescribeRegistry"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.create",
+            "artifactregistry.repositories.delete",
+            "artifactregistry.repositories.update",
+            "artifactregistry.repositories.setIamPolicy",
+            "artifactregistry.locations.get",
+            "artifactregistry.locations.list",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "artifactregistry.repositories.getIamPolicy",
+            "artifactregistry.tags.get",
+            "artifactregistry.tags.list",
+            "artifactregistry.versions.get",
+            "artifactregistry.versions.list",
+            "artifactregistry.packages.get",
+            "artifactregistry.packages.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}/locations/${region}",
+            "condition": {
+              "title": "Stack prefixed artifact registry provision",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}",
+            "condition": {
+              "title": "Resource specific artifact registry provision",
+              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${resourceName}-')"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/write",
+            "Microsoft.ContainerRegistry/registries/delete",
+            "Microsoft.ContainerRegistry/registries/importImage/action",
+            "Microsoft.ContainerRegistry/registries/scheduleRun/action",
+            "Microsoft.ContainerRegistry/registries/updatePolicies/write",
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read",
+            "Microsoft.ContainerRegistry/registries/quarantine/read",
+            "Microsoft.ContainerRegistry/registries/quarantine/write",
+            "Microsoft.ContainerRegistry/registries/sign/write"
+          ],
+          "dataActions": [
+            "Microsoft.ContainerRegistry/registries/pull/read",
+            "Microsoft.ContainerRegistry/registries/push/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

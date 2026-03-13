@@ -1,0 +1,252 @@
+{
+  "id": "container-cluster/provision",
+  "description": "Allows creating and managing ContainerCluster compute infrastructure. Derived from AwsContainerClusterController, GcpContainerClusterController, AzureContainerClusterController API calls.",
+  "platforms": {
+    "aws": [
+      // Launch template create/delete + tagging (CreateLaunchTemplate with TagSpecifications)
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateLaunchTemplate",
+            "ec2:DeleteLaunchTemplate",
+            "ec2:CreateTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
+            ]
+          }
+        }
+      },
+      // ASG create/delete/update/scale — scoped to stack-prefixed ASG names
+      {
+        "grant": {
+          "actions": [
+            "autoscaling:CreateAutoScalingGroup",
+            "autoscaling:DeleteAutoScalingGroup",
+            "autoscaling:UpdateAutoScalingGroup",
+            "autoscaling:SetDesiredCapacity"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ]
+          }
+        }
+      },
+      // Describe actions — AWS requires Resource: "*" for these read-only APIs.
+      // Includes instance-level inspection for operational visibility.
+      {
+        "grant": {
+          "actions": [
+            "ec2:DescribeImages",
+            "ec2:DescribeInstances",
+            "ec2:DescribeInstanceStatus",
+            "ec2:DescribeTags",
+            "ec2:GetConsoleOutput",
+            "autoscaling:DescribeAutoScalingGroups"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // iam:PassRole — scoped to the ContainerCluster's IAM role created in CF
+      {
+        "grant": {
+          "actions": [
+            "iam:PassRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // Instance template and MIG management + serial port output for boot diagnostics
+      {
+        "grant": {
+          "permissions": [
+            "compute.instanceTemplates.create",
+            "compute.instanceTemplates.delete",
+            "compute.instanceTemplates.get",
+            "compute.firewalls.create",
+            "compute.firewalls.delete",
+            "compute.firewalls.get",
+            "compute.instanceGroupManagers.create",
+            "compute.instanceGroupManagers.delete",
+            "compute.instanceGroupManagers.get",
+            "compute.instanceGroupManagers.list",
+            "compute.instanceGroupManagers.update",
+            "compute.instances.getSerialPortOutput"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed container cluster provision",
+              "expression": "resource.name.startsWith('projects/${projectName}/') && (resource.type == 'compute.googleapis.com/InstanceTemplate' || resource.type == 'compute.googleapis.com/InstanceGroupManager' || resource.type == 'compute.googleapis.com/Firewall')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // Service account management for VM instances
+      {
+        "grant": {
+          "permissions": [
+            "iam.serviceAccounts.get",
+            "iam.serviceAccounts.create",
+            "iam.serviceAccounts.delete",
+            "iam.serviceAccounts.actAs",
+            "resourcemanager.projects.getIamPolicy",
+            "resourcemanager.projects.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // Secret Manager for machine token storage
+      {
+        "grant": {
+          "permissions": [
+            "secretmanager.secrets.get",
+            "secretmanager.secrets.create",
+            "secretmanager.secrets.delete",
+            "secretmanager.versions.add",
+            "secretmanager.secrets.getIamPolicy",
+            "secretmanager.secrets.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Stack prefixed secrets",
+              "expression": "resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // VMSS management + VM listing + boot diagnostics for startup log visibility
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Network Security Group
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/networkSecurityGroups/write",
+            "Microsoft.Network/networkSecurityGroups/read",
+            "Microsoft.Network/networkSecurityGroups/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Managed Identity and role assignments
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Key Vault for machine token
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.KeyVault/vaults/secrets/write",
+            "Microsoft.KeyVault/vaults/secrets/read",
+            "Microsoft.KeyVault/vaults/secrets/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

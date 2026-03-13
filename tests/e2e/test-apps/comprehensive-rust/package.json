@@ -1,0 +1,11 @@
+{
+  "name": "comprehensive-rust",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@aliendotdev/core": "workspace:*",
+    "@aliendotdev/typescript-config": "workspace:*",
+    "typescript": "^5.8.3"
+  }
+}

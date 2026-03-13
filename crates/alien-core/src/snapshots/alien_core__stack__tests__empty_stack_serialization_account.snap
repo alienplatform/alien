@@ -1,0 +1,12 @@
+---
+source: crates/alien-core/src/stack.rs
+expression: stack
+---
+{
+  "id": "empty-test-stack",
+  "resources": {},
+  "permissions": {
+    "profiles": {},
+    "management": "auto"
+  }
+}

@@ -1,0 +1,1 @@
+{"type":"string","description":"How heartbeat health checks are handled.","enum":["off","on"],"x-readme-ref-name":"HeartbeatsMode"}
