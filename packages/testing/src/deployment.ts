@@ -2,8 +2,8 @@
  * Deployment — handle to a deployed application running via `alien dev`
  */
 
-import { CommandsClient } from "@aliendotdev/commands-client"
 import type { ChildProcess } from "node:child_process"
+import { CommandsClient } from "@aliendotdev/commands-client"
 import type { Platform, PlatformCredentials } from "./types.js"
 
 /**
@@ -57,7 +57,11 @@ export class Deployment {
   /**
    * Set an external secret using platform-native tools
    */
-  async setExternalSecret(vaultName: string, secretKey: string, secretValue: string): Promise<void> {
+  async setExternalSecret(
+    vaultName: string,
+    secretKey: string,
+    secretValue: string,
+  ): Promise<void> {
     const { setExternalSecret } = await import("./external-secrets.js")
     const stateDir = this.appPath ? `${this.appPath}/.alien` : undefined
     await setExternalSecret(
@@ -84,7 +88,7 @@ export class Deployment {
 
     this.process.kill("SIGTERM")
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       const timeout = setTimeout(() => {
         if (!this.process.killed) {
           this.process.kill("SIGKILL")

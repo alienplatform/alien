@@ -32,14 +32,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
           }
         }
       },
@@ -53,14 +49,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           }
         }
       }

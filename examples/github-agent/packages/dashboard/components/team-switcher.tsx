@@ -1,9 +1,9 @@
 "use client"
 
-import * as React from "react"
-import { ChevronsUpDown, Plus } from "lucide-react"
 import { IconBrandGithub } from "@tabler/icons-react"
+import { ChevronsUpDown, Plus } from "lucide-react"
 import { useRouter } from "next/navigation"
+import * as React from "react"
 
 import {
   DropdownMenu,
@@ -37,7 +37,7 @@ interface TeamSwitcherProps {
 export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitcherProps) {
   const { isMobile } = useSidebar()
   const router = useRouter()
-  
+
   const activeOrg = organizations.find(org => org.id === activeOrganizationId) || organizations[0]
 
   if (!activeOrg) {
@@ -48,7 +48,7 @@ export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitch
     await authClient.organization.setActive({
       organizationId: orgId,
     })
-    
+
     // Refresh the page to reload data for the new organization
     router.refresh()
   }
@@ -76,7 +76,8 @@ export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitch
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{activeOrg.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {organizations.length} {organizations.length === 1 ? 'organization' : 'organizations'}
+                  {organizations.length}{" "}
+                  {organizations.length === 1 ? "organization" : "organizations"}
                 </span>
               </div>
               <ChevronsUpDown className="ml-auto" />
@@ -121,4 +122,3 @@ export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitch
     </SidebarMenu>
   )
 }
-

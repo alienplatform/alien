@@ -6,25 +6,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "s3:ListBucket",
-            "s3:GetObject",
-            "s3:GetObjectVersion",
-            "s3:GetObjectAcl"
-          ]
+          "actions": ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:s3:::${stackPrefix}-*",
-              "arn:aws:s3:::${stackPrefix}-*/*"
-            ]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:s3:::${resourceName}",
-              "arn:aws:s3:::${resourceName}/*"
-            ]
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
           }
         }
       }

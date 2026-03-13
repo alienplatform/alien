@@ -1,16 +1,23 @@
 "use client"
 
-import Link from "next/link"
-import { Bar, BarChart, XAxis, YAxis, Cell, ResponsiveContainer, CartesianGrid } from "recharts"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { IconEye } from "@tabler/icons-react"
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-  type ChartConfig,
 } from "@/components/ui/chart"
+import { IconEye } from "@tabler/icons-react"
+import Link from "next/link"
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, XAxis, YAxis } from "recharts"
 
 interface PrRiskChartProps {
   data: {
@@ -55,11 +62,11 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
     <Card>
       <CardHeader>
         <CardTitle>Risk Distribution</CardTitle>
-        <CardDescription>
-          Pull requests categorized by risk level
-        </CardDescription>
+        <CardDescription>Pull requests categorized by risk level</CardDescription>
         <CardAction>
-          <Link href={`/pull-requests?integrationId=${encodeURIComponent(integrationId)}&agentId=${encodeURIComponent(agentId)}&repo=${encodeURIComponent(repoName || "")}`}>
+          <Link
+            href={`/pull-requests?integrationId=${encodeURIComponent(integrationId)}&agentId=${encodeURIComponent(agentId)}&repo=${encodeURIComponent(repoName || "")}`}
+          >
             <Button variant="outline" size="sm">
               <IconEye className="h-3.5 w-3.5 mr-1.5" />
               View PRs
@@ -94,12 +101,9 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
           </ResponsiveContainer>
         </ChartContainer>
         <div className="flex justify-center gap-4 mt-4 flex-wrap">
-          {chartData.map((item) => (
+          {chartData.map(item => (
             <div key={item.name} className="flex items-center gap-2">
-              <div
-                className="h-3 w-3 rounded-sm"
-                style={{ backgroundColor: item.fill }}
-              />
+              <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: item.fill }} />
               <span className="text-sm text-muted-foreground">
                 {item.name}: {item.value}
               </span>
@@ -110,4 +114,3 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
     </Card>
   )
 }
-

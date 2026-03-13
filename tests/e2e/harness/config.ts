@@ -21,7 +21,10 @@ export function getE2EConfig(): E2EConfig {
 export function getCredentials(platform: Platform): PlatformCredentials | undefined {
   switch (platform) {
     case "aws":
-      if (process.env.AWS_MANAGEMENT_ACCESS_KEY_ID && process.env.AWS_MANAGEMENT_SECRET_ACCESS_KEY) {
+      if (
+        process.env.AWS_MANAGEMENT_ACCESS_KEY_ID &&
+        process.env.AWS_MANAGEMENT_SECRET_ACCESS_KEY
+      ) {
         return {
           platform: "aws",
           accessKeyId: process.env.AWS_MANAGEMENT_ACCESS_KEY_ID,

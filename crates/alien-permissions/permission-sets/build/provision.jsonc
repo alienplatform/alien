@@ -19,33 +19,23 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"
-            ]
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"]
           }
         }
       },
       {
         "grant": {
-          "actions": [
-            "iam:PassRole"
-          ]
+          "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           }
         }
       }

@@ -21,16 +21,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:s3:::${stackPrefix}-*",
-              "arn:aws:s3:::${stackPrefix}-*/*"
-            ]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:s3:::${resourceName}",
-              "arn:aws:s3:::${resourceName}/*"
-            ]
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
           }
         }
       }

@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -36,9 +34,7 @@
                 "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                 "principalIdDisplayName": "User Access Administrator",
                 "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                "delegatedRoleDefinitionIds": [
-                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                ]
+                "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
               }
             ],
             "eligibleAuthorizations": [
@@ -90,9 +86,7 @@
                 "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                 "principalIdDisplayName": "User Access Administrator",
                 "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                "delegatedRoleDefinitionIds": [
-                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                ]
+                "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
               }
             ],
             "eligibleAuthorizations": [
@@ -146,9 +140,7 @@
                     "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                     "principalIdDisplayName": "User Access Administrator",
                     "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                    "delegatedRoleDefinitionIds": [
-                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                    ]
+                    "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                   }
                 ],
                 "eligibleAuthorizations": [
@@ -208,9 +200,7 @@
                 "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                 "principalIdDisplayName": "User Access Administrator",
                 "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                "delegatedRoleDefinitionIds": [
-                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                ]
+                "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
               }
             ],
             "offerDisplayName": "Marketplace Test Offer",
@@ -245,9 +235,7 @@
                     "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                     "principalIdDisplayName": "User Access Administrator",
                     "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                    "delegatedRoleDefinitionIds": [
-                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                    ]
+                    "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                   }
                 ],
                 "eligibleAuthorizations": [
@@ -311,9 +299,7 @@
                     "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                     "principalIdDisplayName": "User Access Administrator",
                     "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                    "delegatedRoleDefinitionIds": [
-                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                    ]
+                    "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                   }
                 ],
                 "eligibleAuthorizations": [
@@ -410,9 +396,7 @@
                         "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                         "principalIdDisplayName": "User Access Administrator",
                         "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                        "delegatedRoleDefinitionIds": [
-                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                        ]
+                        "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                       }
                     ],
                     "eligibleAuthorizations": [
@@ -470,9 +454,7 @@
                         "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                         "principalIdDisplayName": "User Access Administrator",
                         "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                        "delegatedRoleDefinitionIds": [
-                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                        ]
+                        "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                       }
                     ],
                     "eligibleAuthorizations": [
@@ -538,9 +520,7 @@
                         "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                         "principalIdDisplayName": "User Access Administrator",
                         "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                        "delegatedRoleDefinitionIds": [
-                          "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                        ]
+                        "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                       }
                     ],
                     "eligibleAuthorizations": [
@@ -639,9 +619,7 @@
                     "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                     "principalIdDisplayName": "User Access Administrator",
                     "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                    "delegatedRoleDefinitionIds": [
-                      "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                    ]
+                    "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
                   }
                 ],
                 "eligibleAuthorizations": [],
@@ -676,9 +654,7 @@
                 "principalId": "f98d86a2-4cc4-4e9d-ad47-b3e80a1bcdfc",
                 "principalIdDisplayName": "User Access Administrator",
                 "roleDefinitionId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
-                "delegatedRoleDefinitionIds": [
-                  "b24988ac-6180-42a0-ab88-20f7382dd24c"
-                ]
+                "delegatedRoleDefinitionIds": ["b24988ac-6180-42a0-ab88-20f7382dd24c"]
               }
             ],
             "eligibleAuthorizations": [],
@@ -1034,10 +1010,7 @@
             "description": "The name of the managedBy tenant."
           }
         },
-        "required": [
-          "managedByTenantId",
-          "authorizations"
-        ],
+        "required": ["managedByTenantId", "authorizations"],
         "type": "object",
         "description": "The properties of a registration definition."
       },
@@ -1210,9 +1183,7 @@
             "description": "The registration definition associated with the registration assignment."
           }
         },
-        "required": [
-          "registrationDefinitionId"
-        ],
+        "required": ["registrationDefinitionId"],
         "type": "object",
         "description": "The properties of the registration assignment."
       },
@@ -1294,10 +1265,7 @@
             "description": "The marketplace plan display name."
           }
         },
-        "required": [
-          "managedByTenantId",
-          "authorizations"
-        ],
+        "required": ["managedByTenantId", "authorizations"],
         "type": "object",
         "description": "The properties of the marketplace registration definition."
       },
@@ -1338,12 +1306,7 @@
             "description": "Azure Marketplace plan's version."
           }
         },
-        "required": [
-          "name",
-          "publisher",
-          "product",
-          "version"
-        ],
+        "required": ["name", "publisher", "product", "version"],
         "type": "object",
         "description": "The details for the Managed Services offer’s plan in Azure Marketplace."
       },
@@ -1417,10 +1380,7 @@
             }
           }
         },
-        "required": [
-          "principalId",
-          "roleDefinitionId"
-        ],
+        "required": ["principalId", "roleDefinitionId"],
         "type": "object",
         "description": "The Azure Active Directory principal identifier and Azure built-in role that describes the access the principal will receive on the delegated resource in the managed tenant."
       },
@@ -1442,10 +1402,7 @@
             "$ref": "#/components/schemas/JustInTimeAccessPolicy"
           }
         },
-        "required": [
-          "principalId",
-          "roleDefinitionId"
-        ],
+        "required": ["principalId", "roleDefinitionId"],
         "type": "object",
         "description": "The Azure Active Directory principal identifier, Azure built-in role, and just-in-time access policy that describes the just-in-time access the principal will receive on the delegated resource in the managed tenant."
       },
@@ -1460,9 +1417,7 @@
             "description": "The display name of the Azure Active Directory principal."
           }
         },
-        "required": [
-          "principalId"
-        ],
+        "required": ["principalId"],
         "type": "object",
         "description": "Defines the Azure Active Directory principal that can approve any just-in-time access requests by the principal defined in the EligibleAuthorization."
       },
@@ -1471,10 +1426,7 @@
           "multiFactorAuthProvider": {
             "type": "string",
             "description": "The multi-factor authorization provider to be used for just-in-time access requests.",
-            "enum": [
-              "Azure",
-              "None"
-            ],
+            "enum": ["Azure", "None"],
             "x-ms-enum": {
               "name": "MultiFactorAuthProvider",
               "modelAsString": true
@@ -1495,9 +1447,7 @@
             "description": "The list of managedByTenant approvers for the eligible authorization."
           }
         },
-        "required": [
-          "multiFactorAuthProvider"
-        ],
+        "required": ["multiFactorAuthProvider"],
         "type": "object",
         "description": "Just-in-time access policy setting."
       },
@@ -1519,10 +1469,7 @@
             }
           }
         },
-        "required": [
-          "code",
-          "message"
-        ],
+        "required": ["code", "message"],
         "type": "object",
         "description": "The error response indicating why the incoming request wasn’t able to be processed"
       },
@@ -1545,12 +1492,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1567,12 +1509,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true

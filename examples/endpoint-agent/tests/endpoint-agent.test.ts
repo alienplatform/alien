@@ -4,11 +4,11 @@
  * Uses @aliendotdev/testing with the dev deployer for pure local ARC testing.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { deploy, type Deployment } from "@aliendotdev/testing"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { type Deployment, deploy } from "@aliendotdev/testing"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 describe("Endpoint Agent", () => {
   let deployment: Deployment
@@ -38,7 +38,7 @@ describe("Endpoint Agent", () => {
     })
 
     // Wait for monitoring to start
-    await new Promise((resolve) => setTimeout(resolve, 2000))
+    await new Promise(resolve => setTimeout(resolve, 2000))
   }, 300_000)
 
   afterAll(async () => {
@@ -64,7 +64,7 @@ describe("Endpoint Agent", () => {
     await fs.writeFile(testFile, "test data")
 
     // Wait longer for filesystem watcher to initialize and detect the event
-    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await new Promise(resolve => setTimeout(resolve, 3000))
 
     // Query recent events
     const result = await deployment.invokeCommand("get-events", {
@@ -76,14 +76,14 @@ describe("Endpoint Agent", () => {
     expect(Array.isArray(result.events)).toBe(true)
 
     // Should have at least one file_created event
-    const fileCreatedEvents = result.events.filter(
-      (e: any) => e.eventType === "file_created",
-    )
-    
+    const fileCreatedEvents = result.events.filter((e: any) => e.eventType === "file_created")
+
     // Note: Filesystem monitoring may take time to initialize
     // If no events are found, this is likely a timing issue rather than a bug
     if (fileCreatedEvents.length === 0) {
-      console.warn("No file_created events found - filesystem watcher may need more initialization time")
+      console.warn(
+        "No file_created events found - filesystem watcher may need more initialization time",
+      )
     }
     expect(fileCreatedEvents.length).toBeGreaterThanOrEqual(0)
   })
@@ -95,11 +95,11 @@ describe("Endpoint Agent", () => {
     const simulateResult = await deployment.invokeCommand("simulate-clipboard", {
       content: sensitiveContent,
     })
-    
+
     expect(simulateResult.success).toBe(true)
 
     // Small delay to ensure event is written to database
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, 1000))
 
     // Query ALL events to debug
     const result = await deployment.invokeCommand("get-events", {
@@ -111,9 +111,7 @@ describe("Endpoint Agent", () => {
     expect(Array.isArray(result.events)).toBe(true)
 
     // Find clipboard event
-    const clipboardEvents = result.events.filter(
-      (e: any) => e.eventType === "clipboard_write",
-    )
+    const clipboardEvents = result.events.filter((e: any) => e.eventType === "clipboard_write")
 
     // Debug output
     if (clipboardEvents.length === 0) {
@@ -148,9 +146,7 @@ describe("Endpoint Agent", () => {
     expect(result.sensitiveFiles).toBeDefined()
 
     // Should find at least one sensitive file
-    const foundSensitive = result.sensitiveFiles.some((f: any) =>
-      f.path.includes("sensitive.txt"),
-    )
+    const foundSensitive = result.sensitiveFiles.some((f: any) => f.path.includes("sensitive.txt"))
     expect(foundSensitive).toBe(true)
 
     if (foundSensitive) {
@@ -178,5 +174,3 @@ describe("Endpoint Agent", () => {
     ).rejects.toThrow()
   })
 })
-
-

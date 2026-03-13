@@ -1,20 +1,16 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useSearchParams } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  IconServer,
-  IconPlus,
-  IconCloud,
-} from "@tabler/icons-react"
+import { useAgents, useDeploymentGroup } from "@/lib/queries"
+import { IconCloud, IconPlus, IconServer } from "@tabler/icons-react"
 import Image from "next/image"
+import { useSearchParams } from "next/navigation"
+import { useEffect, useState } from "react"
 import { match } from "ts-pattern"
 import { DeployAgentDialog } from "./_components/deploy-agent-dialog"
-import { useDeploymentGroup, useAgents } from "@/lib/queries"
 
 interface Agent {
   id: string
@@ -34,9 +30,9 @@ const platformIcons: Record<string, string> = {
 export default function AgentsPage() {
   const searchParams = useSearchParams()
   const [deployDialogOpen, setDeployDialogOpen] = useState(false)
-  
+
   const { data: agents = [], isLoading: agentsLoading } = useAgents()
-  const { 
+  const {
     data: deploymentGroupData,
     isLoading: tokenLoading,
     error: tokenError,
@@ -44,7 +40,7 @@ export default function AgentsPage() {
 
   // Support opening deploy dialog via URL parameter (?deploy=true)
   useEffect(() => {
-    if (searchParams.get('deploy') === 'true') {
+    if (searchParams.get("deploy") === "true") {
       setDeployDialogOpen(true)
     }
   }, [searchParams])
@@ -72,7 +68,7 @@ export default function AgentsPage() {
         />
       )
     }
-    
+
     return <IconCloud className="h-5 w-5 text-muted-foreground" />
   }
 
@@ -102,7 +98,7 @@ export default function AgentsPage() {
             </Badge>
           )}
         </h2>
-        
+
         {agentsLoading ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {[...Array(3)].map((_, i) => (
@@ -130,7 +126,8 @@ export default function AgentsPage() {
               </div>
               <h3 className="text-xl font-semibold mb-2">No agents running</h3>
               <p className="text-muted-foreground text-center max-w-md mb-6">
-                Deploy your first agent to start analyzing repositories. Agents run in your environment, keeping your data private and secure.
+                Deploy your first agent to start analyzing repositories. Agents run in your
+                environment, keeping your data private and secure.
               </p>
               <Button onClick={() => setDeployDialogOpen(true)}>
                 <IconPlus className="mr-2 h-4 w-4" />
@@ -154,7 +151,9 @@ export default function AgentsPage() {
                           {agent.name || agent.id}
                         </CardTitle>
                         <CardDescription className="flex items-center gap-2 mt-1">
-                          <Badge className={`${getStatusColor(agent.status)} hover:${getStatusColor(agent.status)} gap-1`}>
+                          <Badge
+                            className={`${getStatusColor(agent.status)} hover:${getStatusColor(agent.status)} gap-1`}
+                          >
                             <div className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
                             {agent.status}
                           </Badge>

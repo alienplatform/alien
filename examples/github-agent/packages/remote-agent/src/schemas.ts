@@ -144,4 +144,3 @@ export type AIReview = z.infer<typeof AIReviewSchema>
 export type AnalysisMetrics = z.infer<typeof AnalysisMetricsSchema>
 export type LabelResult = z.infer<typeof LabelResultSchema>
 export type ClassifiedPRWithReview = z.infer<typeof ClassifiedPRWithReviewSchema>
-

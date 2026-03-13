@@ -1,4 +1,4 @@
-import { defineFunction, kv, storage, queue } from "@aliendotdev/core";
+import { defineFunction, kv, queue, storage } from "@aliendotdev/core"
 
 export default defineFunction({
   name: "alien-test-app",
@@ -19,7 +19,4 @@ export default defineFunction({
       name: "test-queue",
     }),
   ],
-});
-
-
-
+})

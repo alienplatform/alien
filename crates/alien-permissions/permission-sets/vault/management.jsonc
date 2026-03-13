@@ -6,15 +6,11 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "ssm:DescribeParameters"
-          ]
+          "actions": ["ssm:DescribeParameters"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
             "resources": [
@@ -27,10 +23,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.get",
-            "secretmanager.secrets.list"
-          ]
+          "permissions": ["secretmanager.secrets.get", "secretmanager.secrets.list"]
         },
         "binding": {
           "stack": {
@@ -53,9 +46,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.KeyVault/vaults/read"
-          ]
+          "actions": ["Microsoft.KeyVault/vaults/read"]
         },
         "binding": {
           "stack": {

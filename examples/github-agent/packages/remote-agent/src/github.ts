@@ -252,7 +252,7 @@ export async function fetchPullRequests(config: IntegrationConfig): Promise<Pull
 
   const pulls = await fetchJson<GitHubPull[]>(listUrl, config.token)
 
-  return mapWithConcurrency(pulls, REQUEST_CONCURRENCY, async (pr) => {
+  return mapWithConcurrency(pulls, REQUEST_CONCURRENCY, async pr => {
     const [details, files, firstReviewAt] = await Promise.all([
       fetchPullRequestDetails(apiBase, config, pr.number),
       fetchPullRequestFiles(apiBase, config, pr.number),

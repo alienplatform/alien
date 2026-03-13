@@ -1,20 +1,14 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
-import Link from "next/link"
-import { signUp } from "@/lib/auth-client"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { signUp } from "@/lib/auth-client"
 import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useState } from "react"
 
 export default function SignUpPage() {
   const router = useRouter()
@@ -51,6 +45,7 @@ export default function SignUpPage() {
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
+      {/* biome-ignore lint/a11y/useValidAnchor: placeholder logo link */}
       <a href="#" className="flex items-center gap-2 self-center font-medium">
         <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
           <IconBrandGithub className="size-5" />
@@ -60,9 +55,7 @@ export default function SignUpPage() {
       <Card className="border-border/50 shadow-xl">
         <CardHeader className="text-center space-y-1">
           <CardTitle className="text-2xl">Create an account</CardTitle>
-          <CardDescription>
-            Get started with code review analytics
-          </CardDescription>
+          <CardDescription>Get started with code review analytics</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -78,7 +71,7 @@ export default function SignUpPage() {
                 type="text"
                 placeholder="John Doe"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={e => setName(e.target.value)}
                 required
                 className="h-10"
               />
@@ -90,7 +83,7 @@ export default function SignUpPage() {
                 type="email"
                 placeholder="you@example.com"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={e => setEmail(e.target.value)}
                 required
                 className="h-10"
               />
@@ -102,14 +95,12 @@ export default function SignUpPage() {
                 type="password"
                 placeholder="Create a password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={e => setPassword(e.target.value)}
                 required
                 minLength={8}
                 className="h-10"
               />
-              <p className="text-xs text-muted-foreground">
-                Must be at least 8 characters
-              </p>
+              <p className="text-xs text-muted-foreground">Must be at least 8 characters</p>
             </div>
             <Button type="submit" className="w-full h-10" disabled={loading}>
               {loading ? (
@@ -124,7 +115,10 @@ export default function SignUpPage() {
           </form>
           <div className="mt-4 text-center text-sm">
             Already have an account?{" "}
-            <Link href="/login" className="text-primary underline-offset-4 hover:underline font-medium">
+            <Link
+              href="/login"
+              className="text-primary underline-offset-4 hover:underline font-medium"
+            >
               Sign in
             </Link>
           </div>
@@ -133,4 +127,3 @@ export default function SignUpPage() {
     </div>
   )
 }
-

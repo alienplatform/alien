@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -559,12 +557,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -581,12 +574,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true

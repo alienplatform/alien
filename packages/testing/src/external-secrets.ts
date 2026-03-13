@@ -2,26 +2,30 @@
  * External secrets - platform-native secret management
  */
 
+import { exec } from "node:child_process"
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { promisify } from "node:util"
+import { AlienError } from "@aliendotdev/core"
+import { PutParameterCommand, SSMClient } from "@aws-sdk/client-ssm"
+import { ClientSecretCredential } from "@azure/identity"
+import { SecretClient } from "@azure/keyvault-secrets"
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
+import { CoreV1Api, KubeConfig } from "@kubernetes/client-node"
+import {
+  TestingOperationFailedError,
+  TestingUnsupportedPlatformError,
+  withTestingContext,
+} from "./errors.js"
 import type {
+  AWSCredentials,
+  AzureCredentials,
+  GCPCredentials,
+  KubernetesCredentials,
   Platform,
   PlatformCredentials,
-  AWSCredentials,
-  GCPCredentials,
-  AzureCredentials,
-  KubernetesCredentials,
 } from "./types.js"
-import { AlienError } from "@aliendotdev/core"
-import { SSMClient, PutParameterCommand } from "@aws-sdk/client-ssm"
-import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
-import { SecretClient } from "@azure/keyvault-secrets"
-import { ClientSecretCredential } from "@azure/identity"
-import { CoreV1Api, KubeConfig } from "@kubernetes/client-node"
-import { exec } from "node:child_process"
-import { promisify } from "node:util"
-import { writeFile, mkdtemp } from "node:fs/promises"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { TestingOperationFailedError, TestingUnsupportedPlatformError, withTestingContext } from "./errors.js"
 
 const execAsync = promisify(exec)
 
@@ -103,12 +107,12 @@ export async function setExternalSecret(
       }
     }
   } catch (error) {
-    throw await withTestingContext(
-      error,
-      "setExternalSecret",
-      "Failed to set external secret",
-      { platform, resourcePrefix, vaultName, secretKey },
-    )
+    throw await withTestingContext(error, "setExternalSecret", "Failed to set external secret", {
+      platform,
+      resourcePrefix,
+      vaultName,
+      secretKey,
+    })
   }
 }
 
@@ -324,7 +328,11 @@ async function setKubernetesSecret(
         },
       })
     } else {
-      throw await withTestingContext(error, "setKubernetesSecret", "Failed to set Kubernetes secret")
+      throw await withTestingContext(
+        error,
+        "setKubernetesSecret",
+        "Failed to set Kubernetes secret",
+      )
     }
   }
 }
@@ -368,6 +376,6 @@ async function setLocalSecret(
 
   // Format: alien dev vault --state-dir <dir> set <vault> <key> <value>
   const command = `${alienCliPath} dev vault --state-dir "${agentStateDir}" set "${vaultName}" "${secretKey}" "${secretValue}"`
-  
+
   await execAsync(command)
 }

@@ -48,14 +48,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"]
           }
         }
       },
@@ -86,22 +82,14 @@
       // ACM certificates for HTTPS containers
       {
         "grant": {
-          "actions": [
-            "acm:ImportCertificate",
-            "acm:DeleteCertificate",
-            "acm:DescribeCertificate"
-          ]
+          "actions": ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"
-            ]
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"
-            ]
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
           }
         }
       }
@@ -154,11 +142,7 @@
       // Persistent Disks for stateful containers
       {
         "grant": {
-          "permissions": [
-            "compute.disks.create",
-            "compute.disks.delete",
-            "compute.disks.get"
-          ]
+          "permissions": ["compute.disks.create", "compute.disks.delete", "compute.disks.get"]
         },
         "binding": {
           "stack": {

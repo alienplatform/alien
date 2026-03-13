@@ -7,18 +7,14 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
   "x-ms-paths": {
     "/{roleId}?disambiguation_dummy": {
       "get": {
-        "tags": [
-          "RoleDefinitions"
-        ],
+        "tags": ["RoleDefinitions"],
         "operationId": "RoleDefinitions_GetById",
         "description": "Gets a role definition by ID.",
         "parameters": [
@@ -97,18 +93,12 @@
             "roleName": "Role name",
             "type": "roletype",
             "description": "Role description",
-            "assignableScopes": [
-              "/subscriptions/subId"
-            ],
+            "assignableScopes": ["/subscriptions/subId"],
             "permissions": [
               {
-                "actions": [
-                  "action"
-                ],
+                "actions": ["action"],
                 "notActions": [],
-                "dataActions": [
-                  "dataAction"
-                ],
+                "dataActions": ["dataAction"],
                 "notDataActions": []
               }
             ]
@@ -124,18 +114,12 @@
             "roleName": "Role name",
             "type": "roletype",
             "description": "Role description",
-            "assignableScopes": [
-              "/subscriptions/subId"
-            ],
+            "assignableScopes": ["/subscriptions/subId"],
             "permissions": [
               {
-                "actions": [
-                  "action"
-                ],
+                "actions": ["action"],
                 "notActions": [],
-                "dataActions": [
-                  "dataAction"
-                ],
+                "dataActions": ["dataAction"],
                 "notDataActions": []
               }
             ]
@@ -151,18 +135,12 @@
             "roleName": "Role name",
             "type": "roletype",
             "description": "Role description",
-            "assignableScopes": [
-              "/subscriptions/subId"
-            ],
+            "assignableScopes": ["/subscriptions/subId"],
             "permissions": [
               {
-                "actions": [
-                  "action"
-                ],
+                "actions": ["action"],
                 "notActions": [],
-                "dataActions": [
-                  "dataAction"
-                ],
+                "dataActions": ["dataAction"],
                 "notDataActions": []
               }
             ]
@@ -180,18 +158,12 @@
                 "roleName": "Role name",
                 "type": "roletype",
                 "description": "Role description",
-                "assignableScopes": [
-                  "/subscriptions/subId"
-                ],
+                "assignableScopes": ["/subscriptions/subId"],
                 "permissions": [
                   {
-                    "actions": [
-                      "action"
-                    ],
+                    "actions": ["action"],
                     "notActions": [],
-                    "dataActions": [
-                      "dataAction"
-                    ],
+                    "dataActions": ["dataAction"],
                     "notDataActions": []
                   }
                 ]
@@ -501,10 +473,7 @@
             "items": {
               "$ref": "#/components/schemas/ErrorDetail"
             },
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ],
+            "x-ms-identifiers": ["message", "target"],
             "description": "The error details."
           },
           "additionalInfo": {

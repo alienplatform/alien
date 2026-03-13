@@ -5,21 +5,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "lambda:InvokeFunction",
-            "lambda:InvokeAsync"
-          ]
+          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
           }
         }
       }

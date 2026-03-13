@@ -6,22 +6,14 @@
       // Launch template create/delete + tagging (CreateLaunchTemplate with TagSpecifications)
       {
         "grant": {
-          "actions": [
-            "ec2:CreateLaunchTemplate",
-            "ec2:DeleteLaunchTemplate",
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateLaunchTemplate", "ec2:DeleteLaunchTemplate", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
-            ]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
-            ]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"]
           }
         }
       },
@@ -73,20 +65,14 @@
       // iam:PassRole — scoped to the ContainerCluster's IAM role created in CF
       {
         "grant": {
-          "actions": [
-            "iam:PassRole"
-          ]
+          "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
           }
         }
       }

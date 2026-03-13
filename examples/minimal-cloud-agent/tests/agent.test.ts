@@ -5,8 +5,8 @@
  * No Agent Manager, no API calls, no cloud dependencies.
  */
 
+import { type Deployment, deploy } from "@aliendotdev/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { deploy, type Deployment } from "@aliendotdev/testing"
 
 describe("Minimal Cloud Agent", () => {
   let deployment: Deployment

@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Confetti, type ConfettiRef } from "@/components/ui/confetti"
 import {
   Dialog,
   DialogContent,
@@ -9,19 +10,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { IconRocket, IconPlus, IconCheck, IconLoader2, IconAlertCircle } from "@tabler/icons-react"
-import { PlatformSelector, type Platform } from "./platform-selector"
-import { DeploymentMethod } from "./deployment-method"
-import { Confetti, type ConfettiRef } from "@/components/ui/confetti"
+import { IconAlertCircle, IconCheck, IconLoader2, IconPlus, IconRocket } from "@tabler/icons-react"
+import { useRouter } from "next/navigation"
+import { useEffect, useRef, useState } from "react"
 import { match } from "ts-pattern"
+import { DeploymentMethod } from "./deployment-method"
+import { type Platform, PlatformSelector } from "./platform-selector"
 
 // Agent status type (subset of platform agent statuses)
-type AgentStatus = 
+type AgentStatus =
   | "pending"
-  | "initial-setup" 
+  | "initial-setup"
   | "provisioning"
   | "running"
   | "update-pending"
@@ -51,13 +51,13 @@ interface DeployingAgent {
   platform: string
 }
 
-export function DeployAgentDialog({ 
-  open, 
-  onOpenChange, 
-  token, 
+export function DeployAgentDialog({
+  open,
+  onOpenChange,
+  token,
   tokenLoading = false,
   tokenError,
-  currentAgentCount
+  currentAgentCount,
 }: DeployAgentDialogProps) {
   const router = useRouter()
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>("local")
@@ -71,7 +71,7 @@ export function DeployAgentDialog({
   useEffect(() => {
     const wasClosedNowOpen = !prevOpenRef.current && open
     const wasOpenNowClosed = prevOpenRef.current && !open
-    
+
     if (wasClosedNowOpen) {
       // Dialog just opened - initialize
       setPreviousAgentCount(currentAgentCount)
@@ -82,7 +82,7 @@ export function DeployAgentDialog({
       setDeploymentState("configuring")
       setDeployingAgent(null)
     }
-    
+
     prevOpenRef.current = open
   }, [open, currentAgentCount])
 
@@ -94,10 +94,10 @@ export function DeployAgentDialog({
       try {
         const response = await fetch("/api/agents")
         if (!response.ok) return
-        
+
         const data = await response.json()
         const agents = data.agents || []
-        
+
         // Detect new agent (newest first)
         if (agents.length > previousAgentCount) {
           const newestAgent = agents[0]
@@ -120,26 +120,26 @@ export function DeployAgentDialog({
       try {
         const response = await fetch("/api/agents")
         if (!response.ok) return
-        
+
         const data = await response.json()
         const agents = data.agents || []
         const updatedAgent = agents.find((a: DeployingAgent) => a.id === deployingAgent.id)
-        
+
         if (updatedAgent) {
           setDeployingAgent(updatedAgent)
-          
+
           // Check if deployment completed successfully
           if (updatedAgent.status === "running") {
             setDeploymentState("completed")
             confettiRef.current?.fire({
               particleCount: 100,
               spread: 70,
-              origin: { y: 0.6 }
+              origin: { y: 0.6 },
             })
-          } 
+          }
           // Check if deployment failed
           else if (
-            updatedAgent.status.includes("failed") || 
+            updatedAgent.status.includes("failed") ||
             updatedAgent.status === "delete-failed" ||
             updatedAgent.status === "update-failed" ||
             updatedAgent.status === "initial-setup-failed" ||
@@ -193,7 +193,8 @@ export function DeployAgentDialog({
             <p className="font-medium">{tokenError}</p>
           </div>
           <p className="text-sm text-muted-foreground">
-            Start the dev server with: <code className="bg-muted px-2 py-1 rounded">alien dev server</code>
+            Start the dev server with:{" "}
+            <code className="bg-muted px-2 py-1 rounded">alien dev server</code>
           </p>
         </div>
       )
@@ -242,13 +243,12 @@ export function DeployAgentDialog({
           <div>
             <h3 className="text-xl font-semibold mb-2">Deployment failed</h3>
             <p className="text-muted-foreground max-w-md mx-auto mb-6">
-              There was an issue deploying <strong>{deployingAgent.name}</strong>. Check the agents page for details.
+              There was an issue deploying <strong>{deployingAgent.name}</strong>. Check the agents
+              page for details.
             </p>
           </div>
           <div className="flex gap-3 justify-center">
-            <Button onClick={handleClose}>
-              View Agents
-            </Button>
+            <Button onClick={handleClose}>View Agents</Button>
           </div>
         </div>
       )
@@ -277,7 +277,7 @@ export function DeployAgentDialog({
               </Badge>
             </div>
           </div>
-          
+
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Progress</span>
@@ -287,7 +287,8 @@ export function DeployAgentDialog({
           </div>
 
           <div className="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground text-center">
-            This usually takes 30-60 seconds. The dialog will update automatically when deployment completes.
+            This usually takes 30-60 seconds. The dialog will update automatically when deployment
+            completes.
           </div>
         </div>
       )
@@ -304,11 +305,8 @@ export function DeployAgentDialog({
             </div>
             <h3 className="text-base font-semibold">Choose Your Platform</h3>
           </div>
-          
-          <PlatformSelector
-            selected={selectedPlatform}
-            onSelect={setSelectedPlatform}
-          />
+
+          <PlatformSelector selected={selectedPlatform} onSelect={setSelectedPlatform} />
         </div>
 
         {/* Step 2: Deployment Method */}
@@ -354,7 +352,10 @@ export function DeployAgentDialog({
         ref={confettiRef}
         className="pointer-events-none fixed left-0 top-0 z-[100] size-full"
       />
-      <Dialog open={open} onOpenChange={deploymentState === "configuring" ? onOpenChange : undefined}>
+      <Dialog
+        open={open}
+        onOpenChange={deploymentState === "configuring" ? onOpenChange : undefined}
+      >
         <DialogContent className="sm:max-w-4xl max-h-[100vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-3">
@@ -373,4 +374,3 @@ export function DeployAgentDialog({
     </>
   )
 }
-

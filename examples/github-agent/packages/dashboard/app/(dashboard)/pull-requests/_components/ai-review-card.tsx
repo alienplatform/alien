@@ -1,24 +1,24 @@
 "use client"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
-  IconSparkles,
-  IconAlertTriangle,
   IconAlertCircle,
-  IconInfoCircle,
+  IconAlertTriangle,
   IconCheck,
   IconCode,
   IconFileCode,
+  IconInfoCircle,
+  IconSparkles,
 } from "@tabler/icons-react"
+import type { AICodeExample, AIReview, AIReviewIssue } from "github-agent-remote-agent"
 import { match } from "ts-pattern"
-import type { AIReview, AIReviewIssue, AICodeExample } from "github-agent-remote-agent"
 
 interface AIReviewCardProps {
   review: AIReview
@@ -27,10 +27,26 @@ interface AIReviewCardProps {
 export function AIReviewCard({ review }: AIReviewCardProps) {
   const getRatingColor = (rating: AIReview["overallRating"]) => {
     return match(rating)
-      .with("excellent", () => "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800")
-      .with("good", () => "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800")
-      .with("needs-work", () => "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800")
-      .with("concerning", () => "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800")
+      .with(
+        "excellent",
+        () =>
+          "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
+      )
+      .with(
+        "good",
+        () =>
+          "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800",
+      )
+      .with(
+        "needs-work",
+        () =>
+          "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+      )
+      .with(
+        "concerning",
+        () =>
+          "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+      )
       .exhaustive()
   }
 
@@ -46,21 +62,53 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
 
   const getSeverityColor = (severity: AIReviewIssue["severity"]) => {
     return match(severity)
-      .with("critical", () => "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800")
-      .with("high", () => "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800")
-      .with("medium", () => "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800")
-      .with("low", () => "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800")
-      .with("info", () => "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400 border-gray-200 dark:border-gray-800")
+      .with(
+        "critical",
+        () =>
+          "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+      )
+      .with(
+        "high",
+        () =>
+          "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800",
+      )
+      .with(
+        "medium",
+        () =>
+          "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+      )
+      .with(
+        "low",
+        () =>
+          "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800",
+      )
+      .with(
+        "info",
+        () =>
+          "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400 border-gray-200 dark:border-gray-800",
+      )
       .exhaustive()
   }
 
   const getCategoryColor = (category: AIReviewIssue["category"]) => {
     return match(category)
       .with("security", () => "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400")
-      .with("performance", () => "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400")
-      .with("maintainability", () => "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400")
-      .with("best-practice", () => "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400")
-      .with("bug-risk", () => "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400")
+      .with(
+        "performance",
+        () => "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+      )
+      .with(
+        "maintainability",
+        () => "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+      )
+      .with(
+        "best-practice",
+        () => "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
+      )
+      .with(
+        "bug-risk",
+        () => "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
+      )
       .exhaustive()
   }
 
@@ -74,7 +122,9 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
             </div>
             <div>
               <CardTitle className="text-lg">AI Code Review</CardTitle>
-              <CardDescription>Automated analysis with security & performance insights</CardDescription>
+              <CardDescription>
+                Automated analysis with security & performance insights
+              </CardDescription>
             </div>
           </div>
           <Badge variant="outline" className={getRatingColor(review.overallRating)}>
@@ -97,10 +147,7 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
             </h3>
             <div className="space-y-2">
               {review.issues.map((issue: AIReviewIssue, idx: number) => (
-                <div
-                  key={idx}
-                  className="rounded-lg border bg-card p-3 space-y-2"
-                >
+                <div key={idx} className="rounded-lg border bg-card p-3 space-y-2">
                   <div className="flex items-start gap-2">
                     {getSeverityIcon(issue.severity)}
                     <div className="flex-1 min-w-0">
@@ -198,7 +245,9 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
               <AccordionContent>
                 <div className="rounded-lg bg-muted/50 p-4 border border-purple-200 dark:border-purple-800">
                   <div className="prose prose-sm dark:prose-invert max-w-none">
-                    <pre className="whitespace-pre-wrap text-xs font-mono">{review.rawAnalysis}</pre>
+                    <pre className="whitespace-pre-wrap text-xs font-mono">
+                      {review.rawAnalysis}
+                    </pre>
                   </div>
                 </div>
               </AccordionContent>
@@ -209,4 +258,3 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
     </Card>
   )
 }
-

@@ -2,7 +2,7 @@ import { Alien } from "@aliendotdev/platform-api"
 
 /**
  * Configuration and SDK clients for the GitHub Agent dashboard.
- * 
+ *
  * Environment variables:
  * - ALIEN_API_URL: Platform API URL (required)
  * - ALIEN_TOKEN: Platform API token (required)
@@ -36,12 +36,12 @@ export const config: {
 
 /**
  * Platform SDK client (server-side only)
- * 
+ *
  * Provides typed access to:
  * - agents.list() - List agents in a deployment group
  * - agents.getInfo() - Get agent connection info (ARC URL, resource URLs)
  * - deploymentGroups.* - Manage deployment groups
- * 
+ *
  * Note: This will only be initialized on the server (Node.js environment).
  * Do not import this in client components.
  */
@@ -49,4 +49,3 @@ export const alien = new Alien({
   serverURL: config.alienApiUrl,
   apiKey: config.alienToken,
 })
-

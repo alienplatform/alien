@@ -8,7 +8,7 @@ export async function checkExternalSecret(deployment: Deployment): Promise<void>
   await deployment.setExternalSecret("test-alien-vault", "EXTERNAL_TEST_SECRET", testValue)
 
   // Wait for propagation
-  await new Promise((resolve) => setTimeout(resolve, 2000))
+  await new Promise(resolve => setTimeout(resolve, 2000))
 
   // Verify the deployment can read it
   const response = await fetch(`${deployment.url}/external-secret`)

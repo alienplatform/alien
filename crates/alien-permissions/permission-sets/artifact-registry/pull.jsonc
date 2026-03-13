@@ -17,33 +17,23 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
           }
         }
       },
       {
         "grant": {
-          "actions": [
-            "sts:AssumeRole"
-          ]
+          "actions": ["sts:AssumeRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-pull"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-pull"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-pull"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-pull"]
           }
         }
       }
@@ -80,10 +70,7 @@
       },
       {
         "grant": {
-          "permissions": [
-            "iam.serviceAccounts.actAs",
-            "iam.serviceAccounts.getAccessToken"
-          ]
+          "permissions": ["iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"]
         },
         "binding": {
           "stack": {
@@ -110,9 +97,7 @@
             "Microsoft.ContainerRegistry/registries/read",
             "Microsoft.ContainerRegistry/registries/metadata/read"
           ],
-          "dataActions": [
-            "Microsoft.ContainerRegistry/registries/pull/read"
-          ]
+          "dataActions": ["Microsoft.ContainerRegistry/registries/pull/read"]
         },
         "binding": {
           "stack": {

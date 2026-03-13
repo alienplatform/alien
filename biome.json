@@ -2,17 +2,19 @@
   "files": {
     "ignore": [
       ".wrangler/*.js",
-      "dist/*.js",
-      "dist/*.mjs",
-      "client-sdk/**",
+      "**/dist/**",
+      "client-sdks/**",
       "**/openapi.json",
+      "**/openapi/**",
+      "**/app/.well-known/**",
       "code-samples-overlay.json",
       ".next/**",
       "**/api-v1.d.ts",
       "entrypoint.js",
       "generated/**",
       "shim.mjs",
-      "target/**"
+      "target/**",
+      "examples/github-agent/packages/dashboard/**"
     ]
   },
   "formatter": {

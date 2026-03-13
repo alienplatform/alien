@@ -1,16 +1,23 @@
 "use client"
 
-import Link from "next/link"
-import { Pie, PieChart, Cell, ResponsiveContainer, Legend } from "recharts"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { IconEye } from "@tabler/icons-react"
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-  type ChartConfig,
 } from "@/components/ui/chart"
+import { IconEye } from "@tabler/icons-react"
+import Link from "next/link"
+import { Cell, Legend, Pie, PieChart, ResponsiveContainer } from "recharts"
 
 interface PrSizeChartProps {
   data: {
@@ -43,7 +50,7 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
     { name: "Small", value: data.small, fill: chartConfig.small.color },
     { name: "Medium", value: data.medium, fill: chartConfig.medium.color },
     { name: "Large", value: data.large, fill: chartConfig.large.color },
-  ].filter((item) => item.value > 0)
+  ].filter(item => item.value > 0)
 
   const total = data.small + data.medium + data.large
 
@@ -51,11 +58,11 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
     <Card>
       <CardHeader>
         <CardTitle>PR Size Distribution</CardTitle>
-        <CardDescription>
-          Pull requests categorized by code change size
-        </CardDescription>
+        <CardDescription>Pull requests categorized by code change size</CardDescription>
         <CardAction>
-          <Link href={`/pull-requests?integrationId=${encodeURIComponent(integrationId)}&agentId=${encodeURIComponent(agentId)}&repo=${encodeURIComponent(repoName || "")}`}>
+          <Link
+            href={`/pull-requests?integrationId=${encodeURIComponent(integrationId)}&agentId=${encodeURIComponent(agentId)}&repo=${encodeURIComponent(repoName || "")}`}
+          >
             <Button variant="outline" size="sm">
               <IconEye className="h-3.5 w-3.5 mr-1.5" />
               View PRs
@@ -67,10 +74,7 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
         <ChartContainer config={chartConfig} className="mx-auto aspect-square h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
-              <ChartTooltip
-                cursor={false}
-                content={<ChartTooltipContent hideLabel />}
-              />
+              <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
               <Pie
                 data={chartData}
                 dataKey="value"
@@ -82,7 +86,7 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
                 strokeWidth={2}
                 stroke="var(--background)"
               >
-                {chartData.map((entry) => (
+                {chartData.map(entry => (
                   <Cell key={entry.name} fill={entry.fill} />
                 ))}
               </Pie>
@@ -90,14 +94,12 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
           </ResponsiveContainer>
         </ChartContainer>
         <div className="flex justify-center gap-6 mt-4">
-          {chartData.map((item) => (
+          {chartData.map(item => (
             <div key={item.name} className="flex items-center gap-2">
-              <div
-                className="h-3 w-3 rounded-full"
-                style={{ backgroundColor: item.fill }}
-              />
+              <div className="h-3 w-3 rounded-full" style={{ backgroundColor: item.fill }} />
               <span className="text-sm text-muted-foreground">
-                {item.name}: {item.value} ({total > 0 ? Math.round((item.value / total) * 100) : 0}%)
+                {item.name}: {item.value} ({total > 0 ? Math.round((item.value / total) * 100) : 0}
+                %)
               </span>
             </div>
           ))}
@@ -106,4 +108,3 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
     </Card>
   )
 }
-

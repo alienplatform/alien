@@ -1,6 +1,6 @@
 /**
  * Commands Protocol Types
- * 
+ *
  * Core command types are re-exported from @aliendotdev/core,
  * which auto-generates them from the Rust implementation.
  */

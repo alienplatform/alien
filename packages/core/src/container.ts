@@ -1,12 +1,12 @@
 import {
-  type Container as ContainerConfig,
-  type ContainerCode,
   type ContainerAutoscaling,
+  type ContainerCode,
+  type Container as ContainerConfig,
   type ContainerGpuSpec,
+  ContainerSchema,
   type HealthCheck,
   type ResourceSpec,
   type ResourceType,
-  ContainerSchema,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
@@ -34,7 +34,7 @@ export {
 
 /**
  * Represents a long-running container workload.
- * 
+ *
  * Containers run on compute instances (EC2, GCE, Azure VMs) and are orchestrated
  * by Horizon. They're designed for always-on workloads like web services, APIs,
  * databases, and background workers.
@@ -87,13 +87,13 @@ export class Container {
 
   /**
    * Sets the CPU resources for the container.
-   * 
+   *
    * For simplified configuration, use a single number:
    * - `.cpu(1)` sets both min and desired to 1 vCPU
-   * 
+   *
    * For advanced configuration, use ResourceSpec:
    * - `.cpu({ min: "0.5", desired: "1" })`
-   * 
+   *
    * @param value CPU in vCPUs (number) or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
@@ -108,11 +108,11 @@ export class Container {
 
   /**
    * Sets the memory resources for the container.
-   * 
+   *
    * Format: "<number>Mi" or "<number>Gi"
-   * 
+   *
    * Example: "512Mi", "2Gi", "16Gi"
-   * 
+   *
    * @param size Memory size string.
    * @returns The Container builder instance.
    */
@@ -123,7 +123,7 @@ export class Container {
 
   /**
    * Sets minimum and maximum replica counts with autoscaling configuration.
-   * 
+   *
    * @param min Minimum replicas (always running).
    * @param max Maximum replicas under load.
    * @returns The Container builder instance.
@@ -230,7 +230,7 @@ export class Container {
     if (!this._config.ports) {
       this._config.ports = []
     }
-    
+
     // Find existing port or add new one
     const existingPort = this._config.ports.find(p => p.port === port)
     if (existingPort) {
@@ -386,4 +386,3 @@ export class Container {
     })
   }
 }
-

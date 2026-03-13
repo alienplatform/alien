@@ -1,8 +1,4 @@
-import {
-  type Queue as QueueConfig,
-  QueueSchema,
-  type ResourceType,
-} from "./generated/index.js"
+import { type Queue as QueueConfig, QueueSchema, type ResourceType } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
 export type { QueueOutputs, Queue as QueueConfig } from "./generated/index.js"

@@ -7,10 +7,7 @@
       // and volume status (are persistent volumes attached?)
       {
         "grant": {
-          "actions": [
-            "elasticloadbalancing:DescribeTargetHealth",
-            "ec2:DescribeVolumes"
-          ]
+          "actions": ["elasticloadbalancing:DescribeTargetHealth", "ec2:DescribeVolumes"]
         },
         "binding": {
           "stack": {
@@ -25,10 +22,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "compute.backendServices.get",
-            "compute.disks.get"
-          ]
+          "permissions": ["compute.backendServices.get", "compute.disks.get"]
         },
         "binding": {
           "stack": {
@@ -43,10 +37,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Network/loadBalancers/read",
-            "Microsoft.Compute/disks/read"
-          ]
+          "actions": ["Microsoft.Network/loadBalancers/read", "Microsoft.Compute/disks/read"]
         },
         "binding": {
           "stack": {

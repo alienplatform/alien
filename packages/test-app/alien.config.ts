@@ -14,9 +14,9 @@ const stack = new alien.Stack("my-stack")
   .permissions({
     profiles: {
       execution: {
-        "*": ["function/execute"]
-      }
-    }
+        "*": ["function/execute"],
+      },
+    },
   })
   .build()
 

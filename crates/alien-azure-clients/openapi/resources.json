@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -25,34 +23,21 @@
           "value": [
             {
               "resourceType": "TestResourceType",
-              "locations": [
-                "West US"
-              ],
-              "apiVersions": [
-                "2018-01-01",
-                "2015-05-01"
-              ],
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
               "locationMappings": [
                 {
                   "location": "West US",
                   "type": "EdgeZone",
-                  "extendedLocations": [
-                    "LosAngeles",
-                    "LosAngeles2"
-                  ]
+                  "extendedLocations": ["LosAngeles", "LosAngeles2"]
                 }
               ],
               "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
             },
             {
               "resourceType": "TestResourceTypeSibling",
-              "locations": [
-                "West US"
-              ],
-              "apiVersions": [
-                "2018-01-01",
-                "2015-05-01"
-              ],
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
               "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
             }
           ]
@@ -69,34 +54,21 @@
               "resourceTypes": [
                 {
                   "resourceType": "TestResourceType",
-                  "locations": [
-                    "West US"
-                  ],
-                  "apiVersions": [
-                    "2018-01-01",
-                    "2015-05-01"
-                  ],
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
                   "locationMappings": [
                     {
                       "location": "West US",
                       "type": "EdgeZone",
-                      "extendedLocations": [
-                        "LosAngeles",
-                        "LosAngeles2"
-                      ]
+                      "extendedLocations": ["LosAngeles", "LosAngeles2"]
                     }
                   ],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "TestResourceTypeSibling",
-                  "locations": [
-                    "West US"
-                  ],
-                  "apiVersions": [
-                    "2018-01-01",
-                    "2015-05-01"
-                  ],
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 }
               ]
@@ -109,73 +81,42 @@
               "resourceTypes": [
                 {
                   "resourceType": "subscriptions",
-                  "locations": [
-                    "eastus",
-                    "eastus2",
-                    "westus"
-                  ],
-                  "apiVersions": [
-                    "2016-09-01",
-                    "2014-04-01-preview"
-                  ],
+                  "locations": ["eastus", "eastus2", "westus"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
                   "aliases": [],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "resourceGroups",
-                  "locations": [
-                    "centralus",
-                    "eastasia",
-                    "southeastasia"
-                  ],
-                  "apiVersions": [
-                    "2016-09-01",
-                    "2014-04-01-preview"
-                  ],
+                  "locations": ["centralus", "eastasia", "southeastasia"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
                   "aliases": [],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "subscriptions/resourceGroups",
-                  "locations": [
-                    "eastus",
-                    "eastus2",
-                    "westus"
-                  ],
-                  "apiVersions": [
-                    "2016-09-01",
-                    "2014-04-01-preview"
-                  ],
+                  "locations": ["eastus", "eastus2", "westus"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
                   "aliases": [],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "bulkDelete",
-                  "locations": [
-                    "centralus",
-                    "eastasia"
-                  ],
-                  "apiVersions": [
-                    "2014-04-01-preview"
-                  ],
+                  "locations": ["centralus", "eastasia"],
+                  "apiVersions": ["2014-04-01-preview"],
                   "aliases": [],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "deployments",
                   "locations": [],
-                  "apiVersions": [
-                    "2017-08-01",
-                    "2017-06-01"
-                  ],
+                  "apiVersions": ["2017-08-01", "2017-06-01"],
                   "aliases": [],
                   "capabilities": "SupportsTags"
                 },
                 {
                   "resourceType": "tags",
-                  "locations": [
-                    "DevFabric"
-                  ],
+                  "locations": ["DevFabric"],
                   "apiVersions": [],
                   "aliases": [],
                   "capabilities": "SupportsExtension"
@@ -190,34 +131,21 @@
               "resourceTypes": [
                 {
                   "resourceType": "TestResourceType",
-                  "locations": [
-                    "West US"
-                  ],
-                  "apiVersions": [
-                    "2018-01-01",
-                    "2015-05-01"
-                  ],
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
                   "locationMappings": [
                     {
                       "location": "West US",
                       "type": "EdgeZone",
-                      "extendedLocations": [
-                        "LosAngeles",
-                        "LosAngeles2"
-                      ]
+                      "extendedLocations": ["LosAngeles", "LosAngeles2"]
                     }
                   ],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 },
                 {
                   "resourceType": "TestResourceTypeSibling",
-                  "locations": [
-                    "West US"
-                  ],
-                  "apiVersions": [
-                    "2018-01-01",
-                    "2015-05-01"
-                  ],
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
                   "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
                 }
               ]
@@ -234,34 +162,21 @@
           "resourceTypes": [
             {
               "resourceType": "TestResourceType",
-              "locations": [
-                "West US"
-              ],
-              "apiVersions": [
-                "2018-01-01",
-                "2015-05-01"
-              ],
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
               "locationMappings": [
                 {
                   "location": "West US",
                   "type": "EdgeZone",
-                  "extendedLocations": [
-                    "LosAngeles",
-                    "LosAngeles2"
-                  ]
+                  "extendedLocations": ["LosAngeles", "LosAngeles2"]
                 }
               ],
               "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
             },
             {
               "resourceType": "TestResourceTypeSibling",
-              "locations": [
-                "West US"
-              ],
-              "apiVersions": [
-                "2018-01-01",
-                "2015-05-01"
-              ],
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
               "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
             }
           ]
@@ -360,10 +275,7 @@
                   "paths": [
                     {
                       "path": "properties.accountType",
-                      "apiVersions": [
-                        "2015-06-15",
-                        "2015-05-01-preview"
-                      ]
+                      "apiVersions": ["2015-06-15", "2015-05-01-preview"]
                     },
                     {
                       "path": "sku.name",
@@ -388,10 +300,7 @@
                   "paths": [
                     {
                       "path": "properties.accountType",
-                      "apiVersions": [
-                        "2015-06-15",
-                        "2015-05-01-preview"
-                      ]
+                      "apiVersions": ["2015-06-15", "2015-05-01-preview"]
                     },
                     {
                       "path": "sku.name",
@@ -940,10 +849,7 @@
           "attributes": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "None",
-              "Modifiable"
-            ],
+            "enum": ["None", "Modifiable"],
             "x-ms-enum": {
               "name": "AliasPathAttributes",
               "modelAsString": true,
@@ -996,10 +902,7 @@
           },
           "type": {
             "type": "string",
-            "enum": [
-              "NotSpecified",
-              "Extract"
-            ],
+            "enum": ["NotSpecified", "Extract"],
             "x-ms-enum": {
               "name": "AliasPatternType",
               "modelAsString": false,
@@ -1036,11 +939,7 @@
           "type": {
             "type": "string",
             "description": "The type of the alias.",
-            "enum": [
-              "NotSpecified",
-              "PlainText",
-              "Mask"
-            ],
+            "enum": ["NotSpecified", "PlainText", "Mask"],
             "x-ms-enum": {
               "name": "AliasType",
               "modelAsString": false,
@@ -1111,10 +1010,7 @@
             "items": {
               "$ref": "#/components/schemas/ProviderExtendedLocation"
             },
-            "x-ms-identifiers": [
-              "location",
-              "type"
-            ],
+            "x-ms-identifiers": ["location", "type"],
             "description": "The location mappings that are supported by this resource type."
           },
           "aliases": {
@@ -1122,9 +1018,7 @@
             "items": {
               "$ref": "#/components/schemas/Alias"
             },
-            "x-ms-identifiers": [
-              "name"
-            ],
+            "x-ms-identifiers": ["name"],
             "description": "The aliases that are supported by this resource type."
           },
           "apiVersions": {
@@ -1144,9 +1038,7 @@
             "items": {
               "$ref": "#/components/schemas/ZoneMapping"
             },
-            "x-ms-identifiers": [
-              "location"
-            ]
+            "x-ms-identifiers": ["location"]
           },
           "apiProfiles": {
             "type": "array",
@@ -1154,10 +1046,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiProfile"
             },
-            "x-ms-identifiers": [
-              "apiVersion",
-              "profileVersion"
-            ],
+            "x-ms-identifiers": ["apiVersion", "profileVersion"],
             "description": "The API profiles for the resource provider."
           },
           "capabilities": {
@@ -1202,19 +1091,12 @@
             "items": {
               "$ref": "#/components/schemas/ProviderResourceType"
             },
-            "x-ms-identifiers": [
-              "resourceType"
-            ],
+            "x-ms-identifiers": ["resourceType"],
             "description": "The collection of provider resource types."
           },
           "providerAuthorizationConsentState": {
             "type": "string",
-            "enum": [
-              "NotSpecified",
-              "Required",
-              "NotRequired",
-              "Consented"
-            ],
+            "enum": ["NotSpecified", "Required", "NotRequired", "Consented"],
             "description": "The provider authorization consent state.",
             "x-ms-enum": {
               "name": "ProviderAuthorizationConsentState",
@@ -1248,9 +1130,7 @@
             "items": {
               "$ref": "#/components/schemas/ProviderResourceType"
             },
-            "x-ms-identifiers": [
-              "resourceType"
-            ],
+            "x-ms-identifiers": ["resourceType"],
             "description": "An array of resource types."
           },
           "nextLink": {
@@ -1297,9 +1177,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": [
-              "EdgeZone"
-            ],
+            "enum": ["EdgeZone"],
             "x-ms-enum": {
               "name": "ExtendedLocationType",
               "modelAsString": true
@@ -1408,12 +1286,7 @@
           "type": {
             "type": "string",
             "description": "The identity type.",
-            "enum": [
-              "SystemAssigned",
-              "UserAssigned",
-              "SystemAssigned, UserAssigned",
-              "None"
-            ],
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
             "x-ms-enum": {
               "name": "ResourceIdentityType",
               "modelAsString": false
@@ -1496,9 +1369,7 @@
             "description": "The tags attached to the resource group."
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "x-ms-azure-resource": true,
         "description": "Resource group information."
       },
@@ -1585,10 +1456,7 @@
           "outputFormat": {
             "type": "string",
             "description": "The output format for the exported resources.",
-            "enum": [
-              "Json",
-              "Bicep"
-            ],
+            "enum": ["Json", "Bicep"],
             "x-ms-enum": {
               "name": "ExportTemplateOutputFormat",
               "modelAsString": true
@@ -1795,9 +1663,7 @@
             "items": {
               "$ref": "#/components/schemas/Operation"
             },
-            "x-ms-identifiers": [
-              "name"
-            ],
+            "x-ms-identifiers": ["name"],
             "description": "List of Microsoft.Resources operations."
           },
           "nextLink": {
@@ -1825,11 +1691,7 @@
           "operation": {
             "type": "string",
             "description": "The operation type for the patch API.",
-            "enum": [
-              "Replace",
-              "Merge",
-              "Delete"
-            ],
+            "enum": ["Replace", "Merge", "Delete"],
             "x-ms-enum": {
               "name": "tagsPatchOperation",
               "modelAsString": true,
@@ -1857,9 +1719,7 @@
       "TagsResource": {
         "type": "object",
         "description": "Wrapper resource for tags API requests and responses.",
-        "required": [
-          "properties"
-        ],
+        "required": ["properties"],
         "properties": {
           "id": {
             "readOnly": true,
@@ -1966,12 +1826,7 @@
           },
           "providerAuthorizationConsentState": {
             "type": "string",
-            "enum": [
-              "NotSpecified",
-              "Required",
-              "NotRequired",
-              "Consented"
-            ],
+            "enum": ["NotSpecified", "Required", "NotRequired", "Consented"],
             "description": "The provider authorization consent state.",
             "x-ms-enum": {
               "name": "ProviderAuthorizationConsentState",
@@ -2058,10 +1913,7 @@
             "items": {
               "$ref": "#/components/schemas/ErrorResponse"
             },
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ],
+            "x-ms-identifiers": ["message", "target"],
             "description": "The error details."
           },
           "additionalInfo": {

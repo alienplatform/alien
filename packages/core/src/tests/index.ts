@@ -1,4 +1,4 @@
-import { StackStateSchema } from "../stack.js";
+import { StackStateSchema } from "../stack.js"
 
 // Utility to get stack state in an Alien integration test
 export function getStackState() {

@@ -1,12 +1,12 @@
 /**
  * This module provides a structured error handling system similar to Rust's error types,
  * with TypeScript type safety, error chaining, and context preservation.
- * 
+ *
  * @example Basic Usage
  * ```typescript
  * import { AlienError, defineError } from '@aliendotdev/core'
  * import { z } from 'zod'
- * 
+ *
  * // Define a type-safe error
  * const DatabaseError = defineError({
  *   code: "DATABASE_CONNECTION_FAILED",
@@ -20,7 +20,7 @@
  *   internal: false,
  *   httpStatusCode: 502,
  * })
- * 
+ *
  * // Use it
  * throw new AlienError(DatabaseError.create({
  *   host: "localhost",
@@ -28,7 +28,7 @@
  *   reason: "Connection timeout"
  * }))
  * ```
- * 
+ *
  * @example Error Chaining
  * ```typescript
  * try {
@@ -44,7 +44,7 @@
  *   )
  * }
  * ```
- * 
+ *
  * @example External API Sanitization
  * ```typescript
  * const internalError = new AlienError(InternalApiError.create({
@@ -52,15 +52,18 @@
  *   details: "Database password expired",
  *   traceId: "trace-12345"
  * }))
- * 
+ *
  * // Safe for external APIs (sanitizes internal errors)
  * const safeResponse = internalError.toExternal()
  * ```
  */
 
-import { type AlienError as AlienErrorOptions, AlienErrorSchema as AlienErrorOptionsSchema } from "./generated/index.js"
 import { serializeError } from "serialize-error"
 import type { z } from "zod/v4"
+import {
+  type AlienError as AlienErrorOptions,
+  AlienErrorSchema as AlienErrorOptionsSchema,
+} from "./generated/index.js"
 
 // Re-export the schema for external use
 export { AlienErrorOptionsSchema }
@@ -68,10 +71,10 @@ export type { AlienErrorOptions }
 
 /**
  * Base interface that all error type definitions must implement.
- * 
+ *
  * This provides the structure for creating type-safe error definitions
  * with Zod validation and contextual information.
- * 
+ *
  * @template TContext - Zod schema type for the error context
  */
 export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
@@ -91,14 +94,14 @@ export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
 
 /**
  * Helper function to create type-safe error definitions.
- * 
+ *
  * This function provides a clean API for defining reusable error types
  * with full TypeScript type safety and Zod validation.
- * 
+ *
  * @template TContext - Zod schema type for the error context
  * @param metadata - Error metadata including code, schema, and message generator
  * @returns Object with metadata and a create function for error instances
- * 
+ *
  * @example
  * ```typescript
  * const UserNotFound = defineError({
@@ -107,13 +110,13 @@ export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
  *     userId: z.string(),
  *     searchMethod: z.string(),
  *   }),
- *   message: ({ userId, searchMethod }) => 
+ *   message: ({ userId, searchMethod }) =>
  *     `User '${userId}' not found using method '${searchMethod}'`,
  *   retryable: false,
  *   internal: false,
  *   httpStatusCode: 404,
  * })
- * 
+ *
  * // Usage
  * const error = UserNotFound.create({
  *   userId: "123",
@@ -121,9 +124,7 @@ export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
  * })
  * ```
  */
-export function defineError<TContext extends z.ZodTypeAny>(
-  metadata: AlienErrorMetadata<TContext>
-) {
+export function defineError<TContext extends z.ZodTypeAny>(metadata: AlienErrorMetadata<TContext>) {
   return {
     metadata,
     contextSchema: metadata.context,
@@ -145,23 +146,23 @@ export function defineError<TContext extends z.ZodTypeAny>(
 
 /**
  * Represents a specific error instance with its context.
- * 
+ *
  * This is created by calling `.create()` on an error definition
  * and contains the actual context data for a specific error occurrence.
- * 
+ *
  * @template TContext - Zod schema type for the error context
  */
 export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
   metadata: AlienErrorMetadata<TContext>
   contextSchema: TContext
   context: z.infer<TContext>
-  
+
   /**
    * Convert this error definition directly to AlienErrorOptions.
-   * 
+   *
    * This allows you to get the wire format representation
    * without creating an AlienError instance first.
-   * 
+   *
    * @returns AlienErrorOptions object representing this error
    */
   toOptions(): AlienErrorOptions
@@ -169,16 +170,16 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
 
 /**
  * Main AlienError class that provides structured error handling.
- * 
+ *
  * This class extends the standard JavaScript Error with additional features:
  * - Type-safe context data
  * - Error chaining and source tracking
  * - Retryability and internal/external visibility flags
  * - HTTP status code mapping
  * - Sanitization for external APIs
- * 
+ *
  * @template TContext - Zod schema type for the error context
- * 
+ *
  * @example Basic Construction
  * ```typescript
  * const error = new AlienError(DatabaseError.create({
@@ -187,7 +188,7 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
  *   reason: "Timeout"
  * }))
  * ```
- * 
+ *
  * @example Converting JavaScript Errors
  * ```typescript
  * try {
@@ -197,7 +198,7 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
  *   console.log(alienError.code) // "GENERIC_ERROR"
  * }
  * ```
- * 
+ *
  * @example Error Chaining
  * ```typescript
  * const contextualError = AlienError.from(new Error("Network timeout"))
@@ -206,7 +207,7 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
  *     port: 5432,
  *     reason: "Connection timeout"
  *   }))
- * 
+ *
  * // Check error chain
  * console.log(contextualError.hasErrorCode("DATABASE_CONNECTION_FAILED")) // true
  * console.log(contextualError.toString()) // Shows full error chain
@@ -230,7 +231,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
     // Handle both error definitions and raw options
     let options: AlienErrorOptions & { context?: any }
 
-    if ('metadata' in input && 'context' in input) {
+    if ("metadata" in input && "context" in input) {
       // It's an AlienErrorDefinition
       const definition = input as AlienErrorDefinition<TContext>
       const { metadata, context: contextData } = definition
@@ -261,10 +262,14 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
     // Handle source construction - check if it's a valid AlienErrorOptions object
     this.source = undefined
-    if (options.source && typeof options.source === 'object') {
+    if (options.source && typeof options.source === "object") {
       // Check if it has the required fields to be a valid AlienErrorOptions
-      if ('code' in options.source && 'message' in options.source &&
-        'retryable' in options.source && 'internal' in options.source) {
+      if (
+        "code" in options.source &&
+        "message" in options.source &&
+        "retryable" in options.source &&
+        "internal" in options.source
+      ) {
         this.source = new AlienError(options.source as AlienErrorOptions)
       }
     }
@@ -272,20 +277,20 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Create an AlienError from a type-safe error definition.
-   * 
+   *
    * @template TContext - Zod schema type for the error context
    * @param definition - Error definition with type-safe context
    * @returns New AlienError instance
    */
   static fromDefinition<TContext extends z.ZodTypeAny>(
-    definition: AlienErrorDefinition<TContext>
+    definition: AlienErrorDefinition<TContext>,
   ): AlienError<TContext> {
     return new AlienError(definition)
   }
 
   /**
    * Create an AlienError from raw options (for compatibility).
-   * 
+   *
    * @param options - Raw error options conforming to AlienErrorOptions schema
    * @returns New AlienError instance
    */
@@ -295,7 +300,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Helper function to get a user-friendly type name for error context.
-   * 
+   *
    * @param error - Any value to get the type name for
    * @returns User-friendly type name
    */
@@ -317,18 +322,20 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
     // Fall back to typeof, but capitalize for consistency
     const typeofResult = typeof error
-    return typeofResult === "object" ? "Object" : typeofResult.charAt(0).toUpperCase() + typeofResult.slice(1)
+    return typeofResult === "object"
+      ? "Object"
+      : typeofResult.charAt(0).toUpperCase() + typeofResult.slice(1)
   }
 
   /**
    * Convert a JavaScript Error or any object to a generic AlienError.
-   * 
+   *
    * This is equivalent to Rust's `.into_alien_error()` pattern and provides
    * a way to convert any JavaScript error into the structured AlienError format.
-   * 
+   *
    * @param error - Any JavaScript error or object to convert
    * @returns AlienError with GENERIC_ERROR code and preserved original error
-   * 
+   *
    * @example
    * ```typescript
    * try {
@@ -339,7 +346,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    *   console.log(alienError.context?.originalError) // Serialized TypeError
    * }
    * ```
-   * 
+   *
    * @example Chaining with context
    * ```typescript
    * try {
@@ -353,7 +360,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    *   )
    * }
    * ```
-   * 
+   *
    * @example AxiosError conversion
    * ```typescript
    * try {
@@ -414,7 +421,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
     }
 
     // Try to parse as AxiosError with AlienError in response.data
-    if (error?.response?.data && typeof error.response.data === 'object') {
+    if (error?.response?.data && typeof error.response.data === "object") {
       const parseResult = AlienErrorOptionsSchema.safeParse(error.response.data)
       if (parseResult.success) {
         return new AlienError(parseResult.data)
@@ -442,14 +449,14 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Add context to this error, creating a new error that wraps this one.
-   * 
+   *
    * This is equivalent to Rust's `.with_context()` pattern and allows
    * building error chains with increasing levels of context.
-   * 
+   *
    * @template TNewContext - Zod schema type for the new context
    * @param definition - Error definition to wrap this error with
    * @returns New AlienError with this error as the source
-   * 
+   *
    * @example
    * ```typescript
    * // Clean fluent API
@@ -463,13 +470,13 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    *     username: "john",
    *     reason: "Database unavailable"
    *   }))
-   * 
+   *
    * // Error chain: AuthError -> DatabaseError -> GENERIC_ERROR
    * console.log(authError.toString())
    * ```
    */
   withContext<TNewContext extends z.ZodTypeAny>(
-    definition: AlienErrorDefinition<TNewContext>
+    definition: AlienErrorDefinition<TNewContext>,
   ): AlienError<TNewContext> {
     const { metadata, context: contextData } = definition
     const message = metadata.message(contextData)
@@ -498,10 +505,10 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Convert this AlienError to the wire format (AlienErrorOptions).
-   * 
+   *
    * This method serializes the error into the standard format used
    * for transmitting errors over the network or storing them.
-   * 
+   *
    * @returns AlienErrorOptions object representing this error
    */
   toOptions(): AlienErrorOptions {
@@ -518,13 +525,13 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Get a sanitized version for external APIs (hides internal errors).
-   * 
+   *
    * This method is crucial for security - it prevents sensitive internal
    * error details from being exposed to external users while preserving
    * the error chain structure for non-sensitive errors.
-   * 
+   *
    * @returns Sanitized AlienErrorOptions safe for external consumption
-   * 
+   *
    * @example
    * ```typescript
    * const internalError = new AlienError(InternalApiError.create({
@@ -532,10 +539,10 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    *   details: "Database password expired for user admin",
    *   traceId: "trace-12345"
    * }))
-   * 
+   *
    * console.log(internalError.toOptions())
    * // Shows full details including sensitive information
-   * 
+   *
    * console.log(internalError.toExternal())
    * // { code: "GENERIC_ERROR", message: "Internal server error", ... }
    * ```
@@ -564,17 +571,17 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Check if this error chain contains an error with a specific code.
-   * 
+   *
    * This method traverses the entire error chain (this error and all
    * source errors) to find if any error has the specified code.
-   * 
+   *
    * @param code - Error code to search for
    * @returns True if the code is found anywhere in the error chain
-   * 
+   *
    * @example
    * ```typescript
    * const chainedError = authError.withContext(dbError.withContext(networkError))
-   * 
+   *
    * console.log(chainedError.hasErrorCode("AUTH_FAILED")) // true
    * console.log(chainedError.hasErrorCode("DATABASE_CONNECTION_FAILED")) // true
    * console.log(chainedError.hasErrorCode("NETWORK_TIMEOUT")) // true
@@ -588,18 +595,18 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Find the first error in the chain with a specific code.
-   * 
+   *
    * This method traverses the error chain and returns the first error
    * instance that matches the specified code, allowing access to its
    * specific context and details.
-   * 
+   *
    * @param code - Error code to search for
    * @returns AlienError instance with the specified code, or undefined if not found
-   * 
+   *
    * @example
    * ```typescript
    * const chainedError = authError.withContext(dbError)
-   * 
+   *
    * const dbError = chainedError.findErrorByCode("DATABASE_CONNECTION_FAILED")
    * if (dbError) {
    *   console.log("Database error context:", dbError.context)
@@ -614,13 +621,13 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 
   /**
    * Get a formatted string representation of the error chain.
-   * 
+   *
    * This method provides a human-readable representation of the entire
    * error chain, showing how errors are nested and providing context
    * for debugging and logging.
-   * 
+   *
    * @returns Formatted string showing the complete error chain
-   * 
+   *
    * @example
    * ```typescript
    * const chainedError = authError.withContext(dbError.withContext(networkError))

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, integer, real } from "drizzle-orm/pg-core"
+import { boolean, integer, pgTable, real, text, timestamp } from "drizzle-orm/pg-core"
 
 // Better Auth tables
 export const user = pgTable("user", {
@@ -20,7 +20,9 @@ export const session = pgTable("session", {
   updatedAt: timestamp("updated_at").notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
-  userId: text("user_id").notNull().references(() => user.id),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id),
   activeOrganizationId: text("active_organization_id"),
 })
 
@@ -28,7 +30,9 @@ export const account = pgTable("account", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull(),
   providerId: text("provider_id").notNull(),
-  userId: text("user_id").notNull().references(() => user.id),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id),
   accessToken: text("access_token"),
   refreshToken: text("refresh_token"),
   idToken: text("id_token"),
@@ -62,20 +66,28 @@ export const organization = pgTable("organization", {
 
 export const member = pgTable("member", {
   id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull().references(() => organization.id),
-  userId: text("user_id").notNull().references(() => user.id),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id),
   role: text("role").notNull(), // 'owner' | 'admin' | 'member'
   createdAt: timestamp("created_at").notNull(),
 })
 
 export const invitation = pgTable("invitation", {
   id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull().references(() => organization.id),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id),
   email: text("email").notNull(),
   role: text("role").notNull(),
   status: text("status").notNull(), // 'pending' | 'accepted' | 'rejected' | 'canceled'
   expiresAt: timestamp("expires_at").notNull(),
-  inviterId: text("inviter_id").notNull().references(() => user.id),
+  inviterId: text("inviter_id")
+    .notNull()
+    .references(() => user.id),
   createdAt: timestamp("created_at").notNull(),
 })
 
@@ -84,7 +96,10 @@ export const invitation = pgTable("invitation", {
 // Organization metadata - stores deployment group info for each organization
 export const organizationMetadata = pgTable("organization_metadata", {
   id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull().references(() => organization.id).unique(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id)
+    .unique(),
   deploymentGroupId: text("deployment_group_id"),
   deploymentToken: text("deployment_token"),
   createdAt: timestamp("created_at").notNull(),
@@ -94,7 +109,9 @@ export const organizationMetadata = pgTable("organization_metadata", {
 // Integrations - stores metadata about GitHub integrations (credentials stay in agent vault)
 export const integration = pgTable("integration", {
   id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull().references(() => organization.id),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id),
   agentId: text("agent_id"), // The agent responsible for this integration
   owner: text("owner").notNull(),
   repo: text("repo").notNull(),
@@ -108,7 +125,9 @@ export const integration = pgTable("integration", {
 // Metrics history - stores aggregated metrics from periodic syncs
 export const metricsHistory = pgTable("metrics_history", {
   id: text("id").primaryKey(),
-  integrationId: text("integration_id").notNull().references(() => integration.id),
+  integrationId: text("integration_id")
+    .notNull()
+    .references(() => integration.id),
   totalPRs: integer("total_prs").notNull(),
   smallPRs: integer("small_prs").notNull(),
   mediumPRs: integer("medium_prs").notNull(),
@@ -127,7 +146,10 @@ export const metricsHistory = pgTable("metrics_history", {
 // Sync status - tracks the last sync for each integration
 export const syncStatus = pgTable("sync_status", {
   id: text("id").primaryKey(),
-  integrationId: text("integration_id").notNull().references(() => integration.id).unique(),
+  integrationId: text("integration_id")
+    .notNull()
+    .references(() => integration.id)
+    .unique(),
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status"), // 'success' | 'error'
   lastSyncError: text("last_sync_error"),

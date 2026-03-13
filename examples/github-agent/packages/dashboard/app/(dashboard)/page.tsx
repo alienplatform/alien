@@ -1,10 +1,10 @@
-import { Suspense } from "react"
-import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
+import { alien, config } from "@/lib/config"
 import { db } from "@/lib/db"
 import { integration, organizationMetadata } from "@/lib/schema"
 import { eq } from "drizzle-orm"
-import { alien, config } from "@/lib/config"
+import { headers } from "next/headers"
+import { Suspense } from "react"
 import { DashboardContent } from "./_components/dashboard-content"
 import { DashboardSkeleton } from "./_components/dashboard-skeleton"
 import { EmptyDashboard } from "./_components/empty-dashboard"
@@ -83,13 +83,16 @@ export default async function DashboardPage() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground">
-          Analytics for <span className="font-medium text-foreground">{firstIntegration.owner}/{firstIntegration.repo}</span>
+          Analytics for{" "}
+          <span className="font-medium text-foreground">
+            {firstIntegration.owner}/{firstIntegration.repo}
+          </span>
         </p>
       </div>
       <Suspense fallback={<DashboardSkeleton />}>
-        <DashboardContent 
-          integrationId={firstIntegration.id} 
-          agentId={agentId || ""} 
+        <DashboardContent
+          integrationId={firstIntegration.id}
+          agentId={agentId || ""}
           repoName={`${firstIntegration.owner}/${firstIntegration.repo}`}
         />
       </Suspense>

@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -494,9 +492,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -518,9 +514,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -542,9 +536,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -566,9 +558,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -590,9 +580,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -614,9 +602,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -646,9 +632,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -674,9 +658,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus"
-              ],
+              "locations": ["eastus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -702,9 +684,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -726,9 +706,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -750,9 +728,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -774,9 +750,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -798,9 +772,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -822,9 +794,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -854,9 +824,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -882,9 +850,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2"
-              ],
+              "locations": ["eastus2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -910,9 +876,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -934,9 +898,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -958,9 +920,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -982,9 +942,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1006,9 +964,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsnetworkacls",
@@ -1022,9 +978,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -1054,9 +1008,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1082,9 +1034,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2(stage)"
-              ],
+              "locations": ["eastus2(stage)"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1110,9 +1060,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1134,9 +1082,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1158,9 +1104,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1182,9 +1126,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1206,9 +1148,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1230,9 +1170,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -1262,9 +1200,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1290,9 +1226,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus"
-              ],
+              "locations": ["westus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1318,9 +1252,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1342,9 +1274,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1366,9 +1296,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1390,9 +1318,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1414,9 +1340,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1438,9 +1362,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -1470,9 +1392,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1498,9 +1418,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westeurope"
-              ],
+              "locations": ["westeurope"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1526,9 +1444,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1550,9 +1466,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1574,9 +1488,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1598,9 +1510,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1622,9 +1532,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1646,9 +1554,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -1678,9 +1584,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1706,9 +1610,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastasia"
-              ],
+              "locations": ["eastasia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1734,9 +1636,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1758,9 +1658,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1782,9 +1680,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1806,9 +1702,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1830,9 +1724,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1854,9 +1746,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -1886,9 +1776,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1914,9 +1802,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southeastasia"
-              ],
+              "locations": ["southeastasia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -1942,9 +1828,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1966,9 +1850,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -1990,9 +1872,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2014,9 +1894,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2038,9 +1916,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2062,9 +1938,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -2094,9 +1968,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2122,9 +1994,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japaneast"
-              ],
+              "locations": ["japaneast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2150,9 +2020,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2174,9 +2042,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2198,9 +2064,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2222,9 +2086,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2246,9 +2108,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2270,9 +2130,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -2302,9 +2160,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2330,9 +2186,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "japanwest"
-              ],
+              "locations": ["japanwest"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2358,9 +2212,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2382,9 +2234,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2406,9 +2256,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2430,9 +2278,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2454,9 +2300,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2478,9 +2322,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -2510,9 +2352,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2538,9 +2378,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northcentralus"
-              ],
+              "locations": ["northcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2566,9 +2404,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2590,9 +2426,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2614,9 +2448,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2638,9 +2470,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2662,9 +2492,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2686,9 +2514,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -2718,9 +2544,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2746,9 +2570,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southcentralus"
-              ],
+              "locations": ["southcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2774,9 +2596,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2798,9 +2618,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2822,9 +2640,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2846,9 +2662,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2870,9 +2684,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -2894,9 +2706,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -2926,9 +2736,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2954,9 +2762,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralus"
-              ],
+              "locations": ["centralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -2982,9 +2788,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3006,9 +2810,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3030,9 +2832,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3054,9 +2854,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3078,9 +2876,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3102,9 +2898,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -3134,9 +2928,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3162,9 +2954,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "northeurope"
-              ],
+              "locations": ["northeurope"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3190,9 +2980,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3214,9 +3002,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3238,9 +3024,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3262,9 +3046,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3286,9 +3068,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3310,9 +3090,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -3342,9 +3120,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3370,9 +3146,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "brazilsouth"
-              ],
+              "locations": ["brazilsouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3398,9 +3172,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3422,9 +3194,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3446,9 +3216,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3470,9 +3238,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3494,9 +3260,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3518,9 +3282,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -3550,9 +3312,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3578,9 +3338,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiaeast"
-              ],
+              "locations": ["australiaeast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3606,9 +3364,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3630,9 +3386,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3654,9 +3408,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3678,9 +3430,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3702,9 +3452,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3726,9 +3474,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -3758,9 +3504,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3786,9 +3530,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "australiasoutheast"
-              ],
+              "locations": ["australiasoutheast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3814,9 +3556,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3838,9 +3578,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3862,9 +3600,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3886,9 +3622,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3910,9 +3644,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -3934,9 +3666,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -3966,9 +3696,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -3994,9 +3722,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "southindia"
-              ],
+              "locations": ["southindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4022,9 +3748,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4046,9 +3770,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4070,9 +3792,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4094,9 +3814,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4118,9 +3836,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4142,9 +3858,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -4174,9 +3888,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4202,9 +3914,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centralindia"
-              ],
+              "locations": ["centralindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4230,9 +3940,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4254,9 +3962,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4278,9 +3984,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4302,9 +4006,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4326,9 +4028,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4350,9 +4050,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -4382,9 +4080,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4410,9 +4106,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westindia"
-              ],
+              "locations": ["westindia"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4438,9 +4132,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4462,9 +4154,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4486,9 +4176,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4510,9 +4198,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4534,9 +4220,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4558,9 +4242,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -4590,9 +4272,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4618,9 +4298,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadaeast"
-              ],
+              "locations": ["canadaeast"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4646,9 +4324,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4670,9 +4346,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4694,9 +4368,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4718,9 +4390,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4742,9 +4412,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4766,9 +4434,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -4798,9 +4464,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4826,9 +4490,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "canadacentral"
-              ],
+              "locations": ["canadacentral"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -4854,9 +4516,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4878,9 +4538,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4902,9 +4560,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4926,9 +4582,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4950,9 +4604,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -4974,9 +4626,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -5006,9 +4656,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5034,9 +4682,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westus2"
-              ],
+              "locations": ["westus2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5062,9 +4708,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5086,9 +4730,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5110,9 +4752,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5134,9 +4774,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5158,9 +4796,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5182,9 +4818,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -5214,9 +4848,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5242,9 +4874,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "westcentralus"
-              ],
+              "locations": ["westcentralus"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5270,9 +4900,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5294,9 +4922,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5318,9 +4944,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5342,9 +4966,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5366,9 +4988,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5390,9 +5010,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -5422,9 +5040,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5450,9 +5066,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth"
-              ],
+              "locations": ["uksouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5478,9 +5092,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5502,9 +5114,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5526,9 +5136,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5550,9 +5158,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5574,9 +5180,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5598,9 +5202,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -5630,9 +5232,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5658,9 +5258,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "ukwest"
-              ],
+              "locations": ["ukwest"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5686,9 +5284,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5710,9 +5306,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5734,9 +5328,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5758,9 +5350,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5782,9 +5372,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5806,9 +5394,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -5838,9 +5424,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5866,9 +5450,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreacentral"
-              ],
+              "locations": ["koreacentral"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -5894,9 +5476,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5918,9 +5498,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5942,9 +5520,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5966,9 +5542,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -5990,9 +5564,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6014,9 +5586,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -6046,9 +5616,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6074,9 +5642,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "koreasouth"
-              ],
+              "locations": ["koreasouth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6102,9 +5668,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6126,9 +5690,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6150,9 +5712,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6174,9 +5734,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6198,9 +5756,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6222,9 +5778,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -6254,9 +5808,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6282,9 +5834,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uknorth"
-              ],
+              "locations": ["uknorth"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6310,9 +5860,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6334,9 +5882,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6358,9 +5904,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6382,9 +5926,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6406,9 +5948,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6430,9 +5970,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -6462,9 +6000,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6490,9 +6026,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "uksouth2"
-              ],
+              "locations": ["uksouth2"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6518,9 +6052,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6542,9 +6074,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6566,9 +6096,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6590,9 +6118,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6614,9 +6140,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6638,9 +6162,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -6670,9 +6192,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6698,9 +6218,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "eastus2euap"
-              ],
+              "locations": ["eastus2euap"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6726,9 +6244,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6750,9 +6266,7 @@
               "name": "Standard_ZRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6774,9 +6288,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6798,9 +6310,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "Storage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6822,9 +6332,7 @@
               "name": "Premium_LRS",
               "tier": "Premium",
               "kind": "Storage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsfileencryption",
@@ -6846,9 +6354,7 @@
               "name": "Standard_LRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportsarchivepreview",
@@ -6878,9 +6384,7 @@
               "name": "Standard_GRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -6906,9 +6410,7 @@
               "name": "Standard_RAGRS",
               "tier": "Standard",
               "kind": "BlobStorage",
-              "locations": [
-                "centraluseuap"
-              ],
+              "locations": ["centraluseuap"],
               "capabilities": [
                 {
                   "name": "supportschangenotification",
@@ -9433,12 +8935,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9480,12 +8978,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9513,12 +9007,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer2"
-                      ],
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer2"],
                       "blobIndexMatch": [
                         {
                           "name": "tag1",
@@ -9567,12 +9057,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9615,12 +9101,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9679,13 +9161,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob",
-                        "appendBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob", "appendBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9726,12 +9203,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9781,12 +9254,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9823,12 +9292,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9884,12 +9349,8 @@
                   "type": "Lifecycle",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob"
-                      ],
-                      "prefixMatch": [
-                        "olcmtestcontainer1"
-                      ]
+                      "blobTypes": ["blockBlob"],
+                      "prefixMatch": ["olcmtestcontainer1"]
                     },
                     "actions": {
                       "baseBlob": {
@@ -9934,15 +9395,8 @@
                       "destination": "container1",
                       "definition": {
                         "filters": {
-                          "blobTypes": [
-                            "blockBlob",
-                            "appendBlob",
-                            "pageBlob"
-                          ],
-                          "prefixMatch": [
-                            "inventoryprefix1",
-                            "inventoryprefix2"
-                          ],
+                          "blobTypes": ["blockBlob", "appendBlob", "pageBlob"],
+                          "prefixMatch": ["inventoryprefix1", "inventoryprefix2"],
                           "includeSnapshots": true,
                           "includeBlobVersions": true
                         },
@@ -9989,15 +9443,8 @@
                   "destination": "container1",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob",
-                        "appendBlob",
-                        "pageBlob"
-                      ],
-                      "prefixMatch": [
-                        "inventoryprefix1",
-                        "inventoryprefix2"
-                      ],
+                      "blobTypes": ["blockBlob", "appendBlob", "pageBlob"],
+                      "prefixMatch": ["inventoryprefix1", "inventoryprefix2"],
                       "creationTime": {
                         "lastNDays": 1000
                       },
@@ -10066,19 +9513,9 @@
                   "destination": "container1",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob",
-                        "appendBlob",
-                        "pageBlob"
-                      ],
-                      "prefixMatch": [
-                        "inventoryprefix1",
-                        "inventoryprefix2"
-                      ],
-                      "excludePrefix": [
-                        "excludeprefix1",
-                        "excludeprefix2"
-                      ],
+                      "blobTypes": ["blockBlob", "appendBlob", "pageBlob"],
+                      "prefixMatch": ["inventoryprefix1", "inventoryprefix2"],
+                      "excludePrefix": ["excludeprefix1", "excludeprefix2"],
                       "includeSnapshots": true,
                       "includeBlobVersions": true,
                       "includeDeleted": true
@@ -10161,19 +9598,9 @@
                   "destination": "container1",
                   "definition": {
                     "filters": {
-                      "blobTypes": [
-                        "blockBlob",
-                        "appendBlob",
-                        "pageBlob"
-                      ],
-                      "prefixMatch": [
-                        "inventoryprefix1",
-                        "inventoryprefix2"
-                      ],
-                      "excludePrefix": [
-                        "excludeprefix1",
-                        "excludeprefix2"
-                      ],
+                      "blobTypes": ["blockBlob", "appendBlob", "pageBlob"],
+                      "prefixMatch": ["inventoryprefix1", "inventoryprefix2"],
+                      "excludePrefix": ["excludeprefix1", "excludeprefix2"],
                       "includeSnapshots": true,
                       "includeBlobVersions": true,
                       "includeDeleted": true
@@ -10322,12 +9749,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "blob",
-                "requiredMembers": [
-                  "blob"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.blob.core.windows.net"
-                ]
+                "requiredMembers": ["blob"],
+                "requiredZoneNames": ["privatelink.blob.core.windows.net"]
               }
             },
             {
@@ -10336,12 +9759,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "blob_secondary",
-                "requiredMembers": [
-                  "blob_secondary"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.blob.core.windows.net"
-                ]
+                "requiredMembers": ["blob_secondary"],
+                "requiredZoneNames": ["privatelink.blob.core.windows.net"]
               }
             },
             {
@@ -10350,12 +9769,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "table",
-                "requiredMembers": [
-                  "table"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.table.core.windows.net"
-                ]
+                "requiredMembers": ["table"],
+                "requiredZoneNames": ["privatelink.table.core.windows.net"]
               }
             },
             {
@@ -10364,12 +9779,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "table_secondary",
-                "requiredMembers": [
-                  "table_secondary"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.table.core.windows.net"
-                ]
+                "requiredMembers": ["table_secondary"],
+                "requiredZoneNames": ["privatelink.table.core.windows.net"]
               }
             },
             {
@@ -10378,12 +9789,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "dfs",
-                "requiredMembers": [
-                  "dfs"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.dfs.core.windows.net"
-                ]
+                "requiredMembers": ["dfs"],
+                "requiredZoneNames": ["privatelink.dfs.core.windows.net"]
               }
             },
             {
@@ -10392,12 +9799,8 @@
               "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
               "properties": {
                 "groupId": "dfs_secondary",
-                "requiredMembers": [
-                  "dfs_secondary"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.dfs.core.windows.net"
-                ]
+                "requiredMembers": ["dfs_secondary"],
+                "requiredZoneNames": ["privatelink.dfs.core.windows.net"]
               }
             }
           ]
@@ -10445,20 +9848,14 @@
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobA",
-                    "blobB"
-                  ]
+                  "prefixMatch": ["blobA", "blobB"]
                 }
               },
               {
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobC",
-                    "blobD"
-                  ]
+                  "prefixMatch": ["blobC", "blobD"]
                 }
               }
             ],
@@ -10483,10 +9880,7 @@
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobA",
-                    "blobB"
-                  ]
+                  "prefixMatch": ["blobA", "blobB"]
                 }
               }
             ],
@@ -10512,10 +9906,7 @@
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobA",
-                    "blobB"
-                  ],
+                  "prefixMatch": ["blobA", "blobB"],
                   "minCreationTime": "2020-02-19T16:05:00Z"
                 }
               }
@@ -10541,10 +9932,7 @@
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobA",
-                    "blobB"
-                  ]
+                  "prefixMatch": ["blobA", "blobB"]
                 }
               },
               {
@@ -10575,10 +9963,7 @@
                 "sourceContainer": "sourceContainer1",
                 "destinationContainer": "destContainer1",
                 "filters": {
-                  "prefixMatch": [
-                    "blobA",
-                    "blobB"
-                  ]
+                  "prefixMatch": ["blobA", "blobB"]
                 }
               },
               {
@@ -10675,11 +10060,7 @@
                 "userId": 1000,
                 "groupId": 2000,
                 "allowAclAuthorization": true,
-                "extendedGroups": [
-                  1001,
-                  1005,
-                  2005
-                ],
+                "extendedGroups": [1001, 1005, 2005],
                 "isNFSv3Enabled": true
               }
             },
@@ -10702,11 +10083,7 @@
                 "userId": 1001,
                 "groupId": 2000,
                 "allowAclAuthorization": true,
-                "extendedGroups": [
-                  1001,
-                  1005,
-                  2005
-                ],
+                "extendedGroups": [1001, 1005, 2005],
                 "isNFSv3Enabled": true
               }
             }
@@ -10739,11 +10116,7 @@
             "userId": 1000,
             "groupId": 2000,
             "allowAclAuthorization": true,
-            "extendedGroups": [
-              1001,
-              1005,
-              2005
-            ],
+            "extendedGroups": [1001, 1005, 2005],
             "isNFSv3Enabled": true
           }
         }
@@ -10809,11 +10182,7 @@
             "userId": 1000,
             "groupId": 2000,
             "allowAclAuthorization": true,
-            "extendedGroups": [
-              1001,
-              1005,
-              2005
-            ],
+            "extendedGroups": [1001, 1005, 2005],
             "isNFSv3Enabled": true
           }
         }
@@ -10832,11 +10201,7 @@
             "userId": 1000,
             "groupId": 3000,
             "allowAclAuthorization": false,
-            "extendedGroups": [
-              1001,
-              1005,
-              2005
-            ],
+            "extendedGroups": [1001, 1005, 2005],
             "isNFSv3Enabled": true
           }
         }
@@ -11499,9 +10864,7 @@
         "x-ms-parameter-location": "method",
         "schema": {
           "type": "string",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "StorageAccountGetManagementPolicies": {
@@ -11549,9 +10912,7 @@
         "schema": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9]*$",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "StorageAccountGetMigrationFailed": {
@@ -11666,9 +11027,7 @@
         "x-ms-parameter-location": "method",
         "schema": {
           "type": "string",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "StorageAccountGetBlobInventoryPolicy": {
@@ -12421,9 +11780,7 @@
           },
           "type": {
             "type": "string",
-            "enum": [
-              "Microsoft.Storage/storageAccounts"
-            ],
+            "enum": ["Microsoft.Storage/storageAccounts"],
             "x-ms-enum": {
               "name": "Type",
               "modelAsString": false
@@ -12431,10 +11788,7 @@
             "description": "The type of resource, Microsoft.Storage/storageAccounts"
           }
         },
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "description": "The parameters used to check the availability of the storage account name."
       },
       "SKUCapability": {
@@ -12469,10 +11823,7 @@
           },
           "reasonCode": {
             "type": "string",
-            "enum": [
-              "QuotaId",
-              "NotAvailableForSubscription"
-            ],
+            "enum": ["QuotaId", "NotAvailableForSubscription"],
             "x-ms-enum": {
               "name": "ReasonCode",
               "modelAsString": true
@@ -12506,10 +11857,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the reason that a storage account name could not be used. The Reason element is only returned if NameAvailable is false.",
-            "enum": [
-              "AccountNameInvalid",
-              "AlreadyExists"
-            ],
+            "enum": ["AccountNameInvalid", "AlreadyExists"],
             "x-ms-enum": {
               "name": "Reason",
               "modelAsString": false
@@ -12540,13 +11888,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Indicates the type of storage account.",
-            "enum": [
-              "Storage",
-              "StorageV2",
-              "BlobStorage",
-              "FileStorage",
-              "BlockBlobStorage"
-            ],
+            "enum": ["Storage", "StorageV2", "BlobStorage", "FileStorage", "BlockBlobStorage"],
             "x-ms-enum": {
               "name": "Kind",
               "modelAsString": true
@@ -12576,9 +11918,7 @@
             "description": "The restrictions because of which SKU cannot be used. This is empty if there are no restrictions."
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "description": "Storage SKU and its properties"
       },
       "CustomDomain": {
@@ -12592,9 +11932,7 @@
             "description": "Indicates whether indirect CName validation is enabled. Default value is false. This should only be set on updates."
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "description": "The custom domain assigned to this storage account. This can be set via Update."
       },
       "SasPolicy": {
@@ -12606,10 +11944,7 @@
           },
           "expirationAction": {
             "type": "string",
-            "enum": [
-              "Log",
-              "Block"
-            ],
+            "enum": ["Log", "Block"],
             "x-ms-enum": {
               "name": "ExpirationAction",
               "modelAsString": true
@@ -12618,10 +11953,7 @@
             "description": "The SAS Expiration Action defines the action to be performed when sasPolicy.sasExpirationPeriod is violated. The 'Log' action can be used for audit purposes and the 'Block' action can be used to block and deny the usage of SAS tokens that do not adhere to the sas policy expiration period."
           }
         },
-        "required": [
-          "sasExpirationPeriod",
-          "expirationAction"
-        ],
+        "required": ["sasExpirationPeriod", "expirationAction"],
         "description": "SasPolicy assigned to the storage account."
       },
       "KeyPolicy": {
@@ -12632,9 +11964,7 @@
             "format": "int32"
           }
         },
-        "required": [
-          "keyExpirationPeriodInDays"
-        ],
+        "required": ["keyExpirationPeriodInDays"],
         "description": "KeyPolicy assigned to the storage account."
       },
       "KeyCreationTime": {
@@ -12664,18 +11994,12 @@
           "keyType": {
             "type": "string",
             "description": "Encryption key type to be used for the encryption service. 'Account' key type implies that an account-scoped encryption key will be used. 'Service' key type implies that a default service key is used.",
-            "enum": [
-              "Service",
-              "Account"
-            ],
+            "enum": ["Service", "Account"],
             "x-ms-enum": {
               "name": "KeyType",
               "modelAsString": true
             },
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           }
         },
         "description": "A service that allows server-side encryption to be used."
@@ -12743,10 +12067,7 @@
           "keySource": {
             "type": "string",
             "description": "The encryption keySource (provider). Possible values (case-insensitive):  Microsoft.Storage, Microsoft.Keyvault",
-            "enum": [
-              "Microsoft.Storage",
-              "Microsoft.Keyvault"
-            ],
+            "enum": ["Microsoft.Storage", "Microsoft.Keyvault"],
             "x-ms-enum": {
               "name": "KeySource",
               "modelAsString": true
@@ -12819,9 +12140,7 @@
           },
           "action": {
             "type": "string",
-            "enum": [
-              "Allow"
-            ],
+            "enum": ["Allow"],
             "x-ms-enum": {
               "name": "Action",
               "modelAsString": false
@@ -12845,9 +12164,7 @@
             "description": "Gets the state of virtual network rule."
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "description": "Virtual Network rule."
       },
       "IPRule": {
@@ -12859,9 +12176,7 @@
           },
           "action": {
             "type": "string",
-            "enum": [
-              "Allow"
-            ],
+            "enum": ["Allow"],
             "x-ms-enum": {
               "name": "Action",
               "modelAsString": false
@@ -12870,21 +12185,14 @@
             "description": "The action of IP ACL rule."
           }
         },
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "description": "IP rule with specific IP or IP range in CIDR format."
       },
       "NetworkRuleSet": {
         "properties": {
           "bypass": {
             "type": "string",
-            "enum": [
-              "None",
-              "Logging",
-              "Metrics",
-              "AzureServices"
-            ],
+            "enum": ["None", "Logging", "Metrics", "AzureServices"],
             "x-ms-enum": {
               "name": "Bypass",
               "modelAsString": true
@@ -12916,10 +12224,7 @@
           },
           "defaultAction": {
             "type": "string",
-            "enum": [
-              "Allow",
-              "Deny"
-            ],
+            "enum": ["Allow", "Deny"],
             "x-ms-enum": {
               "name": "DefaultAction",
               "modelAsString": false
@@ -12928,9 +12233,7 @@
             "description": "Specifies the default action of allow or deny when no other rules match."
           }
         },
-        "required": [
-          "defaultAction"
-        ],
+        "required": ["defaultAction"],
         "description": "Network rule set"
       },
       "AzureFilesIdentityBasedAuthentication": {
@@ -12938,12 +12241,7 @@
           "directoryServiceOptions": {
             "type": "string",
             "description": "Indicates the directory service used. Note that this enum may be extended in the future.",
-            "enum": [
-              "None",
-              "AADDS",
-              "AD",
-              "AADKERB"
-            ],
+            "enum": ["None", "AADDS", "AD", "AADKERB"],
             "x-ms-enum": {
               "name": "DirectoryServiceOptions",
               "modelAsString": true
@@ -12967,9 +12265,7 @@
             }
           }
         },
-        "required": [
-          "directoryServiceOptions"
-        ],
+        "required": ["directoryServiceOptions"],
         "description": "Settings for Azure Files identity based authentication."
       },
       "ActiveDirectoryProperties": {
@@ -13005,20 +12301,14 @@
           "accountType": {
             "type": "string",
             "description": "Specifies the Active Directory account type for Azure Storage.",
-            "enum": [
-              "User",
-              "Computer"
-            ],
+            "enum": ["User", "Computer"],
             "x-ms-enum": {
               "name": "AccountType",
               "modelAsString": true
             }
           }
         },
-        "required": [
-          "domainName",
-          "domainGuid"
-        ],
+        "required": ["domainName", "domainGuid"],
         "description": "Settings properties for Active Directory (AD)."
       },
       "StorageAccountPropertiesCreateParameters": {
@@ -13026,10 +12316,7 @@
           "allowedCopyScope": {
             "type": "string",
             "description": "Restrict copy to and from Storage Accounts within an AAD tenant or with Private Links to the same VNet.",
-            "enum": [
-              "PrivateLink",
-              "AAD"
-            ],
+            "enum": ["PrivateLink", "AAD"],
             "x-ms-enum": {
               "name": "AllowedCopyScope",
               "modelAsString": true
@@ -13056,12 +12343,7 @@
           "accessTier": {
             "type": "string",
             "description": "Required for storage accounts where kind = BlobStorage. The access tier is used for billing. The 'Premium' access tier is the default value for premium block blobs storage account type and it cannot be changed for the premium block blobs storage account type.",
-            "enum": [
-              "Hot",
-              "Cool",
-              "Premium",
-              "Cold"
-            ],
+            "enum": ["Hot", "Cool", "Premium", "Cold"],
             "x-ms-enum": {
               "name": "AccessTier",
               "modelAsString": false
@@ -13097,10 +12379,7 @@
           },
           "largeFileSharesState": {
             "type": "string",
-            "enum": [
-              "Disabled",
-              "Enabled"
-            ],
+            "enum": ["Disabled", "Enabled"],
             "x-ms-enum": {
               "name": "LargeFileSharesState",
               "modelAsString": true
@@ -13117,12 +12396,7 @@
           },
           "minimumTlsVersion": {
             "type": "string",
-            "enum": [
-              "TLS1_0",
-              "TLS1_1",
-              "TLS1_2",
-              "TLS1_3"
-            ],
+            "enum": ["TLS1_0", "TLS1_1", "TLS1_2", "TLS1_3"],
             "x-ms-enum": {
               "name": "MinimumTlsVersion",
               "modelAsString": true
@@ -13151,10 +12425,7 @@
           },
           "dnsEndpointType": {
             "type": "string",
-            "enum": [
-              "Standard",
-              "AzureDnsZone"
-            ],
+            "enum": ["Standard", "AzureDnsZone"],
             "x-ms-enum": {
               "name": "DnsEndpointType",
               "modelAsString": true
@@ -13179,12 +12450,7 @@
           "type": {
             "type": "string",
             "description": "The identity type.",
-            "enum": [
-              "None",
-              "SystemAssigned",
-              "UserAssigned",
-              "SystemAssigned,UserAssigned"
-            ],
+            "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
             "x-ms-enum": {
               "name": "IdentityType",
               "modelAsString": true
@@ -13198,17 +12464,13 @@
             "description": "Gets or sets a list of key value pairs that describe the set of User Assigned identities that will be used with this storage account. The key is the ARM resource identifier of the identity. Only 1 User Assigned identity is permitted here."
           }
         },
-        "required": [
-          "type"
-        ],
+        "required": ["type"],
         "description": "Identity for the resource."
       },
       "ExtendedLocationType": {
         "type": "string",
         "description": "The type of extendedLocation.",
-        "enum": [
-          "EdgeZone"
-        ],
+        "enum": ["EdgeZone"],
         "x-ms-enum": {
           "name": "ExtendedLocationTypes",
           "modelAsString": true
@@ -13234,13 +12496,7 @@
           "kind": {
             "type": "string",
             "description": "Required. Indicates the type of storage account.",
-            "enum": [
-              "Storage",
-              "StorageV2",
-              "BlobStorage",
-              "FileStorage",
-              "BlockBlobStorage"
-            ],
+            "enum": ["Storage", "StorageV2", "BlobStorage", "FileStorage", "BlockBlobStorage"],
             "x-ms-enum": {
               "name": "Kind",
               "modelAsString": true
@@ -13267,11 +12523,7 @@
             "$ref": "#/components/schemas/StorageAccountPropertiesCreateParameters"
           }
         },
-        "required": [
-          "sku",
-          "kind",
-          "location"
-        ],
+        "required": ["sku", "kind", "location"],
         "description": "The parameters used when creating a storage account."
       },
       "Endpoints": {
@@ -13381,11 +12633,7 @@
             "readOnly": true,
             "type": "string",
             "description": "The status of the secondary location. Possible values are: - Live: Indicates that the secondary location is active and operational. - Bootstrap: Indicates initial synchronization from the primary location to the secondary location is in progress.This typically occurs when replication is first enabled. - Unavailable: Indicates that the secondary location is temporarily unavailable.",
-            "enum": [
-              "Live",
-              "Bootstrap",
-              "Unavailable"
-            ],
+            "enum": ["Live", "Bootstrap", "Unavailable"],
             "x-ms-enum": {
               "name": "GeoReplicationStatus",
               "modelAsString": true
@@ -13410,10 +12658,7 @@
             "readOnly": true,
             "type": "string",
             "description": "The redundancy type of the account after an account failover is performed.",
-            "enum": [
-              "Standard_LRS",
-              "Standard_ZRS"
-            ],
+            "enum": ["Standard_LRS", "Standard_ZRS"],
             "x-ms-enum": {
               "name": "postFailoverRedundancy",
               "modelAsString": true
@@ -13423,12 +12668,7 @@
             "readOnly": true,
             "type": "string",
             "description": "The redundancy type of the account after a planned account failover is performed.",
-            "enum": [
-              "Standard_GRS",
-              "Standard_GZRS",
-              "Standard_RAGRS",
-              "Standard_RAGZRS"
-            ],
+            "enum": ["Standard_GRS", "Standard_GZRS", "Standard_RAGRS", "Standard_RAGZRS"],
             "x-ms-enum": {
               "name": "postPlannedFailoverRedundancy",
               "modelAsString": true
@@ -13442,10 +12682,7 @@
           "routingChoice": {
             "type": "string",
             "description": "Routing Choice defines the kind of network routing opted by the user.",
-            "enum": [
-              "MicrosoftRouting",
-              "InternetRouting"
-            ],
+            "enum": ["MicrosoftRouting", "InternetRouting"],
             "x-ms-enum": {
               "name": "RoutingChoice",
               "modelAsString": true
@@ -13488,11 +12725,7 @@
           "state": {
             "type": "string",
             "description": "The ImmutabilityPolicy state defines the mode of the policy. Disabled state disables the policy, Unlocked state allows increase and decrease of immutability retention time and also allows toggling allowProtectedAppendWrites property, Locked state only allows the increase of the immutability retention time. A policy can only be created in a Disabled or Unlocked state and can be toggled between the two states. Only a policy in an Unlocked state can transition to a Locked state which cannot be reverted.",
-            "enum": [
-              "Unlocked",
-              "Locked",
-              "Disabled"
-            ],
+            "enum": ["Unlocked", "Locked", "Disabled"],
             "x-ms-enum": {
               "name": "AccountImmutabilityPolicyState",
               "modelAsString": true
@@ -13512,11 +12745,7 @@
             "readOnly": true,
             "type": "string",
             "description": "This property indicates the current sku conversion status.",
-            "enum": [
-              "InProgress",
-              "Succeeded",
-              "Failed"
-            ],
+            "enum": ["InProgress", "Succeeded", "Failed"],
             "x-ms-enum": {
               "name": "SkuConversionStatus",
               "modelAsString": true
@@ -13544,11 +12773,7 @@
             "readOnly": true,
             "type": "string",
             "description": "The status of blob restore progress. Possible values are: - InProgress: Indicates that blob restore is ongoing. - Complete: Indicates that blob restore has been completed successfully. - Failed: Indicates that blob restore is failed.",
-            "enum": [
-              "InProgress",
-              "Complete",
-              "Failed"
-            ],
+            "enum": ["InProgress", "Complete", "Failed"],
             "x-ms-enum": {
               "name": "BlobRestoreProgressStatus",
               "modelAsString": true
@@ -13606,11 +12831,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the status of the storage account at the time the operation was called.",
-            "enum": [
-              "Creating",
-              "ResolvingDNS",
-              "Succeeded"
-            ],
+            "enum": ["Creating", "ResolvingDNS", "Succeeded"],
             "x-ms-enum": {
               "name": "ProvisioningState",
               "modelAsString": false
@@ -13628,10 +12849,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the status indicating whether the primary location of the storage account is available or unavailable.",
-            "enum": [
-              "available",
-              "unavailable"
-            ],
+            "enum": ["available", "unavailable"],
             "x-ms-enum": {
               "name": "AccountStatus",
               "modelAsString": false
@@ -13651,10 +12869,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the status indicating whether the secondary location of the storage account is available or unavailable. Only available if the SKU name is Standard_GRS or Standard_RAGRS.",
-            "enum": [
-              "available",
-              "unavailable"
-            ],
+            "enum": ["available", "unavailable"],
             "x-ms-enum": {
               "name": "AccountStatus",
               "modelAsString": false
@@ -13687,12 +12902,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Required for storage accounts where kind = BlobStorage. The access tier is used for billing. The 'Premium' access tier is the default value for premium block blobs storage account type and it cannot be changed for the premium block blobs storage account type.",
-            "enum": [
-              "Hot",
-              "Cool",
-              "Premium",
-              "Cold"
-            ],
+            "enum": ["Hot", "Cool", "Premium", "Cold"],
             "x-ms-enum": {
               "name": "AccessTier",
               "modelAsString": false
@@ -13740,10 +12950,7 @@
           },
           "largeFileSharesState": {
             "type": "string",
-            "enum": [
-              "Disabled",
-              "Enabled"
-            ],
+            "enum": ["Disabled", "Enabled"],
             "x-ms-enum": {
               "name": "LargeFileSharesState",
               "modelAsString": true
@@ -13771,12 +12978,7 @@
           },
           "minimumTlsVersion": {
             "type": "string",
-            "enum": [
-              "TLS1_0",
-              "TLS1_1",
-              "TLS1_2",
-              "TLS1_3"
-            ],
+            "enum": ["TLS1_0", "TLS1_1", "TLS1_2", "TLS1_3"],
             "x-ms-enum": {
               "name": "MinimumTlsVersion",
               "modelAsString": true
@@ -13808,10 +13010,7 @@
           },
           "allowedCopyScope": {
             "type": "string",
-            "enum": [
-              "PrivateLink",
-              "AAD"
-            ],
+            "enum": ["PrivateLink", "AAD"],
             "x-ms-enum": {
               "name": "AllowedCopyScope",
               "modelAsString": true
@@ -13823,10 +13022,7 @@
           },
           "dnsEndpointType": {
             "type": "string",
-            "enum": [
-              "Standard",
-              "AzureDnsZone"
-            ],
+            "enum": ["Standard", "AzureDnsZone"],
             "x-ms-enum": {
               "name": "DnsEndpointType",
               "modelAsString": true
@@ -13870,13 +13066,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the Kind.",
-            "enum": [
-              "Storage",
-              "StorageV2",
-              "BlobStorage",
-              "FileStorage",
-              "BlockBlobStorage"
-            ],
+            "enum": ["Storage", "StorageV2", "BlobStorage", "FileStorage", "BlockBlobStorage"],
             "x-ms-enum": {
               "name": "Kind",
               "modelAsString": true
@@ -13915,10 +13105,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Permissions for the key -- read-only or full permissions.",
-            "enum": [
-              "Read",
-              "Full"
-            ],
+            "enum": ["Read", "Full"],
             "x-ms-enum": {
               "name": "KeyPermission",
               "modelAsString": false
@@ -13988,9 +13175,7 @@
             "description": "The name of storage keys that want to be regenerated, possible values are key1, key2, kerb1, kerb2."
           }
         },
-        "required": [
-          "keyName"
-        ],
+        "required": ["keyName"],
         "description": "The parameters used to regenerate the storage account key."
       },
       "StorageAccountPropertiesUpdateParameters": {
@@ -14010,12 +13195,7 @@
           "accessTier": {
             "type": "string",
             "description": "Required for storage accounts where kind = BlobStorage. The access tier is used for billing. The 'Premium' access tier is the default value for premium block blobs storage account type and it cannot be changed for the premium block blobs storage account type.",
-            "enum": [
-              "Hot",
-              "Cool",
-              "Premium",
-              "Cold"
-            ],
+            "enum": ["Hot", "Cool", "Premium", "Cold"],
             "x-ms-enum": {
               "name": "AccessTier",
               "modelAsString": false
@@ -14049,10 +13229,7 @@
           },
           "largeFileSharesState": {
             "type": "string",
-            "enum": [
-              "Disabled",
-              "Enabled"
-            ],
+            "enum": ["Disabled", "Enabled"],
             "x-ms-enum": {
               "name": "LargeFileSharesState",
               "modelAsString": true
@@ -14069,12 +13246,7 @@
           },
           "minimumTlsVersion": {
             "type": "string",
-            "enum": [
-              "TLS1_0",
-              "TLS1_1",
-              "TLS1_2",
-              "TLS1_3"
-            ],
+            "enum": ["TLS1_0", "TLS1_1", "TLS1_2", "TLS1_3"],
             "x-ms-enum": {
               "name": "MinimumTlsVersion",
               "modelAsString": true
@@ -14101,10 +13273,7 @@
           },
           "allowedCopyScope": {
             "type": "string",
-            "enum": [
-              "PrivateLink",
-              "AAD"
-            ],
+            "enum": ["PrivateLink", "AAD"],
             "x-ms-enum": {
               "name": "AllowedCopyScope",
               "modelAsString": true
@@ -14113,10 +13282,7 @@
           },
           "dnsEndpointType": {
             "type": "string",
-            "enum": [
-              "Standard",
-              "AzureDnsZone"
-            ],
+            "enum": ["Standard", "AzureDnsZone"],
             "x-ms-enum": {
               "name": "DnsEndpointType",
               "modelAsString": true
@@ -14147,13 +13313,7 @@
           "kind": {
             "type": "string",
             "description": "Optional. Indicates the type of storage account. Currently only StorageV2 value supported by server.",
-            "enum": [
-              "Storage",
-              "StorageV2",
-              "BlobStorage",
-              "FileStorage",
-              "BlockBlobStorage"
-            ],
+            "enum": ["Storage", "StorageV2", "BlobStorage", "FileStorage", "BlockBlobStorage"],
             "x-ms-enum": {
               "name": "Kind",
               "modelAsString": true
@@ -14176,10 +13336,7 @@
             "description": "Blob ranges to restore."
           }
         },
-        "required": [
-          "timeToRestore",
-          "blobRanges"
-        ],
+        "required": ["timeToRestore", "blobRanges"],
         "description": "Blob restore parameters"
       },
       "BlobRestoreRange": {
@@ -14193,10 +13350,7 @@
             "description": "Blob end range. This is exclusive. Empty means account end."
           }
         },
-        "required": [
-          "startRange",
-          "endRange"
-        ],
+        "required": ["startRange", "endRange"],
         "description": "Blob range"
       },
       "UsageName": {
@@ -14220,14 +13374,7 @@
             "readOnly": true,
             "type": "string",
             "description": "Gets the unit of measurement.",
-            "enum": [
-              "Count",
-              "Bytes",
-              "Seconds",
-              "Percent",
-              "CountsPerSecond",
-              "BytesPerSecond"
-            ],
+            "enum": ["Count", "Bytes", "Seconds", "Percent", "CountsPerSecond", "BytesPerSecond"],
             "x-ms-enum": {
               "name": "UsageUnit",
               "modelAsString": false
@@ -14267,12 +13414,7 @@
         "properties": {
           "signedServices": {
             "type": "string",
-            "enum": [
-              "b",
-              "q",
-              "t",
-              "f"
-            ],
+            "enum": ["b", "q", "t", "f"],
             "x-ms-enum": {
               "name": "Services",
               "modelAsString": true
@@ -14282,11 +13424,7 @@
           },
           "signedResourceTypes": {
             "type": "string",
-            "enum": [
-              "s",
-              "c",
-              "o"
-            ],
+            "enum": ["s", "c", "o"],
             "x-ms-enum": {
               "name": "SignedResourceTypes",
               "modelAsString": true
@@ -14296,16 +13434,7 @@
           },
           "signedPermission": {
             "type": "string",
-            "enum": [
-              "r",
-              "d",
-              "w",
-              "l",
-              "a",
-              "c",
-              "u",
-              "p"
-            ],
+            "enum": ["r", "d", "w", "l", "a", "c", "u", "p"],
             "x-ms-enum": {
               "name": "Permissions",
               "modelAsString": true
@@ -14320,10 +13449,7 @@
           },
           "signedProtocol": {
             "type": "string",
-            "enum": [
-              "https,http",
-              "https"
-            ],
+            "enum": ["https,http", "https"],
             "x-ms-enum": {
               "name": "HttpProtocol",
               "modelAsString": false
@@ -14346,12 +13472,7 @@
             "description": "The key to sign the account SAS token with."
           }
         },
-        "required": [
-          "signedServices",
-          "signedResourceTypes",
-          "signedPermission",
-          "signedExpiry"
-        ],
+        "required": ["signedServices", "signedResourceTypes", "signedPermission", "signedExpiry"],
         "description": "The parameters to list SAS credentials of a storage account."
       },
       "ListAccountSasResponse": {
@@ -14372,12 +13493,7 @@
           },
           "signedResource": {
             "type": "string",
-            "enum": [
-              "b",
-              "c",
-              "f",
-              "s"
-            ],
+            "enum": ["b", "c", "f", "s"],
             "x-ms-enum": {
               "name": "signedResource",
               "modelAsString": true
@@ -14387,16 +13503,7 @@
           },
           "signedPermission": {
             "type": "string",
-            "enum": [
-              "r",
-              "d",
-              "w",
-              "l",
-              "a",
-              "c",
-              "u",
-              "p"
-            ],
+            "enum": ["r", "d", "w", "l", "a", "c", "u", "p"],
             "x-ms-enum": {
               "name": "Permissions",
               "modelAsString": true
@@ -14411,10 +13518,7 @@
           },
           "signedProtocol": {
             "type": "string",
-            "enum": [
-              "https,http",
-              "https"
-            ],
+            "enum": ["https,http", "https"],
             "x-ms-enum": {
               "name": "HttpProtocol",
               "modelAsString": false
@@ -14488,9 +13592,7 @@
             "description": "The response header override for content type."
           }
         },
-        "required": [
-          "canonicalizedResource"
-        ],
+        "required": ["canonicalizedResource"],
         "description": "The parameters to list service SAS credentials of a specific resource."
       },
       "ListServiceSasResponse": {
@@ -14527,9 +13629,7 @@
             "$ref": "#/components/schemas/ManagementPolicySchema"
           }
         },
-        "required": [
-          "policy"
-        ],
+        "required": ["policy"],
         "description": "The Storage Account ManagementPolicy properties."
       },
       "ManagementPolicySchema": {
@@ -14542,9 +13642,7 @@
             "description": "The Storage Account ManagementPolicies Rules. See more details in: https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-overview."
           }
         },
-        "required": [
-          "rules"
-        ],
+        "required": ["rules"],
         "description": "The Storage Account ManagementPolicies Rules. See more details in: https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-overview."
       },
       "ManagementPolicyRule": {
@@ -14560,9 +13658,7 @@
           "type": {
             "type": "string",
             "description": "The valid value is Lifecycle",
-            "enum": [
-              "Lifecycle"
-            ],
+            "enum": ["Lifecycle"],
             "x-ms-enum": {
               "name": "RuleType",
               "modelAsString": true
@@ -14572,11 +13668,7 @@
             "$ref": "#/components/schemas/ManagementPolicyDefinition"
           }
         },
-        "required": [
-          "name",
-          "type",
-          "definition"
-        ],
+        "required": ["name", "type", "definition"],
         "description": "An object that wraps the Lifecycle rule. Each rule is uniquely defined by name."
       },
       "ManagementPolicyDefinition": {
@@ -14588,9 +13680,7 @@
             "$ref": "#/components/schemas/ManagementPolicyFilter"
           }
         },
-        "required": [
-          "actions"
-        ],
+        "required": ["actions"],
         "description": "An object that defines the Lifecycle rule. Each definition is made up with a filters set and an actions set."
       },
       "ManagementPolicyFilter": {
@@ -14617,9 +13707,7 @@
             "description": "An array of blob index tag based filters, there can be at most 10 tag filters"
           }
         },
-        "required": [
-          "blobTypes"
-        ],
+        "required": ["blobTypes"],
         "description": "Filters limit rule actions to a subset of blobs within the storage account. If multiple filters are defined, a logical AND is performed on all filters. "
       },
       "TagFilter": {
@@ -14641,11 +13729,7 @@
             "description": "This is the filter tag value field used for tag based filtering, it can have 0 - 256 characters"
           }
         },
-        "required": [
-          "name",
-          "op",
-          "value"
-        ],
+        "required": ["name", "op", "value"],
         "description": "Blob index tag based filtering for blob objects"
       },
       "ManagementPolicyAction": {
@@ -14770,9 +13854,7 @@
             "description": "Value indicating the age in days after last blob tier change time. This property is only applicable for tierToArchive actions and requires daysAfterCreationGreaterThan to be set for snapshots and blob version based actions. The blob will be archived if both the conditions are satisfied."
           }
         },
-        "required": [
-          "daysAfterCreationGreaterThan"
-        ],
+        "required": ["daysAfterCreationGreaterThan"],
         "description": "Object to define snapshot and version action conditions."
       },
       "EncryptionScope": {
@@ -14792,10 +13874,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": [
-              "Microsoft.Storage",
-              "Microsoft.KeyVault"
-            ],
+            "enum": ["Microsoft.Storage", "Microsoft.KeyVault"],
             "x-ms-enum": {
               "name": "EncryptionScopeSource",
               "modelAsString": true
@@ -14804,10 +13883,7 @@
           },
           "state": {
             "type": "string",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "x-ms-enum": {
               "name": "EncryptionScopeState",
               "modelAsString": true
@@ -14934,10 +14010,7 @@
             "description": "Optional. The object replication policy metrics feature options."
           }
         },
-        "required": [
-          "sourceAccount",
-          "destinationAccount"
-        ],
+        "required": ["sourceAccount", "destinationAccount"],
         "description": "The Storage Account ObjectReplicationPolicy properties."
       },
       "ObjectReplicationPolicyRule": {
@@ -14958,10 +14031,7 @@
             "$ref": "#/components/schemas/ObjectReplicationPolicyFilter"
           }
         },
-        "required": [
-          "sourceContainer",
-          "destinationContainer"
-        ],
+        "required": ["sourceContainer", "destinationContainer"],
         "description": "The replication policy rule between two containers."
       },
       "ObjectReplicationPolicyFilter": {
@@ -15119,11 +14189,7 @@
             "description": "The name of resource, normally the container name or the file share name, used by the local user."
           }
         },
-        "required": [
-          "permissions",
-          "service",
-          "resourceName"
-        ]
+        "required": ["permissions", "service", "resourceName"]
       },
       "SshAuthorizedKeys": {
         "type": "array",
@@ -15190,9 +14256,7 @@
             "$ref": "#/components/schemas/BlobInventoryPolicySchema"
           }
         },
-        "required": [
-          "policy"
-        ],
+        "required": ["policy"],
         "description": "The storage account blob inventory policy properties."
       },
       "BlobInventoryPolicySchema": {
@@ -15209,9 +14273,7 @@
           "type": {
             "type": "string",
             "description": "The valid value is Inventory",
-            "enum": [
-              "Inventory"
-            ],
+            "enum": ["Inventory"],
             "x-ms-enum": {
               "name": "InventoryRuleType",
               "modelAsString": true
@@ -15225,11 +14287,7 @@
             "description": "The storage account blob inventory policy rules. The rule is applied when it is enabled."
           }
         },
-        "required": [
-          "enabled",
-          "type",
-          "rules"
-        ],
+        "required": ["enabled", "type", "rules"],
         "description": "The storage account blob inventory policy rules."
       },
       "BlobInventoryPolicyRule": {
@@ -15250,12 +14308,7 @@
             "$ref": "#/components/schemas/BlobInventoryPolicyDefinition"
           }
         },
-        "required": [
-          "name",
-          "enabled",
-          "destination",
-          "definition"
-        ],
+        "required": ["name", "enabled", "destination", "definition"],
         "description": "An object that wraps the blob inventory rule. Each rule is uniquely defined by name."
       },
       "BlobInventoryPolicyDefinition": {
@@ -15266,10 +14319,7 @@
           "format": {
             "type": "string",
             "description": "This is a required field, it specifies the format for the inventory files.",
-            "enum": [
-              "Csv",
-              "Parquet"
-            ],
+            "enum": ["Csv", "Parquet"],
             "x-ms-enum": {
               "name": "format",
               "modelAsString": true
@@ -15278,10 +14328,7 @@
           "schedule": {
             "type": "string",
             "description": "This is a required field. This field is used to schedule an inventory formation.",
-            "enum": [
-              "Daily",
-              "Weekly"
-            ],
+            "enum": ["Daily", "Weekly"],
             "x-ms-enum": {
               "name": "schedule",
               "modelAsString": true
@@ -15290,10 +14337,7 @@
           "objectType": {
             "type": "string",
             "description": "This is a required field. This field specifies the scope of the inventory created either at the blob or container level.",
-            "enum": [
-              "Blob",
-              "Container"
-            ],
+            "enum": ["Blob", "Container"],
             "x-ms-enum": {
               "name": "objectType",
               "modelAsString": true
@@ -15307,12 +14351,7 @@
             "description": "This is a required field. This field specifies the fields and properties of the object to be included in the inventory. The Schema field value 'Name' is always required. The valid values for this field for the 'Blob' definition.objectType include 'Name, Creation-Time, Last-Modified, Content-Length, Content-MD5, BlobType, AccessTier, AccessTierChangeTime, AccessTierInferred, Tags, Expiry-Time, hdi_isfolder, Owner, Group, Permissions, Acl, Snapshot, VersionId, IsCurrentVersion, Metadata, LastAccessTime, Tags, Etag, ContentType, ContentEncoding, ContentLanguage, ContentCRC64, CacheControl, ContentDisposition, LeaseStatus, LeaseState, LeaseDuration, ServerEncrypted, Deleted, DeletionId, DeletedTime, RemainingRetentionDays, ImmutabilityPolicyUntilDate, ImmutabilityPolicyMode, LegalHold, CopyId, CopyStatus, CopySource, CopyProgress, CopyCompletionTime, CopyStatusDescription, CustomerProvidedKeySha256, RehydratePriority, ArchiveStatus, XmsBlobSequenceNumber, EncryptionScope, IncrementalCopy, TagCount'. For Blob object type schema field value 'DeletedTime' is applicable only for Hns enabled accounts. The valid values for 'Container' definition.objectType include 'Name, Last-Modified, Metadata, LeaseStatus, LeaseState, LeaseDuration, PublicAccess, HasImmutabilityPolicy, HasLegalHold, Etag, DefaultEncryptionScope, DenyEncryptionScopeOverride, ImmutableStorageWithVersioningEnabled, Deleted, Version, DeletedTime, RemainingRetentionDays'. Schema field values 'Expiry-Time, hdi_isfolder, Owner, Group, Permissions, Acl, DeletionId' are valid only for Hns enabled accounts.Schema field values 'Tags, TagCount' are only valid for Non-Hns accounts."
           }
         },
-        "required": [
-          "format",
-          "schedule",
-          "objectType",
-          "schemaFields"
-        ],
+        "required": ["format", "schedule", "objectType", "schemaFields"],
         "description": "An object that defines the blob inventory rule."
       },
       "BlobInventoryPolicyFilter": {
@@ -15394,13 +14433,7 @@
               "migrationStatus": {
                 "type": "string",
                 "description": "Current status of migration",
-                "enum": [
-                  "Invalid",
-                  "SubmittedForConversion",
-                  "InProgress",
-                  "Complete",
-                  "Failed"
-                ],
+                "enum": ["Invalid", "SubmittedForConversion", "InProgress", "Complete", "Failed"],
                 "x-ms-enum": {
                   "name": "migrationStatus",
                   "modelAsString": true
@@ -15421,14 +14454,10 @@
             "x-ms-client-flatten": true,
             "x-ms-client-name": "StorageAccountMigrationDetails",
             "description": "The properties of a storage account’s ongoing or enqueued migration.",
-            "required": [
-              "targetSkuName"
-            ]
+            "required": ["targetSkuName"]
           }
         },
-        "required": [
-          "properties"
-        ],
+        "required": ["properties"],
         "description": "The parameters or status associated with an ongoing or enqueued storage account migration in order to update its current SKU or region."
       },
       "ErrorResponseBody": {
@@ -15455,11 +14484,7 @@
       "PublicNetworkAccess": {
         "type": "string",
         "description": "Allow, disallow, or let Network Security Perimeter configuration to evaluate public network access to Storage Account. Value is optional but if passed in, must be 'Enabled', 'Disabled' or 'SecuredByPerimeter'.",
-        "enum": [
-          "Enabled",
-          "Disabled",
-          "SecuredByPerimeter"
-        ],
+        "enum": ["Enabled", "Disabled", "SecuredByPerimeter"],
         "x-ms-enum": {
           "name": "PublicNetworkAccess",
           "modelAsString": true
@@ -15493,10 +14518,7 @@
         "readOnly": true,
         "type": "string",
         "description": "The SKU tier. This is based on the SKU name.",
-        "enum": [
-          "Standard",
-          "Premium"
-        ],
+        "enum": ["Standard", "Premium"],
         "x-ms-enum": {
           "name": "SkuTier",
           "modelAsString": false
@@ -15535,25 +14557,16 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["read", "create", "update"],
             "description": "Resource tags."
           },
           "location": {
             "type": "string",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ],
+            "x-ms-mutability": ["read", "create"],
             "description": "The geo-location where the resource lives"
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"
@@ -15569,9 +14582,7 @@
             "$ref": "#/components/schemas/Tier"
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "description": "The SKU of the storage account."
       },
       "PrivateEndpoint": {
@@ -15587,11 +14598,7 @@
       "PrivateEndpointServiceConnectionStatus": {
         "type": "string",
         "description": "The private endpoint connection status.",
-        "enum": [
-          "Pending",
-          "Approved",
-          "Rejected"
-        ],
+        "enum": ["Pending", "Approved", "Rejected"],
         "x-ms-enum": {
           "name": "PrivateEndpointServiceConnectionStatus",
           "modelAsString": true
@@ -15617,12 +14624,7 @@
         "type": "string",
         "readOnly": true,
         "description": "The current provisioning state.",
-        "enum": [
-          "Succeeded",
-          "Creating",
-          "Deleting",
-          "Failed"
-        ],
+        "enum": ["Succeeded", "Creating", "Deleting", "Failed"],
         "x-ms-enum": {
           "name": "PrivateEndpointConnectionProvisioningState",
           "modelAsString": true
@@ -15640,9 +14642,7 @@
             "$ref": "#/components/schemas/PrivateEndpointConnectionProvisioningState"
           }
         },
-        "required": [
-          "privateLinkServiceConnectionState"
-        ],
+        "required": ["privateLinkServiceConnectionState"],
         "description": "Properties of the PrivateEndpointConnectProperties."
       },
       "PrivateEndpointConnection": {
@@ -15694,10 +14694,7 @@
               "$ref": "#/components/schemas/ErrorDetail"
             },
             "readOnly": true,
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ]
+            "x-ms-identifiers": ["message", "target"]
           },
           "additionalInfo": {
             "type": "array",
@@ -15782,12 +14779,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -15804,12 +14796,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true

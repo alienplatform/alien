@@ -4,8 +4,7 @@ import * as alien from "@aliendotdev/core"
 
 // Object storage for vector data
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure
-const storage = new alien.Storage("data")
-  .build()
+const storage = new alien.Storage("data").build()
 
 // Writer container
 const writer = new alien.Container("writer")
@@ -77,5 +76,3 @@ export default new alien.Stack("byoc-database")
     },
   })
   .build()
-
-

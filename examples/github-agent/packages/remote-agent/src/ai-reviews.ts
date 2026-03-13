@@ -9,14 +9,16 @@ export function generateAIReview(pr: PullRequest): AIReview {
   const reviews: Record<number, AIReview> = {
     101: {
       prNumber: 101,
-      summary: "Strong authentication implementation with proper session handling. Minor improvements suggested for error handling.",
+      summary:
+        "Strong authentication implementation with proper session handling. Minor improvements suggested for error handling.",
       overallRating: "good",
       issues: [
         {
           severity: "medium",
           category: "security",
           title: "Session token not invalidated on logout",
-          description: "The logout handler clears the session cookie but doesn't invalidate the token in Redis, potentially allowing session replay attacks.",
+          description:
+            "The logout handler clears the session cookie but doesn't invalidate the token in Redis, potentially allowing session replay attacks.",
           file: "src/auth/session.ts",
           line: 45,
           suggestion: "Add `await redis.del(`session:${token}`)` before clearing the cookie",
@@ -25,7 +27,8 @@ export function generateAIReview(pr: PullRequest): AIReview {
           severity: "low",
           category: "best-practice",
           title: "Hard-coded session timeout",
-          description: "Session timeout is hard-coded to 24 hours. Consider making this configurable via environment variable.",
+          description:
+            "Session timeout is hard-coded to 24 hours. Consider making this configurable via environment variable.",
           file: "src/auth/session.ts",
           line: 23,
           suggestion: "Use `parseInt(process.env.SESSION_TIMEOUT || '86400')` instead",
@@ -85,14 +88,16 @@ This ensures defense-in-depth - even if the cookie is somehow preserved or repla
     },
     102: {
       prNumber: 102,
-      summary: "Complex billing refactor with good test coverage, but performance concerns in high-volume scenarios.",
+      summary:
+        "Complex billing refactor with good test coverage, but performance concerns in high-volume scenarios.",
       overallRating: "needs-work",
       issues: [
         {
           severity: "high",
           category: "performance",
           title: "N+1 query in billing calculation",
-          description: "The ledger calculation loops through transactions and makes individual database queries for each account balance check.",
+          description:
+            "The ledger calculation loops through transactions and makes individual database queries for each account balance check.",
           file: "src/billing/ledger.ts",
           line: 67,
           suggestion: "Batch load all account balances in a single query before the loop",
@@ -101,7 +106,8 @@ This ensures defense-in-depth - even if the cookie is somehow preserved or repla
           severity: "medium",
           category: "bug-risk",
           title: "Race condition in concurrent billing updates",
-          description: "Multiple concurrent billing updates could cause race conditions when updating account balances without proper locking.",
+          description:
+            "Multiple concurrent billing updates could cause race conditions when updating account balances without proper locking.",
           file: "src/billing/ledger.ts",
           line: 89,
           suggestion: "Use database transactions with SELECT FOR UPDATE or optimistic locking",
@@ -110,7 +116,8 @@ This ensures defense-in-depth - even if the cookie is somehow preserved or repla
           severity: "low",
           category: "maintainability",
           title: "Complex nested conditionals",
-          description: "The pricing logic has deeply nested if/else blocks that are hard to follow and test.",
+          description:
+            "The pricing logic has deeply nested if/else blocks that are hard to follow and test.",
           file: "src/billing/pricing.ts",
           line: 145,
           suggestion: "Refactor into a pricing strategy pattern or use a pricing table",
@@ -177,14 +184,16 @@ On the positive side, the test coverage is excellent at 95%. The audit logging i
     },
     103: {
       prNumber: 103,
-      summary: "Well-architected async worker system. Excellent use of queues and error handling patterns.",
+      summary:
+        "Well-architected async worker system. Excellent use of queues and error handling patterns.",
       overallRating: "excellent",
       issues: [
         {
           severity: "info",
           category: "maintainability",
           title: "Consider adding worker metrics",
-          description: "The worker system would benefit from Prometheus-style metrics for monitoring queue depth, processing time, and error rates.",
+          description:
+            "The worker system would benefit from Prometheus-style metrics for monitoring queue depth, processing time, and error rates.",
           suggestion: "Add instrumentation using a metrics library like prom-client",
         },
       ],
@@ -272,15 +281,17 @@ This code is production-ready. Ship it with confidence.`,
   }
 
   // Return mock review for known PRs, or generate a basic one
-  return reviews[pr.number] || {
-    prNumber: pr.number,
-    summary: "Standard code review completed. No critical issues found.",
-    overallRating: "good" as const,
-    issues: [],
-    highlights: ["Code follows project conventions", "Tests are passing"],
-    codeExamples: [],
-    rawAnalysis: `## Standard Review\n\nThis pull request has been reviewed and appears to follow standard practices. No critical issues detected.`,
-    reviewedAt: new Date().toISOString(),
-  }
+  return (
+    reviews[pr.number] || {
+      prNumber: pr.number,
+      summary: "Standard code review completed. No critical issues found.",
+      overallRating: "good" as const,
+      issues: [],
+      highlights: ["Code follows project conventions", "Tests are passing"],
+      codeExamples: [],
+      rawAnalysis:
+        "## Standard Review\n\nThis pull request has been reviewed and appears to follow standard practices. No critical issues detected.",
+      reviewedAt: new Date().toISOString(),
+    }
+  )
 }
-

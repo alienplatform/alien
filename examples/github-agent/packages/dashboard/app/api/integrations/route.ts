@@ -1,10 +1,10 @@
-import { headers } from "next/headers"
+import { listAgents } from "@/lib/alien"
+import { type IntegrationConfig, invokeCommand } from "@/lib/arc"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { integration } from "@/lib/schema"
 import { eq } from "drizzle-orm"
-import { invokeCommand, type IntegrationConfig } from "@/lib/arc"
-import { listAgents } from "@/lib/alien"
+import { headers } from "next/headers"
 
 export async function GET() {
   const session = await auth.api.getSession({
@@ -30,7 +30,7 @@ export async function GET() {
   try {
     const agents = await listAgents(activeOrgId)
     const agentIds = new Set(agents.map(a => a.id))
-    
+
     for (const int of integrations) {
       if (int.agentId && int.isActive && !agentIds.has(int.agentId)) {
         // Agent no longer exists, mark integration as inactive
@@ -67,10 +67,7 @@ export async function POST(request: Request) {
   const { owner, repo, token, baseUrl, agentId: providedAgentId } = await request.json()
 
   if (!owner || !repo) {
-    return Response.json(
-      { error: "owner and repo are required" },
-      { status: 400 }
-    )
+    return Response.json({ error: "owner and repo are required" }, { status: 400 })
   }
 
   // Use provided agentId, env var, or find first available agent
@@ -91,11 +88,13 @@ export async function POST(request: Request) {
   if (!agentId) {
     return Response.json(
       { error: "No agent available. Please deploy an agent first." },
-      { status: 400 }
+      { status: 400 },
     )
   }
 
-  const integrationId = `github-${activeOrgId}-${owner}-${repo}`.toLowerCase().replace(/[^a-z0-9-]/g, "-")
+  const integrationId = `github-${activeOrgId}-${owner}-${repo}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
 
   // Check if integration already exists for this organization
   const existing = await db.query.integration.findFirst({
@@ -103,10 +102,7 @@ export async function POST(request: Request) {
   })
 
   if (existing) {
-    return Response.json(
-      { error: "Integration already exists" },
-      { status: 400 }
-    )
+    return Response.json({ error: "Integration already exists" }, { status: 400 })
   }
 
   // Send credentials to agent's vault
@@ -126,7 +122,7 @@ export async function POST(request: Request) {
     console.error("Failed to set integration in agent:", error)
     return Response.json(
       { error: "Failed to configure agent. Make sure the agent is running." },
-      { status: 500 }
+      { status: 500 },
     )
   }
 

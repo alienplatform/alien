@@ -5,18 +5,18 @@
  * Exposes HTTP endpoints that the e2e check functions exercise.
  */
 
-import { Hono } from "hono"
-import { AlienError } from "@aliendotdev/core"
 import {
-  storage,
-  kv,
-  queue,
-  vault,
-  onStorageEvent,
-  onQueueMessage,
   command,
+  kv,
+  onQueueMessage,
+  onStorageEvent,
+  queue,
+  storage,
+  vault,
   waitUntil,
 } from "@aliendotdev/bindings"
+import { AlienError } from "@aliendotdev/core"
+import { Hono } from "hono"
 
 const app = new Hono()
 
@@ -35,15 +35,15 @@ async function toExternalOperationError(error: unknown, operation: string) {
 
 // --- Health and utility endpoints ---
 
-app.get("/health", (c) => {
+app.get("/health", c => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() })
 })
 
-app.get("/hello", (c) => {
+app.get("/hello", c => {
   return c.json({ message: "Hello from TypeScript!", timestamp: new Date().toISOString() })
 })
 
-app.get("/env-var/:varName", (c) => {
+app.get("/env-var/:varName", c => {
   const varName = c.req.param("varName")
   const value = process.env[varName]
   if (!value) {
@@ -52,14 +52,14 @@ app.get("/env-var/:varName", (c) => {
   return c.json({ name: varName, value })
 })
 
-app.post("/inspect", async (c) => {
+app.post("/inspect", async c => {
   const body = await c.req.json()
   return c.json({ success: true, requestBody: body })
 })
 
 // --- SSE endpoint ---
 
-app.get("/sse", (c) => {
+app.get("/sse", c => {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     start(controller) {
@@ -76,7 +76,7 @@ app.get("/sse", (c) => {
 
 // --- Storage binding test ---
 
-app.post("/storage-test/:bindingName", async (c) => {
+app.post("/storage-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
     const s = await storage(bindingName)
@@ -110,7 +110,7 @@ app.post("/storage-test/:bindingName", async (c) => {
 
 // --- KV binding test ---
 
-app.post("/kv-test/:bindingName", async (c) => {
+app.post("/kv-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
     const k = await kv(bindingName)
@@ -139,7 +139,7 @@ app.post("/kv-test/:bindingName", async (c) => {
 
 // --- Vault binding test ---
 
-app.post("/vault-test/:bindingName", async (c) => {
+app.post("/vault-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
     const v = await vault(bindingName)
@@ -167,7 +167,7 @@ app.post("/vault-test/:bindingName", async (c) => {
 
 // --- Queue binding test ---
 
-app.post("/queue-test/:bindingName", async (c) => {
+app.post("/queue-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
     const q = await queue(bindingName)
@@ -182,7 +182,7 @@ app.post("/queue-test/:bindingName", async (c) => {
 
 // --- External secret endpoint ---
 
-app.get("/external-secret", async (c) => {
+app.get("/external-secret", async c => {
   try {
     const v = await vault("test-alien-vault")
     const value = await v.get("EXTERNAL_TEST_SECRET")
@@ -195,20 +195,22 @@ app.get("/external-secret", async (c) => {
 
 // --- Wait-until background task ---
 
-app.post("/wait-until-test", async (c) => {
+app.post("/wait-until-test", async c => {
   const { storageBindingName, testData, delayMs } = await c.req.json()
   const testId = `test-${Date.now()}`
 
-  waitUntil((async () => {
-    await new Promise((resolve) => setTimeout(resolve, delayMs || 1000))
-    const s = await storage(storageBindingName || "test-alien-storage")
-    await s.put(`wait-until-${testId}.txt`, testData || "background-task-done")
-  })())
+  waitUntil(
+    (async () => {
+      await new Promise(resolve => setTimeout(resolve, delayMs || 1000))
+      const s = await storage(storageBindingName || "test-alien-storage")
+      await s.put(`wait-until-${testId}.txt`, testData || "background-task-done")
+    })(),
+  )
 
   return c.json({ success: true, testId, message: "Background task scheduled" })
 })
 
-app.get("/wait-until-verify/:testId/:storageBindingName", async (c) => {
+app.get("/wait-until-verify/:testId/:storageBindingName", async c => {
   const testId = c.req.param("testId")
   const storageBindingName = c.req.param("storageBindingName")
   try {
@@ -245,11 +247,11 @@ app.get("/wait-until-verify/:testId/:storageBindingName", async (c) => {
 
 // --- Event verification endpoints ---
 
-app.get("/events/list", async (c) => {
+app.get("/events/list", async c => {
   return c.json({ storageEvents: [], cronEvents: [], queueMessages: [] })
 })
 
-app.get("/events/storage/:key", async (c) => {
+app.get("/events/storage/:key", async c => {
   const key = c.req.param("key")
   try {
     const k = await kv("test-alien-kv")
@@ -262,7 +264,7 @@ app.get("/events/storage/:key", async (c) => {
   }
 })
 
-app.get("/events/queue/:messageId", async (c) => {
+app.get("/events/queue/:messageId", async c => {
   const messageId = c.req.param("messageId")
   try {
     const k = await kv("test-alien-kv")
@@ -277,33 +279,30 @@ app.get("/events/queue/:messageId", async (c) => {
 
 // --- Event handlers ---
 
-onStorageEvent("*", async (event) => {
+onStorageEvent("*", async event => {
   const k = await kv("test-alien-kv")
   const sanitizedKey = event.key.replace(/\//g, "_")
-  await k.set(
-    `storage_event:${sanitizedKey}`,
-    {
-      key: event.key,
-      bucket: event.bucket,
-      eventType: event.eventType,
-      size: event.size,
-      processedAt: new Date().toISOString(),
-    }
-  )
+  await k.set(`storage_event:${sanitizedKey}`, {
+    key: event.key,
+    bucket: event.bucket,
+    eventType: event.eventType,
+    size: event.size,
+    processedAt: new Date().toISOString(),
+  })
 })
 
-onQueueMessage("*", async (message) => {
+onQueueMessage("*", async message => {
   const k = await kv("test-alien-kv")
   const sanitizedId = message.id.replace(/\//g, "_")
-  await k.set(
-    `queue_message:${sanitizedId}`,
-    {
-      messageId: message.id,
-      source: message.source,
-      payload: typeof message.payload === "string" ? message.payload : new TextDecoder().decode(message.payload as Uint8Array),
-      processedAt: new Date().toISOString(),
-    }
-  )
+  await k.set(`queue_message:${sanitizedId}`, {
+    messageId: message.id,
+    source: message.source,
+    payload:
+      typeof message.payload === "string"
+        ? message.payload
+        : new TextDecoder().decode(message.payload as Uint8Array),
+    processedAt: new Date().toISOString(),
+  })
 })
 
 // --- ARC Commands ---

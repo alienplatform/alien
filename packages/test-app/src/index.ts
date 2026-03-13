@@ -12,12 +12,12 @@ import { Hono } from "hono"
 const app = new Hono()
 
 // Health check / default route
-app.get("/", (c) => {
+app.get("/", c => {
   return c.json({ status: "ok", message: "Hello from test-app!" })
 })
 
 // Test route that returns request info
-app.get("/*", (c) => {
+app.get("/*", c => {
   return c.json({
     status: "ok",
     method: "GET",
@@ -26,7 +26,7 @@ app.get("/*", (c) => {
 })
 
 // POST handler
-app.post("/*", async (c) => {
+app.post("/*", async c => {
   const body = await c.req.text()
   return c.json({
     status: "ok",

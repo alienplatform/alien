@@ -12,9 +12,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "tags": [
@@ -182,9 +180,7 @@
               "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
               "id": "/subscriptions/c267c0e7-0a73-4789-9e17-d26aeb0904e5/resourcegroups/rgName/providers/Microsoft.ManagedIdentity/userAssignedIdentities/identityName/federatedIdentityCredentials/ficResourceName",
               "properties": {
-                "audiences": [
-                  "api://AzureADTokenExchange"
-                ],
+                "audiences": ["api://AzureADTokenExchange"],
                 "issuer": "https://oidc.prod-aks.azure.com/TenantGUID/IssuerGUID",
                 "subject": "system:serviceaccount:ns:svcaccount"
               }
@@ -198,9 +194,7 @@
           "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
           "id": "/subscriptions/c267c0e7-0a73-4789-9e17-d26aeb0904e5/resourcegroups/rgName/providers/Microsoft.ManagedIdentity/userAssignedIdentities/identityName/federatedIdentityCredentials/ficResourceName",
           "properties": {
-            "audiences": [
-              "api://AzureADTokenExchange"
-            ],
+            "audiences": ["api://AzureADTokenExchange"],
             "issuer": "https://oidc.prod-aks.azure.com/TenantGUID/IssuerGUID",
             "subject": "system:serviceaccount:ns:svcaccount"
           }
@@ -212,9 +206,7 @@
           "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
           "id": "/subscriptions/c267c0e7-0a73-4789-9e17-d26aeb0904e5/resourcegroups/rgName/providers/Microsoft.ManagedIdentity/userAssignedIdentities/identityName/federatedIdentityCredentials/ficResourceName",
           "properties": {
-            "audiences": [
-              "api://AzureADTokenExchange"
-            ],
+            "audiences": ["api://AzureADTokenExchange"],
             "issuer": "https://oidc.prod-aks.azure.com/TenantGUID/IssuerGUID",
             "subject": "system:serviceaccount:ns:svcaccount"
           }
@@ -403,9 +395,7 @@
             "items": {
               "$ref": "#/components/schemas/CloudErrorBody"
             },
-            "x-ms-identifiers": [
-              "code"
-            ]
+            "x-ms-identifiers": ["code"]
           }
         },
         "x-ms-external": true
@@ -446,11 +436,7 @@
             }
           }
         },
-        "required": [
-          "issuer",
-          "subject",
-          "audiences"
-        ]
+        "required": ["issuer", "subject", "audiences"]
       },
       "FederatedIdentityCredentialsListResult": {
         "type": "object",
@@ -462,9 +448,7 @@
             "items": {
               "$ref": "#/components/schemas/FederatedIdentityCredential"
             },
-            "x-ms-identifiers": [
-              "id"
-            ]
+            "x-ms-identifiers": ["id"]
           },
           "nextLink": {
             "type": "string",
@@ -472,9 +456,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "Identity": {
         "type": "object",
@@ -497,10 +479,7 @@
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           },
           "tags": {
             "type": "object",
@@ -508,11 +487,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "update",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "update", "create"]
           },
           "properties": {
             "$ref": "#/components/schemas/UserAssignedIdentityProperties"
@@ -527,10 +502,7 @@
       "IsolationScope": {
         "type": "string",
         "description": "Enum to configure regional restrictions on identity assignment, as necessary.",
-        "enum": [
-          "None",
-          "Regional"
-        ],
+        "enum": ["None", "Regional"],
         "x-ms-enum": {
           "name": "IsolationScope",
           "modelAsString": true,
@@ -600,9 +572,7 @@
             "items": {
               "$ref": "#/components/schemas/Operation"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "nextLink": {
             "type": "string",
@@ -611,9 +581,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "SystemAssignedIdentity": {
         "type": "object",
@@ -624,26 +592,17 @@
           },
           "location": {
             "type": "string",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           },
           "tags": {
             "type": "object",
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "update",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "update", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/ProxyResource"
@@ -688,9 +647,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "UserAssignedIdentityProperties": {
         "type": "object",
@@ -722,12 +679,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -744,12 +696,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -810,24 +757,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ]
+            "x-ms-mutability": ["read", "create", "update"]
           },
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"

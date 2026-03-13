@@ -7,149 +7,149 @@ import * as alien from "../index.js"
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
-    it("builds and validates a complex stack with permissions", () => {
-      // Storage bucket
-      const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
+  it("builds and validates a complex stack with permissions", () => {
+    // Storage bucket
+    const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
 
-      // Main application function with permissions
-      const func = new alien.Function("my-test-function")
-        .code({ type: "image", image: SHARED_IMAGE })
-        .memoryMb(512)
-        .timeoutSeconds(30)
-        .permissions("execution")
-        .ingress("public")
-        .environment({
-          RUST_LOG: "info,alien_runtime_test_server=debug,alien_runtime=debug",
-        })
-        .link(storage)
-        .build()
+    // Main application function with permissions
+    const func = new alien.Function("my-test-function")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .memoryMb(512)
+      .timeoutSeconds(30)
+      .permissions("execution")
+      .ingress("public")
+      .environment({
+        RUST_LOG: "info,alien_runtime_test_server=debug,alien_runtime=debug",
+      })
+      .link(storage)
+      .build()
 
-      const stack = new alien.Stack("my-test-stack")
-        .add(storage, "frozen")
-        .add(func, "live")
-        .permissions({
-          profiles: {
-            execution: {
-              "*": ["storage/data-read"],
-              "my-test-bucket": ["storage/data-write"]
-            }
+    const stack = new alien.Stack("my-test-stack")
+      .add(storage, "frozen")
+      .add(func, "live")
+      .permissions({
+        profiles: {
+          execution: {
+            "*": ["storage/data-read"],
+            "my-test-bucket": ["storage/data-write"],
           },
-          management: {
-            extend: {
-              "*": ["function/management", "storage/management"]
-            }
-          }
-        })
-        .build()
-
-      // Basic assertions
-      expect(stack.id).toBe("my-test-stack")
-      expect(stack.resources).toHaveProperty("my-test-bucket")
-      expect(stack.resources).toHaveProperty("my-test-function")
-      expect(stack.permissions?.profiles).toHaveProperty("execution")
-      expect(stack.permissions?.management).toHaveProperty("extend")
-
-      // Schema validation occurs inside build(); absence of thrown error means success
-
-      // Snapshot the full stack for regression testing
-      expect(stack).toMatchSnapshot()
-    })
-
-    it("builds and validates a stack with Build and ArtifactRegistry resources", () => {
-      // Artifact registry for storing build artifacts
-      const registry = new alien.ArtifactRegistry("my-artifact-registry").build()
-
-      // Storage for build inputs/outputs
-      const buildStorage = new alien.Storage("build-storage").build()
-
-      // Build resource with permissions
-      const build = new alien.Build("my-build")
-        .computeType("medium")
-        .environment({
-          NODE_ENV: "production",
-          BUILD_TARGET: "release",
-        })
-        .link(registry)
-        .link(buildStorage)
-        .permissions("builder")
-        .build()
-
-      const stack = new alien.Stack("build-stack")
-        .add(registry, "frozen")
-        .add(buildStorage, "frozen")
-        .add(build, "live")
-        .permissions({
-          profiles: {
-            builder: {
-              "*": ["artifact-registry/data-read", "artifact-registry/data-write"],
-              "build-storage": ["storage/data-read", "storage/data-write"]
-            }
+        },
+        management: {
+          extend: {
+            "*": ["function/management", "storage/management"],
           },
-          management: {
-            extend: {
-              "*": ["build/management", "storage/management", "artifact-registry/management"]
-            }
-          }
-        })
-        .build()
+        },
+      })
+      .build()
 
-      // Basic assertions
-      expect(stack.id).toBe("build-stack")
-      expect(stack.resources).toHaveProperty("my-artifact-registry")
-      expect(stack.resources).toHaveProperty("build-storage")
-      expect(stack.resources).toHaveProperty("my-build")
+    // Basic assertions
+    expect(stack.id).toBe("my-test-stack")
+    expect(stack.resources).toHaveProperty("my-test-bucket")
+    expect(stack.resources).toHaveProperty("my-test-function")
+    expect(stack.permissions?.profiles).toHaveProperty("execution")
+    expect(stack.permissions?.management).toHaveProperty("extend")
 
-      // Verify resource configurations
-      const buildResource = stack.resources["my-build"]
-      expect(buildResource?.config.computeType).toBe("medium")
-      expect(buildResource?.config.environment).toEqual({
+    // Schema validation occurs inside build(); absence of thrown error means success
+
+    // Snapshot the full stack for regression testing
+    expect(stack).toMatchSnapshot()
+  })
+
+  it("builds and validates a stack with Build and ArtifactRegistry resources", () => {
+    // Artifact registry for storing build artifacts
+    const registry = new alien.ArtifactRegistry("my-artifact-registry").build()
+
+    // Storage for build inputs/outputs
+    const buildStorage = new alien.Storage("build-storage").build()
+
+    // Build resource with permissions
+    const build = new alien.Build("my-build")
+      .computeType("medium")
+      .environment({
         NODE_ENV: "production",
         BUILD_TARGET: "release",
       })
-      expect(buildResource?.config.links).toHaveLength(2)
+      .link(registry)
+      .link(buildStorage)
+      .permissions("builder")
+      .build()
 
-      // Schema validation occurs inside build(); absence of thrown error means success
-      expect(stack).toMatchSnapshot()
-    })
-
-    it("builds and validates a stack with function source", () => {
-      const funcWithSource = new alien.Function("my-source-function")
-        .code({
-          type: "source",
-          src: "./app",
-          toolchain: { type: "typescript" }
-        })
-        .memoryMb(256)
-        .timeoutSeconds(15)
-        .ingress("private")
-        .permissions("execution")
-        .build()
-
-      const stack = new alien.Stack("my-source-stack")
-        .add(funcWithSource, "live")
-        .permissions({
-          profiles: {
-            execution: {
-              "*": ["function/execute"]
-            }
+    const stack = new alien.Stack("build-stack")
+      .add(registry, "frozen")
+      .add(buildStorage, "frozen")
+      .add(build, "live")
+      .permissions({
+        profiles: {
+          builder: {
+            "*": ["artifact-registry/data-read", "artifact-registry/data-write"],
+            "build-storage": ["storage/data-read", "storage/data-write"],
           },
-          management: {
-            extend: {
-              "*": ["function/management"]
-            }
-          }
-        })
-        .build()
+        },
+        management: {
+          extend: {
+            "*": ["build/management", "storage/management", "artifact-registry/management"],
+          },
+        },
+      })
+      .build()
 
-      expect(stack.id).toBe("my-source-stack")
-      expect(stack.resources).toHaveProperty("my-source-function")
-      const resourceInStack = stack.resources["my-source-function"]
-      expect(resourceInStack).toBeDefined()
-      const functionConfigFromStack = FunctionSchema.parse(resourceInStack!.config)
-      expect(functionConfigFromStack.code.type).toBe("source")
+    // Basic assertions
+    expect(stack.id).toBe("build-stack")
+    expect(stack.resources).toHaveProperty("my-artifact-registry")
+    expect(stack.resources).toHaveProperty("build-storage")
+    expect(stack.resources).toHaveProperty("my-build")
 
-      expect(stack).toMatchSnapshot()
+    // Verify resource configurations
+    const buildResource = stack.resources["my-build"]
+    expect(buildResource?.config.computeType).toBe("medium")
+    expect(buildResource?.config.environment).toEqual({
+      NODE_ENV: "production",
+      BUILD_TARGET: "release",
     })
+    expect(buildResource?.config.links).toHaveLength(2)
+
+    // Schema validation occurs inside build(); absence of thrown error means success
+    expect(stack).toMatchSnapshot()
+  })
+
+  it("builds and validates a stack with function source", () => {
+    const funcWithSource = new alien.Function("my-source-function")
+      .code({
+        type: "source",
+        src: "./app",
+        toolchain: { type: "typescript" },
+      })
+      .memoryMb(256)
+      .timeoutSeconds(15)
+      .ingress("private")
+      .permissions("execution")
+      .build()
+
+    const stack = new alien.Stack("my-source-stack")
+      .add(funcWithSource, "live")
+      .permissions({
+        profiles: {
+          execution: {
+            "*": ["function/execute"],
+          },
+        },
+        management: {
+          extend: {
+            "*": ["function/management"],
+          },
+        },
+      })
+      .build()
+
+    expect(stack.id).toBe("my-source-stack")
+    expect(stack.resources).toHaveProperty("my-source-function")
+    const resourceInStack = stack.resources["my-source-function"]
+    expect(resourceInStack).toBeDefined()
+    const functionConfigFromStack = FunctionSchema.parse(resourceInStack!.config)
+    expect(functionConfigFromStack.code.type).toBe("source")
+
+    expect(stack).toMatchSnapshot()
+  })
 })
 
 describe("Permissions system", () => {
@@ -159,13 +159,15 @@ describe("Permissions system", () => {
       id: "custom-storage-access",
       description: "Custom storage access permissions",
       platforms: {
-        aws: [{
-          grant: { actions: ["s3:GetObject", "s3:PutObject"] },
-          binding: { 
-            stack: { resources: ["arn:aws:s3:::${stackPrefix}-*"] }
-          }
-        }]
-      }
+        aws: [
+          {
+            grant: { actions: ["s3:GetObject", "s3:PutObject"] },
+            binding: {
+              stack: { resources: ["arn:aws:s3:::${stackPrefix}-*"] },
+            },
+          },
+        ],
+      },
     }
 
     // Create a function with permissions
@@ -180,14 +182,14 @@ describe("Permissions system", () => {
       .permissions({
         profiles: {
           execution: {
-            "*": ["storage/data-read", customPermissionSet]
-          }
+            "*": ["storage/data-read", customPermissionSet],
+          },
         },
         management: {
           extend: {
-            "*": ["function/management"]
-          }
-        }
+            "*": ["function/management"],
+          },
+        },
       })
       .build()
 
@@ -200,7 +202,7 @@ describe("Permissions system", () => {
     // Verify the permissions structure
     expect(stack.permissions?.profiles.execution?.["*"]).toEqual([
       "storage/data-read",
-      customPermissionSet
+      customPermissionSet,
     ])
 
     expect(stack).toMatchSnapshot()
@@ -241,9 +243,7 @@ describe("Build resource configuration", () => {
   })
 
   it("creates a minimal build with defaults", () => {
-    const build = new alien.Build("minimal-build")
-      .permissions("default")
-      .build()
+    const build = new alien.Build("minimal-build").permissions("default").build()
 
     // Verify minimal configuration
     expect(build.config.id).toBe("minimal-build")
@@ -281,7 +281,7 @@ describe("ArtifactRegistry resource configuration", () => {
 
   it("can be used in stack permissions", () => {
     const registry = new alien.ArtifactRegistry("protected-registry").build()
-    
+
     const func = new alien.Function("registry-user")
       .code({ type: "image", image: SHARED_IMAGE })
       .permissions("execution")
@@ -293,16 +293,16 @@ describe("ArtifactRegistry resource configuration", () => {
       .permissions({
         profiles: {
           execution: {
-            "protected-registry": ["artifact-registry/data-read", "artifact-registry/data-write"]
-          }
-        }
+            "protected-registry": ["artifact-registry/data-read", "artifact-registry/data-write"],
+          },
+        },
       })
       .build()
 
     // Verify the stack includes permissions for the registry
     expect(stack.permissions?.profiles.execution?.["protected-registry"]).toEqual([
       "artifact-registry/data-read",
-      "artifact-registry/data-write"
+      "artifact-registry/data-write",
     ])
 
     expect(stack).toMatchSnapshot()

@@ -1,9 +1,9 @@
-import { headers } from "next/headers"
+import { type IntegrationConfig, invokeCommand } from "@/lib/arc"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { integration } from "@/lib/schema"
 import { eq } from "drizzle-orm"
-import { invokeCommand, type IntegrationConfig } from "@/lib/arc"
+import { headers } from "next/headers"
 
 /**
  * PATCH endpoint to update an integration (e.g., reassign agent, mark as inactive)
@@ -48,7 +48,7 @@ export async function PATCH(request: Request) {
     // If we're assigning a new agent, mark as active
     if (agentId) {
       updateData.isActive = true
-      
+
       // Reconfigure the new agent's vault with the integration credentials
       try {
         const config: IntegrationConfig = {
@@ -57,7 +57,7 @@ export async function PATCH(request: Request) {
           token: existingIntegration.hasToken ? "existing" : "demo",
           baseUrl: existingIntegration.baseUrl || undefined,
         }
-        
+
         await invokeCommand(agentId, "set-integration", {
           integrationId,
           config,
@@ -66,7 +66,7 @@ export async function PATCH(request: Request) {
         console.error("Failed to reconfigure agent:", error)
         return Response.json(
           { error: "Failed to configure new agent. Make sure the agent is running." },
-          { status: 500 }
+          { status: 500 },
         )
       }
     }
@@ -76,11 +76,7 @@ export async function PATCH(request: Request) {
     updateData.isActive = isActive
   }
 
-  await db
-    .update(integration)
-    .set(updateData)
-    .where(eq(integration.id, integrationId))
+  await db.update(integration).set(updateData).where(eq(integration.id, integrationId))
 
   return Response.json({ success: true })
 }
-

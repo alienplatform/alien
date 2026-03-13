@@ -1,33 +1,41 @@
 import {
+  type PermissionSet,
+  type ResourceType,
   type ServiceAccount as ServiceAccountConfig,
   ServiceAccountSchema,
-  type ResourceType,
-  type PermissionSet,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
-export type { ServiceAccount as ServiceAccountConfig, ServiceAccountOutputs, PermissionSet } from "./generated/index.js"
-export { ServiceAccountSchema as ServiceAccountConfigSchema, ServiceAccountOutputsSchema, PermissionSetSchema } from "./generated/index.js"
+export type {
+  ServiceAccount as ServiceAccountConfig,
+  ServiceAccountOutputs,
+  PermissionSet,
+} from "./generated/index.js"
+export {
+  ServiceAccountSchema as ServiceAccountConfigSchema,
+  ServiceAccountOutputsSchema,
+  PermissionSetSchema,
+} from "./generated/index.js"
 
 /**
  * Represents a non-human identity that can be assumed by compute services.
- * 
+ *
  * Maps to:
  * - AWS: IAM Role
- * - GCP: Service Account  
+ * - GCP: Service Account
  * - Azure: User-assigned Managed Identity
- * 
+ *
  * ServiceAccounts can be used to grant specific permissions to compute resources
  * and can be impersonated by other services for cross-account or cross-service access.
- * 
+ *
  * @example
  * ```typescript
  * import { ServiceAccount, Function } from "@alien/core"
- * 
+ *
  * // Create a service account with stack-level permissions
  * const dataProcessorAccount = new ServiceAccount("data-processor")
  *   .build()
- * 
+ *
  * // Link it to a function to use its identity
  * const processor = new Function("processor")
  *   .code({ type: "image", image: "processor:latest" })
@@ -60,15 +68,15 @@ export class ServiceAccount {
   /**
    * Adds a stack-level permission set to the service account.
    * Stack-level permissions apply to all resources in the stack.
-   * 
+   *
    * Note: Only inline permission set objects are supported. To use built-in permission sets,
    * you need to resolve them first through the permission set registry or use permission profiles
    * in your stack configuration.
-   * 
+   *
    * @example
    * ```typescript
    * import { ServiceAccount, type PermissionSet } from "@alien/core"
-   * 
+   *
    * const customPermissionSet: PermissionSet = {
    *   id: "custom/my-perms",
    *   description: "Custom permissions",
@@ -76,12 +84,12 @@ export class ServiceAccount {
    *     aws: [{ grant: { actions: ["s3:GetObject"] }, binding: { stack: { resources: ["*"] } } }]
    *   }
    * }
-   * 
+   *
    * const account = new ServiceAccount("custom-processor")
    *   .stackPermissionSet(customPermissionSet)
    *   .build()
    * ```
-   * 
+   *
    * @param permissionSet The permission set object with platform-specific permissions
    * @returns The ServiceAccount builder instance.
    */
@@ -107,4 +115,3 @@ export class ServiceAccount {
     })
   }
 }
-

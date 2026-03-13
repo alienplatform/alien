@@ -17,10 +17,7 @@ export async function loadIntegrationConfig(integrationId: string): Promise<Inte
   try {
     return await integrations.getJson<IntegrationConfig>(integrationId)
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Integration configuration not found"
+    const message = error instanceof Error ? error.message : "Integration configuration not found"
     throw new Error(`Missing integration ${integrationId}: ${message}`)
   }
 }

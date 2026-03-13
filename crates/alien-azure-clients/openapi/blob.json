@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -31,61 +29,25 @@
                 "cors": {
                   "corsRules": [
                     {
-                      "allowedOrigins": [
-                        "http://www.contoso.com",
-                        "http://www.fabrikam.com"
-                      ],
-                      "allowedMethods": [
-                        "GET",
-                        "HEAD",
-                        "POST",
-                        "OPTIONS",
-                        "MERGE",
-                        "PUT"
-                      ],
+                      "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                      "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                       "maxAgeInSeconds": 100,
-                      "exposedHeaders": [
-                        "x-ms-meta-*"
-                      ],
-                      "allowedHeaders": [
-                        "x-ms-meta-abc",
-                        "x-ms-meta-data*",
-                        "x-ms-meta-target*"
-                      ]
+                      "exposedHeaders": ["x-ms-meta-*"],
+                      "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                     },
                     {
-                      "allowedOrigins": [
-                        "*"
-                      ],
-                      "allowedMethods": [
-                        "GET"
-                      ],
+                      "allowedOrigins": ["*"],
+                      "allowedMethods": ["GET"],
                       "maxAgeInSeconds": 2,
-                      "exposedHeaders": [
-                        "*"
-                      ],
-                      "allowedHeaders": [
-                        "*"
-                      ]
+                      "exposedHeaders": ["*"],
+                      "allowedHeaders": ["*"]
                     },
                     {
-                      "allowedOrigins": [
-                        "http://www.abc23.com",
-                        "https://www.fabrikam.com/*"
-                      ],
-                      "allowedMethods": [
-                        "GET",
-                        "PUT"
-                      ],
+                      "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                      "allowedMethods": ["GET", "PUT"],
                       "maxAgeInSeconds": 2000,
-                      "exposedHeaders": [
-                        "x-ms-meta-abc",
-                        "x-ms-meta-data*",
-                        "x -ms-meta-target*"
-                      ],
-                      "allowedHeaders": [
-                        "x-ms-meta-12345675754564*"
-                      ]
+                      "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                      "allowedHeaders": ["x-ms-meta-12345675754564*"]
                     }
                   ]
                 },
@@ -117,61 +79,25 @@
             "cors": {
               "corsRules": [
                 {
-                  "allowedOrigins": [
-                    "http://www.contoso.com",
-                    "http://www.fabrikam.com"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "HEAD",
-                    "POST",
-                    "OPTIONS",
-                    "MERGE",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                   "maxAgeInSeconds": 100,
-                  "exposedHeaders": [
-                    "x-ms-meta-*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "*"
-                  ],
-                  "allowedMethods": [
-                    "GET"
-                  ],
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
                   "maxAgeInSeconds": 2,
-                  "exposedHeaders": [
-                    "*"
-                  ],
-                  "allowedHeaders": [
-                    "*"
-                  ]
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "http://www.abc23.com",
-                    "https://www.fabrikam.com/*"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
                   "maxAgeInSeconds": 2000,
-                  "exposedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x -ms-meta-target*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-12345675754564*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
                 }
               ]
             },
@@ -202,9 +128,7 @@
               "enable": true,
               "name": "AccessTimeTracking",
               "trackingGranularityInDays": 1,
-              "blobType": [
-                "blockBlob"
-              ]
+              "blobType": ["blockBlob"]
             }
           }
         }
@@ -233,61 +157,25 @@
             "cors": {
               "corsRules": [
                 {
-                  "allowedOrigins": [
-                    "http://www.contoso.com",
-                    "http://www.fabrikam.com"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "HEAD",
-                    "POST",
-                    "OPTIONS",
-                    "MERGE",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                   "maxAgeInSeconds": 100,
-                  "exposedHeaders": [
-                    "x-ms-meta-*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "*"
-                  ],
-                  "allowedMethods": [
-                    "GET"
-                  ],
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
                   "maxAgeInSeconds": 2,
-                  "exposedHeaders": [
-                    "*"
-                  ],
-                  "allowedHeaders": [
-                    "*"
-                  ]
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "http://www.abc23.com",
-                    "https://www.fabrikam.com/*"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
                   "maxAgeInSeconds": 2000,
-                  "exposedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x -ms-meta-target*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-12345675754564*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
                 }
               ]
             },
@@ -575,21 +463,13 @@
       "SetLegalHoldContainers": {
         "value": {
           "hasLegalHold": true,
-          "tags": [
-            "tag1",
-            "tag2",
-            "tag3"
-          ]
+          "tags": ["tag1", "tag2", "tag3"]
         }
       },
       "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
         "value": {
           "hasLegalHold": true,
-          "tags": [
-            "tag1",
-            "tag2",
-            "tag3"
-          ],
+          "tags": ["tag1", "tag2", "tag3"],
           "allowProtectedAppendWritesAll": true
         }
       },
@@ -769,9 +649,7 @@
         "x-ms-parameter-location": "method",
         "schema": {
           "type": "string",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "CreateOrUpdateImmutabilityPolicy": {
@@ -800,9 +678,7 @@
         "x-ms-parameter-location": "method",
         "schema": {
           "type": "string",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "PutBlobServices": {
@@ -1233,11 +1109,7 @@
           },
           "publicAccess": {
             "type": "string",
-            "enum": [
-              "Container",
-              "Blob",
-              "None"
-            ],
+            "enum": ["Container", "Blob", "None"],
             "x-ms-enum": {
               "name": "PublicAccess",
               "modelAsString": false
@@ -1252,10 +1124,7 @@
           "leaseStatus": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "Locked",
-              "Unlocked"
-            ],
+            "enum": ["Locked", "Unlocked"],
             "x-ms-enum": {
               "name": "LeaseStatus",
               "modelAsString": true
@@ -1265,13 +1134,7 @@
           "leaseState": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "Available",
-              "Leased",
-              "Expired",
-              "Breaking",
-              "Broken"
-            ],
+            "enum": ["Available", "Leased", "Expired", "Breaking", "Broken"],
             "x-ms-enum": {
               "name": "LeaseState",
               "modelAsString": true
@@ -1281,10 +1144,7 @@
           "leaseDuration": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "Infinite",
-              "Fixed"
-            ],
+            "enum": ["Infinite", "Fixed"],
             "x-ms-enum": {
               "name": "LeaseDuration",
               "modelAsString": true
@@ -1350,10 +1210,7 @@
           "state": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "Locked",
-              "Unlocked"
-            ],
+            "enum": ["Locked", "Unlocked"],
             "x-ms-enum": {
               "name": "ImmutabilityPolicyState",
               "modelAsString": true
@@ -1403,9 +1260,7 @@
             "$ref": "#/components/schemas/AzureEntityResource"
           }
         ],
-        "required": [
-          "properties"
-        ],
+        "required": ["properties"],
         "description": "The ImmutabilityPolicy property of a blob container, including Id, resource name, resource type, Etag."
       },
       "ImmutableStorageWithVersioning": {
@@ -1422,10 +1277,7 @@
           "migrationState": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "InProgress",
-              "Completed"
-            ],
+            "enum": ["InProgress", "Completed"],
             "x-ms-enum": {
               "name": "MigrationState",
               "modelAsString": true
@@ -1440,11 +1292,7 @@
           "update": {
             "type": "string",
             "readOnly": true,
-            "enum": [
-              "put",
-              "lock",
-              "extend"
-            ],
+            "enum": ["put", "lock", "extend"],
             "x-ms-enum": {
               "name": "ImmutabilityPolicyUpdateType",
               "modelAsString": true
@@ -1573,9 +1421,7 @@
             "description": "When enabled, new blocks can be written to both 'Append and Bock Blobs' while maintaining legal hold protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted."
           }
         },
-        "required": [
-          "tags"
-        ],
+        "required": ["tags"],
         "description": "The LegalHold property of a blob container."
       },
       "ListContainerItem": {
@@ -1710,9 +1556,7 @@
             "description": "Returns the minimum date and time that the restore can be started."
           }
         },
-        "required": [
-          "enabled"
-        ],
+        "required": ["enabled"],
         "description": "The blob service properties for blob restore policy"
       },
       "LastAccessTimeTrackingPolicy": {
@@ -1724,9 +1568,7 @@
           "name": {
             "type": "string",
             "description": "Name of the policy. The valid value is AccessTimeTracking. This field is currently read only",
-            "enum": [
-              "AccessTimeTracking"
-            ],
+            "enum": ["AccessTimeTracking"],
             "x-ms-enum": {
               "name": "name",
               "modelAsString": true
@@ -1745,22 +1587,14 @@
             "description": "An array of predefined supported blob types. Only blockBlob is the supported value. This field is currently read only"
           }
         },
-        "required": [
-          "enable"
-        ],
+        "required": ["enable"],
         "description": "The blob service properties for Last access time based tracking policy."
       },
       "LeaseContainerRequest": {
         "properties": {
           "action": {
             "type": "string",
-            "enum": [
-              "Acquire",
-              "Renew",
-              "Change",
-              "Release",
-              "Break"
-            ],
+            "enum": ["Acquire", "Renew", "Change", "Release", "Break"],
             "x-ms-enum": {
               "name": "LeaseContainerRequestAction",
               "modelAsString": true
@@ -1784,9 +1618,7 @@
             "description": "Optional for acquire, required for change. Proposed lease ID, in a GUID string format."
           }
         },
-        "required": [
-          "action"
-        ],
+        "required": ["action"],
         "description": "Lease Container request schema."
       },
       "LeaseContainerResponse": {
@@ -1944,10 +1776,7 @@
         "readOnly": true,
         "type": "string",
         "description": "The SKU tier. This is based on the SKU name.",
-        "enum": [
-          "Standard",
-          "Premium"
-        ],
+        "enum": ["Standard", "Premium"],
         "x-ms-enum": {
           "name": "SkuTier",
           "modelAsString": false
@@ -1962,9 +1791,7 @@
             "$ref": "#/components/schemas/Tier"
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "description": "The SKU of the storage account."
       },
       "AzureEntityResource": {

@@ -9,8 +9,22 @@ import {
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
-export type { Ingress, Function as FunctionConfig, FunctionOutputs, FunctionTrigger, ReadinessProbe, HttpMethod } from "./generated/index.js"
-export { IngressSchema, FunctionSchema as FunctionConfigSchema, FunctionOutputsSchema, FunctionTriggerSchema, ReadinessProbeSchema, HttpMethodSchema } from "./generated/index.js"
+export type {
+  Ingress,
+  Function as FunctionConfig,
+  FunctionOutputs,
+  FunctionTrigger,
+  ReadinessProbe,
+  HttpMethod,
+} from "./generated/index.js"
+export {
+  IngressSchema,
+  FunctionSchema as FunctionConfigSchema,
+  FunctionOutputsSchema,
+  FunctionTriggerSchema,
+  ReadinessProbeSchema,
+  HttpMethodSchema,
+} from "./generated/index.js"
 
 /**
  * Represents a serverless function that executes code in response to triggers or direct invocations.
@@ -141,21 +155,21 @@ export class Function {
    * Configures a readiness probe for the function.
    * The probe will be executed after provisioning/update to verify the function is ready.
    * Only works with functions that have Public ingress.
-   * 
+   *
    * @example
    * ```typescript
    * const probe: ReadinessProbe = {
    *   method: "GET",
    *   path: "/health"
    * };
-   * 
+   *
    * const func = new Function("my-api")
    *   .code({ type: "image", image: "my-api:latest" })
    *   .ingress("public")
    *   .readinessProbe(probe)
    *   .build();
    * ```
-   * 
+   *
    * @param probe The readiness probe configuration.
    * @returns The Function builder instance.
    */
@@ -180,7 +194,7 @@ export class Function {
   /**
    * Adds a trigger to the function. Functions can have multiple triggers.
    * Each trigger will independently invoke the function when its conditions are met.
-   * 
+   *
    * @example
    * ```typescript
    * // Queue trigger
@@ -188,20 +202,20 @@ export class Function {
    *   type: "queue",
    *   queue: myQueue.ref()
    * };
-   * 
-   * // Schedule trigger  
+   *
+   * // Schedule trigger
    * const scheduleTrigg: FunctionTrigger = {
    *   type: "schedule",
    *   cron: "0 * * * *"
    * };
-   * 
+   *
    * const func = new Function("my-func")
    *   .code({ type: "image", image: "my-image:latest" })
    *   .trigger(queueTrigger)
    *   .trigger(scheduleTrigger)
    *   .build();
    * ```
-   * 
+   *
    * @param trigger The trigger configuration.
    * @returns The Function builder instance.
    */

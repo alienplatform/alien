@@ -8,8 +8,8 @@
 import { spawn } from "node:child_process"
 import { existsSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import getPort from "get-port"
 import { AlienError } from "@aliendotdev/core"
+import getPort from "get-port"
 import { Deployment } from "./deployment.js"
 import { TestingOperationFailedError, withTestingContext } from "./errors.js"
 import type { DeployOptions, DeploymentInfo } from "./types.js"
@@ -66,12 +66,7 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
   const cliPath = getAlienCliPath(options.app)
 
   // Build args: alien dev --platform <p> --no-tui --port <port> [--config <f>] [--env K=V]... [--secret K=V]...
-  const args = [
-    "dev",
-    "--platform", options.platform,
-    "--no-tui",
-    "--port", String(port),
-  ]
+  const args = ["dev", "--platform", options.platform, "--no-tui", "--port", String(port)]
 
   if (options.config) {
     args.push("--config", options.config)
@@ -157,11 +152,11 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
 
   let exited = false
   let exitCode: number | null = null
-  proc.on("exit", (code) => {
+  proc.on("exit", code => {
     exited = true
     exitCode = code
   })
-  proc.on("error", (err) => {
+  proc.on("error", err => {
     exited = true
     exitCode = 1
     stderr += `\nFailed to spawn alien CLI: ${err.message}`
@@ -171,7 +166,12 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
 
   // Wait for the deployment to reach "running" status
   try {
-    const info = await waitForDeploymentRunning(serverUrl, () => exited, () => exitCode, () => stderr)
+    const info = await waitForDeploymentRunning(
+      serverUrl,
+      () => exited,
+      () => exitCode,
+      () => stderr,
+    )
 
     const publicUrl = findPublicUrl(info.resources)
     if (!publicUrl) {
@@ -246,7 +246,7 @@ async function waitForDeploymentRunning(
       // Expected while server is starting
     }
 
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise(r => setTimeout(r, 500))
   }
 
   // Poll deployments until one is running
@@ -270,7 +270,9 @@ async function waitForDeploymentRunning(
       })
 
       if (listResp.ok) {
-        const list = (await listResp.json()) as { items: Array<{ id: string; name: string; status: string }> }
+        const list = (await listResp.json()) as {
+          items: Array<{ id: string; name: string; status: string }>
+        }
         const deployment = list.items[0]
 
         if (deployment) {
@@ -305,7 +307,7 @@ async function waitForDeploymentRunning(
       // Network errors are expected while things are starting
     }
 
-    await new Promise((r) => setTimeout(r, pollInterval))
+    await new Promise(r => setTimeout(r, pollInterval))
   }
 
   throw new AlienError(
@@ -325,14 +327,18 @@ function findPublicUrl(
 ): string | undefined {
   // Prefer router/gateway/proxy resources
   for (const [name, resource] of Object.entries(resources)) {
-    if (resource.publicUrl && (name.includes("router") || name.includes("gateway") || name.includes("proxy"))) {
+    if (
+      resource.publicUrl &&
+      (name.includes("router") || name.includes("gateway") || name.includes("proxy"))
+    ) {
       return resource.publicUrl
     }
   }
 
   // Fallback to last resource with publicUrl
-  const publicResources = Object.entries(resources)
-    .filter(([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.publicUrl)
+  const publicResources = Object.entries(resources).filter(
+    ([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.publicUrl,
+  )
   if (publicResources.length > 0) {
     return publicResources[publicResources.length - 1]![1].publicUrl
   }

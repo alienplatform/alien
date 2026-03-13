@@ -15,14 +15,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"
-            ]
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
           }
         }
       }
@@ -30,10 +26,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "datastore.entities.get",
-            "datastore.entities.list"
-          ]
+          "permissions": ["datastore.entities.get", "datastore.entities.list"]
         },
         "binding": {
           "stack": {
@@ -56,12 +49,8 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/tableServices/read"
-          ],
-          "dataActions": [
-            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read"
-          ]
+          "actions": ["Microsoft.Storage/storageAccounts/tableServices/read"],
+          "dataActions": ["Microsoft.Storage/storageAccounts/tableServices/tables/entities/read"]
         },
         "binding": {
           "stack": {

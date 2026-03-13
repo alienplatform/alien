@@ -17,14 +17,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
-            ]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
           }
         }
       }

@@ -17,14 +17,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
           }
         }
       }
@@ -72,9 +68,7 @@
             "Microsoft.ContainerRegistry/registries/quarantine/write",
             "Microsoft.ContainerRegistry/registries/sign/write"
           ],
-          "dataActions": [
-            "Microsoft.ContainerRegistry/registries/pull/read"
-          ]
+          "dataActions": ["Microsoft.ContainerRegistry/registries/pull/read"]
         },
         "binding": {
           "stack": {

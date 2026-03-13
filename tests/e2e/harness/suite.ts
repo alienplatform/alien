@@ -7,8 +7,8 @@
 
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { deploy, type Deployment, type Platform } from "@aliendotdev/testing"
-import { describe, it, beforeAll, afterAll } from "vitest"
+import { type Deployment, type Platform, deploy } from "@aliendotdev/testing"
+import { afterAll, beforeAll, describe, it } from "vitest"
 import * as checks from "../checks/index.js"
 import { getCredentials, getE2EConfig } from "./config.js"
 
@@ -35,9 +35,7 @@ export function defineDeploymentSuite(options: SuiteOptions) {
     beforeAll(async () => {
       const credentials = getCredentials(options.platform)
       const appPath = path.resolve(e2eRoot, options.app)
-      const configFile = isLocal
-        ? (options.devConfig || "alien.config.dev.ts")
-        : options.config
+      const configFile = isLocal ? options.devConfig || "alien.config.dev.ts" : options.config
 
       deployment = await deploy({
         app: appPath,

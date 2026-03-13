@@ -5,9 +5,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Resources/subscriptions/resourceGroups/read"
-          ]
+          "actions": ["Microsoft.Resources/subscriptions/resourceGroups/read"]
         },
         "binding": {
           "stack": {

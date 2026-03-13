@@ -1,8 +1,8 @@
-import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { metricsHistory, syncStatus } from "@/lib/schema"
-import { eq, desc } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
+import { headers } from "next/headers"
 
 export async function GET(request: Request) {
   const session = await auth.api.getSession({
@@ -54,9 +54,7 @@ export async function GET(request: Request) {
     avgTimeToFirstReviewHours: latestMetrics.avgTimeToFirstReviewHours || 0,
     avgMergeTimeHours: latestMetrics.avgMergeTimeHours || 0,
     reviewThroughputScore: latestMetrics.reviewThroughputScore || 0,
-    churnHotspots: latestMetrics.churnHotspots
-      ? JSON.parse(latestMetrics.churnHotspots)
-      : [],
+    churnHotspots: latestMetrics.churnHotspots ? JSON.parse(latestMetrics.churnHotspots) : [],
   }
 
   return Response.json({
@@ -64,4 +62,3 @@ export async function GET(request: Request) {
     syncStatus: sync,
   })
 }
-

@@ -4,8 +4,8 @@
  * Uses @aliendotdev/testing with the dev deployer for pure local command testing.
  */
 
+import { type Deployment, deploy } from "@aliendotdev/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { deploy, type Deployment } from "@aliendotdev/testing"
 
 const integrationId = "demo-repo"
 
@@ -39,7 +39,7 @@ describe("GitHub Agent Remote", () => {
 
     expect(response.ok).toBe(true)
 
-    const data = await response.json() as { status: string; timestamp: string }
+    const data = (await response.json()) as { status: string; timestamp: string }
     expect(data.status).toBe("ok")
     expect(data.timestamp).toBeDefined()
   })
@@ -68,7 +68,7 @@ describe("GitHub Agent Remote", () => {
 
     expect(response.ok).toBe(true)
 
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       integrationId: string
       pullRequests: Array<{ size: string; risk: string; aiReview: unknown }>
     }

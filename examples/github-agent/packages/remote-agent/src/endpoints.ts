@@ -1,10 +1,10 @@
 import type { Hono } from "hono"
+import { generateAIReview } from "./ai-reviews.js"
 import { classifyPullRequests, fetchPullRequests } from "./github.js"
 import { loadIntegrationConfig } from "./integrations.js"
-import { generateAIReview } from "./ai-reviews.js"
 
 export function registerEndpoints(app: Hono): void {
-  app.get("/health", (c) => {
+  app.get("/health", c => {
     console.log("health")
     return c.json({
       status: "ok",
@@ -12,7 +12,7 @@ export function registerEndpoints(app: Hono): void {
     })
   })
 
-  app.get("/prs", async (c) => {
+  app.get("/prs", async c => {
     const integrationId = c.req.query("integrationId")?.trim()
 
     if (!integrationId) {

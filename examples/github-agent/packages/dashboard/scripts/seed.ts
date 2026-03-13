@@ -1,10 +1,11 @@
+import { hash } from "bcrypt"
 import { drizzle } from "drizzle-orm/node-postgres"
 import { Pool } from "pg"
 import * as schema from "../lib/schema"
-import { hash } from "bcrypt"
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5435/github_agent",
+  connectionString:
+    process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5435/github_agent",
 })
 
 const db = drizzle(pool, { schema })
@@ -14,7 +15,7 @@ async function seed() {
 
   // Create demo user
   const passwordHash = await hash("demo1234", 10)
-  
+
   const existingUser = await db.query.user.findFirst({
     where: (user, { eq }) => eq(user.email, "demo@example.com"),
   })
@@ -48,8 +49,7 @@ async function seed() {
   process.exit(0)
 }
 
-seed().catch((error) => {
+seed().catch(error => {
   console.error("Error seeding database:", error)
   process.exit(1)
 })
-

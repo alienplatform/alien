@@ -1,14 +1,14 @@
-import { headers } from "next/headers"
-import { redirect } from "next/navigation"
+import { AppSidebar } from "@/components/app-sidebar"
+import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb"
+import { Separator } from "@/components/ui/separator"
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { Toaster } from "@/components/ui/sonner"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { member, organization } from "@/lib/schema"
 import { eq } from "drizzle-orm"
-import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
-import { AppSidebar } from "@/components/app-sidebar"
-import { Separator } from "@/components/ui/separator"
-import { Toaster } from "@/components/ui/sonner"
-import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb"
+import { headers } from "next/headers"
+import { redirect } from "next/navigation"
 
 export default async function DashboardLayout({
   children,
@@ -72,19 +72,13 @@ export default async function DashboardLayout({
         <header className="flex h-[--header-height] shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="flex items-center gap-2 px-4 py-2">
             <SidebarTrigger className="-ml-1" />
-            <Separator
-              orientation="vertical"
-              className="mr-2 data-[orientation=vertical]:h-4"
-            />
+            <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
             <DynamicBreadcrumb />
           </div>
         </header>
-        <main className="flex flex-1 flex-col">
-          {children}
-        </main>
+        <main className="flex flex-1 flex-col">{children}</main>
       </SidebarInset>
       <Toaster />
     </SidebarProvider>
   )
 }
-

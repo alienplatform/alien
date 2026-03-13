@@ -1,12 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -15,6 +11,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -23,20 +21,28 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { toast } from "sonner"
 import {
+  useAddIntegration,
+  useAgents,
+  useAnalyzeIntegration,
+  useIntegrations,
+  useUpdateIntegration,
+} from "@/lib/queries"
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
   IconBrandGithub,
+  IconLoader2,
+  IconLock,
   IconPlus,
   IconRefresh,
-  IconLock,
-  IconLoader2,
   IconServer,
-  IconAlertCircle,
   IconSettings,
-  IconAlertTriangle,
 } from "@tabler/icons-react"
 import Link from "next/link"
-import { useIntegrations, useAgents, useAddIntegration, useAnalyzeIntegration, useUpdateIntegration } from "@/lib/queries"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
 
 interface Integration {
   id: string
@@ -98,7 +104,7 @@ export default function IntegrationsPage() {
 
   const handleAddIntegration = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!selectedAgentId) {
       toast.error("Please select an agent")
       return
@@ -114,9 +120,9 @@ export default function IntegrationsPage() {
         baseUrl,
         agentId: selectedAgentId,
       })
-      
+
       toast.success("🎉 Integration added successfully!", {
-        description: `${owner}/${repo} is now connected. ${wasFirstIntegration ? 'Redirecting to dashboard...' : 'Click "Analyze" to fetch metrics.'}`,
+        description: `${owner}/${repo} is now connected. ${wasFirstIntegration ? "Redirecting to dashboard..." : 'Click "Analyze" to fetch metrics.'}`,
         duration: wasFirstIntegration ? 2000 : 5000,
       })
       setAddDialogOpen(false)
@@ -141,15 +147,12 @@ export default function IntegrationsPage() {
       toast.error("Cannot analyze inactive integration. Please assign an agent first.")
       return
     }
-    
-    toast.promise(
-      analyzeIntegration.mutateAsync(integration.id),
-      {
-        loading: `Analyzing ${integration.owner}/${integration.repo}...`,
-        success: "Analysis complete! Check the dashboard for updated metrics.",
-        error: "Analysis failed",
-      }
-    )
+
+    toast.promise(analyzeIntegration.mutateAsync(integration.id), {
+      loading: `Analyzing ${integration.owner}/${integration.repo}...`,
+      success: "Analysis complete! Check the dashboard for updated metrics.",
+      error: "Analysis failed",
+    })
   }
 
   const handleEditIntegration = (integration: Integration) => {
@@ -159,7 +162,7 @@ export default function IntegrationsPage() {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!editingIntegration || !editSelectedAgentId) {
       toast.error("Please select an agent")
       return
@@ -170,7 +173,7 @@ export default function IntegrationsPage() {
         integrationId: editingIntegration.id,
         agentId: editSelectedAgentId,
       })
-      
+
       toast.success("Integration updated successfully")
       setEditDialogOpen(false)
       setEditingIntegration(null)
@@ -231,14 +234,14 @@ export default function IntegrationsPage() {
                     The agent that will analyze this repository.
                   </p>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="owner">Owner / Organization</Label>
                   <Input
                     id="owner"
                     placeholder="acme-corp"
                     value={owner}
-                    onChange={(e) => setOwner(e.target.value)}
+                    onChange={e => setOwner(e.target.value)}
                     required
                   />
                 </div>
@@ -248,7 +251,7 @@ export default function IntegrationsPage() {
                     id="repo"
                     placeholder="api"
                     value={repo}
-                    onChange={(e) => setRepo(e.target.value)}
+                    onChange={e => setRepo(e.target.value)}
                     required
                   />
                 </div>
@@ -261,7 +264,7 @@ export default function IntegrationsPage() {
                     type="password"
                     placeholder="ghp_xxx..."
                     value={token}
-                    onChange={(e) => setToken(e.target.value)}
+                    onChange={e => setToken(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
                     Leave blank for demo mode with mock data.
@@ -275,7 +278,7 @@ export default function IntegrationsPage() {
                     id="baseUrl"
                     placeholder="https://github.mycompany.com"
                     value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
+                    onChange={e => setBaseUrl(e.target.value)}
                   />
                 </div>
                 <div className="rounded-lg bg-green-500/10 border border-green-500/20 p-3 flex items-start gap-2">
@@ -360,10 +363,9 @@ export default function IntegrationsPage() {
             </div>
             <h3 className="text-xl font-semibold mb-2">No integrations yet</h3>
             <p className="text-muted-foreground text-center max-w-md mb-6">
-              {hasNoAgents 
+              {hasNoAgents
                 ? "Deploy an agent first, then add GitHub integrations to start analyzing."
-                : "Add a GitHub integration to start analyzing your code review metrics."
-              }
+                : "Add a GitHub integration to start analyzing your code review metrics."}
             </p>
             {hasNoAgents ? (
               <Button asChild>
@@ -383,13 +385,20 @@ export default function IntegrationsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {integrations.map((integration: Integration) => (
-            <Card key={integration.id} className={`relative overflow-hidden ${!integration.isActive ? 'opacity-75 border-yellow-500/30' : ''}`}>
+            <Card
+              key={integration.id}
+              className={`relative overflow-hidden ${!integration.isActive ? "opacity-75 border-yellow-500/30" : ""}`}
+            >
               <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl" />
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 ${integration.isActive ? 'bg-primary/10 ring-primary/20' : 'bg-yellow-500/10 ring-yellow-500/20'}`}>
-                      <IconBrandGithub className={`h-5 w-5 ${integration.isActive ? 'text-primary' : 'text-yellow-600'}`} />
+                    <div
+                      className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 ${integration.isActive ? "bg-primary/10 ring-primary/20" : "bg-yellow-500/10 ring-yellow-500/20"}`}
+                    >
+                      <IconBrandGithub
+                        className={`h-5 w-5 ${integration.isActive ? "text-primary" : "text-yellow-600"}`}
+                      />
                     </div>
                     <div>
                       <CardTitle className="text-base font-semibold">
@@ -397,7 +406,10 @@ export default function IntegrationsPage() {
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2 mt-1 flex-wrap">
                         {!integration.isActive && (
-                          <Badge variant="outline" className="border-yellow-500/50 text-yellow-600 gap-1">
+                          <Badge
+                            variant="outline"
+                            className="border-yellow-500/50 text-yellow-600 gap-1"
+                          >
                             <IconAlertTriangle className="h-3 w-3" />
                             Inactive
                           </Badge>
@@ -420,7 +432,8 @@ export default function IntegrationsPage() {
                   <div className="mb-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-3 flex items-start gap-2">
                     <IconAlertTriangle className="h-4 w-4 text-yellow-600 mt-0.5 shrink-0" />
                     <div className="text-xs text-yellow-700 dark:text-yellow-400">
-                      The agent for this integration is no longer available. Assign a new agent to continue.
+                      The agent for this integration is no longer available. Assign a new agent to
+                      continue.
                     </div>
                   </div>
                 )}
@@ -484,7 +497,7 @@ export default function IntegrationsPage() {
                 The agent that will analyze this repository.
               </p>
             </div>
-            
+
             {!editingIntegration?.isActive && (
               <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-3 flex items-start gap-2">
                 <IconAlertTriangle className="h-4 w-4 text-yellow-600 mt-0.5 shrink-0" />
@@ -493,7 +506,7 @@ export default function IntegrationsPage() {
                 </div>
               </div>
             )}
-            
+
             <div className="flex justify-end gap-2 pt-2">
               <Button type="button" variant="outline" onClick={() => setEditDialogOpen(false)}>
                 Cancel

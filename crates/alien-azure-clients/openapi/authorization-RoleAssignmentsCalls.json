@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -583,13 +581,7 @@
           "principalType": {
             "type": "string",
             "description": "The principal type of the assigned principal ID.",
-            "enum": [
-              "User",
-              "Group",
-              "ServicePrincipal",
-              "ForeignGroup",
-              "Device"
-            ],
+            "enum": ["User", "Group", "ServicePrincipal", "ForeignGroup", "Device"],
             "default": "User",
             "x-ms-enum": {
               "name": "PrincipalType",
@@ -633,10 +625,7 @@
             "description": "Id of the delegated managed identity resource"
           }
         },
-        "required": [
-          "roleDefinitionId",
-          "principalId"
-        ],
+        "required": ["roleDefinitionId", "principalId"],
         "type": "object",
         "description": "Role assignment properties."
       },
@@ -671,9 +660,7 @@
             "$ref": "#/components/schemas/RoleAssignmentProperties"
           }
         },
-        "required": [
-          "properties"
-        ],
+        "required": ["properties"],
         "type": "object",
         "description": "Role assignment create parameters."
       },
@@ -702,10 +689,7 @@
             "items": {
               "$ref": "#/components/schemas/ErrorDetail"
             },
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ],
+            "x-ms-identifiers": ["message", "target"],
             "description": "The error details."
           },
           "additionalInfo": {

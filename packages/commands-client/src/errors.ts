@@ -68,8 +68,7 @@ export const CommandExpiredError = defineError({
     commandId: z.string(),
     command: z.string(),
   }),
-  message: ({ command }) =>
-    `Command '${command}' expired before completion`,
+  message: ({ command }) => `Command '${command}' expired before completion`,
   retryable: false,
   internal: false,
   httpStatusCode: 410,
@@ -85,8 +84,7 @@ export const StorageOperationFailedError = defineError({
     url: z.string(),
     reason: z.string(),
   }),
-  message: ({ operation, reason }) =>
-    `Storage ${operation} failed: ${reason}`,
+  message: ({ operation, reason }) => `Storage ${operation} failed: ${reason}`,
   retryable: true,
   internal: false,
   httpStatusCode: 500,
@@ -102,8 +100,7 @@ export const ResponseDecodingFailedError = defineError({
     command: z.string(),
     reason: z.string(),
   }),
-  message: ({ command, reason }) =>
-    `Failed to decode response for command '${command}': ${reason}`,
+  message: ({ command, reason }) => `Failed to decode response for command '${command}': ${reason}`,
   retryable: false,
   internal: false,
   httpStatusCode: 500,

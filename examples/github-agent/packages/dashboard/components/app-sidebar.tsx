@@ -1,18 +1,18 @@
 "use client"
 
-import * as React from "react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
 import {
   IconBrandGithub,
   IconChartBar,
   IconDashboard,
+  IconHelp,
+  IconLogout,
   IconPlug,
   IconServer,
   IconSettings,
-  IconHelp,
-  IconLogout,
 } from "@tabler/icons-react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import type * as React from "react"
 
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -77,10 +77,15 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   activeOrganizationId?: string | null
 }
 
-export function AppSidebar({ user, organizations = [], activeOrganizationId, ...props }: AppSidebarProps) {
+export function AppSidebar({
+  user,
+  organizations = [],
+  activeOrganizationId,
+  ...props
+}: AppSidebarProps) {
   const pathname = usePathname()
 
-  const navMainWithActive = navMain.map((item) => ({
+  const navMainWithActive = navMain.map(item => ({
     ...item,
     isActive: pathname === item.url || (item.url !== "/" && pathname.startsWith(item.url)),
   }))
@@ -93,10 +98,7 @@ export function AppSidebar({ user, organizations = [], activeOrganizationId, ...
         ) : (
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                className="data-[slot=sidebar-menu-button]:!p-1.5"
-              >
+              <SidebarMenuButton asChild className="data-[slot=sidebar-menu-button]:!p-1.5">
                 <Link href="/">
                   <div className="bg-primary text-primary-foreground flex size-7 items-center justify-center rounded-md">
                     <IconBrandGithub className="size-4" />

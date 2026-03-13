@@ -1,9 +1,9 @@
 import {
+  type PermissionsConfig,
+  type ResourceEntry,
   type ResourceLifecycle,
   type Stack as StackConfig,
-  type ResourceEntry,
   StackSchema,
-  type PermissionsConfig,
 } from "./generated/index.js"
 import type { Resource } from "./resource.js"
 

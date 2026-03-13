@@ -17,8 +17,8 @@ const container = new alien.Container("test-alien-container")
     src: "./",
     toolchain: {
       type: "rust",
-      binaryName: "alien-test-server"
-    }
+      binaryName: "alien-test-server",
+    },
   })
   .memory("512Mi")
   .cpu(0.5)
@@ -43,7 +43,7 @@ const stack = new alien.Stack("test-alien-stack")
       execution: {
         "*": [
           "storage/data-read",
-          "storage/data-write", 
+          "storage/data-write",
           "build/execute",
           "artifact-registry/pull",
           "artifact-registry/push",
@@ -54,12 +54,12 @@ const stack = new alien.Stack("test-alien-stack")
           "kv/data-write",
           "queue/data-read",
           "queue/data-write",
-          "function/execute"
+          "function/execute",
         ],
       },
       "build-execution": {
-        "*": ["build/logs-and-artifacts"]
-      }
+        "*": ["build/logs-and-artifacts"],
+      },
     },
   })
   .add(storage, "frozen")
@@ -72,6 +72,3 @@ const stack = new alien.Stack("test-alien-stack")
   .build()
 
 export default stack
-
-
-

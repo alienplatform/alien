@@ -5,9 +5,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/read"
-          ]
+          "actions": ["Microsoft.Storage/storageAccounts/read"]
         },
         "binding": {
           "stack": {

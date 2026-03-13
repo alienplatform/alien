@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -1049,12 +1047,8 @@
               "type": "Microsoft.ServiceBus/namespaces/privateLinkResources",
               "properties": {
                 "groupId": "namespace",
-                "requiredMembers": [
-                  "namespace"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.servicebus.windows.net"
-                ]
+                "requiredMembers": ["namespace"],
+                "requiredZoneNames": ["privatelink.servicebus.windows.net"]
               }
             }
           ]
@@ -1349,11 +1343,7 @@
           "minimumTlsVersion": {
             "type": "string",
             "description": "The minimum TLS version for the cluster to support, e.g. '1.2'",
-            "enum": [
-              "1.0",
-              "1.1",
-              "1.2"
-            ],
+            "enum": ["1.0", "1.1", "1.2"],
             "x-ms-enum": {
               "name": "TlsVersion",
               "modelAsString": true
@@ -1392,10 +1382,7 @@
           "zoneRedundant": {
             "type": "boolean",
             "description": "This property reflects if zone redundancy has been enabled for namespaces in regions that support availability zones.",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "encryption": {
             "$ref": "#/components/schemas/Encryption"
@@ -1417,11 +1404,7 @@
           },
           "publicNetworkAccess": {
             "description": "This determines if traffic is allowed over public network. By default it is enabled.",
-            "enum": [
-              "Enabled",
-              "Disabled",
-              "SecuredByPerimeter"
-            ],
+            "enum": ["Enabled", "Disabled", "SecuredByPerimeter"],
             "type": "string",
             "x-ms-enum": {
               "name": "PublicNetworkAccess",
@@ -1497,11 +1480,7 @@
           "name": {
             "type": "string",
             "description": "Name of this SKU.",
-            "enum": [
-              "Basic",
-              "Standard",
-              "Premium"
-            ],
+            "enum": ["Basic", "Standard", "Premium"],
             "x-ms-enum": {
               "name": "SkuName",
               "modelAsString": false
@@ -1510,11 +1489,7 @@
           "tier": {
             "type": "string",
             "description": "The billing tier of this particular SKU.",
-            "enum": [
-              "Basic",
-              "Standard",
-              "Premium"
-            ],
+            "enum": ["Basic", "Standard", "Premium"],
             "x-ms-enum": {
               "name": "SkuTier",
               "modelAsString": false
@@ -1526,9 +1501,7 @@
             "description": "Messaging units for your service bus premium namespace. Valid capacities are {1, 2, 4, 8, 16} multiples of your properties.premiumMessagingPartitions setting. For example, If properties.premiumMessagingPartitions is 1 then possible capacity values are 1, 2, 4, 8, and 16. If properties.premiumMessagingPartitions is 4 then possible capacity values are 4, 8, 16, 32 and 64"
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "description": "SKU of the namespace."
       },
       "Identity": {
@@ -1547,12 +1520,7 @@
           },
           "type": {
             "description": "Type of managed service identity.",
-            "enum": [
-              "SystemAssigned",
-              "UserAssigned",
-              "SystemAssigned, UserAssigned",
-              "None"
-            ],
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
             "type": "string",
             "x-ms-enum": {
               "name": "ManagedServiceIdentityType",
@@ -1603,9 +1571,7 @@
             "type": "string",
             "description": "Enumerates the possible value of keySource for Encryption",
             "default": "Microsoft.KeyVault",
-            "enum": [
-              "Microsoft.KeyVault"
-            ],
+            "enum": ["Microsoft.KeyVault"],
             "x-ms-enum": {
               "name": "keySource",
               "modelAsString": false
@@ -1668,14 +1634,7 @@
           },
           "provisioningState": {
             "description": "Provisioning state of the Private Endpoint Connection.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Canceled",
-              "Failed"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Canceled", "Failed"],
             "type": "string",
             "x-ms-enum": {
               "name": "EndPointProvisioningState",
@@ -1700,12 +1659,7 @@
         "properties": {
           "status": {
             "description": "Status of the connection.",
-            "enum": [
-              "Pending",
-              "Approved",
-              "Rejected",
-              "Disconnected"
-            ],
+            "enum": ["Pending", "Approved", "Rejected", "Disconnected"],
             "type": "string",
             "x-ms-enum": {
               "name": "PrivateLinkConnectionStatus",
@@ -1892,10 +1846,7 @@
         "properties": {
           "location": {
             "type": "string",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ],
+            "x-ms-mutability": ["read", "create"],
             "description": "The Geo-location where the resource lives"
           },
           "tags": {
@@ -1903,11 +1854,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["read", "create", "update"],
             "description": "Resource tags"
           }
         },
@@ -1916,9 +1863,7 @@
             "$ref": "#/components/schemas/Resource"
           }
         ],
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "description": "The Resource definition."
       },
       "systemData": {
@@ -1933,12 +1878,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1955,12 +1895,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true

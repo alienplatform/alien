@@ -17,8 +17,8 @@ const fn = new alien.Function("test-alien-function")
     src: "./",
     toolchain: {
       type: "rust",
-      binaryName: "alien-test-server"
-    }
+      binaryName: "alien-test-server",
+    },
   })
   .memoryMb(512)
   .timeoutSeconds(180)
@@ -46,7 +46,7 @@ const stack = new alien.Stack("test-alien-stack")
       execution: {
         "*": [
           "storage/data-read",
-          "storage/data-write", 
+          "storage/data-write",
           "build/execute",
           "artifact-registry/pull",
           "artifact-registry/push",
@@ -57,12 +57,12 @@ const stack = new alien.Stack("test-alien-stack")
           "kv/data-write",
           "queue/data-read",
           "queue/data-write",
-          "function/execute"
+          "function/execute",
         ],
       },
       "build-execution": {
-        "*": ["build/logs-and-artifacts"]
-      }
+        "*": ["build/logs-and-artifacts"],
+      },
     },
   })
   .add(storage, "frozen")
@@ -75,6 +75,3 @@ const stack = new alien.Stack("test-alien-stack")
   .build()
 
 export default stack
-
-
-

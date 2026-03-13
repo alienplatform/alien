@@ -5,20 +5,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "sts:AssumeRole"
-          ]
+          "actions": ["sts:AssumeRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
           }
         }
       }
@@ -26,9 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "iam.serviceAccounts.getAccessToken"
-          ]
+          "permissions": ["iam.serviceAccounts.getAccessToken"]
         },
         "binding": {
           "stack": {
@@ -44,10 +36,9 @@
         }
       }
     ]
-    // Note: Azure is intentionally not included here. Azure impersonation works differently - 
+    // Note: Azure is intentionally not included here. Azure impersonation works differently -
     // the managed identity must be attached to the workload (Container App, VM, etc.) at provisioning time.
     // The workload can then request tokens for any attached identity by specifying its client_id.
     // No additional permissions are needed at runtime - the attachment itself grants the access.
   }
 }
-

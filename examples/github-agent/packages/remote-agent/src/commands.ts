@@ -1,12 +1,7 @@
 import { command as arcCommand } from "@aliendotdev/bindings"
-import type { IntegrationConfig, LabelResult } from "./types.js"
-import {
-  applyLabels,
-  classifyPullRequests,
-  computeMetrics,
-  fetchPullRequests,
-} from "./github.js"
+import { applyLabels, classifyPullRequests, computeMetrics, fetchPullRequests } from "./github.js"
 import { loadIntegrationConfig, saveIntegrationConfig } from "./integrations.js"
+import type { IntegrationConfig, LabelResult } from "./types.js"
 
 const command = arcCommand as unknown as <TParams, TResponse>(
   name: string,

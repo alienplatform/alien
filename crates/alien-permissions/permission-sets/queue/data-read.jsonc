@@ -6,22 +6,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "sqs:ReceiveMessage",
-            "sqs:GetQueueAttributes",
-            "sqs:GetQueueUrl"
-          ]
+          "actions": ["sqs:ReceiveMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
-            ]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
           }
         }
       }
@@ -29,10 +21,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "pubsub.subscriptions.consume",
-            "pubsub.subscriptions.get"
-          ]
+          "permissions": ["pubsub.subscriptions.consume", "pubsub.subscriptions.get"]
         },
         "binding": {
           "stack": {
@@ -59,9 +48,7 @@
             "Microsoft.ServiceBus/namespaces/read",
             "Microsoft.ServiceBus/namespaces/queues/read"
           ],
-          "dataActions": [
-            "Microsoft.ServiceBus/namespaces/messages/receive/action"
-          ]
+          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/receive/action"]
         },
         "binding": {
           "stack": {

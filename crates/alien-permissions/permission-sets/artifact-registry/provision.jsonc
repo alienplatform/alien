@@ -27,14 +27,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
           }
         }
       }

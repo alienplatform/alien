@@ -1,8 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useImperativeHandle, useRef } from "react"
 import confetti from "canvas-confetti"
 import type { Options as ConfettiOptions } from "canvas-confetti"
+import { useCallback, useEffect, useImperativeHandle, useRef } from "react"
 
 export interface ConfettiRef {
   fire: (options?: ConfettiOptions) => void
@@ -53,7 +53,7 @@ export const Confetti = ({
         })
       }
     },
-    [options]
+    [options],
   )
 
   useImperativeHandle(
@@ -61,23 +61,13 @@ export const Confetti = ({
     () => ({
       fire: makeShot,
     }),
-    [makeShot]
+    [makeShot],
   )
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className={className}
-      onMouseEnter={onMouseEnter}
-    />
-  )
+  return <canvas ref={canvasRef} className={className} onMouseEnter={onMouseEnter} />
 }
 
-export function ConfettiButton({
-  options,
-  children,
-  className = "",
-}: ConfettiButtonProps) {
+export function ConfettiButton({ options, children, className = "" }: ConfettiButtonProps) {
   const confettiRef = useRef<ConfettiRef>(null)
 
   const handleClick = () => {
@@ -96,4 +86,3 @@ export function ConfettiButton({
     </>
   )
 }
-

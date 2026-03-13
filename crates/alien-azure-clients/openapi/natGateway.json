@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -552,10 +550,7 @@
           "name": {
             "type": "string",
             "description": "Name of Nat Gateway SKU.",
-            "enum": [
-              "Standard",
-              "StandardV2"
-            ],
+            "enum": ["Standard", "StandardV2"],
             "x-ms-enum": {
               "name": "NatGatewaySkuName",
               "modelAsString": true
@@ -744,12 +739,7 @@
         "type": "string",
         "readOnly": true,
         "description": "The current provisioning state.",
-        "enum": [
-          "Succeeded",
-          "Updating",
-          "Deleting",
-          "Failed"
-        ],
+        "enum": ["Succeeded", "Updating", "Deleting", "Failed"],
         "x-ms-enum": {
           "name": "ProvisioningState",
           "modelAsString": true

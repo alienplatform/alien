@@ -12,9 +12,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "tags": [
@@ -523,12 +521,8 @@
               "type": "Microsoft.Compute/diskAccesses/privateLinkResources",
               "properties": {
                 "groupId": "disks",
-                "requiredMembers": [
-                  "diskAccess_1"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.blob.core.windows.net"
-                ]
+                "requiredMembers": ["diskAccess_1"],
+                "requiredZoneNames": ["privatelink.blob.core.windows.net"]
               }
             }
           ]
@@ -2829,11 +2823,7 @@
       "AccessLevel": {
         "type": "string",
         "description": "The Access Level, accepted values include None, Read, Write.",
-        "enum": [
-          "None",
-          "Read",
-          "Write"
-        ],
+        "enum": ["None", "Read", "Write"],
         "x-ms-enum": {
           "name": "AccessLevel",
           "modelAsString": true,
@@ -2877,10 +2867,7 @@
       "Architecture": {
         "type": "string",
         "description": "CPU architecture supported by an OS disk.",
-        "enum": [
-          "x64",
-          "Arm64"
-        ],
+        "enum": ["x64", "Arm64"],
         "x-ms-enum": {
           "name": "Architecture",
           "modelAsString": true,
@@ -2908,10 +2895,7 @@
       "AvailabilityPolicyDiskDelay": {
         "type": "string",
         "description": "Determines on how to handle disks with slow I/O.",
-        "enum": [
-          "None",
-          "AutomaticReattach"
-        ],
+        "enum": ["None", "AutomaticReattach"],
         "x-ms-enum": {
           "name": "AvailabilityPolicyDiskDelay",
           "modelAsString": true,
@@ -2941,17 +2925,12 @@
             "description": "Indicates the error message if the background copy of a resource created via the CopyStart operation fails."
           }
         },
-        "required": [
-          "errorCode",
-          "errorMessage"
-        ]
+        "required": ["errorCode", "errorMessage"]
       },
       "CopyCompletionErrorReason": {
         "type": "string",
         "description": "Indicates the error code if the background copy of a resource created via the CopyStart operation fails.",
-        "enum": [
-          "CopySourceNotFound"
-        ],
+        "enum": ["CopySourceNotFound"],
         "x-ms-enum": {
           "name": "CopyCompletionErrorReason",
           "modelAsString": true,
@@ -3031,17 +3010,12 @@
             "minimum": 1
           }
         },
-        "required": [
-          "createOption"
-        ]
+        "required": ["createOption"]
       },
       "DataAccessAuthMode": {
         "type": "string",
         "description": "Additional authentication requirements when exporting or uploading to a disk or snapshot.",
-        "enum": [
-          "AzureActiveDirectory",
-          "None"
-        ],
+        "enum": ["AzureActiveDirectory", "None"],
         "x-ms-enum": {
           "name": "DataAccessAuthMode",
           "modelAsString": true,
@@ -3133,9 +3107,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "DiskAccessProperties": {
         "type": "object",
@@ -3271,12 +3243,7 @@
       "DiskEncryptionSetIdentityType": {
         "type": "string",
         "description": "The type of Managed Identity used by the DiskEncryptionSet. Only SystemAssigned is supported for new creations. Disk Encryption Sets can be updated with Identity type None during migration of subscription to a new Azure Active Directory tenant; it will cause the encrypted resources to lose access to the keys.",
-        "enum": [
-          "SystemAssigned",
-          "UserAssigned",
-          "SystemAssigned, UserAssigned",
-          "None"
-        ],
+        "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
         "x-ms-enum": {
           "name": "DiskEncryptionSetIdentityType",
           "modelAsString": true,
@@ -3317,9 +3284,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "DiskEncryptionSetType": {
         "type": "string",
@@ -3407,9 +3372,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "DiskProperties": {
         "type": "object",
@@ -3497,9 +3460,7 @@
               "$ref": "#/components/schemas/ShareInfoElement"
             },
             "readOnly": true,
-            "x-ms-identifiers": [
-              "vmUri"
-            ]
+            "x-ms-identifiers": ["vmUri"]
           },
           "networkAccessPolicy": {
             "$ref": "#/components/schemas/NetworkAccessPolicy"
@@ -3556,9 +3517,7 @@
             "$ref": "#/components/schemas/AvailabilityPolicy"
           }
         },
-        "required": [
-          "creationData"
-        ]
+        "required": ["creationData"]
       },
       "DiskPurchasePlan": {
         "type": "object",
@@ -3581,11 +3540,7 @@
             "description": "The Offer Promotion Code."
           }
         },
-        "required": [
-          "name",
-          "publisher",
-          "product"
-        ]
+        "required": ["name", "publisher", "product"]
       },
       "DiskRestorePoint": {
         "type": "object",
@@ -3618,9 +3573,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "DiskRestorePointProperties": {
         "type": "object",
@@ -4044,9 +3997,7 @@
               "$ref": "#/components/schemas/KeyForDiskEncryptionSet"
             },
             "readOnly": true,
-            "x-ms-identifiers": [
-              "sourceVault/id"
-            ]
+            "x-ms-identifiers": ["sourceVault/id"]
           },
           "provisioningState": {
             "type": "string",
@@ -4085,18 +4036,14 @@
             "items": {
               "$ref": "#/components/schemas/EncryptionSettingsElement"
             },
-            "x-ms-identifiers": [
-              "diskEncryptionKey/sourceVault/id"
-            ]
+            "x-ms-identifiers": ["diskEncryptionKey/sourceVault/id"]
           },
           "encryptionSettingsVersion": {
             "type": "string",
             "description": "Describes what type of encryption is used for the disks. Once this field is set, it cannot be overwritten. '1.0' corresponds to Azure Disk Encryption with AAD app.'1.1' corresponds to Azure Disk Encryption."
           }
         },
-        "required": [
-          "enabled"
-        ]
+        "required": ["enabled"]
       },
       "EncryptionSettingsElement": {
         "type": "object",
@@ -4143,10 +4090,7 @@
       "FileFormat": {
         "type": "string",
         "description": "Used to specify the file format when making request for SAS on a VHDX file format snapshot",
-        "enum": [
-          "VHD",
-          "VHDX"
-        ],
+        "enum": ["VHD", "VHDX"],
         "x-ms-enum": {
           "name": "FileFormat",
           "modelAsString": true,
@@ -4184,18 +4128,12 @@
             "$ref": "#/components/schemas/FileFormat"
           }
         },
-        "required": [
-          "access",
-          "durationInSeconds"
-        ]
+        "required": ["access", "durationInSeconds"]
       },
       "HyperVGeneration": {
         "type": "string",
         "description": "The hypervisor generation of the Virtual Machine. Applicable to OS disks only.",
-        "enum": [
-          "V1",
-          "V2"
-        ],
+        "enum": ["V1", "V2"],
         "x-ms-enum": {
           "name": "HyperVGeneration",
           "modelAsString": true,
@@ -4246,9 +4184,7 @@
             "description": "Fully versioned Key Url pointing to a key in KeyVault. Version segment of the Url is required regardless of rotationToLatestKeyVersionEnabled value."
           }
         },
-        "required": [
-          "keyUrl"
-        ]
+        "required": ["keyUrl"]
       },
       "KeyVaultAndKeyReference": {
         "type": "object",
@@ -4262,10 +4198,7 @@
             "description": "Url pointing to a key or secret in KeyVault"
           }
         },
-        "required": [
-          "sourceVault",
-          "keyUrl"
-        ]
+        "required": ["sourceVault", "keyUrl"]
       },
       "KeyVaultAndSecretReference": {
         "type": "object",
@@ -4279,19 +4212,12 @@
             "description": "Url pointing to a key or secret in KeyVault"
           }
         },
-        "required": [
-          "sourceVault",
-          "secretUrl"
-        ]
+        "required": ["sourceVault", "secretUrl"]
       },
       "NetworkAccessPolicy": {
         "type": "string",
         "description": "Policy for accessing the disk via network.",
-        "enum": [
-          "AllowAll",
-          "AllowPrivate",
-          "DenyAll"
-        ],
+        "enum": ["AllowAll", "AllowPrivate", "DenyAll"],
         "x-ms-enum": {
           "name": "NetworkAccessPolicy",
           "modelAsString": true,
@@ -4317,10 +4243,7 @@
       "OperatingSystemTypes": {
         "type": "string",
         "description": "The Operating System type.",
-        "enum": [
-          "Windows",
-          "Linux"
-        ],
+        "enum": ["Windows", "Linux"],
         "x-ms-enum": {
           "name": "OperatingSystemTypes",
           "modelAsString": false
@@ -4368,9 +4291,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "PrivateEndpointConnectionProperties": {
         "type": "object",
@@ -4386,19 +4307,12 @@
             "$ref": "#/components/schemas/PrivateEndpointConnectionProvisioningState"
           }
         },
-        "required": [
-          "privateLinkServiceConnectionState"
-        ]
+        "required": ["privateLinkServiceConnectionState"]
       },
       "PrivateEndpointConnectionProvisioningState": {
         "type": "string",
         "description": "The current provisioning state.",
-        "enum": [
-          "Succeeded",
-          "Creating",
-          "Deleting",
-          "Failed"
-        ],
+        "enum": ["Succeeded", "Creating", "Deleting", "Failed"],
         "x-ms-enum": {
           "name": "PrivateEndpointConnectionProvisioningState",
           "modelAsString": true,
@@ -4425,11 +4339,7 @@
       "PrivateEndpointServiceConnectionStatus": {
         "type": "string",
         "description": "The private endpoint connection status.",
-        "enum": [
-          "Pending",
-          "Approved",
-          "Rejected"
-        ],
+        "enum": ["Pending", "Approved", "Rejected"],
         "x-ms-enum": {
           "name": "PrivateEndpointServiceConnectionStatus",
           "modelAsString": true,
@@ -4542,10 +4452,7 @@
       "ProvisionedBandwidthCopyOption": {
         "type": "string",
         "description": "If this field is set on a snapshot and createOption is CopyStart, the snapshot will be copied at a quicker speed.",
-        "enum": [
-          "None",
-          "Enhanced"
-        ],
+        "enum": ["None", "Enhanced"],
         "x-ms-enum": {
           "name": "ProvisionedBandwidthCopyOption",
           "modelAsString": true,
@@ -4564,10 +4471,7 @@
       "PublicNetworkAccess": {
         "type": "string",
         "description": "Policy for controlling export on the disk.",
-        "enum": [
-          "Enabled",
-          "Disabled"
-        ],
+        "enum": ["Enabled", "Disabled"],
         "x-ms-enum": {
           "name": "PublicNetworkAccess",
           "modelAsString": true,
@@ -4602,9 +4506,7 @@
             "description": "The uri to fetch the next page of encrypted resources. Call ListNext() with this to fetch the next page of encrypted resources."
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "ShareInfoElement": {
         "type": "object",
@@ -4644,13 +4546,7 @@
       "SnapshotAccessState": {
         "type": "string",
         "description": "The state of snapshot which determines the access availability of the snapshot.",
-        "enum": [
-          "Unknown",
-          "Pending",
-          "Available",
-          "InstantAccess",
-          "AvailableWithInstantAccess"
-        ],
+        "enum": ["Unknown", "Pending", "Available", "InstantAccess", "AvailableWithInstantAccess"],
         "x-ms-enum": {
           "name": "SnapshotAccessState",
           "modelAsString": true,
@@ -4700,9 +4596,7 @@
             "description": "The link to the next page of items"
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "SnapshotProperties": {
         "type": "object",
@@ -4799,9 +4693,7 @@
             "$ref": "#/components/schemas/SnapshotAccessState"
           }
         },
-        "required": [
-          "creationData"
-        ]
+        "required": ["creationData"]
       },
       "SnapshotSku": {
         "type": "object",
@@ -4820,11 +4712,7 @@
       "SnapshotStorageAccountTypes": {
         "type": "string",
         "description": "The sku name.",
-        "enum": [
-          "Standard_LRS",
-          "Premium_LRS",
-          "Standard_ZRS"
-        ],
+        "enum": ["Standard_LRS", "Premium_LRS", "Standard_ZRS"],
         "x-ms-enum": {
           "name": "SnapshotStorageAccountTypes",
           "modelAsString": true,
@@ -4942,10 +4830,7 @@
       "SupportedSecurityOption": {
         "type": "string",
         "description": "Refers to the security capability of the disk supported to create a Trusted launch or Confidential VM",
-        "enum": [
-          "TrustedLaunchSupported",
-          "TrustedLaunchAndConfidentialVMSupported"
-        ],
+        "enum": ["TrustedLaunchSupported", "TrustedLaunchAndConfidentialVMSupported"],
         "x-ms-enum": {
           "name": "SupportedSecurityOption",
           "modelAsString": true,
@@ -5018,10 +4903,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiErrorBase"
             },
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ],
+            "x-ms-identifiers": ["message", "target"],
             "description": "The Api error details"
           },
           "innererror": {
@@ -5063,12 +4945,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -5085,12 +4962,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -5140,24 +5012,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ]
+            "x-ms-mutability": ["read", "create", "update"]
           },
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"
@@ -5177,9 +5040,7 @@
       "ExtendedLocationType": {
         "type": "string",
         "description": "The type of extendedLocation.",
-        "enum": [
-          "EdgeZone"
-        ],
+        "enum": ["EdgeZone"],
         "x-ms-enum": {
           "name": "ExtendedLocationTypes",
           "modelAsString": true

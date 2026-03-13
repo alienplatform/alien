@@ -6,5 +6,3 @@ export default defineConfig({
     testTimeout: 300_000, // 5 minutes
   },
 })
-
-

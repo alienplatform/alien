@@ -17,14 +17,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"
-            ]
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
           }
         }
       }

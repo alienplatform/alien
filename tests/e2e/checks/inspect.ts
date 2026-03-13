@@ -11,7 +11,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
     const aObj = a as Record<string, unknown>
     const bObj = b as Record<string, unknown>
     const keys = new Set([...Object.keys(aObj), ...Object.keys(bObj)])
-    return [...keys].every((k) => deepEqual(aObj[k], bObj[k]))
+    return [...keys].every(k => deepEqual(aObj[k], bObj[k]))
   }
   return false
 }

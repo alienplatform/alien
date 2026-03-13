@@ -1,7 +1,7 @@
+import { eq } from "drizzle-orm"
 import { alien, config } from "./config"
 import { db } from "./db"
 import { organizationMetadata } from "./schema"
-import { eq } from "drizzle-orm"
 
 /**
  * Create a deployment group for an organization.
@@ -9,14 +9,14 @@ import { eq } from "drizzle-orm"
 export async function createDeploymentGroupForOrganization(
   organizationId: string,
   organizationName: string,
-  organizationSlug: string | null
+  organizationSlug: string | null,
 ): Promise<{
   deploymentGroupId: string
   deploymentToken: string
 }> {
   // Create deployment group with organization's name
   const name = organizationSlug ?? organizationName.toLowerCase().replace(/[^a-z0-9-]/g, "-")
-  
+
   const deploymentGroup = await alien.deploymentGroups.createDeploymentGroup({
     workspace: config.workspace,
     createDeploymentGroupRequest: {
@@ -47,13 +47,13 @@ export async function createDeploymentGroupForOrganization(
 
 /**
  * Get or create deployment group for an organization.
- * 
+ *
  * Idempotent operation that creates a deployment group on-demand.
  */
 export async function getOrCreateDeploymentGroup(
   organizationId: string,
   organizationName: string,
-  organizationSlug: string | null
+  organizationSlug: string | null,
 ): Promise<{
   deploymentGroupId: string
   deploymentToken: string
@@ -76,7 +76,7 @@ export async function getOrCreateDeploymentGroup(
   const result = await createDeploymentGroupForOrganization(
     organizationId,
     organizationName,
-    organizationSlug
+    organizationSlug,
   )
 
   // Store in database (upsert)
@@ -90,18 +90,15 @@ export async function getOrCreateDeploymentGroup(
       })
       .where(eq(organizationMetadata.organizationId, organizationId))
   } else {
-    await db
-      .insert(organizationMetadata)
-      .values({
-        id: `org_meta_${organizationId}`,
-        organizationId,
-        deploymentGroupId: result.deploymentGroupId,
-        deploymentToken: result.deploymentToken,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
+    await db.insert(organizationMetadata).values({
+      id: `org_meta_${organizationId}`,
+      organizationId,
+      deploymentGroupId: result.deploymentGroupId,
+      deploymentToken: result.deploymentToken,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
   }
 
   return result
 }
-

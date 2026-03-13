@@ -7,7 +7,12 @@ import {
 import { Resource } from "./resource.js"
 
 export type { BuildOutputs, ComputeType, BuildStatus, BuildConfig } from "./generated/index.js"
-export { BuildOutputsSchema, ComputeTypeSchema, BuildStatusSchema, BuildConfigSchema } from "./generated/index.js"
+export {
+  BuildOutputsSchema,
+  ComputeTypeSchema,
+  BuildStatusSchema,
+  BuildConfigSchema,
+} from "./generated/index.js"
 
 /**
  * Represents a build resource that executes bash scripts to build code.
@@ -97,4 +102,4 @@ export class Build {
       ...config,
     })
   }
-} 
+}

@@ -1,17 +1,17 @@
-import { headers } from "next/headers"
-import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { member, organization } from "@/lib/schema"
-import { eq, and } from "drizzle-orm"
 import { getOrCreateDeploymentGroup } from "@/lib/deployment-groups"
+import { member, organization } from "@/lib/schema"
+import { and, eq } from "drizzle-orm"
+import { headers } from "next/headers"
+import { NextResponse } from "next/server"
 
 /**
  * GET /api/organizations/deployment-group
- * 
+ *
  * Gets or creates a deployment group for the user's active organization.
  * Returns the deployment group ID and token.
- * 
+ *
  * In local dev: Returns the default local dev deployment group
  * In production: Creates a deployment group via the Platform API
  */
@@ -35,10 +35,7 @@ export async function GET() {
     const membership = await db
       .select()
       .from(member)
-      .where(and(
-        eq(member.organizationId, activeOrgId),
-        eq(member.userId, session.user.id)
-      ))
+      .where(and(eq(member.organizationId, activeOrgId), eq(member.userId, session.user.id)))
       .limit(1)
 
     if (membership.length === 0) {
@@ -60,7 +57,7 @@ export async function GET() {
     const { deploymentGroupId, deploymentToken } = await getOrCreateDeploymentGroup(
       activeOrgId,
       org[0].name,
-      org[0].slug
+      org[0].slug,
     )
 
     return NextResponse.json({
@@ -68,13 +65,8 @@ export async function GET() {
       deploymentToken,
       deploymentLink: `https://alien.dev/deploy#${deploymentToken}`,
     })
-
   } catch (error) {
     console.error("Failed to get/create deployment group:", error)
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
-

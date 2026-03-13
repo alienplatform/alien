@@ -12,4 +12,3 @@ export default defineConfig({
   // transitive dependencies installed in the user's project.
   noExternal: [/.*/],
 })
-

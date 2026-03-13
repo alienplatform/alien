@@ -1,6 +1,6 @@
 /**
  * Commands Client - Lightweight client for deployment command invocation
- * 
+ *
  * Handles command invocation with automatic:
  * - Base64 encoding/decoding of params and responses
  * - Large payload upload/download via storage
@@ -9,24 +9,24 @@
  */
 
 import { AlienError } from "@aliendotdev/core"
+import {
+  CommandCreationFailedError,
+  CommandExpiredError,
+  CommandTimeoutError,
+  DeploymentCommandError,
+  ManagerHttpError,
+  ResponseDecodingFailedError,
+  StorageOperationFailedError,
+} from "./errors.js"
 import type {
-  CommandsClientConfig,
   BodySpec,
   CommandResponse,
   CommandState,
   CommandStatusResponse,
+  CommandsClientConfig,
   CreateCommandResponse,
   InvokeOptions,
 } from "./types.js"
-import {
-  DeploymentCommandError,
-  ManagerHttpError,
-  CommandCreationFailedError,
-  CommandExpiredError,
-  CommandTimeoutError,
-  ResponseDecodingFailedError,
-  StorageOperationFailedError,
-} from "./errors.js"
 
 const INLINE_MAX_BYTES = 150_000 // 150KB - matches server limit
 
@@ -162,7 +162,7 @@ async function decodeBodySpec(
           }),
         )
       }
-      
+
       // Validate path doesn't contain path traversal attempts
       const filePath = request.backend.filePath
       if (filePath.includes("..")) {
@@ -174,7 +174,7 @@ async function decodeBodySpec(
           }),
         )
       }
-      
+
       // Dynamically import fs/promises only when needed (local dev)
       try {
         const { readFile } = await import("node:fs/promises")
@@ -184,7 +184,7 @@ async function decodeBodySpec(
         if (error instanceof AlienError) {
           throw error
         }
-        
+
         // Wrap filesystem/parse errors
         const alienError = await AlienError.from(error)
         throw alienError.withContext(
@@ -242,7 +242,7 @@ export class CommandsClient {
 
   /**
    * Invoke a command on the deployment and wait for response
-   * 
+   *
    * @param command - Command name (e.g., "generate-report")
    * @param params - Command parameters (JSON-serializable)
    * @param options - Invocation options
@@ -466,6 +466,6 @@ export class CommandsClient {
    * Sleep helper
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
+    return new Promise(resolve => setTimeout(resolve, ms))
   }
 }

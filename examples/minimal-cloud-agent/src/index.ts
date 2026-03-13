@@ -1,3 +1,4 @@
+import { command } from "@aliendotdev/bindings"
 /**
  * Minimal Cloud Agent - src/index.ts
  *
@@ -6,12 +7,11 @@
  * Register the "echo" command for ARC invocation.
  */
 import { Hono } from "hono"
-import { command } from "@aliendotdev/bindings"
 
 const app = new Hono()
 
 // Health endpoint - returns agent status
-app.get("/health", (c) => {
+app.get("/health", c => {
   return c.json({
     status: "ok",
     timestamp: new Date().toISOString(),

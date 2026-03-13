@@ -3,7 +3,7 @@ import { alien, config } from "./config"
 
 /**
  * Get an ARC client for a specific deployment.
- * 
+ *
  * Discovers the deployment's ARC endpoint via the Platform SDK,
  * then creates a client configured to communicate with that deployment.
  */
@@ -29,10 +29,10 @@ export async function getCommandsClient(deploymentId: string) {
 export async function invokeCommand<T = unknown>(
   deploymentId: string,
   command: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
 ): Promise<T> {
   const client = await getCommandsClient(deploymentId)
-  return await client.invoke(command, params) as T
+  return (await client.invoke(command, params)) as T
 }
 
 // Types for deployment commands

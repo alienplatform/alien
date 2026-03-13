@@ -1,6 +1,6 @@
-import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { alien, config } from "@/lib/config"
+import { headers } from "next/headers"
 
 type RouteContext = {
   params: Promise<{ id: string }>
@@ -12,10 +12,7 @@ type RouteContext = {
  * Get connection info for a specific agent.
  * Returns ARC endpoint URL and resource public URLs.
  */
-export async function GET(
-  _request: Request,
-  context: RouteContext,
-): Promise<Response> {
+export async function GET(_request: Request, context: RouteContext): Promise<Response> {
   const session = await auth.api.getSession({
     headers: await headers(),
   })
@@ -39,4 +36,3 @@ export async function GET(
     )
   }
 }
-

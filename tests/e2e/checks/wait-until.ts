@@ -24,7 +24,7 @@ interface WaitUntilVerifyResponse {
 }
 
 export async function checkWaitUntil(deployment: Deployment): Promise<void> {
-  const testData = "wait-until-test-data-" + Date.now()
+  const testData = `wait-until-test-data-${Date.now()}`
 
   // Step 1: Trigger background task
   const triggerResponse = await fetch(`${deployment.url}/wait-until-test`, {
@@ -48,14 +48,18 @@ export async function checkWaitUntil(deployment: Deployment): Promise<void> {
   const testId = triggerData.testId
 
   // Step 2: Wait then verify with retries
-  await new Promise((resolve) => setTimeout(resolve, VERIFICATION_WAIT_MS))
+  await new Promise(resolve => setTimeout(resolve, VERIFICATION_WAIT_MS))
 
   for (let attempt = 1; attempt <= MAX_VERIFICATION_ATTEMPTS; attempt++) {
     const verifyResponse = await fetch(
-      `${deployment.url}/wait-until-verify/${testId}/${STORAGE_BINDING_NAME}`
+      `${deployment.url}/wait-until-verify/${testId}/${STORAGE_BINDING_NAME}`,
     )
 
-    await assertResponseOk(verifyResponse, "wait-until-verify", "Wait-until verification request failed")
+    await assertResponseOk(
+      verifyResponse,
+      "wait-until-verify",
+      "Wait-until verification request failed",
+    )
 
     const verifyData = (await verifyResponse.json()) as WaitUntilVerifyResponse
 
@@ -73,7 +77,7 @@ export async function checkWaitUntil(deployment: Deployment): Promise<void> {
     }
 
     if (attempt < MAX_VERIFICATION_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
     } else {
       failCheck("wait-until-verify", "Background task did not complete in time", {
         maxAttempts: MAX_VERIFICATION_ATTEMPTS,

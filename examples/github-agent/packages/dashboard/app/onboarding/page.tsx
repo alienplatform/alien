@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
 import { authClient } from "@/lib/auth-client"
+import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 export default function OnboardingPage() {
@@ -21,7 +21,7 @@ export default function OnboardingPage() {
     // Check if user already has an organization
     const checkSession = async () => {
       const session = await authClient.getSession()
-      
+
       if (!session) {
         router.push("/login")
         return
@@ -85,7 +85,7 @@ export default function OnboardingPage() {
       }
 
       toast.success("Organization created successfully!")
-      
+
       // Redirect to dashboard
       router.push("/")
     } catch (error) {
@@ -114,9 +114,7 @@ export default function OnboardingPage() {
           </div>
           <div className="space-y-2 text-center">
             <CardTitle className="text-2xl">Welcome to Code Intelligence</CardTitle>
-            <CardDescription>
-              Let's get started by creating your organization
-            </CardDescription>
+            <CardDescription>Let's get started by creating your organization</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -126,7 +124,7 @@ export default function OnboardingPage() {
               id="organization-name"
               placeholder="Acme Inc"
               value={organizationName}
-              onChange={(e) => setOrganizationName(e.target.value)}
+              onChange={e => setOrganizationName(e.target.value)}
               disabled={isCreating}
               autoFocus
             />
@@ -135,15 +133,13 @@ export default function OnboardingPage() {
           <div className="space-y-2">
             <Label htmlFor="slug">
               Organization Slug
-              <span className="text-muted-foreground text-xs ml-2">
-                (used in URLs)
-              </span>
+              <span className="text-muted-foreground text-xs ml-2">(used in URLs)</span>
             </Label>
             <Input
               id="slug"
               placeholder="acme-inc"
               value={slug}
-              onChange={(e) => setSlug(e.target.value)}
+              onChange={e => setSlug(e.target.value)}
               disabled={isCreating}
             />
           </div>
@@ -167,4 +163,3 @@ export default function OnboardingPage() {
     </div>
   )
 }
-

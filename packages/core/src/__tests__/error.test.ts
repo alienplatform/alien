@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { z } from "zod/v4"
 
-import { AlienError, defineError, type AlienErrorOptions } from "../error.js"
+import { AlienError, type AlienErrorOptions, defineError } from "../error.js"
 
 // Define test error types similar to the Rust examples
 const DatabaseError = defineError({
@@ -49,7 +49,8 @@ const ValidationError = defineError({
     value: z.any(),
     expectedType: z.string(),
   }),
-  message: ({ field, expectedType }) => `Validation failed for field '${field}': expected ${expectedType}`,
+  message: ({ field, expectedType }) =>
+    `Validation failed for field '${field}': expected ${expectedType}`,
   retryable: false,
   internal: false,
   httpStatusCode: 400,
@@ -65,11 +66,13 @@ const EmptyContextError = defineError({
 
 describe("AlienError Basic Usage", () => {
   it("creates an error from definition", () => {
-    const error = new AlienError(DatabaseError.create({
-      host: "localhost",
-      port: 5432,
-      reason: "Connection timeout"
-    }))
+    const error = new AlienError(
+      DatabaseError.create({
+        host: "localhost",
+        port: 5432,
+        reason: "Connection timeout",
+      }),
+    )
 
     expect(error.code).toBe("DATABASE_CONNECTION_FAILED")
     expect(error.message).toBe("Failed to connect to database 'localhost:5432': Connection timeout")
@@ -79,7 +82,7 @@ describe("AlienError Basic Usage", () => {
     expect(error.context).toEqual({
       host: "localhost",
       port: 5432,
-      reason: "Connection timeout"
+      reason: "Connection timeout",
     })
     expect(error.source).toBeUndefined()
   })
@@ -93,10 +96,12 @@ describe("AlienError Basic Usage", () => {
   })
 
   it("fromDefinition static method works", () => {
-    const error = AlienError.fromDefinition(AuthError.create({
-      username: "john",
-      reason: "Invalid password"
-    }))
+    const error = AlienError.fromDefinition(
+      AuthError.create({
+        username: "john",
+        reason: "Invalid password",
+      }),
+    )
 
     expect(error.code).toBe("AUTH_FAILED")
     expect(error.message).toBe("Authentication failed for user 'john': Invalid password")
@@ -105,11 +110,13 @@ describe("AlienError Basic Usage", () => {
   })
 
   it("toOptions converts to wire format", () => {
-    const error = new AlienError(ValidationError.create({
-      field: "email",
-      value: "invalid-email",
-      expectedType: "valid email address"
-    }))
+    const error = new AlienError(
+      ValidationError.create({
+        field: "email",
+        value: "invalid-email",
+        expectedType: "valid email address",
+      }),
+    )
 
     const options = error.toOptions()
 
@@ -122,7 +129,7 @@ describe("AlienError Basic Usage", () => {
       context: {
         field: "email",
         value: "invalid-email",
-        expectedType: "valid email address"
+        expectedType: "valid email address",
       },
       source: undefined,
     })
@@ -132,7 +139,7 @@ describe("AlienError Basic Usage", () => {
     const definition = ValidationError.create({
       field: "email",
       value: "invalid-email",
-      expectedType: "valid email address"
+      expectedType: "valid email address",
     })
 
     const options = definition.toOptions()
@@ -146,7 +153,7 @@ describe("AlienError Basic Usage", () => {
       context: {
         field: "email",
         value: "invalid-email",
-        expectedType: "valid email address"
+        expectedType: "valid email address",
       },
     })
   })
@@ -211,11 +218,13 @@ describe("AlienError.from() with JS Error types", () => {
   })
 
   it("returns same AlienError when passed AlienError", async () => {
-    const originalError = new AlienError(DatabaseError.create({
-      host: "localhost",
-      port: 5432,
-      reason: "Timeout"
-    }))
+    const originalError = new AlienError(
+      DatabaseError.create({
+        host: "localhost",
+        port: 5432,
+        reason: "Timeout",
+      }),
+    )
 
     const result = await AlienError.from(originalError)
 
@@ -330,16 +339,19 @@ describe("AlienError.from() with random JS objects", async () => {
 describe("Error Chaining", async () => {
   it("chains errors with withContext", async () => {
     const baseError = new Error("Network timeout")
-    
-    const chainedError = (await AlienError.from(baseError))
-      .withContext(DatabaseError.create({
+
+    const chainedError = (await AlienError.from(baseError)).withContext(
+      DatabaseError.create({
         host: "localhost",
         port: 5432,
-        reason: "Connection timeout"
-      }))
+        reason: "Connection timeout",
+      }),
+    )
 
     expect(chainedError.code).toBe("DATABASE_CONNECTION_FAILED")
-    expect(chainedError.message).toBe("Failed to connect to database 'localhost:5432': Connection timeout")
+    expect(chainedError.message).toBe(
+      "Failed to connect to database 'localhost:5432': Connection timeout",
+    )
     expect(chainedError.retryable).toBe(true)
     expect(chainedError.internal).toBe(false)
 
@@ -351,24 +363,30 @@ describe("Error Chaining", async () => {
 
   it("chains multiple errors", async () => {
     const baseError = new Error("ECONNREFUSED")
-    
+
     const multiChainedError = (await AlienError.from(baseError))
-      .withContext(DatabaseError.create({
-        host: "localhost",
-        port: 5432,
-        reason: "Connection refused"
-      }))
-      .withContext(AuthError.create({
-        username: "john",
-        reason: "Database unavailable"
-      }))
+      .withContext(
+        DatabaseError.create({
+          host: "localhost",
+          port: 5432,
+          reason: "Connection refused",
+        }),
+      )
+      .withContext(
+        AuthError.create({
+          username: "john",
+          reason: "Database unavailable",
+        }),
+      )
 
     expect(multiChainedError.code).toBe("AUTH_FAILED")
-    expect(multiChainedError.message).toBe("Authentication failed for user 'john': Database unavailable")
+    expect(multiChainedError.message).toBe(
+      "Authentication failed for user 'john': Database unavailable",
+    )
 
     // Check first level source
     expect(multiChainedError.source?.code).toBe("DATABASE_CONNECTION_FAILED")
-    
+
     // Check second level source
     expect(multiChainedError.source?.source?.code).toBe("GENERIC_ERROR")
     expect(multiChainedError.source?.source?.message).toBe("ECONNREFUSED")
@@ -376,15 +394,19 @@ describe("Error Chaining", async () => {
 
   it("hasErrorCode works with chains", async () => {
     const chainedError = (await AlienError.from(new Error("base")))
-      .withContext(DatabaseError.create({
-        host: "localhost",
-        port: 5432,
-        reason: "timeout"
-      }))
-      .withContext(AuthError.create({
-        username: "john",
-        reason: "db issues"
-      }))
+      .withContext(
+        DatabaseError.create({
+          host: "localhost",
+          port: 5432,
+          reason: "timeout",
+        }),
+      )
+      .withContext(
+        AuthError.create({
+          username: "john",
+          reason: "db issues",
+        }),
+      )
 
     expect(chainedError.hasErrorCode("AUTH_FAILED")).toBe(true)
     expect(chainedError.hasErrorCode("DATABASE_CONNECTION_FAILED")).toBe(true)
@@ -394,15 +416,19 @@ describe("Error Chaining", async () => {
 
   it("findErrorByCode works with chains", async () => {
     const chainedError = (await AlienError.from(new Error("base")))
-      .withContext(DatabaseError.create({
-        host: "localhost",
-        port: 5432,
-        reason: "timeout"
-      }))
-      .withContext(AuthError.create({
-        username: "john",
-        reason: "db issues"
-      }))
+      .withContext(
+        DatabaseError.create({
+          host: "localhost",
+          port: 5432,
+          reason: "timeout",
+        }),
+      )
+      .withContext(
+        AuthError.create({
+          username: "john",
+          reason: "db issues",
+        }),
+      )
 
     const authError = chainedError.findErrorByCode("AUTH_FAILED")
     expect(authError).toBeDefined()
@@ -420,31 +446,41 @@ describe("Error Chaining", async () => {
 
   it("toString shows full error chain", async () => {
     const chainedError = (await AlienError.from(new Error("Network timeout")))
-      .withContext(DatabaseError.create({
-        host: "localhost",
-        port: 5432,
-        reason: "Connection timeout"
-      }))
-      .withContext(AuthError.create({
-        username: "john",
-        reason: "Database unavailable"
-      }))
+      .withContext(
+        DatabaseError.create({
+          host: "localhost",
+          port: 5432,
+          reason: "Connection timeout",
+        }),
+      )
+      .withContext(
+        AuthError.create({
+          username: "john",
+          reason: "Database unavailable",
+        }),
+      )
 
     const errorString = chainedError.toString()
 
-    expect(errorString).toContain("AUTH_FAILED: Authentication failed for user 'john': Database unavailable")
-    expect(errorString).toContain("├─▶ DATABASE_CONNECTION_FAILED: Failed to connect to database 'localhost:5432': Connection timeout")
+    expect(errorString).toContain(
+      "AUTH_FAILED: Authentication failed for user 'john': Database unavailable",
+    )
+    expect(errorString).toContain(
+      "├─▶ DATABASE_CONNECTION_FAILED: Failed to connect to database 'localhost:5432': Connection timeout",
+    )
     expect(errorString).toContain("├─▶ GENERIC_ERROR: Network timeout")
   })
 })
 
 describe("External API Sanitization", async () => {
   it("sanitizes internal errors for external APIs", async () => {
-    const internalError = new AlienError(InternalApiError.create({
-      service: "payment-processor",
-      details: "Database password expired for user admin",
-      traceId: "trace-12345"
-    }))
+    const internalError = new AlienError(
+      InternalApiError.create({
+        service: "payment-processor",
+        details: "Database password expired for user admin",
+        traceId: "trace-12345",
+      }),
+    )
 
     const external = internalError.toExternal()
 
@@ -458,11 +494,13 @@ describe("External API Sanitization", async () => {
   })
 
   it("preserves non-internal errors for external APIs", async () => {
-    const publicError = new AlienError(ValidationError.create({
-      field: "email",
-      value: "invalid-email",
-      expectedType: "valid email address"
-    }))
+    const publicError = new AlienError(
+      ValidationError.create({
+        field: "email",
+        value: "invalid-email",
+        expectedType: "valid email address",
+      }),
+    )
 
     const external = publicError.toExternal()
 
@@ -475,7 +513,7 @@ describe("External API Sanitization", async () => {
       context: {
         field: "email",
         value: "invalid-email",
-        expectedType: "valid email address"
+        expectedType: "valid email address",
       },
       source: undefined,
     })
@@ -483,16 +521,20 @@ describe("External API Sanitization", async () => {
 
   it("sanitizes internal errors in error chains", async () => {
     const chainedError = (await AlienError.from(new Error("Network issue")))
-      .withContext(InternalApiError.create({
-        service: "auth-service",
-        details: "JWT secret key leaked in logs",
-        traceId: "trace-456"
-      }))
-      .withContext(ValidationError.create({
-        field: "token",
-        value: "invalid-token",
-        expectedType: "valid JWT"
-      }))
+      .withContext(
+        InternalApiError.create({
+          service: "auth-service",
+          details: "JWT secret key leaked in logs",
+          traceId: "trace-456",
+        }),
+      )
+      .withContext(
+        ValidationError.create({
+          field: "token",
+          value: "invalid-token",
+          expectedType: "valid JWT",
+        }),
+      )
 
     const external = chainedError.toExternal()
 
@@ -502,7 +544,7 @@ describe("External API Sanitization", async () => {
     expect(external.context).toEqual({
       field: "token",
       value: "invalid-token",
-      expectedType: "valid JWT"
+      expectedType: "valid JWT",
     })
 
     // But source should be sanitized (internal error)
@@ -517,36 +559,50 @@ describe("External API Sanitization", async () => {
 
   it("preserves non-internal errors deep in chain", async () => {
     const chainedError = (await AlienError.from(new Error("Network timeout")))
-      .withContext(DatabaseError.create({
-        host: "localhost",
-        port: 5432,
-        reason: "Connection timeout"
-      }))
-      .withContext(AuthError.create({
-        username: "john",
-        reason: "Database unavailable"
-      }))
+      .withContext(
+        DatabaseError.create({
+          host: "localhost",
+          port: 5432,
+          reason: "Connection timeout",
+        }),
+      )
+      .withContext(
+        AuthError.create({
+          username: "john",
+          reason: "Database unavailable",
+        }),
+      )
 
     const external = chainedError.toExternal()
 
     // All errors in this chain are non-internal, so should be preserved
     expect(external.code).toBe("AUTH_FAILED")
     expect((external.source as AlienErrorOptions)?.code).toBe("DATABASE_CONNECTION_FAILED")
-    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.code).toBe("GENERIC_ERROR")
-    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.message).toBe("Network timeout")
+    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.code).toBe(
+      "GENERIC_ERROR",
+    )
+    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.message).toBe(
+      "Network timeout",
+    )
   })
 
   it("handles mixed internal/external in chain", async () => {
     const chainedError = (await AlienError.from(new Error("Base error")))
-      .withContext(AuthError.create({ // Not internal
-        username: "john",
-        reason: "Auth failed"
-      }))
-      .withContext(InternalApiError.create({ // Internal - should be sanitized
-        service: "payment",
-        details: "Secret API key exposed",
-        traceId: "trace-789"
-      }))
+      .withContext(
+        AuthError.create({
+          // Not internal
+          username: "john",
+          reason: "Auth failed",
+        }),
+      )
+      .withContext(
+        InternalApiError.create({
+          // Internal - should be sanitized
+          service: "payment",
+          details: "Secret API key exposed",
+          traceId: "trace-789",
+        }),
+      )
 
     const external = chainedError.toExternal()
 
@@ -563,22 +619,26 @@ describe("External API Sanitization", async () => {
 
 describe("Error Metadata and Properties", () => {
   it("preserves all metadata correctly", () => {
-    const error = new AlienError(DatabaseError.create({
-      host: "db.example.com",
-      port: 3306,
-      reason: "SSL handshake failed"
-    }))
+    const error = new AlienError(
+      DatabaseError.create({
+        host: "db.example.com",
+        port: 3306,
+        reason: "SSL handshake failed",
+      }),
+    )
 
     expect(error.name).toBe("AlienError")
     expect(error.code).toBe("DATABASE_CONNECTION_FAILED")
     expect(error.retryable).toBe(true)
     expect(error.internal).toBe(false)
     expect(error.httpStatusCode).toBe(502)
-    expect(error.message).toBe("Failed to connect to database 'db.example.com:3306': SSL handshake failed")
+    expect(error.message).toBe(
+      "Failed to connect to database 'db.example.com:3306': SSL handshake failed",
+    )
     expect(error.context).toEqual({
       host: "db.example.com",
       port: 3306,
-      reason: "SSL handshake failed"
+      reason: "SSL handshake failed",
     })
   })
 
@@ -594,10 +654,12 @@ describe("Error Metadata and Properties", () => {
       // No httpStatusCode specified
     })
 
-    const error = new AlienError(SimpleError.create({
-      message: "Simple error message"
-    }))
+    const error = new AlienError(
+      SimpleError.create({
+        message: "Simple error message",
+      }),
+    )
 
     expect(error.httpStatusCode).toBe(500) // Should default to 500
   })
-}) 
+})

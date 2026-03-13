@@ -6,15 +6,11 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "ssm:GetParameter"
-          ]
+          "actions": ["ssm:GetParameter"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
             "resources": [
@@ -27,10 +23,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "secretmanager.versions.access",
-            "secretmanager.secrets.get"
-          ]
+          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
         },
         "binding": {
           "stack": {

@@ -6,9 +6,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -377,9 +375,7 @@
               "properties": {
                 "provisioningState": "Succeeded",
                 "subjectName": "my-subject-name.company.country.net",
-                "subjectAlternativeNames": [
-                  "CN=my-subject-name.com"
-                ],
+                "subjectAlternativeNames": ["CN=my-subject-name.com"],
                 "issuer": "Issuer Name",
                 "issueDate": "2021-11-06T04:00:00Z",
                 "expirationDate": "2022-11-06T04:00:00Z",
@@ -395,9 +391,7 @@
               "properties": {
                 "provisioningState": "Succeeded",
                 "subjectName": "my-subject-name.company.country.net",
-                "subjectAlternativeNames": [
-                  "CN=my-subject-name.com"
-                ],
+                "subjectAlternativeNames": ["CN=my-subject-name.com"],
                 "issuer": "Issuer Name",
                 "issueDate": "2021-11-06T04:00:00Z",
                 "expirationDate": "2022-11-06T04:00:00Z",
@@ -440,9 +434,7 @@
           "properties": {
             "provisioningState": "Succeeded",
             "subjectName": "my-subject-name.company.country.net",
-            "subjectAlternativeNames": [
-              "CN=my-subject-name.com"
-            ],
+            "subjectAlternativeNames": ["CN=my-subject-name.com"],
             "certificateKeyVaultProperties": {
               "identity": "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/test-rg/providers/microsoft.managedidentity/userassignedidentities/test-user-mi",
               "keyVaultUrl": "https://xxxxxxxx.vault.azure.net/certificates/certName"
@@ -467,9 +459,7 @@
           "properties": {
             "provisioningState": "Succeeded",
             "subjectName": "my-subject-name.company.country.net",
-            "subjectAlternativeNames": [
-              "CN=my-subject-name.com"
-            ],
+            "subjectAlternativeNames": ["CN=my-subject-name.com"],
             "issuer": "Issuer Name",
             "issueDate": "2021-11-06T04:00:00Z",
             "expirationDate": "2022-11-06T04:00:00Z",
@@ -825,42 +815,27 @@
           "internal": {
             "type": "boolean",
             "description": "Boolean indicating the environment only has an internal load balancer. These environments do not have a public static IP resource. They must provide infrastructureSubnetId if enabling this property",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "infrastructureSubnetId": {
             "type": "string",
             "description": "Resource ID of a subnet for infrastructure components. Must not overlap with any other provided IP ranges.",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "dockerBridgeCidr": {
             "type": "string",
             "description": "CIDR notation IP range assigned to the Docker bridge, network. Must not overlap with any other provided IP ranges.",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "platformReservedCidr": {
             "type": "string",
             "description": "IP range in CIDR notation that can be reserved for environment infrastructure IP addresses. Must not overlap with any other provided IP ranges.",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "platformReservedDnsIP": {
             "type": "string",
             "description": " An IP address from the IP range defined by platformReservedCidr that will be reserved for the internal DNS server.",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           }
         }
       },
@@ -949,10 +924,7 @@
               "zoneRedundant": {
                 "description": "Whether or not this Managed Environment is zone-redundant.",
                 "type": "boolean",
-                "x-ms-mutability": [
-                  "create",
-                  "read"
-                ]
+                "x-ms-mutability": ["create", "read"]
               },
               "customDomainConfiguration": {
                 "$ref": "#/components/schemas/CustomDomainConfiguration"
@@ -968,9 +940,7 @@
                 "items": {
                   "$ref": "#/components/schemas/WorkloadProfile"
                 },
-                "x-ms-identifiers": [
-                  "name"
-                ]
+                "x-ms-identifiers": ["name"]
               },
               "kedaConfiguration": {
                 "$ref": "#/components/schemas/KedaConfiguration"
@@ -981,10 +951,7 @@
               "infrastructureResourceGroup": {
                 "description": "Name of the platform-managed resource group created for the Managed Environment to host infrastructure resources. If a subnet ID is provided, this resource group will be created in the same subscription as the subnet.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create",
-                  "read"
-                ]
+                "x-ms-mutability": ["create", "read"]
               },
               "peerAuthentication": {
                 "description": "Peer authentication settings for the Managed Environment",
@@ -1018,9 +985,7 @@
       },
       "ManagedEnvironmentsCollection": {
         "description": "Collection of Environments",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1048,10 +1013,7 @@
           "sharedKey": {
             "description": "Log analytics customer key",
             "type": "string",
-            "x-ms-mutability": [
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["create", "update"],
             "x-ms-secret": true
           }
         }
@@ -1106,10 +1068,7 @@
             "description": "The maximum capacity."
           }
         },
-        "required": [
-          "name",
-          "workloadProfileType"
-        ]
+        "required": ["name", "workloadProfileType"]
       },
       "workloadProfileStates": {
         "description": "Collection of all the workload Profile States for a Managed Environment..",
@@ -1145,9 +1104,7 @@
       },
       "workloadProfileStatesCollection": {
         "description": "Collection of workloadProfileStates",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1212,9 +1169,7 @@
                   },
                   "readOnly": true
                 },
-                "x-ms-identifiers": [
-                  "code"
-                ]
+                "x-ms-identifiers": ["code"]
               },
               "innererror": {
                 "description": "More information to debug error.",
@@ -1237,12 +1192,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1259,12 +1209,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1315,24 +1260,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ]
+            "x-ms-mutability": ["read", "create", "update"]
           },
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"
@@ -1342,12 +1278,7 @@
       "ManagedServiceIdentityType": {
         "type": "string",
         "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
-        "enum": [
-          "None",
-          "SystemAssigned",
-          "UserAssigned",
-          "SystemAssigned,UserAssigned"
-        ],
+        "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
         "x-ms-enum": {
           "name": "ManagedServiceIdentityType",
           "modelAsString": true
@@ -1402,9 +1333,7 @@
             "$ref": "#/components/schemas/UserAssignedIdentities"
           }
         },
-        "required": [
-          "type"
-        ]
+        "required": ["type"]
       },
       "CertificateKeyVaultProperties": {
         "description": "Properties for a certificate stored in a Key Vault.",
@@ -1433,10 +1362,7 @@
           "dnsSuffix": {
             "type": "string",
             "description": "Dns suffix for the environment domain",
-            "x-ms-mutability": [
-              "create",
-              "read"
-            ]
+            "x-ms-mutability": ["create", "read"]
           },
           "certificateKeyVaultProperties": {
             "$ref": "#/components/schemas/CertificateKeyVaultProperties"
@@ -1492,13 +1418,7 @@
             "properties": {
               "provisioningState": {
                 "description": "Provisioning state of the certificate.",
-                "enum": [
-                  "Succeeded",
-                  "Failed",
-                  "Canceled",
-                  "DeleteFailed",
-                  "Pending"
-                ],
+                "enum": ["Succeeded", "Failed", "Canceled", "DeleteFailed", "Pending"],
                 "type": "string",
                 "readOnly": true,
                 "x-ms-enum": {
@@ -1512,9 +1432,7 @@
               "password": {
                 "description": "Certificate password.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create"
-                ],
+                "x-ms-mutability": ["create"],
                 "x-ms-secret": true
               },
               "subjectName": {
@@ -1534,9 +1452,7 @@
                 "format": "byte",
                 "description": "PFX or PEM blob",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create"
-                ],
+                "x-ms-mutability": ["create"],
                 "x-ms-secret": true
               },
               "issuer": {
@@ -1576,9 +1492,7 @@
       },
       "CertificateCollection": {
         "description": "Collection of Certificates.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1623,13 +1537,7 @@
             "properties": {
               "provisioningState": {
                 "description": "Provisioning state of the certificate.",
-                "enum": [
-                  "Succeeded",
-                  "Failed",
-                  "Canceled",
-                  "DeleteFailed",
-                  "Pending"
-                ],
+                "enum": ["Succeeded", "Failed", "Canceled", "DeleteFailed", "Pending"],
                 "type": "string",
                 "readOnly": true,
                 "x-ms-enum": {
@@ -1648,11 +1556,7 @@
               },
               "domainControlValidation": {
                 "description": "Selected type of domain control validation for managed certificates.",
-                "enum": [
-                  "CNAME",
-                  "HTTP",
-                  "TXT"
-                ],
+                "enum": ["CNAME", "HTTP", "TXT"],
                 "type": "string",
                 "x-ms-enum": {
                   "name": "ManagedCertificateDomainControlValidation",
@@ -1684,9 +1588,7 @@
       },
       "ManagedCertificateCollection": {
         "description": "Collection of Managed Certificates.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1728,10 +1630,7 @@
           "reason": {
             "type": "string",
             "description": "The reason why the given name is not available.",
-            "enum": [
-              "Invalid",
-              "AlreadyExists"
-            ],
+            "enum": ["Invalid", "AlreadyExists"],
             "x-ms-enum": {
               "name": "CheckNameAvailabilityReason",
               "modelAsString": true

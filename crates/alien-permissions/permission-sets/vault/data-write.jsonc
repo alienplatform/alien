@@ -6,16 +6,11 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "ssm:PutParameter",
-            "ssm:DeleteParameter"
-          ]
+          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
             "resources": [

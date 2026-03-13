@@ -6,9 +6,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -372,13 +370,8 @@
                     "cpu": 0.5,
                     "memory": "1Gi"
                   },
-                  "command": [
-                    "/bin/sh"
-                  ],
-                  "args": [
-                    "-c",
-                    "while true; do echo hello; sleep 10;done"
-                  ]
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
                 }
               ],
               "volumes": [
@@ -460,13 +453,8 @@
                     "cpu": 0.5,
                     "memory": "1Gi"
                   },
-                  "command": [
-                    "/bin/sh"
-                  ],
-                  "args": [
-                    "-c",
-                    "while true; do echo hello; sleep 10;done"
-                  ]
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
                 }
               ]
             },
@@ -581,13 +569,8 @@
                         "cpu": 0.5,
                         "memory": "1Gi"
                       },
-                      "command": [
-                        "/bin/sh"
-                      ],
-                      "args": [
-                        "-c",
-                        "while true; do echo hello; sleep 10;done"
-                      ]
+                      "command": ["/bin/sh"],
+                      "args": ["-c", "while true; do echo hello; sleep 10;done"]
                     }
                   ]
                 }
@@ -622,13 +605,8 @@
                     "cpu": 0.5,
                     "memory": "1Gi"
                   },
-                  "command": [
-                    "/bin/sh"
-                  ],
-                  "args": [
-                    "-c",
-                    "while true; do echo hello; sleep 10;done"
-                  ]
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
                 }
               ]
             }
@@ -885,10 +863,7 @@
       "JobConfiguration": {
         "description": "Non versioned Container Apps Job configuration properties",
         "type": "object",
-        "required": [
-          "replicaTimeout",
-          "triggerType"
-        ],
+        "required": ["replicaTimeout", "triggerType"],
         "properties": {
           "secrets": {
             "description": "Collection of secrets used by a Container Apps Job",
@@ -896,17 +871,11 @@
             "items": {
               "$ref": "#/components/schemas/Secret"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "triggerType": {
             "description": "Trigger type of the job",
-            "enum": [
-              "Schedule",
-              "Event",
-              "Manual"
-            ],
+            "enum": ["Schedule", "Event", "Manual"],
             "type": "string",
             "default": "Manual",
             "x-ms-enum": {
@@ -938,9 +907,7 @@
           },
           "scheduleTriggerConfig": {
             "description": "Cron formatted repeating trigger schedule (\"* * * * *\") for cronjobs. Properties completions and parallelism would be set to 1 by default",
-            "required": [
-              "cronExpression"
-            ],
+            "required": ["cronExpression"],
             "type": "object",
             "properties": {
               "replicaCompletionCount": {
@@ -976,9 +943,7 @@
             "items": {
               "$ref": "#/components/schemas/RegistryCredentials"
             },
-            "x-ms-identifiers": [
-              "server"
-            ]
+            "x-ms-identifiers": ["server"]
           },
           "identitySettings": {
             "description": "Optional settings for Managed Identities that are assigned to the Container App Job. If a Managed Identity is not specified here, default settings will be used.",
@@ -986,9 +951,7 @@
             "items": {
               "$ref": "#/components/schemas/IdentitySettings"
             },
-            "x-ms-identifiers": [
-              "identity"
-            ]
+            "x-ms-identifiers": ["identity"]
           }
         }
       },
@@ -1010,13 +973,7 @@
             "properties": {
               "provisioningState": {
                 "description": "Provisioning state of the Container Apps Job.",
-                "enum": [
-                  "InProgress",
-                  "Succeeded",
-                  "Failed",
-                  "Canceled",
-                  "Deleting"
-                ],
+                "enum": ["InProgress", "Succeeded", "Failed", "Canceled", "Deleting"],
                 "type": "string",
                 "readOnly": true,
                 "x-ms-enum": {
@@ -1027,10 +984,7 @@
               "environmentId": {
                 "description": "Resource ID of environment.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create",
-                  "read"
-                ]
+                "x-ms-mutability": ["create", "read"]
               },
               "workloadProfileName": {
                 "$ref": "#/components/schemas/WorkloadProfileName"
@@ -1071,11 +1025,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["read", "create", "update"],
             "description": "Resource tags."
           },
           "properties": {
@@ -1084,11 +1034,7 @@
               "environmentId": {
                 "description": "Resource ID of environment.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create",
-                  "read",
-                  "update"
-                ]
+                "x-ms-mutability": ["create", "read", "update"]
               },
               "configuration": {
                 "$ref": "#/components/schemas/JobConfiguration"
@@ -1113,9 +1059,7 @@
       },
       "JobsCollection": {
         "description": "Container Apps Jobs collection ARM resource.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1156,9 +1100,7 @@
       },
       "JobSecretsCollection": {
         "description": "Container Apps Job Secrets Collection ARM resource.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1167,9 +1109,7 @@
             "items": {
               "$ref": "#/components/schemas/Secret"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -1330,15 +1270,11 @@
             "readOnly": true
           }
         },
-        "required": [
-          "value"
-        ]
+        "required": ["value"]
       },
       "JobExecutionNamesCollection": {
         "description": "Container App executions names list.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1360,9 +1296,7 @@
             "items": {
               "$ref": "#/components/schemas/JobExecutionContainer"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "initContainers": {
             "description": "List of specialized containers that run before job containers.",
@@ -1370,9 +1304,7 @@
             "items": {
               "$ref": "#/components/schemas/JobExecutionContainer"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -1408,9 +1340,7 @@
             "items": {
               "$ref": "#/components/schemas/EnvironmentVar"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "resources": {
             "$ref": "#/components/schemas/ContainerResources"
@@ -1465,9 +1395,7 @@
                   },
                   "readOnly": true
                 },
-                "x-ms-identifiers": [
-                  "code"
-                ]
+                "x-ms-identifiers": ["code"]
               },
               "innererror": {
                 "description": "More information to debug error.",
@@ -1490,12 +1418,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1512,12 +1435,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -1568,24 +1486,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ]
+            "x-ms-mutability": ["read", "create", "update"]
           },
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"
@@ -1595,12 +1504,7 @@
       "ManagedServiceIdentityType": {
         "type": "string",
         "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
-        "enum": [
-          "None",
-          "SystemAssigned",
-          "UserAssigned",
-          "SystemAssigned,UserAssigned"
-        ],
+        "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
         "x-ms-enum": {
           "name": "ManagedServiceIdentityType",
           "modelAsString": true
@@ -1655,9 +1559,7 @@
             "$ref": "#/components/schemas/UserAssignedIdentities"
           }
         },
-        "required": [
-          "type"
-        ]
+        "required": ["type"]
       },
       "WorkloadProfileName": {
         "description": "Workload profile name for container apps to execute on.",
@@ -1674,10 +1576,7 @@
           "value": {
             "description": "Secret Value.",
             "type": "string",
-            "x-ms-mutability": [
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["create", "update"],
             "x-ms-secret": true
           },
           "identity": {
@@ -1707,9 +1606,7 @@
       "IdentitySettings": {
         "description": "Optional settings for a Managed Identity that is assigned to the Container App.",
         "type": "object",
-        "required": [
-          "identity"
-        ],
+        "required": ["identity"],
         "properties": {
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -1717,12 +1614,7 @@
           },
           "lifecycle": {
             "description": "Use to select the lifecycle stages of a Container App during which the Managed Identity should be available.",
-            "enum": [
-              "Init",
-              "Main",
-              "None",
-              "All"
-            ],
+            "enum": ["Init", "Main", "None", "All"],
             "type": "string",
             "default": "All",
             "x-ms-enum": {
@@ -1820,9 +1712,7 @@
             "items": {
               "$ref": "#/components/schemas/EnvironmentVar"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "resources": {
             "$ref": "#/components/schemas/ContainerResources"
@@ -1833,9 +1723,7 @@
             "items": {
               "$ref": "#/components/schemas/VolumeMount"
             },
-            "x-ms-identifiers": [
-              "volumeName"
-            ]
+            "x-ms-identifiers": ["volumeName"]
           }
         }
       },
@@ -1860,9 +1748,7 @@
           "httpGet": {
             "description": "HTTPGet specifies the http request to perform.",
             "type": "object",
-            "required": [
-              "port"
-            ],
+            "required": ["port"],
             "properties": {
               "host": {
                 "description": "Host name to connect to, defaults to the pod IP. You probably want to set \"Host\" in httpHeaders instead.",
@@ -1874,10 +1760,7 @@
                 "items": {
                   "description": "HTTPHeader describes a custom header to be used in HTTP probes",
                   "type": "object",
-                  "required": [
-                    "name",
-                    "value"
-                  ],
+                  "required": ["name", "value"],
                   "properties": {
                     "name": {
                       "description": "The header field name",
@@ -1889,9 +1772,7 @@
                     }
                   }
                 },
-                "x-ms-identifiers": [
-                  "name"
-                ]
+                "x-ms-identifiers": ["name"]
               },
               "path": {
                 "description": "Path to access on the HTTP server.",
@@ -1904,10 +1785,7 @@
               },
               "scheme": {
                 "description": "Scheme to use for connecting to the host. Defaults to HTTP.",
-                "enum": [
-                  "HTTP",
-                  "HTTPS"
-                ],
+                "enum": ["HTTP", "HTTPS"],
                 "type": "string",
                 "x-ms-enum": {
                   "name": "Scheme",
@@ -1934,9 +1812,7 @@
           "tcpSocket": {
             "description": "TCPSocket specifies an action involving a TCP port. TCP hooks not yet supported.",
             "type": "object",
-            "required": [
-              "port"
-            ],
+            "required": ["port"],
             "properties": {
               "host": {
                 "description": "Optional: Host name to connect to, defaults to the pod IP.",
@@ -1961,11 +1837,7 @@
           },
           "type": {
             "description": "The type of probe.",
-            "enum": [
-              "Liveness",
-              "Readiness",
-              "Startup"
-            ],
+            "enum": ["Liveness", "Readiness", "Startup"],
             "type": "string",
             "x-ms-enum": {
               "name": "Type",
@@ -1989,9 +1861,7 @@
             "items": {
               "$ref": "#/components/schemas/ContainerAppProbe"
             },
-            "x-ms-identifiers": [
-              "type"
-            ]
+            "x-ms-identifiers": ["type"]
           }
         }
       },
@@ -2019,12 +1889,7 @@
           },
           "storageType": {
             "description": "Storage type for the volume. If not provided, use EmptyDir.",
-            "enum": [
-              "AzureFile",
-              "EmptyDir",
-              "Secret",
-              "NfsAzureFile"
-            ],
+            "enum": ["AzureFile", "EmptyDir", "Secret", "NfsAzureFile"],
             "type": "string",
             "x-ms-enum": {
               "name": "StorageType",
@@ -2041,9 +1906,7 @@
             "items": {
               "$ref": "#/components/schemas/SecretVolumeItem"
             },
-            "x-ms-identifiers": [
-              "secretRef"
-            ]
+            "x-ms-identifiers": ["secretRef"]
           },
           "mountOptions": {
             "description": "Mount options used while mounting the Azure file share or NFS Azure file share. Must be a comma-separated string.",
@@ -2061,9 +1924,7 @@
             "items": {
               "$ref": "#/components/schemas/InitContainer"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "containers": {
             "description": "List of container definitions for the Container App.",
@@ -2071,9 +1932,7 @@
             "items": {
               "$ref": "#/components/schemas/Container"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "volumes": {
             "description": "List of volume definitions for the Container App.",
@@ -2081,9 +1940,7 @@
             "items": {
               "$ref": "#/components/schemas/Volume"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       }

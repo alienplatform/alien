@@ -1,46 +1,55 @@
 "use client"
 
-import { useSearchParams } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAgentInfo } from "@/lib/queries"
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconChevronRight,
+  IconExternalLink,
   IconGitMerge,
   IconGitPullRequest,
-  IconExternalLink,
-  IconAlertCircle,
-  IconChevronRight,
-  IconSparkles,
-  IconTrendingUp,
-  IconTrendingDown,
-  IconAlertTriangle,
   IconShieldCheck,
+  IconSparkles,
+  IconTrendingDown,
+  IconTrendingUp,
 } from "@tabler/icons-react"
-import { formatDistanceToNow } from "date-fns"
-import { match } from "ts-pattern"
 import { useQuery } from "@tanstack/react-query"
-import { useAgentInfo } from "@/lib/queries"
-import { EncryptionIndicator } from "./_components/encryption-indicator"
-import { AIReviewCard } from "./_components/ai-review-card"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import { useState } from "react"
+import { formatDistanceToNow } from "date-fns"
 import type { ClassifiedPRWithReview } from "github-agent-remote-agent"
+import { useSearchParams } from "next/navigation"
+import { useState } from "react"
+import { match } from "ts-pattern"
+import { AIReviewCard } from "./_components/ai-review-card"
+import { EncryptionIndicator } from "./_components/encryption-indicator"
 
 const sizeColors = {
-  small: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
-  medium: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
-  large: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+  small:
+    "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
+  medium:
+    "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+  large:
+    "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
 } as const
 
 const riskColors = {
   low: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
-  medium: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+  medium:
+    "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
   high: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800",
-  critical: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+  critical:
+    "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
 } as const
 
 function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
@@ -63,9 +72,7 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
                     <IconGitPullRequest className="h-4 w-4 text-green-500 shrink-0" />
                   )}
                   <span className="font-medium truncate">{pr.title}</span>
-                  {pr.aiReview && (
-                    <IconSparkles className="h-4 w-4 text-purple-500 shrink-0" />
-                  )}
+                  {pr.aiReview && <IconSparkles className="h-4 w-4 text-purple-500 shrink-0" />}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
                   <Badge
@@ -74,8 +81,8 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
                       pr.mergedAt
                         ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800"
                         : pr.state === "open"
-                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800"
-                        : ""
+                          ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800"
+                          : ""
                     }
                   >
                     {pr.mergedAt ? "merged" : pr.state}
@@ -87,8 +94,7 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
                     {pr.risk}
                   </Badge>
                   <span className="font-mono">
-                    <span className="text-green-600">+{pr.additions}</span>
-                    {" "}
+                    <span className="text-green-600">+{pr.additions}</span>{" "}
                     <span className="text-red-600">-{pr.deletions}</span>
                   </span>
                   <span>•</span>
@@ -101,7 +107,7 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={e => e.stopPropagation()}
                 >
                   <IconExternalLink className="h-4 w-4" />
                 </a>
@@ -136,9 +142,17 @@ export default function PullRequestsPage() {
   const agentId = searchParams.get("agentId")
   const repoName = searchParams.get("repo") || "Repository"
 
-  const { data: agentInfo, isLoading: agentInfoLoading, error: agentInfoError } = useAgentInfo(agentId || undefined)
+  const {
+    data: agentInfo,
+    isLoading: agentInfoLoading,
+    error: agentInfoError,
+  } = useAgentInfo(agentId || undefined)
 
-  const { data: prs = [], isLoading: prsLoading, error: prsError } = useQuery({
+  const {
+    data: prs = [],
+    isLoading: prsLoading,
+    error: prsError,
+  } = useQuery({
     queryKey: ["prs", integrationId, agentId],
     queryFn: async () => {
       if (!integrationId || !agentId) {
@@ -155,7 +169,7 @@ export default function PullRequestsPage() {
       }
 
       const response = await fetch(
-        `${agentUrl}/prs?integrationId=${encodeURIComponent(integrationId)}`
+        `${agentUrl}/prs?integrationId=${encodeURIComponent(integrationId)}`,
       )
 
       if (!response.ok) {
@@ -178,7 +192,7 @@ export default function PullRequestsPage() {
   const highRiskPRs = prs.filter(pr => pr.risk === "high" || pr.risk === "critical").length
   const lowRiskPRs = prs.filter(pr => pr.risk === "low").length
   const largePRs = prs.filter(pr => pr.size === "large").length
-  
+
   // Calculate percentages for badges
   const openPercentage = prs.length > 0 ? Math.round((openPRs / prs.length) * 100) : 0
   const highRiskPercentage = prs.length > 0 ? Math.round((highRiskPRs / prs.length) * 100) : 0
@@ -190,9 +204,7 @@ export default function PullRequestsPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-bold tracking-tight">{repoName}</h1>
-          <p className="text-muted-foreground">
-            Pull requests with AI-powered code reviews
-          </p>
+          <p className="text-muted-foreground">Pull requests with AI-powered code reviews</p>
         </div>
         {agentInfo && <EncryptionIndicator agentEnvironment={agentEnvironment} />}
       </div>
@@ -215,11 +227,10 @@ export default function PullRequestsPage() {
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
               <div className="line-clamp-1 flex gap-2 font-medium">
-                {openPRs > 0 ? `${openPRs} currently open` : "All closed"} <IconGitPullRequest className="size-4" />
+                {openPRs > 0 ? `${openPRs} currently open` : "All closed"}{" "}
+                <IconGitPullRequest className="size-4" />
               </div>
-              <div className="text-muted-foreground">
-                With AI-powered reviews
-              </div>
+              <div className="text-muted-foreground">With AI-powered reviews</div>
             </CardFooter>
           </Card>
 
@@ -230,19 +241,25 @@ export default function PullRequestsPage() {
                 {openPRs}
               </CardTitle>
               <CardAction>
-                <Badge variant="outline" className={openPercentage > 30 ? "text-yellow-600" : "text-green-600"}>
-                  {openPercentage > 30 ? <IconTrendingUp className="h-3 w-3" /> : <IconTrendingDown className="h-3 w-3" />}
+                <Badge
+                  variant="outline"
+                  className={openPercentage > 30 ? "text-yellow-600" : "text-green-600"}
+                >
+                  {openPercentage > 30 ? (
+                    <IconTrendingUp className="h-3 w-3" />
+                  ) : (
+                    <IconTrendingDown className="h-3 w-3" />
+                  )}
                   {openPercentage}%
                 </Badge>
               </CardAction>
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
               <div className="line-clamp-1 flex gap-2 font-medium">
-                {openPercentage > 30 ? "Active development" : "Low backlog"} <IconGitMerge className="size-4" />
+                {openPercentage > 30 ? "Active development" : "Low backlog"}{" "}
+                <IconGitMerge className="size-4" />
               </div>
-              <div className="text-muted-foreground">
-                {mergedPRs} merged successfully
-              </div>
+              <div className="text-muted-foreground">{mergedPRs} merged successfully</div>
             </CardFooter>
           </Card>
 
@@ -253,19 +270,25 @@ export default function PullRequestsPage() {
                 {highRiskPRs}
               </CardTitle>
               <CardAction>
-                <Badge variant="outline" className={highRiskPRs > 0 ? "text-orange-600" : "text-green-600"}>
-                  {highRiskPRs > 0 ? <IconAlertTriangle className="h-3 w-3" /> : <IconShieldCheck className="h-3 w-3" />}
+                <Badge
+                  variant="outline"
+                  className={highRiskPRs > 0 ? "text-orange-600" : "text-green-600"}
+                >
+                  {highRiskPRs > 0 ? (
+                    <IconAlertTriangle className="h-3 w-3" />
+                  ) : (
+                    <IconShieldCheck className="h-3 w-3" />
+                  )}
                   {highRiskPercentage}%
                 </Badge>
               </CardAction>
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
               <div className="line-clamp-1 flex gap-2 font-medium">
-                {highRiskPRs > 0 ? "Needs attention" : "All clear"} <IconAlertTriangle className="size-4" />
+                {highRiskPRs > 0 ? "Needs attention" : "All clear"}{" "}
+                <IconAlertTriangle className="size-4" />
               </div>
-              <div className="text-muted-foreground">
-                {lowRiskPRs} low risk PRs
-              </div>
+              <div className="text-muted-foreground">{lowRiskPRs} low risk PRs</div>
             </CardFooter>
           </Card>
 
@@ -276,19 +299,25 @@ export default function PullRequestsPage() {
                 {largePRs}
               </CardTitle>
               <CardAction>
-                <Badge variant="outline" className={largePRs > 2 ? "text-red-600" : "text-green-600"}>
-                  {largePRs > 2 ? <IconTrendingUp className="h-3 w-3" /> : <IconTrendingDown className="h-3 w-3" />}
+                <Badge
+                  variant="outline"
+                  className={largePRs > 2 ? "text-red-600" : "text-green-600"}
+                >
+                  {largePRs > 2 ? (
+                    <IconTrendingUp className="h-3 w-3" />
+                  ) : (
+                    <IconTrendingDown className="h-3 w-3" />
+                  )}
                   {largePRs > 0 ? "Review carefully" : "None"}
                 </Badge>
               </CardAction>
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
               <div className="line-clamp-1 flex gap-2 font-medium">
-                {largePRs > 2 ? "Consider splitting" : "Good sizing"} <IconSparkles className="size-4" />
+                {largePRs > 2 ? "Consider splitting" : "Good sizing"}{" "}
+                <IconSparkles className="size-4" />
               </div>
-              <div className="text-muted-foreground">
-                500+ lines of changes
-              </div>
+              <div className="text-muted-foreground">500+ lines of changes</div>
             </CardFooter>
           </Card>
         </div>
@@ -356,14 +385,12 @@ export default function PullRequestsPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {prs.map((pr) => (
+            {prs.map(pr => (
               <PRRow key={pr.number} pr={pr} />
             ))}
           </div>
         )}
       </div>
-
     </div>
   )
 }
-

@@ -6,9 +6,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -54,10 +52,7 @@
                     "secretRef": "masterkey"
                   }
                 ],
-                "scopes": [
-                  "container-app-1",
-                  "container-app-2"
-                ]
+                "scopes": ["container-app-1", "container-app-2"]
               }
             },
             {
@@ -88,10 +83,7 @@
                     "secretRef": "masterkey"
                   }
                 ],
-                "scopes": [
-                  "container-app-1",
-                  "container-app-2"
-                ]
+                "scopes": ["container-app-1", "container-app-2"]
               }
             },
             {
@@ -122,10 +114,7 @@
                     "secretRef": "cosmosdb/masterkey"
                   }
                 ],
-                "scopes": [
-                  "container-app-1",
-                  "container-app-2"
-                ]
+                "scopes": ["container-app-1", "container-app-2"]
               }
             }
           ]
@@ -164,10 +153,7 @@
                 "secretRef": "masterkey"
               }
             ],
-            "scopes": [
-              "container-app-1",
-              "container-app-2"
-            ]
+            "scopes": ["container-app-1", "container-app-2"]
           }
         }
       },
@@ -200,10 +186,7 @@
                 "secretRef": "masterkey"
               }
             ],
-            "scopes": [
-              "container-app-1",
-              "container-app-2"
-            ]
+            "scopes": ["container-app-1", "container-app-2"]
           }
         }
       },
@@ -240,10 +223,7 @@
                 "secretRef": "masterkey"
               }
             ],
-            "scopes": [
-              "container-app-1",
-              "container-app-2"
-            ]
+            "scopes": ["container-app-1", "container-app-2"]
           }
         }
       },
@@ -276,10 +256,7 @@
                 "secretRef": "masterkey"
               }
             ],
-            "scopes": [
-              "container-app-1",
-              "container-app-2"
-            ]
+            "scopes": ["container-app-1", "container-app-2"]
           }
         }
       },
@@ -462,9 +439,7 @@
                   },
                   "readOnly": true
                 },
-                "x-ms-identifiers": [
-                  "code"
-                ]
+                "x-ms-identifiers": ["code"]
               },
               "innererror": {
                 "description": "More information to debug error.",
@@ -487,12 +462,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -509,12 +479,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -575,10 +540,7 @@
           "value": {
             "description": "Secret Value.",
             "type": "string",
-            "x-ms-mutability": [
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["create", "update"],
             "x-ms-secret": true
           },
           "identity": {
@@ -645,9 +607,7 @@
                 "items": {
                   "$ref": "#/components/schemas/Secret"
                 },
-                "x-ms-identifiers": [
-                  "name"
-                ]
+                "x-ms-identifiers": ["name"]
               },
               "secretStoreComponent": {
                 "description": "Name of a Dapr component to retrieve component secrets from",
@@ -659,9 +619,7 @@
                 "items": {
                   "$ref": "#/components/schemas/DaprMetadata"
                 },
-                "x-ms-identifiers": [
-                  "name"
-                ]
+                "x-ms-identifiers": ["name"]
               },
               "scopes": {
                 "description": "Names of container apps that can use this Dapr component",
@@ -677,9 +635,7 @@
       },
       "DaprComponentsCollection": {
         "description": "Dapr Components ARM resource.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -715,9 +671,7 @@
       },
       "DaprSecretsCollection": {
         "description": "Dapr component Secrets Collection for ListSecrets Action.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -726,9 +680,7 @@
             "items": {
               "$ref": "#/components/schemas/DaprSecret"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       }

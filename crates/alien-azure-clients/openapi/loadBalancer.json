@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -701,9 +699,7 @@
                 "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/loadBalancers/lb/frontendIPConfigurations/fe-lb",
                 "type": "Microsoft.Network/loadBalancers/frontendIPConfigurations",
                 "etag": "W/\"00000000-0000-0000-0000-00000000\"",
-                "zones": [
-                  "1"
-                ],
+                "zones": ["1"],
                 "properties": {
                   "provisioningState": "Succeeded",
                   "privateIPAddress": "10.0.1.4",
@@ -2620,10 +2616,7 @@
       },
       "Migrate_load_balancer_to_IP_Based": {
         "value": {
-          "migratedPools": [
-            "pool1",
-            "pool2"
-          ]
+          "migratedPools": ["pool1", "pool2"]
         }
       }
     },
@@ -2921,11 +2914,7 @@
           "protocol": {
             "type": "string",
             "description": "Protocol of gateway load balancer tunnel interface.",
-            "enum": [
-              "None",
-              "Native",
-              "VXLAN"
-            ],
+            "enum": ["None", "Native", "VXLAN"],
             "x-ms-enum": {
               "name": "GatewayLoadBalancerTunnelProtocol",
               "modelAsString": true
@@ -2934,11 +2923,7 @@
           "type": {
             "type": "string",
             "description": "Traffic type of gateway load balancer tunnel interface.",
-            "enum": [
-              "None",
-              "Internal",
-              "External"
-            ],
+            "enum": ["None", "Internal", "External"],
             "x-ms-enum": {
               "name": "GatewayLoadBalancerTunnelInterfaceType",
               "modelAsString": true
@@ -2952,11 +2937,7 @@
           "name": {
             "type": "string",
             "description": "Name of a load balancer SKU.",
-            "enum": [
-              "Basic",
-              "Standard",
-              "Gateway"
-            ],
+            "enum": ["Basic", "Standard", "Gateway"],
             "x-ms-enum": {
               "name": "LoadBalancerSkuName",
               "modelAsString": true
@@ -2965,10 +2946,7 @@
           "tier": {
             "type": "string",
             "description": "Tier of a load balancer SKU.",
-            "enum": [
-              "Regional",
-              "Global"
-            ],
+            "enum": ["Regional", "Global"],
             "x-ms-enum": {
               "name": "LoadBalancerSkuTier",
               "modelAsString": true
@@ -3103,11 +3081,7 @@
           "adminState": {
             "type": "string",
             "description": "A list of administrative states which once set can override health probe so that Load Balancer will always forward new connections to backend, or deny new connections and reset existing connections.",
-            "enum": [
-              "None",
-              "Up",
-              "Down"
-            ],
+            "enum": ["None", "Up", "Down"],
             "x-ms-enum": {
               "name": "LoadBalancerBackendAddressAdminState",
               "modelAsString": true
@@ -3197,10 +3171,7 @@
           "syncMode": {
             "type": "string",
             "description": "Backend address synchronous mode for the backend pool",
-            "enum": [
-              "Automatic",
-              "Manual"
-            ],
+            "enum": ["Automatic", "Manual"],
             "x-ms-enum": {
               "name": "SyncMode",
               "modelAsString": true
@@ -3260,11 +3231,7 @@
           "loadDistribution": {
             "type": "string",
             "description": "The load distribution policy for this rule.",
-            "enum": [
-              "Default",
-              "SourceIP",
-              "SourceIPProtocol"
-            ],
+            "enum": ["Default", "SourceIP", "SourceIPProtocol"],
             "x-ms-enum": {
               "name": "LoadDistribution",
               "modelAsString": true
@@ -3305,10 +3272,7 @@
             "$ref": "#/components/schemas/ProvisioningState"
           }
         },
-        "required": [
-          "protocol",
-          "frontendPort"
-        ],
+        "required": ["protocol", "frontendPort"],
         "description": "Properties of the load balancer."
       },
       "LoadBalancingRule": {
@@ -3351,11 +3315,7 @@
           "protocol": {
             "type": "string",
             "description": "The protocol of the end point. If 'Tcp' is specified, a received ACK is required for the probe to be successful. If 'Http' or 'Https' is specified, a 200 OK response from the specifies URI is required for the probe to be successful.",
-            "enum": [
-              "Http",
-              "Tcp",
-              "Https"
-            ],
+            "enum": ["Http", "Tcp", "Https"],
             "x-ms-enum": {
               "name": "ProbeProtocol",
               "modelAsString": true
@@ -3374,10 +3334,7 @@
           "noHealthyBackendsBehavior": {
             "type": "string",
             "description": "Determines how new connections are handled by the load balancer when all backend instances are probed down.",
-            "enum": [
-              "AllProbedDown",
-              "AllProbedUp"
-            ],
+            "enum": ["AllProbedDown", "AllProbedUp"],
             "x-ms-enum": {
               "name": "ProbeNoHealthyBackendsBehavior",
               "modelAsString": true,
@@ -3411,10 +3368,7 @@
             "$ref": "#/components/schemas/ProvisioningState"
           }
         },
-        "required": [
-          "protocol",
-          "port"
-        ],
+        "required": ["protocol", "port"],
         "description": "Load balancer probe resource."
       },
       "Probe": {
@@ -3564,12 +3518,7 @@
             "$ref": "#/components/schemas/ProvisioningState"
           }
         },
-        "required": [
-          "protocol",
-          "frontendPortRangeStart",
-          "frontendPortRangeEnd",
-          "backendPort"
-        ],
+        "required": ["protocol", "frontendPortRangeStart", "frontendPortRangeEnd", "backendPort"],
         "description": "Properties of Inbound NAT pool."
       },
       "InboundNatPool": {
@@ -3622,11 +3571,7 @@
           "protocol": {
             "type": "string",
             "description": "The protocol for the outbound rule in load balancer.",
-            "enum": [
-              "Tcp",
-              "Udp",
-              "All"
-            ],
+            "enum": ["Tcp", "Udp", "All"],
             "x-ms-enum": {
               "name": "LoadBalancerOutboundRuleProtocol",
               "modelAsString": true
@@ -3641,11 +3586,7 @@
             "description": "The timeout for the TCP idle connection."
           }
         },
-        "required": [
-          "backendAddressPool",
-          "frontendIPConfigurations",
-          "protocol"
-        ],
+        "required": ["backendAddressPool", "frontendIPConfigurations", "protocol"],
         "description": "Outbound rule of the load balancer."
       },
       "OutboundRule": {
@@ -3737,10 +3678,7 @@
           "scope": {
             "type": "string",
             "description": "Indicates the scope of the load balancer: external (Public) or internal (Private).",
-            "enum": [
-              "Public",
-              "Private"
-            ],
+            "enum": ["Public", "Private"],
             "x-ms-enum": {
               "name": "LoadBalancerScope",
               "modelAsString": true
@@ -3895,12 +3833,7 @@
       "TransportProtocol": {
         "type": "string",
         "description": "The transport protocol for the endpoint.",
-        "enum": [
-          "Udp",
-          "Tcp",
-          "All",
-          "Quic"
-        ],
+        "enum": ["Udp", "Tcp", "All", "Quic"],
         "x-ms-enum": {
           "name": "TransportProtocol",
           "modelAsString": true
@@ -4149,9 +4082,7 @@
       "ExtendedLocationType": {
         "type": "string",
         "description": "The supported ExtendedLocation types. Currently only EdgeZone is supported in Microsoft.Network resources.",
-        "enum": [
-          "EdgeZone"
-        ],
+        "enum": ["EdgeZone"],
         "x-ms-enum": {
           "name": "ExtendedLocationTypes",
           "modelAsString": true
@@ -4182,10 +4113,7 @@
       "IPAllocationMethod": {
         "type": "string",
         "description": "IP address allocation method.",
-        "enum": [
-          "Static",
-          "Dynamic"
-        ],
+        "enum": ["Static", "Dynamic"],
         "x-ms-enum": {
           "name": "IPAllocationMethod",
           "modelAsString": true
@@ -4194,10 +4122,7 @@
       "IPVersion": {
         "type": "string",
         "description": "IP address version.",
-        "enum": [
-          "IPv4",
-          "IPv6"
-        ],
+        "enum": ["IPv4", "IPv6"],
         "x-ms-enum": {
           "name": "IPVersion",
           "modelAsString": true
@@ -4207,12 +4132,7 @@
         "type": "string",
         "readOnly": true,
         "description": "The current provisioning state.",
-        "enum": [
-          "Succeeded",
-          "Updating",
-          "Deleting",
-          "Failed"
-        ],
+        "enum": ["Succeeded", "Updating", "Deleting", "Failed"],
         "x-ms-enum": {
           "name": "ProvisioningState",
           "modelAsString": true
@@ -4252,10 +4172,7 @@
       "SecurityRuleAccess": {
         "type": "string",
         "description": "Whether network traffic is allowed or denied.",
-        "enum": [
-          "Allow",
-          "Deny"
-        ],
+        "enum": ["Allow", "Deny"],
         "x-ms-enum": {
           "name": "SecurityRuleAccess",
           "modelAsString": true
@@ -4264,10 +4181,7 @@
       "SecurityRuleDirection": {
         "type": "string",
         "description": "The direction of the rule. The direction specifies if rule will be evaluated on incoming or outgoing traffic.",
-        "enum": [
-          "Inbound",
-          "Outbound"
-        ],
+        "enum": ["Inbound", "Outbound"],
         "x-ms-enum": {
           "name": "SecurityRuleDirection",
           "modelAsString": true
@@ -4282,14 +4196,7 @@
           "protocol": {
             "type": "string",
             "description": "Network protocol this rule applies to.",
-            "enum": [
-              "Tcp",
-              "Udp",
-              "Icmp",
-              "Esp",
-              "*",
-              "Ah"
-            ],
+            "enum": ["Tcp", "Udp", "Icmp", "Esp", "*", "Ah"],
             "x-ms-enum": {
               "name": "SecurityRuleProtocol",
               "modelAsString": true
@@ -4370,12 +4277,7 @@
             "$ref": "#/components/schemas/ProvisioningState"
           }
         },
-        "required": [
-          "protocol",
-          "access",
-          "priority",
-          "direction"
-        ],
+        "required": ["protocol", "access", "priority", "direction"],
         "description": "Security rule resource."
       },
       "SecurityRule": {
@@ -4615,11 +4517,7 @@
           "ipVersionType": {
             "type": "string",
             "description": "Specifies the IP version type for the private IPs of the private endpoint. If not defined, this defaults to IPv4.",
-            "enum": [
-              "IPv4",
-              "IPv6",
-              "DualStack"
-            ],
+            "enum": ["IPv4", "IPv6", "DualStack"],
             "default": "IPv4",
             "x-ms-enum": {
               "name": "PrivateEndpointIPVersionType",
@@ -4887,11 +4785,7 @@
           "name": {
             "type": "string",
             "description": "Name of a public IP address SKU.",
-            "enum": [
-              "Basic",
-              "Standard",
-              "StandardV2"
-            ],
+            "enum": ["Basic", "Standard", "StandardV2"],
             "x-ms-enum": {
               "name": "PublicIPAddressSkuName",
               "modelAsString": true
@@ -4900,10 +4794,7 @@
           "tier": {
             "type": "string",
             "description": "Tier of a public IP address SKU.",
-            "enum": [
-              "Regional",
-              "Global"
-            ],
+            "enum": ["Regional", "Global"],
             "x-ms-enum": {
               "name": "PublicIPAddressSkuTier",
               "modelAsString": true
@@ -4995,12 +4886,7 @@
           "domainNameLabelScope": {
             "type": "string",
             "description": "The domain name label scope. If a domain name label and a domain name label scope are specified, an A DNS record is created for the public IP in the Microsoft Azure DNS system with a hashed value includes in FQDN.",
-            "enum": [
-              "TenantReuse",
-              "SubscriptionReuse",
-              "ResourceGroupReuse",
-              "NoReuse"
-            ],
+            "enum": ["TenantReuse", "SubscriptionReuse", "ResourceGroupReuse", "NoReuse"],
             "x-ms-enum": {
               "name": "PublicIpAddressDnsSettingsDomainNameLabelScope",
               "modelAsString": false
@@ -5022,11 +4908,7 @@
           "protectionMode": {
             "readOnly": false,
             "type": "string",
-            "enum": [
-              "VirtualNetworkInherited",
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["VirtualNetworkInherited", "Enabled", "Disabled"],
             "x-ms-enum": {
               "name": "DdosSettingsProtectionMode",
               "modelAsString": true
@@ -5057,10 +4939,7 @@
           "name": {
             "type": "string",
             "description": "Name of Nat Gateway SKU.",
-            "enum": [
-              "Standard",
-              "StandardV2"
-            ],
+            "enum": ["Standard", "StandardV2"],
             "x-ms-enum": {
               "name": "NatGatewaySkuName",
               "modelAsString": true
@@ -5207,13 +5086,7 @@
           "migrationPhase": {
             "type": "string",
             "description": "Migration phase of Public IP Address.",
-            "enum": [
-              "None",
-              "Prepare",
-              "Commit",
-              "Abort",
-              "Committed"
-            ],
+            "enum": ["None", "Prepare", "Commit", "Abort", "Committed"],
             "x-ms-enum": {
               "name": "PublicIPAddressMigrationPhase",
               "modelAsString": true
@@ -5225,10 +5098,7 @@
           "deleteOption": {
             "type": "string",
             "description": "Specify what happens to the public IP address when the VM using it is deleted",
-            "enum": [
-              "Delete",
-              "Detach"
-            ],
+            "enum": ["Delete", "Detach"],
             "x-ms-enum": {
               "name": "DeleteOptions",
               "modelAsString": true
@@ -5510,10 +5380,7 @@
           "accessMode": {
             "type": "string",
             "description": "The access mode of the private link service.",
-            "enum": [
-              "Default",
-              "Restricted"
-            ],
+            "enum": ["Default", "Restricted"],
             "x-ms-enum": {
               "name": "AccessMode",
               "modelAsString": true,
@@ -5693,10 +5560,7 @@
           "nicType": {
             "type": "string",
             "description": "Type of Network Interface resource.",
-            "enum": [
-              "Standard",
-              "Elastic"
-            ],
+            "enum": ["Standard", "Elastic"],
             "x-ms-enum": {
               "name": "NetworkInterfaceNicType",
               "modelAsString": true
@@ -5708,13 +5572,7 @@
           "migrationPhase": {
             "type": "string",
             "description": "Migration phase of Network Interface resource.",
-            "enum": [
-              "None",
-              "Prepare",
-              "Commit",
-              "Abort",
-              "Committed"
-            ],
+            "enum": ["None", "Prepare", "Commit", "Abort", "Committed"],
             "x-ms-enum": {
               "name": "NetworkInterfaceMigrationPhase",
               "modelAsString": true
@@ -5723,12 +5581,7 @@
           "auxiliaryMode": {
             "type": "string",
             "description": "Auxiliary mode of Network Interface resource.",
-            "enum": [
-              "None",
-              "MaxConnections",
-              "Floating",
-              "AcceleratedConnections"
-            ],
+            "enum": ["None", "MaxConnections", "Floating", "AcceleratedConnections"],
             "x-ms-enum": {
               "name": "NetworkInterfaceAuxiliaryMode",
               "modelAsString": true
@@ -5737,13 +5590,7 @@
           "auxiliarySku": {
             "type": "string",
             "description": "Auxiliary sku of Network Interface resource.",
-            "enum": [
-              "None",
-              "A1",
-              "A2",
-              "A4",
-              "A8"
-            ],
+            "enum": ["None", "A1", "A2", "A4", "A8"],
             "x-ms-enum": {
               "name": "NetworkInterfaceAuxiliarySku",
               "modelAsString": true
@@ -5774,9 +5621,7 @@
           "type": {
             "type": "string",
             "description": "The file type of flow log.",
-            "enum": [
-              "JSON"
-            ],
+            "enum": ["JSON"],
             "x-ms-enum": {
               "name": "FlowLogFormatType",
               "modelAsString": true
@@ -5826,10 +5671,7 @@
       },
       "FlowLogPropertiesFormat": {
         "description": "Parameters that define the configuration of flow log.",
-        "required": [
-          "targetResourceId",
-          "storageId"
-        ],
+        "required": ["targetResourceId", "storageId"],
         "properties": {
           "targetResourceId": {
             "description": "ID of network security group to which flow log will be applied.",
@@ -5885,12 +5727,7 @@
           "type": {
             "type": "string",
             "description": "The type of identity used for the resource. The type 'SystemAssigned, UserAssigned' includes both an implicitly created identity and a set of user assigned identities. The type 'None' will remove any identities from the virtual machine.",
-            "enum": [
-              "SystemAssigned",
-              "UserAssigned",
-              "SystemAssigned, UserAssigned",
-              "None"
-            ],
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
             "x-ms-enum": {
               "name": "ResourceIdentityType",
               "modelAsString": false
@@ -5998,13 +5835,7 @@
       "RouteNextHopType": {
         "type": "string",
         "description": "The type of Azure hop the packet should be sent to.",
-        "enum": [
-          "VirtualNetworkGateway",
-          "VnetLocal",
-          "Internet",
-          "VirtualAppliance",
-          "None"
-        ],
+        "enum": ["VirtualNetworkGateway", "VnetLocal", "Internet", "VirtualAppliance", "None"],
         "x-ms-enum": {
           "name": "RouteNextHopType",
           "modelAsString": true
@@ -6032,9 +5863,7 @@
             "description": "A value indicating whether this route overrides overlapping BGP routes regardless of LPM."
           }
         },
-        "required": [
-          "nextHopType"
-        ],
+        "required": ["nextHopType"],
         "description": "Route resource."
       },
       "Route": {
@@ -6601,12 +6430,7 @@
             "type": "string",
             "default": "Disabled",
             "description": "Enable or Disable apply network policies on private end point in the subnet.",
-            "enum": [
-              "Enabled",
-              "Disabled",
-              "NetworkSecurityGroupEnabled",
-              "RouteTableEnabled"
-            ],
+            "enum": ["Enabled", "Disabled", "NetworkSecurityGroupEnabled", "RouteTableEnabled"],
             "x-ms-enum": {
               "name": "VirtualNetworkPrivateEndpointNetworkPolicies",
               "modelAsString": true
@@ -6616,10 +6440,7 @@
             "type": "string",
             "default": "Enabled",
             "description": "Enable or Disable apply network policies on private link service in the subnet.",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "x-ms-enum": {
               "name": "VirtualNetworkPrivateLinkServiceNetworkPolicies",
               "modelAsString": true
@@ -6636,10 +6457,7 @@
             "type": "string",
             "default": null,
             "description": "Set this property to Tenant to allow sharing subnet with other subscriptions in your AAD tenant. This property can only be set if defaultOutboundAccess is set to false, both properties can only be set if subnet is empty.",
-            "enum": [
-              "Tenant",
-              "DelegatedServices"
-            ],
+            "enum": ["Tenant", "DelegatedServices"],
             "x-ms-enum": {
               "name": "SharingScope",
               "modelAsString": true

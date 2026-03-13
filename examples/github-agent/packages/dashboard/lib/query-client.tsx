@@ -5,7 +5,7 @@ import { useState } from "react"
 
 /**
  * React Query provider for the dashboard.
- * 
+ *
  * Provides data fetching, caching, and synchronization for:
  * - Agents list
  * - Agent info
@@ -22,9 +22,8 @@ export function ReactQueryProvider({ children }: { children: React.ReactNode }) 
             refetchOnWindowFocus: false,
           },
         },
-      })
+      }),
   )
 
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
-

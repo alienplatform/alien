@@ -1,12 +1,12 @@
 "use client"
 
-import { useState } from "react"
-import Link from "next/link"
-import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { IconBrandGithub, IconPlus, IconArrowRight, IconServer } from "@tabler/icons-react"
+import { Card, CardContent } from "@/components/ui/card"
+import { useAgents, useDeploymentGroup } from "@/lib/queries"
+import { IconArrowRight, IconBrandGithub, IconPlus, IconServer } from "@tabler/icons-react"
+import Link from "next/link"
+import { useState } from "react"
 import { DeployAgentDialog } from "../agents/_components/deploy-agent-dialog"
-import { useDeploymentGroup, useAgents } from "@/lib/queries"
 
 interface EmptyDashboardProps {
   hasAgents: boolean
@@ -15,7 +15,7 @@ interface EmptyDashboardProps {
 export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
   const [deployDialogOpen, setDeployDialogOpen] = useState(false)
   const { data: agents = [] } = useAgents()
-  const { 
+  const {
     data: deploymentGroupData,
     isLoading: tokenLoading,
     error: tokenError,
@@ -42,7 +42,8 @@ export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
               </div>
               <h3 className="text-xl font-semibold mb-2">No agents deployed</h3>
               <p className="text-muted-foreground text-center max-w-md mb-6">
-                Deploy an agent first to start analyzing your GitHub repositories. Agents run in your environment, keeping your data private and secure.
+                Deploy an agent first to start analyzing your GitHub repositories. Agents run in
+                your environment, keeping your data private and secure.
               </p>
               <Button asChild>
                 <Link href="/agents?deploy=true">
@@ -76,7 +77,8 @@ export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
           </div>
           <h3 className="text-xl font-semibold mb-2">🎉 Agent deployed!</h3>
           <p className="text-muted-foreground text-center max-w-md mb-6">
-            Great! Your agent is running. Now connect a GitHub repository to start analyzing code review metrics and track team performance.
+            Great! Your agent is running. Now connect a GitHub repository to start analyzing code
+            review metrics and track team performance.
           </p>
           <Button asChild>
             <Link href="/integrations">
@@ -89,4 +91,3 @@ export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
     </div>
   )
 }
-

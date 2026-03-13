@@ -1,7 +1,7 @@
+import { eq } from "drizzle-orm"
 import { alien, config } from "./config"
 import { db } from "./db"
 import { organizationMetadata } from "./schema"
-import { eq } from "drizzle-orm"
 
 /**
  * Agent type from the Platform SDK
@@ -36,7 +36,7 @@ export async function listAgents(organizationId: string): Promise<Agent[]> {
     deploymentGroup: metadata.deploymentGroupId,
   })
 
-  return response.items.map((agent) => ({
+  return response.items.map(agent => ({
     id: agent.id,
     name: agent.name,
     platform: agent.platform,
@@ -45,4 +45,3 @@ export async function listAgents(organizationId: string): Promise<Agent[]> {
     createdAt: agent.createdAt.toISOString(),
   }))
 }
-

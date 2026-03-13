@@ -6,9 +6,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -104,10 +102,7 @@
               "logLevel": "Information",
               "auditLogStatus": "Disabled"
             },
-            "notificationsList": [
-              "hello-world:*:*",
-              "sample/repo/*:1.0:*"
-            ],
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
             "garbageCollection": {
               "enabled": true,
               "schedule": "0 5 * * *"
@@ -140,10 +135,7 @@
               "logLevel": "Information",
               "auditLogStatus": "Disabled"
             },
-            "notificationsList": [
-              "hello-world:*:*",
-              "sample/repo/*:1.0:*"
-            ],
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
             "garbageCollection": {
               "enabled": true,
               "schedule": "0 5 * * *"
@@ -174,10 +166,7 @@
               "logLevel": "Debug",
               "auditLogStatus": "Enabled"
             },
-            "notificationsList": [
-              "hello-world:*:*",
-              "sample/repo/*:1.0:*"
-            ],
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
             "garbageCollection": {
               "enabled": true,
               "schedule": "0 5 * * *"
@@ -212,10 +201,7 @@
                   "logLevel": "Information",
                   "auditLogStatus": "Disabled"
                 },
-                "notificationsList": [
-                  "hello-world:*:*",
-                  "sample/repo/*:1.0:*"
-                ],
+                "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
                 "garbageCollection": {
                   "enabled": true,
                   "schedule": "0 5 * * *"
@@ -787,13 +773,8 @@
               "type": "Microsoft.ContainerRegistry/registries/privateLinkResources",
               "properties": {
                 "groupId": "registry",
-                "requiredMembers": [
-                  "registry",
-                  "registry_data_myregion"
-                ],
-                "requiredZoneNames": [
-                  "privatelink.azurecr.io"
-                ]
+                "requiredMembers": ["registry", "registry_data_myregion"],
+                "requiredZoneNames": ["privatelink.azurecr.io"]
               }
             }
           ]
@@ -806,13 +787,8 @@
           "type": "Microsoft.ContainerRegistry/registries/privateLinkResources",
           "properties": {
             "groupId": "registry",
-            "requiredMembers": [
-              "registry",
-              "registry_data_myregion"
-            ],
-            "requiredZoneNames": [
-              "privatelink.azurecr.io"
-            ]
+            "requiredMembers": ["registry", "registry_data_myregion"],
+            "requiredZoneNames": ["privatelink.azurecr.io"]
           }
         }
       },
@@ -1127,9 +1103,7 @@
               "properties": {
                 "status": "enabled",
                 "scope": "myRepository",
-                "actions": [
-                  "push"
-                ],
+                "actions": ["push"],
                 "provisioningState": "Succeeded"
               }
             }
@@ -1148,9 +1122,7 @@
           "properties": {
             "status": "enabled",
             "scope": "myRepository",
-            "actions": [
-              "push"
-            ],
+            "actions": ["push"],
             "provisioningState": "Succeeded"
           }
         }
@@ -1167,9 +1139,7 @@
           "properties": {
             "status": "enabled",
             "scope": "myRepository",
-            "actions": [
-              "push"
-            ],
+            "actions": ["push"],
             "provisioningState": "Creating"
           }
         }
@@ -1186,9 +1156,7 @@
           "properties": {
             "status": "enabled",
             "scope": "myRepository",
-            "actions": [
-              "push"
-            ],
+            "actions": ["push"],
             "provisioningState": "Updating"
           }
         }
@@ -2311,10 +2279,7 @@
         "properties": {
           "status": {
             "description": "The activation status of the connected registry.",
-            "enum": [
-              "Active",
-              "Inactive"
-            ],
+            "enum": ["Active", "Inactive"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2331,10 +2296,7 @@
           "status": {
             "description": "The value that indicates whether the policy is enabled or not.",
             "default": "enabled",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "AzureADAuthenticationAsArmPolicyStatus",
@@ -2397,14 +2359,7 @@
           },
           "provisioningState": {
             "description": "Provisioning state of the resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2466,22 +2421,12 @@
       },
       "ConnectedRegistryProperties": {
         "description": "The properties of a connected registry.",
-        "required": [
-          "mode",
-          "parent"
-        ],
+        "required": ["mode", "parent"],
         "type": "object",
         "properties": {
           "provisioningState": {
             "description": "Provisioning state of the resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2491,12 +2436,7 @@
           },
           "mode": {
             "description": "The mode of the connected registry resource that indicates the permissions of the registry.",
-            "enum": [
-              "ReadWrite",
-              "ReadOnly",
-              "Registry",
-              "Mirror"
-            ],
+            "enum": ["ReadWrite", "ReadOnly", "Registry", "Mirror"],
             "type": "string",
             "x-ms-enum": {
               "name": "ConnectedRegistryMode",
@@ -2510,12 +2450,7 @@
           },
           "connectionState": {
             "description": "The current connection state of the connected registry.",
-            "enum": [
-              "Online",
-              "Offline",
-              "Syncing",
-              "Unhealthy"
-            ],
+            "enum": ["Online", "Offline", "Syncing", "Unhealthy"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2554,9 +2489,7 @@
               "$ref": "#/components/schemas/StatusDetailProperties"
             },
             "readOnly": true,
-            "x-ms-identifiers": [
-              "correlationId"
-            ]
+            "x-ms-identifiers": ["correlationId"]
           },
           "notificationsList": {
             "description": "The list of notifications subscription information for the connected registry.",
@@ -2629,13 +2562,7 @@
           "logLevel": {
             "description": "The verbosity of logs persisted on the connected registry.",
             "default": "Information",
-            "enum": [
-              "Debug",
-              "Information",
-              "Warning",
-              "Error",
-              "None"
-            ],
+            "enum": ["Debug", "Information", "Warning", "Error", "None"],
             "type": "string",
             "x-ms-enum": {
               "name": "LogLevel",
@@ -2645,10 +2572,7 @@
           "auditLogStatus": {
             "description": "Indicates whether audit logs are enabled on the connected registry.",
             "default": "Disabled",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "AuditLogStatus",
@@ -2673,9 +2597,7 @@
       },
       "ParentProperties": {
         "description": "The properties of the connected registry parent.",
-        "required": [
-          "syncProperties"
-        ],
+        "required": ["syncProperties"],
         "type": "object",
         "properties": {
           "id": {
@@ -2737,12 +2659,7 @@
           },
           "type": {
             "description": "The identity type.",
-            "enum": [
-              "SystemAssigned",
-              "UserAssigned",
-              "SystemAssigned, UserAssigned",
-              "None"
-            ],
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
             "type": "string",
             "x-ms-enum": {
               "name": "ResourceIdentityType",
@@ -2772,9 +2689,7 @@
             "items": {
               "$ref": "#/components/schemas/AuthCredential"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "creationDate": {
             "description": "The creation date of credential store resource.",
@@ -2783,14 +2698,7 @@
           },
           "provisioningState": {
             "description": "Provisioning state of the resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2817,9 +2725,7 @@
       },
       "Resource": {
         "description": "An Azure resource.",
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "properties": {
           "id": {
             "description": "The resource ID.",
@@ -2839,10 +2745,7 @@
           "location": {
             "description": "The location of the resource. This cannot be changed after the resource is created.",
             "type": "string",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           },
           "tags": {
             "description": "The tags of the resource.",
@@ -2863,9 +2766,7 @@
         "properties": {
           "name": {
             "description": "The name of the credential.",
-            "enum": [
-              "Credential1"
-            ],
+            "enum": ["Credential1"],
             "type": "string",
             "x-ms-enum": {
               "name": "CredentialName",
@@ -2915,10 +2816,7 @@
         "properties": {
           "status": {
             "description": "The health status of credential.",
-            "enum": [
-              "Healthy",
-              "Unhealthy"
-            ],
+            "enum": ["Healthy", "Unhealthy"],
             "type": "string",
             "x-ms-enum": {
               "name": "CredentialHealthStatus",
@@ -2945,12 +2843,7 @@
           },
           "createdByType": {
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "type": "string",
             "x-ms-enum": {
               "name": "createdByType",
@@ -2967,12 +2860,7 @@
           },
           "lastModifiedByType": {
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "type": "string",
             "x-ms-enum": {
               "name": "lastModifiedByType",
@@ -3008,16 +2896,12 @@
             "items": {
               "$ref": "#/components/schemas/AuthCredential"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
       "ImportImageParameters": {
-        "required": [
-          "source"
-        ],
+        "required": ["source"],
         "type": "object",
         "properties": {
           "source": {
@@ -3040,10 +2924,7 @@
           "mode": {
             "description": "When Force, any existing target tags will be overwritten. When NoForce, any existing target tags will fail the operation before any copying begins.",
             "default": "NoForce",
-            "enum": [
-              "NoForce",
-              "Force"
-            ],
+            "enum": ["NoForce", "Force"],
             "type": "string",
             "x-ms-enum": {
               "name": "ImportMode",
@@ -3053,9 +2934,7 @@
         }
       },
       "ImportSource": {
-        "required": [
-          "sourceImage"
-        ],
+        "required": ["sourceImage"],
         "type": "object",
         "properties": {
           "resourceId": {
@@ -3076,9 +2955,7 @@
         }
       },
       "ImportSourceCredentials": {
-        "required": [
-          "password"
-        ],
+        "required": ["password"],
         "type": "object",
         "properties": {
           "username": {
@@ -3101,9 +2978,7 @@
             "items": {
               "$ref": "#/components/schemas/OperationDefinition"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "nextLink": {
             "description": "The URI that can be used to request the next list of container registry operations.",
@@ -3176,9 +3051,7 @@
             "items": {
               "$ref": "#/components/schemas/OperationMetricSpecificationDefinition"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "logSpecifications": {
             "description": "A list of Azure Monitoring log definitions.",
@@ -3186,9 +3059,7 @@
             "items": {
               "$ref": "#/components/schemas/OperationLogSpecificationDefinition"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -3242,10 +3113,7 @@
       },
       "RegistryNameCheckRequest": {
         "description": "A request to check whether a container registry name is available.",
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "type": "object",
         "properties": {
           "name": {
@@ -3257,9 +3125,7 @@
           },
           "type": {
             "description": "The resource type of the container registry. This field must be set to 'Microsoft.ContainerRegistry/registries'.",
-            "enum": [
-              "Microsoft.ContainerRegistry/registries"
-            ],
+            "enum": ["Microsoft.ContainerRegistry/registries"],
             "type": "string",
             "x-ms-enum": {
               "name": "ContainerRegistryResourceType",
@@ -3329,14 +3195,7 @@
           },
           "provisioningState": {
             "description": "The provisioning state of private endpoint connection resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -3362,12 +3221,7 @@
         "properties": {
           "status": {
             "description": "The private link service connection status.",
-            "enum": [
-              "Approved",
-              "Pending",
-              "Rejected",
-              "Disconnected"
-            ],
+            "enum": ["Approved", "Pending", "Rejected", "Disconnected"],
             "type": "string",
             "x-ms-enum": {
               "name": "ConnectionStatus",
@@ -3380,10 +3234,7 @@
           },
           "actionsRequired": {
             "description": "A message indicating if changes on the service provider require any updates on the consumer.",
-            "enum": [
-              "None",
-              "Recreate"
-            ],
+            "enum": ["None", "Recreate"],
             "type": "string",
             "x-ms-enum": {
               "name": "ActionsRequired",
@@ -3411,9 +3262,7 @@
       },
       "Registry": {
         "description": "An object that represents a container registry.",
-        "required": [
-          "sku"
-        ],
+        "required": ["sku"],
         "type": "object",
         "allOf": [
           {
@@ -3434,19 +3283,12 @@
       },
       "Sku": {
         "description": "The SKU of a container registry.",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "type": "object",
         "properties": {
           "name": {
             "description": "The SKU name of the container registry. Required for registry creation.",
-            "enum": [
-              "Classic",
-              "Basic",
-              "Standard",
-              "Premium"
-            ],
+            "enum": ["Classic", "Basic", "Standard", "Premium"],
             "type": "string",
             "x-ms-enum": {
               "name": "SkuName",
@@ -3455,12 +3297,7 @@
           },
           "tier": {
             "description": "The SKU tier based on the SKU name.",
-            "enum": [
-              "Classic",
-              "Basic",
-              "Standard",
-              "Premium"
-            ],
+            "enum": ["Classic", "Basic", "Standard", "Premium"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -3486,14 +3323,7 @@
           },
           "provisioningState": {
             "description": "The provisioning state of the container registry at the time the operation was called.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -3541,10 +3371,7 @@
           "publicNetworkAccess": {
             "description": "Whether or not public network access is allowed for the container registry.",
             "default": "Enabled",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "PublicNetworkAccess",
@@ -3554,10 +3381,7 @@
           "networkRuleBypassOptions": {
             "description": "Whether to allow trusted Azure services to access a network restricted registry.",
             "default": "AzureServices",
-            "enum": [
-              "AzureServices",
-              "None"
-            ],
+            "enum": ["AzureServices", "None"],
             "type": "string",
             "x-ms-enum": {
               "name": "NetworkRuleBypassOptions",
@@ -3567,10 +3391,7 @@
           "zoneRedundancy": {
             "description": "Whether or not zone redundancy is enabled for this container registry",
             "default": "Disabled",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "ZoneRedundancy",
@@ -3638,9 +3459,7 @@
       },
       "StorageAccountProperties": {
         "description": "The properties of a storage account for a container registry. Only applicable to Classic SKU.",
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "type": "object",
         "properties": {
           "id": {
@@ -3651,10 +3470,7 @@
       },
       "SyncProperties": {
         "description": "The sync properties of the connected registry with its parent.",
-        "required": [
-          "tokenId",
-          "messageTtl"
-        ],
+        "required": ["tokenId", "messageTtl"],
         "type": "object",
         "properties": {
           "tokenId": {
@@ -3709,18 +3525,13 @@
       },
       "NetworkRuleSet": {
         "description": "The network rule set for a container registry.",
-        "required": [
-          "defaultAction"
-        ],
+        "required": ["defaultAction"],
         "type": "object",
         "properties": {
           "defaultAction": {
             "description": "The default action of allow or deny when no other rules match.",
             "default": "Allow",
-            "enum": [
-              "Allow",
-              "Deny"
-            ],
+            "enum": ["Allow", "Deny"],
             "type": "string",
             "x-ms-enum": {
               "name": "DefaultAction",
@@ -3763,10 +3574,7 @@
         "properties": {
           "status": {
             "description": "Indicates whether or not the encryption is enabled for container registry.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "EncryptionStatus",
@@ -3795,17 +3603,13 @@
       },
       "IPRule": {
         "description": "IP rule with specific IP or IP range in CIDR format.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "action": {
             "description": "The action of IP ACL rule.",
             "default": "Allow",
-            "enum": [
-              "Allow"
-            ],
+            "enum": ["Allow"],
             "type": "string",
             "x-ms-enum": {
               "name": "Action",
@@ -3826,10 +3630,7 @@
           "status": {
             "description": "The value that indicates whether the policy is enabled or not.",
             "default": "disabled",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "PolicyStatus",
@@ -3845,9 +3646,7 @@
           "type": {
             "description": "The type of trust policy.",
             "default": "Notary",
-            "enum": [
-              "Notary"
-            ],
+            "enum": ["Notary"],
             "type": "string",
             "x-ms-enum": {
               "name": "TrustPolicyType",
@@ -3857,10 +3656,7 @@
           "status": {
             "description": "The value that indicates whether the policy is enabled or not.",
             "default": "disabled",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "PolicyStatus",
@@ -3887,10 +3683,7 @@
           "status": {
             "description": "The value that indicates whether the policy is enabled or not.",
             "default": "disabled",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "PolicyStatus",
@@ -3906,10 +3699,7 @@
           "status": {
             "description": "The value that indicates whether the policy is enabled or not.",
             "default": "enabled",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "ExportPolicyStatus",
@@ -3991,10 +3781,7 @@
           },
           "publicNetworkAccess": {
             "description": "Whether or not public network access is allowed for the container registry.",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "PublicNetworkAccess",
@@ -4004,10 +3791,7 @@
           "networkRuleBypassOptions": {
             "description": "Whether to allow trusted Azure services to access a network restricted registry.",
             "default": "AzureServices",
-            "enum": [
-              "AzureServices",
-              "None"
-            ],
+            "enum": ["AzureServices", "None"],
             "type": "string",
             "x-ms-enum": {
               "name": "NetworkRuleBypassOptions",
@@ -4030,9 +3814,7 @@
             "items": {
               "$ref": "#/components/schemas/RegistryUsage"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -4056,10 +3838,7 @@
           },
           "unit": {
             "description": "The unit of measurement.",
-            "enum": [
-              "Count",
-              "Bytes"
-            ],
+            "enum": ["Count", "Bytes"],
             "type": "string",
             "x-ms-enum": {
               "name": "RegistryUsageUnit",
@@ -4155,10 +3934,7 @@
         "properties": {
           "name": {
             "description": "The password name.",
-            "enum": [
-              "password",
-              "password2"
-            ],
+            "enum": ["password", "password2"],
             "type": "string",
             "x-ms-enum": {
               "name": "PasswordName",
@@ -4173,17 +3949,12 @@
       },
       "RegenerateCredentialParameters": {
         "description": "The parameters used to regenerate the login credential.",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "type": "object",
         "properties": {
           "name": {
             "description": "Specifies name of the password which should be regenerated -- password or password2.",
-            "enum": [
-              "password",
-              "password2"
-            ],
+            "enum": ["password", "password2"],
             "type": "string",
             "x-ms-enum": {
               "name": "PasswordName",
@@ -4229,14 +4000,7 @@
         "properties": {
           "provisioningState": {
             "description": "The provisioning state of the replication at the time the operation was called.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4255,10 +4019,7 @@
           "zoneRedundancy": {
             "description": "Whether or not zone redundancy is enabled for this container registry replication",
             "default": "Disabled",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "ZoneRedundancy",
@@ -4325,9 +4086,7 @@
       },
       "ScopeMapProperties": {
         "description": "The properties of a scope map.",
-        "required": [
-          "actions"
-        ],
+        "required": ["actions"],
         "type": "object",
         "properties": {
           "description": {
@@ -4346,14 +4105,7 @@
           },
           "provisioningState": {
             "description": "Provisioning state of the resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4402,9 +4154,7 @@
         "properties": {
           "type": {
             "description": "The type of certificate location.",
-            "enum": [
-              "LocalDirectory"
-            ],
+            "enum": ["LocalDirectory"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4425,10 +4175,7 @@
         "properties": {
           "status": {
             "description": "Indicates whether HTTPS is enabled for the login server.",
-            "enum": [
-              "Enabled",
-              "Disabled"
-            ],
+            "enum": ["Enabled", "Disabled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4483,14 +4230,7 @@
           },
           "provisioningState": {
             "description": "Provisioning state of the resource.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4507,10 +4247,7 @@
           },
           "status": {
             "description": "The status of the token example enabled or disabled.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "TokenStatus",
@@ -4528,9 +4265,7 @@
             "items": {
               "$ref": "#/components/schemas/TokenCertificate"
             },
-            "x-ms-identifiers": [
-              "thumbprint"
-            ]
+            "x-ms-identifiers": ["thumbprint"]
           },
           "passwords": {
             "type": "array",
@@ -4560,10 +4295,7 @@
         "type": "object",
         "properties": {
           "name": {
-            "enum": [
-              "certificate1",
-              "certificate2"
-            ],
+            "enum": ["certificate1", "certificate2"],
             "type": "string",
             "x-ms-enum": {
               "name": "TokenCertificateName",
@@ -4598,10 +4330,7 @@
           },
           "name": {
             "description": "The password name \"password1\" or \"password2\"",
-            "enum": [
-              "password1",
-              "password2"
-            ],
+            "enum": ["password1", "password2"],
             "type": "string",
             "x-ms-enum": {
               "name": "TokenPasswordName",
@@ -4634,10 +4363,7 @@
           },
           "status": {
             "description": "The status of the token example enabled or disabled.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "TokenStatus",
@@ -4663,10 +4389,7 @@
           },
           "name": {
             "description": "Specifies name of the password which should be regenerated if any -- password1 or password2.",
-            "enum": [
-              "password1",
-              "password2"
-            ],
+            "enum": ["password1", "password2"],
             "type": "string",
             "x-ms-enum": {
               "name": "TokenPasswordName",
@@ -4726,17 +4449,12 @@
       },
       "WebhookProperties": {
         "description": "The properties of a webhook.",
-        "required": [
-          "actions"
-        ],
+        "required": ["actions"],
         "type": "object",
         "properties": {
           "status": {
             "description": "The status of the webhook at the time the operation was called.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "WebhookStatus",
@@ -4751,13 +4469,7 @@
             "description": "The list of actions that trigger the webhook to post notifications.",
             "type": "array",
             "items": {
-              "enum": [
-                "push",
-                "delete",
-                "quarantine",
-                "chart_push",
-                "chart_delete"
-              ],
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
               "type": "string",
               "x-ms-enum": {
                 "name": "WebhookAction",
@@ -4767,14 +4479,7 @@
           },
           "provisioningState": {
             "description": "The provisioning state of the webhook at the time the operation was called.",
-            "enum": [
-              "Creating",
-              "Updating",
-              "Deleting",
-              "Succeeded",
-              "Failed",
-              "Canceled"
-            ],
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -4786,9 +4491,7 @@
       },
       "WebhookCreateParameters": {
         "description": "The parameters for creating a webhook.",
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "type": "object",
         "properties": {
           "tags": {
@@ -4809,10 +4512,7 @@
       },
       "WebhookPropertiesCreateParameters": {
         "description": "The parameters for creating the properties of a webhook.",
-        "required": [
-          "serviceUri",
-          "actions"
-        ],
+        "required": ["serviceUri", "actions"],
         "type": "object",
         "properties": {
           "serviceUri": {
@@ -4830,10 +4530,7 @@
           },
           "status": {
             "description": "The status of the webhook at the time the operation was called.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "WebhookStatus",
@@ -4848,13 +4545,7 @@
             "description": "The list of actions that trigger the webhook to post notifications.",
             "type": "array",
             "items": {
-              "enum": [
-                "push",
-                "delete",
-                "quarantine",
-                "chart_push",
-                "chart_delete"
-              ],
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
               "type": "string",
               "x-ms-enum": {
                 "name": "WebhookAction",
@@ -4899,10 +4590,7 @@
           },
           "status": {
             "description": "The status of the webhook at the time the operation was called.",
-            "enum": [
-              "enabled",
-              "disabled"
-            ],
+            "enum": ["enabled", "disabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "WebhookStatus",
@@ -4917,13 +4605,7 @@
             "description": "The list of actions that trigger the webhook to post notifications.",
             "type": "array",
             "items": {
-              "enum": [
-                "push",
-                "delete",
-                "quarantine",
-                "chart_push",
-                "chart_delete"
-              ],
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
               "type": "string",
               "x-ms-enum": {
                 "name": "WebhookAction",
@@ -5160,9 +4842,7 @@
       },
       "CallbackConfig": {
         "description": "The configuration of service URI and custom headers for the webhook.",
-        "required": [
-          "serviceUri"
-        ],
+        "required": ["serviceUri"],
         "type": "object",
         "properties": {
           "serviceUri": {
@@ -5204,10 +4884,7 @@
               "$ref": "#/components/schemas/ErrorDetail"
             },
             "readOnly": true,
-            "x-ms-identifiers": [
-              "message",
-              "target"
-            ]
+            "x-ms-identifiers": ["message", "target"]
           },
           "additionalInfo": {
             "type": "array",

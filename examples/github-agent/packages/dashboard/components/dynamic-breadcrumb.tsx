@@ -1,7 +1,5 @@
 "use client"
 
-import { usePathname } from "next/navigation"
-import Link from "next/link"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -10,42 +8,43 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import {
-  IconDashboard,
-  IconServer,
-  IconPlug,
-  IconGitPullRequest,
-} from "@tabler/icons-react"
+import { IconDashboard, IconGitPullRequest, IconPlug, IconServer } from "@tabler/icons-react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { match } from "ts-pattern"
 
 export function DynamicBreadcrumb() {
   const pathname = usePathname()
 
-  const { icon: Icon, label, parent } = match(pathname)
-    .with("/", () => ({ 
-      icon: IconDashboard, 
-      label: "Dashboard", 
-      parent: null 
+  const {
+    icon: Icon,
+    label,
+    parent,
+  } = match(pathname)
+    .with("/", () => ({
+      icon: IconDashboard,
+      label: "Dashboard",
+      parent: null,
     }))
-    .with("/agents", () => ({ 
-      icon: IconServer, 
-      label: "Agents", 
-      parent: null 
+    .with("/agents", () => ({
+      icon: IconServer,
+      label: "Agents",
+      parent: null,
     }))
-    .with("/integrations", () => ({ 
-      icon: IconPlug, 
-      label: "Integrations", 
-      parent: null 
+    .with("/integrations", () => ({
+      icon: IconPlug,
+      label: "Integrations",
+      parent: null,
     }))
-    .with("/pull-requests", () => ({ 
-      icon: IconGitPullRequest, 
-      label: "Pull Requests", 
-      parent: { href: "/", label: "Dashboard" } 
+    .with("/pull-requests", () => ({
+      icon: IconGitPullRequest,
+      label: "Pull Requests",
+      parent: { href: "/", label: "Dashboard" },
     }))
-    .otherwise(() => ({ 
-      icon: IconDashboard, 
-      label: "Dashboard", 
-      parent: null 
+    .otherwise(() => ({
+      icon: IconDashboard,
+      label: "Dashboard",
+      parent: null,
     }))
 
   if (!parent) {
@@ -82,4 +81,3 @@ export function DynamicBreadcrumb() {
     </Breadcrumb>
   )
 }
-

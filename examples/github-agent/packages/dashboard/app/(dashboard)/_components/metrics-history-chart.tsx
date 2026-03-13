@@ -1,12 +1,18 @@
 "use client"
 
-import { Area, AreaChart, CartesianGrid, XAxis, ResponsiveContainer } from "recharts"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-  type ChartConfig,
 } from "@/components/ui/chart"
 import {
   Select,
@@ -15,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis } from "recharts"
 
 interface MetricsHistoryChartProps {
   data: Array<{
@@ -40,9 +47,7 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
     <Card>
       <CardHeader>
         <CardTitle>Metrics Over Time</CardTitle>
-        <CardDescription>
-          PR volume and review time trends
-        </CardDescription>
+        <CardDescription>PR volume and review time trends</CardDescription>
         <CardAction>
           <Select defaultValue="30d">
             <SelectTrigger className="w-32" size="sm">
@@ -73,7 +78,7 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
                 axisLine={false}
                 tickMargin={8}
                 minTickGap={32}
-                tickFormatter={(value) => {
+                tickFormatter={value => {
                   const date = new Date(value)
                   return date.toLocaleDateString("en-US", {
                     month: "short",
@@ -85,7 +90,7 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
                 cursor={false}
                 content={
                   <ChartTooltipContent
-                    labelFormatter={(value) => {
+                    labelFormatter={value => {
                       return new Date(value).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
@@ -109,4 +114,3 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
     </Card>
   )
 }
-

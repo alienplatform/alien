@@ -23,14 +23,19 @@ export async function checkStorageEventHandler(deployment: Deployment): Promise<
 
   const data = (await response.json()) as EventListResponse
 
-  assertCheck(Array.isArray(data.storageEvents), "events-list", "Invalid storage events array in response")
-  assertCheck(Array.isArray(data.queueMessages), "events-list", "Invalid queue messages array in response")
+  assertCheck(
+    Array.isArray(data.storageEvents),
+    "events-list",
+    "Invalid storage events array in response",
+  )
+  assertCheck(
+    Array.isArray(data.queueMessages),
+    "events-list",
+    "Invalid queue messages array in response",
+  )
 }
 
-export async function checkStorageEvent(
-  deployment: Deployment,
-  key: string
-): Promise<boolean> {
+export async function checkStorageEvent(deployment: Deployment, key: string): Promise<boolean> {
   const response = await fetch(`${deployment.url}/events/storage/${encodeURIComponent(key)}`)
 
   await assertResponseOk(response, "events-storage", "Storage event lookup request failed")
@@ -41,7 +46,7 @@ export async function checkStorageEvent(
 
 export async function checkQueueMessage(
   deployment: Deployment,
-  messageId: string
+  messageId: string,
 ): Promise<boolean> {
   const response = await fetch(`${deployment.url}/events/queue/${encodeURIComponent(messageId)}`)
 

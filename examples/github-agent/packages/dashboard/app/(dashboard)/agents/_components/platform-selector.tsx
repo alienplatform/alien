@@ -1,8 +1,8 @@
 "use client"
 
-import Image from "next/image"
-import { IconCircleCheck } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
+import { IconCircleCheck } from "@tabler/icons-react"
+import Image from "next/image"
 
 export type Platform = "aws" | "gcp" | "azure" | "kubernetes" | "local"
 
@@ -48,16 +48,13 @@ interface PlatformSelectorProps {
   onSelect: (platform: Platform) => void
 }
 
-export function PlatformSelector({
-  selected,
-  onSelect,
-}: PlatformSelectorProps) {
+export function PlatformSelector({ selected, onSelect }: PlatformSelectorProps) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-      {platformOrder.map((platform) => {
+      {platformOrder.map(platform => {
         const info = platformInfo[platform]
         const isSelected = selected === platform
-        
+
         return (
           <button
             key={platform}
@@ -67,7 +64,7 @@ export function PlatformSelector({
               "group relative flex flex-col items-center justify-center py-4 rounded-lg border transition-all duration-200",
               isSelected
                 ? "border-primary/30 bg-primary/5 ring-2 ring-primary/20 shadow-sm"
-                : "border-border/50 hover:bg-accent/50 hover:shadow-sm hover:border-primary/20"
+                : "border-border/50 hover:bg-accent/50 hover:shadow-sm hover:border-primary/20",
             )}
           >
             {isSelected && (
@@ -83,7 +80,7 @@ export function PlatformSelector({
                 className={cn(
                   "object-contain",
                   // Add brightness filter for AWS and Local in light mode
-                  (platform === "local") && "dark:brightness-100 brightness-0"
+                  platform === "local" && "dark:brightness-100 brightness-0",
                 )}
               />
             </div>

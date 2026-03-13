@@ -29,5 +29,3 @@ export default new alien.Stack("endpoint-agent")
     },
   })
   .build()
-
-

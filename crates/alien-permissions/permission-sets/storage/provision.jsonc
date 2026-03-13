@@ -29,14 +29,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:s3:::${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:s3:::${resourceName}"
-            ]
+            "resources": ["arn:aws:s3:::${resourceName}"]
           }
         }
       }
@@ -92,9 +88,7 @@
             "Microsoft.Storage/storageAccounts/read",
             "Microsoft.Storage/storageAccounts/blobServices/containers/read"
           ],
-          "dataActions": [
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
-          ]
+          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
         },
         "binding": {
           "stack": {

@@ -1,25 +1,33 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardAction, CardFooter } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { formatDistanceToNow } from "date-fns"
+import { Button } from "@/components/ui/button"
 import {
-  IconGitPullRequest,
-  IconClock,
-  IconTrendingUp,
-  IconTrendingDown,
-  IconAlertTriangle,
-  IconRefresh,
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
   IconActivity,
-  IconGauge,
+  IconAlertTriangle,
+  IconClock,
   IconFlame,
+  IconGauge,
+  IconGitPullRequest,
+  IconRefresh,
+  IconTrendingDown,
+  IconTrendingUp,
 } from "@tabler/icons-react"
-import { PrSizeChart } from "./pr-size-chart"
-import { PrRiskChart } from "./pr-risk-chart"
-import { MetricsHistoryChart } from "./metrics-history-chart"
+import { formatDistanceToNow } from "date-fns"
+import { useEffect, useState } from "react"
 import { DashboardSkeleton } from "./dashboard-skeleton"
+import { MetricsHistoryChart } from "./metrics-history-chart"
+import { PrRiskChart } from "./pr-risk-chart"
+import { PrSizeChart } from "./pr-size-chart"
 
 interface DashboardContentProps {
   integrationId: string
@@ -43,7 +51,11 @@ interface SyncStatus {
   lastSyncError: string | null
 }
 
-export function DashboardContent({ integrationId, agentId, repoName = "Repository" }: DashboardContentProps) {
+export function DashboardContent({
+  integrationId,
+  agentId,
+  repoName = "Repository",
+}: DashboardContentProps) {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     lastSyncAt: null,
@@ -116,8 +128,8 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
           <p className="text-muted-foreground text-center max-w-md mb-6">
             Click "Sync Now" to fetch metrics from your agent and start analyzing your repository.
           </p>
-          <Button 
-            onClick={handleSync} 
+          <Button
+            onClick={handleSync}
             disabled={syncing}
             className="animate-pulse hover:animate-none"
             size="lg"
@@ -178,9 +190,7 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
             <div className="line-clamp-1 flex gap-2 font-medium">
               Pull requests analyzed <IconGitPullRequest className="size-4" />
             </div>
-            <div className="text-muted-foreground">
-              From connected repository
-            </div>
+            <div className="text-muted-foreground">From connected repository</div>
           </CardFooter>
         </Card>
 
@@ -191,11 +201,20 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
               {metrics.avgTimeToFirstReviewHours.toFixed(1)}h
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className={metrics.avgTimeToFirstReviewHours < 4 ? "text-green-600" : "text-yellow-600"}>
+              <Badge
+                variant="outline"
+                className={
+                  metrics.avgTimeToFirstReviewHours < 4 ? "text-green-600" : "text-yellow-600"
+                }
+              >
                 {metrics.avgTimeToFirstReviewHours < 4 ? (
-                  <><IconTrendingDown className="h-3 w-3" /> Fast</>
+                  <>
+                    <IconTrendingDown className="h-3 w-3" /> Fast
+                  </>
                 ) : (
-                  <><IconTrendingUp className="h-3 w-3" /> Slow</>
+                  <>
+                    <IconTrendingUp className="h-3 w-3" /> Slow
+                  </>
                 )}
               </Badge>
             </CardAction>
@@ -204,9 +223,7 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
             <div className="line-clamp-1 flex gap-2 font-medium">
               Time to first review <IconClock className="size-4" />
             </div>
-            <div className="text-muted-foreground">
-              Average across all PRs
-            </div>
+            <div className="text-muted-foreground">Average across all PRs</div>
           </CardFooter>
         </Card>
 
@@ -217,11 +234,20 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
               {metrics.reviewThroughputScore}/100
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className={metrics.reviewThroughputScore >= 70 ? "text-green-600" : "text-yellow-600"}>
+              <Badge
+                variant="outline"
+                className={
+                  metrics.reviewThroughputScore >= 70 ? "text-green-600" : "text-yellow-600"
+                }
+              >
                 {metrics.reviewThroughputScore >= 70 ? (
-                  <><IconTrendingUp className="h-3 w-3" /> Good</>
+                  <>
+                    <IconTrendingUp className="h-3 w-3" /> Good
+                  </>
                 ) : (
-                  <><IconTrendingDown className="h-3 w-3" /> Needs work</>
+                  <>
+                    <IconTrendingDown className="h-3 w-3" /> Needs work
+                  </>
                 )}
               </Badge>
             </CardAction>
@@ -230,9 +256,7 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
             <div className="line-clamp-1 flex gap-2 font-medium">
               Review efficiency <IconGauge className="size-4" />
             </div>
-            <div className="text-muted-foreground">
-              Based on review patterns
-            </div>
+            <div className="text-muted-foreground">Based on review patterns</div>
           </CardFooter>
         </Card>
 
@@ -243,11 +267,18 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
               {highRiskCount}
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className={highRiskCount === 0 ? "text-green-600" : "text-red-600"}>
+              <Badge
+                variant="outline"
+                className={highRiskCount === 0 ? "text-green-600" : "text-red-600"}
+              >
                 {highRiskCount === 0 ? (
-                  <><IconTrendingDown className="h-3 w-3" /> Clear</>
+                  <>
+                    <IconTrendingDown className="h-3 w-3" /> Clear
+                  </>
                 ) : (
-                  <><IconAlertTriangle className="h-3 w-3" /> Attention</>
+                  <>
+                    <IconAlertTriangle className="h-3 w-3" /> Attention
+                  </>
                 )}
               </Badge>
             </CardAction>
@@ -256,22 +287,20 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
             <div className="line-clamp-1 flex gap-2 font-medium">
               Requires attention <IconAlertTriangle className="size-4" />
             </div>
-            <div className="text-muted-foreground">
-              High + critical risk PRs
-            </div>
+            <div className="text-muted-foreground">High + critical risk PRs</div>
           </CardFooter>
         </Card>
       </div>
 
       {/* Charts */}
       <div className="grid gap-4 md:grid-cols-2">
-        <PrSizeChart 
-          data={metrics.bySize} 
+        <PrSizeChart
+          data={metrics.bySize}
           integrationId={integrationId}
           agentId={agentId}
           repoName={repoName}
         />
-        <PrRiskChart 
+        <PrRiskChart
           data={metrics.byRisk}
           integrationId={integrationId}
           agentId={agentId}
@@ -292,7 +321,10 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
           <CardContent>
             <div className="space-y-3">
               {metrics.churnHotspots.slice(0, 5).map((hotspot, index) => (
-                <div key={index} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                >
                   <div className="flex items-center gap-3 min-w-0">
                     <Badge variant="outline" className="tabular-nums font-mono shrink-0">
                       #{index + 1}
@@ -311,4 +343,3 @@ export function DashboardContent({ integrationId, agentId, repoName = "Repositor
     </div>
   )
 }
-

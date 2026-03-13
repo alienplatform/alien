@@ -9,8 +9,8 @@
  * 4. Query again to verify persistence
  */
 
+import { type Deployment, deploy } from "@aliendotdev/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { deploy, type Deployment } from "@aliendotdev/testing"
 
 describe("BYOC Database", () => {
   let deployment: Deployment
@@ -38,37 +38,31 @@ describe("BYOC Database", () => {
     const namespace = "demo"
 
     // Upsert vectors
-    const upsertResponse = await fetch(
-      `${deployment.url}/api/v1/namespaces/${namespace}/upsert`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vectors: [
-            { id: "doc1", values: [0.1, 0.2, 0.3, 0.4], metadata: { title: "Hello" } },
-            { id: "doc2", values: [0.2, 0.3, 0.4, 0.5], metadata: { title: "World" } },
-            { id: "doc3", values: [0.9, 0.8, 0.7, 0.6], metadata: { title: "Other" } },
-          ],
-        }),
-      }
-    )
+    const upsertResponse = await fetch(`${deployment.url}/api/v1/namespaces/${namespace}/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vectors: [
+          { id: "doc1", values: [0.1, 0.2, 0.3, 0.4], metadata: { title: "Hello" } },
+          { id: "doc2", values: [0.2, 0.3, 0.4, 0.5], metadata: { title: "World" } },
+          { id: "doc3", values: [0.9, 0.8, 0.7, 0.6], metadata: { title: "Other" } },
+        ],
+      }),
+    })
 
     expect(upsertResponse.ok).toBe(true)
     const upsertData = await upsertResponse.json()
     expect(upsertData.upserted).toBe(3)
 
     // Query for similar vectors
-    const queryResponse = await fetch(
-      `${deployment.url}/api/v1/namespaces/${namespace}/query`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vector: [0.1, 0.2, 0.3, 0.4],
-          topK: 2,
-        }),
-      }
-    )
+    const queryResponse = await fetch(`${deployment.url}/api/v1/namespaces/${namespace}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vector: [0.1, 0.2, 0.3, 0.4],
+        topK: 2,
+      }),
+    })
 
     expect(queryResponse.ok).toBe(true)
     const queryData = await queryResponse.json()
@@ -94,33 +88,25 @@ describe("BYOC Database", () => {
     const namespace = "persistent"
 
     // Insert data
-    const upsertResponse = await fetch(
-      `${deployment.url}/api/v1/namespaces/${namespace}/upsert`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vectors: [
-            { id: "persistent1", values: [1.0, 0.0, 0.0, 0.0], metadata: { test: "data" } },
-          ],
-        }),
-      }
-    )
+    const upsertResponse = await fetch(`${deployment.url}/api/v1/namespaces/${namespace}/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vectors: [{ id: "persistent1", values: [1.0, 0.0, 0.0, 0.0], metadata: { test: "data" } }],
+      }),
+    })
 
     expect(upsertResponse.ok).toBe(true)
 
     // Query immediately
-    const queryResponse1 = await fetch(
-      `${deployment.url}/api/v1/namespaces/${namespace}/query`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vector: [1.0, 0.0, 0.0, 0.0],
-          topK: 1,
-        }),
-      }
-    )
+    const queryResponse1 = await fetch(`${deployment.url}/api/v1/namespaces/${namespace}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vector: [1.0, 0.0, 0.0, 0.0],
+        topK: 1,
+      }),
+    })
 
     expect(queryResponse1.ok).toBe(true)
     const queryData1 = await queryResponse1.json()
@@ -131,17 +117,14 @@ describe("BYOC Database", () => {
     // so querying again should work
 
     // Query again to verify persistence
-    const queryResponse2 = await fetch(
-      `${deployment.url}/api/v1/namespaces/${namespace}/query`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vector: [1.0, 0.0, 0.0, 0.0],
-          topK: 1,
-        }),
-      }
-    )
+    const queryResponse2 = await fetch(`${deployment.url}/api/v1/namespaces/${namespace}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vector: [1.0, 0.0, 0.0, 0.0],
+        topK: 1,
+      }),
+    })
 
     expect(queryResponse2.ok).toBe(true)
     const queryData2 = await queryResponse2.json()
@@ -223,21 +206,16 @@ describe("BYOC Database", () => {
   })
 
   it("handles empty namespace queries gracefully", async () => {
-    const response = await fetch(
-      `${deployment.url}/api/v1/namespaces/nonexistent/query`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vector: [1.0, 2.0, 3.0],
-          topK: 10,
-        }),
-      }
-    )
+    const response = await fetch(`${deployment.url}/api/v1/namespaces/nonexistent/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vector: [1.0, 2.0, 3.0],
+        topK: 10,
+      }),
+    })
 
     expect(response.ok).toBe(false)
     expect(response.status).toBe(404)
   })
 })
-
-

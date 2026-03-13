@@ -14,34 +14,24 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           }
         }
       },
       // Per-container SA impersonation: VM assumes any SA role in this stack
       {
         "grant": {
-          "actions": [
-            "sts:AssumeRole"
-          ]
+          "actions": ["sts:AssumeRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           }
         }
       }
@@ -99,9 +89,7 @@
             "Microsoft.ContainerRegistry/registries/read",
             "Microsoft.ContainerRegistry/registries/metadata/read"
           ],
-          "dataActions": [
-            "Microsoft.ContainerRegistry/registries/pull/read"
-          ]
+          "dataActions": ["Microsoft.ContainerRegistry/registries/pull/read"]
         },
         "binding": {
           "stack": {

@@ -7,9 +7,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -31,61 +29,25 @@
                 "cors": {
                   "corsRules": [
                     {
-                      "allowedOrigins": [
-                        "http://www.contoso.com",
-                        "http://www.fabrikam.com"
-                      ],
-                      "allowedMethods": [
-                        "GET",
-                        "HEAD",
-                        "POST",
-                        "OPTIONS",
-                        "MERGE",
-                        "PUT"
-                      ],
+                      "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                      "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                       "maxAgeInSeconds": 100,
-                      "exposedHeaders": [
-                        "x-ms-meta-*"
-                      ],
-                      "allowedHeaders": [
-                        "x-ms-meta-abc",
-                        "x-ms-meta-data*",
-                        "x-ms-meta-target*"
-                      ]
+                      "exposedHeaders": ["x-ms-meta-*"],
+                      "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                     },
                     {
-                      "allowedOrigins": [
-                        "*"
-                      ],
-                      "allowedMethods": [
-                        "GET"
-                      ],
+                      "allowedOrigins": ["*"],
+                      "allowedMethods": ["GET"],
                       "maxAgeInSeconds": 2,
-                      "exposedHeaders": [
-                        "*"
-                      ],
-                      "allowedHeaders": [
-                        "*"
-                      ]
+                      "exposedHeaders": ["*"],
+                      "allowedHeaders": ["*"]
                     },
                     {
-                      "allowedOrigins": [
-                        "http://www.abc23.com",
-                        "https://www.fabrikam.com/*"
-                      ],
-                      "allowedMethods": [
-                        "GET",
-                        "PUT"
-                      ],
+                      "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                      "allowedMethods": ["GET", "PUT"],
                       "maxAgeInSeconds": 2000,
-                      "exposedHeaders": [
-                        "x-ms-meta-abc",
-                        "x-ms-meta-data*",
-                        "x-ms-meta-target*"
-                      ],
-                      "allowedHeaders": [
-                        "x-ms-meta-12345675754564*"
-                      ]
+                      "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"],
+                      "allowedHeaders": ["x-ms-meta-12345675754564*"]
                     }
                   ]
                 }
@@ -103,61 +65,25 @@
             "cors": {
               "corsRules": [
                 {
-                  "allowedOrigins": [
-                    "http://www.contoso.com",
-                    "http://www.fabrikam.com"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "HEAD",
-                    "POST",
-                    "OPTIONS",
-                    "MERGE",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                   "maxAgeInSeconds": 100,
-                  "exposedHeaders": [
-                    "x-ms-meta-*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "*"
-                  ],
-                  "allowedMethods": [
-                    "GET"
-                  ],
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
                   "maxAgeInSeconds": 2,
-                  "exposedHeaders": [
-                    "*"
-                  ],
-                  "allowedHeaders": [
-                    "*"
-                  ]
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "http://www.abc23.com",
-                    "https://www.fabrikam.com/*"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
                   "maxAgeInSeconds": 2000,
-                  "exposedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-12345675754564*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
                 }
               ]
             }
@@ -173,61 +99,25 @@
             "cors": {
               "corsRules": [
                 {
-                  "allowedOrigins": [
-                    "http://www.contoso.com",
-                    "http://www.fabrikam.com"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "HEAD",
-                    "POST",
-                    "OPTIONS",
-                    "MERGE",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
                   "maxAgeInSeconds": 100,
-                  "exposedHeaders": [
-                    "x-ms-meta-*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "*"
-                  ],
-                  "allowedMethods": [
-                    "GET"
-                  ],
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
                   "maxAgeInSeconds": 2,
-                  "exposedHeaders": [
-                    "*"
-                  ],
-                  "allowedHeaders": [
-                    "*"
-                  ]
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
                 },
                 {
-                  "allowedOrigins": [
-                    "http://www.abc23.com",
-                    "https://www.fabrikam.com/*"
-                  ],
-                  "allowedMethods": [
-                    "GET",
-                    "PUT"
-                  ],
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
                   "maxAgeInSeconds": 2000,
-                  "exposedHeaders": [
-                    "x-ms-meta-abc",
-                    "x-ms-meta-data*",
-                    "x-ms-meta-target*"
-                  ],
-                  "allowedHeaders": [
-                    "x-ms-meta-12345675754564*"
-                  ]
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
                 }
               ]
             }
@@ -329,9 +219,7 @@
         "x-ms-parameter-location": "method",
         "schema": {
           "type": "string",
-          "enum": [
-            "default"
-          ]
+          "enum": ["default"]
         },
         "examples": {
           "TableServicesPut": {
@@ -651,9 +539,7 @@
             "$ref": "#/components/schemas/TableAccessPolicy"
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "type": "object",
         "description": "Object to set Table Access Policy."
       },
@@ -672,9 +558,7 @@
             "description": "Required. List of abbreviated permissions. Supported permission values include 'r','a','u','d'"
           }
         },
-        "required": [
-          "permission"
-        ],
+        "required": ["permission"],
         "type": "object",
         "description": "Table Access Policy Properties Object."
       },

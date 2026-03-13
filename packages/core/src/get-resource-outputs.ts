@@ -1,13 +1,15 @@
-import * as z from "zod/v4";
-import { 
-  ArtifactRegistryOutputsSchema, 
-  ArtifactRegistrySchema, 
-  BuildOutputsSchema, 
-  BuildSchema, 
+import * as z from "zod/v4"
+import { ResourceNotFoundError, ResourceOutputsParseError } from "./common-errors.js"
+import { AlienError } from "./error.js"
+import {
+  ArtifactRegistryOutputsSchema,
+  ArtifactRegistrySchema,
+  BuildOutputsSchema,
+  BuildSchema,
   ContainerOutputsSchema,
   ContainerSchema,
-  FunctionOutputsSchema, 
-  FunctionSchema, 
+  FunctionOutputsSchema,
+  FunctionSchema,
   KvOutputsSchema,
   KvSchema,
   QueueOutputsSchema,
@@ -16,14 +18,12 @@ import {
   RemoteStackManagementSchema,
   ServiceAccountOutputsSchema,
   ServiceAccountSchema,
-  StorageOutputsSchema, 
+  StorageOutputsSchema,
   StorageSchema,
   VaultOutputsSchema,
   VaultSchema,
-} from "./generated/index.js";
-import type { StackState } from "./stack.js";
-import { AlienError } from "./error.js";
-import { ResourceNotFoundError, ResourceOutputsParseError } from "./common-errors.js";
+} from "./generated/index.js"
+import type { StackState } from "./stack.js"
 
 export const ResourceSchemaMapping = {
   function: {
@@ -70,28 +70,32 @@ export const ResourceSchemaMapping = {
 
 // Retrieves and validates the outputs of a resource from the stack state.
 export function getResourceOutputs<K extends keyof typeof ResourceSchemaMapping>(params: {
-  state: StackState,
-  resource: { type: K, name: string }
-}): z.infer<typeof ResourceSchemaMapping[K]["output"]> {
+  state: StackState
+  resource: { type: K; name: string }
+}): z.infer<(typeof ResourceSchemaMapping)[K]["output"]> {
   const { state, resource } = params
 
   const resourceState = state.resources[resource.name]
   if (!resourceState) {
-    throw new AlienError(ResourceNotFoundError.create({
-      resourceId: resource.name,
-      availableResources: Object.keys(state.resources),
-    }))
+    throw new AlienError(
+      ResourceNotFoundError.create({
+        resourceId: resource.name,
+        availableResources: Object.keys(state.resources),
+      }),
+    )
   }
 
   const outputsSchema = ResourceSchemaMapping[resource.type].output
   const outputs = outputsSchema.safeParse(resourceState.outputs)
   if (!outputs.success) {
-    throw new AlienError(ResourceOutputsParseError.create({
-      resourceName: resource.name,
-      resourceType: resource.type,
-      validationErrors: z.prettifyError(outputs.error),
-    }))
+    throw new AlienError(
+      ResourceOutputsParseError.create({
+        resourceName: resource.name,
+        resourceType: resource.type,
+        validationErrors: z.prettifyError(outputs.error),
+      }),
+    )
   }
 
-  return outputs.data as z.infer<typeof ResourceSchemaMapping[K]["output"]>
+  return outputs.data as z.infer<(typeof ResourceSchemaMapping)[K]["output"]>
 }

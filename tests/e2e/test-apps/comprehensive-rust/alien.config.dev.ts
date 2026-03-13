@@ -13,8 +13,8 @@ const fn = new alien.Function("test-alien-function")
     src: "./",
     toolchain: {
       type: "rust",
-      binaryName: "alien-test-server"
-    }
+      binaryName: "alien-test-server",
+    },
   })
   .memoryMb(512)
   .timeoutSeconds(180)
@@ -38,7 +38,7 @@ const stack = new alien.Stack("test-alien-stack")
           "vault/data-write",
           "kv/data-read",
           "kv/data-write",
-          "function/execute"
+          "function/execute",
         ],
       },
     },
@@ -50,4 +50,3 @@ const stack = new alien.Stack("test-alien-stack")
   .build()
 
 export default stack
-

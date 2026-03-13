@@ -5,20 +5,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "iam:GetRole"
-          ]
+          "actions": ["iam:GetRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
           }
         }
       }
@@ -26,10 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "iam.serviceAccounts.get",
-            "iam.roles.get"
-          ]
+          "permissions": ["iam.serviceAccounts.get", "iam.roles.get"]
         },
         "binding": {
           "stack": {
@@ -48,9 +39,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/read"
-          ]
+          "actions": ["Microsoft.ManagedIdentity/userAssignedIdentities/read"]
         },
         "binding": {
           "stack": {
@@ -64,4 +53,3 @@
     ]
   }
 }
-

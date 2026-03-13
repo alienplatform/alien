@@ -1,11 +1,11 @@
 /**
  * React Query hooks for data fetching.
- * 
+ *
  * These hooks provide type-safe, cached data fetching with automatic
  * refetching, error handling, and loading states.
  */
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 /**
  * Query keys for React Query cache management
@@ -90,7 +90,7 @@ export function useDeploymentGroup() {
  */
 export function useAddIntegration() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
     mutationFn: async (data: {
       owner: string
@@ -104,12 +104,12 @@ export function useAddIntegration() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       })
-      
+
       if (!response.ok) {
         const error = await response.json()
         throw new Error(error.error || "Failed to add integration")
       }
-      
+
       return await response.json()
     },
     onSuccess: () => {
@@ -129,7 +129,7 @@ export function useAnalyzeIntegration() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integrationId }),
       })
-      
+
       if (!response.ok) throw new Error("Analysis failed")
       return await response.json()
     },
@@ -141,7 +141,7 @@ export function useAnalyzeIntegration() {
  */
 export function useUpdateIntegration() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
     mutationFn: async (data: {
       integrationId: string
@@ -153,12 +153,12 @@ export function useUpdateIntegration() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       })
-      
+
       if (!response.ok) {
         const error = await response.json()
         throw new Error(error.error || "Failed to update integration")
       }
-      
+
       return await response.json()
     },
     onSuccess: () => {
@@ -166,5 +166,3 @@ export function useUpdateIntegration() {
     },
   })
 }
-
-

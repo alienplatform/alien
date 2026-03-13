@@ -15,37 +15,23 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:s3:::codepipeline-2-*",
-              "arn:aws:s3:::codepipeline-2-*/*"
-            ]
+            "resources": ["arn:aws:s3:::codepipeline-2-*", "arn:aws:s3:::codepipeline-2-*/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:s3:::codepipeline-2-*",
-              "arn:aws:s3:::codepipeline-2-*/*"
-            ]
+            "resources": ["arn:aws:s3:::codepipeline-2-*", "arn:aws:s3:::codepipeline-2-*/*"]
           }
         }
       },
       {
         "grant": {
-          "actions": [
-            "logs:CreateLogGroup",
-            "logs:CreateLogStream",
-            "logs:PutLogEvents"
-          ]
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:logs:*:${awsAccountId}:log-group:/aws/codebuild/*"
-            ]
+            "resources": ["arn:aws:logs:*:${awsAccountId}:log-group:/aws/codebuild/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:logs:*:${awsAccountId}:log-group:/aws/codebuild/*"
-            ]
+            "resources": ["arn:aws:logs:*:${awsAccountId}:log-group:/aws/codebuild/*"]
           }
         }
       },
@@ -61,14 +47,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:codebuild:*:${awsAccountId}:report-group/*"
-            ]
+            "resources": ["arn:aws:codebuild:*:${awsAccountId}:report-group/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:codebuild:*:${awsAccountId}:report-group/*"
-            ]
+            "resources": ["arn:aws:codebuild:*:${awsAccountId}:report-group/*"]
           }
         }
       }

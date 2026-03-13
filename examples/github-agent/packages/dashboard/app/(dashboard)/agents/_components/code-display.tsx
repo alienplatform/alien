@@ -1,9 +1,9 @@
 "use client"
 
-import { useState } from "react"
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
-import { IconCopy, IconCheck } from "@tabler/icons-react"
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
+import { IconCheck, IconCopy } from "@tabler/icons-react"
+import { useState } from "react"
 import { toast } from "sonner"
 
 interface CodeDisplayProps {
@@ -44,4 +44,3 @@ export function CodeDisplay({ code, language = "bash" }: CodeDisplayProps) {
     </ScrollArea>
   )
 }
-

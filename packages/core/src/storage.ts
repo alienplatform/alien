@@ -1,8 +1,8 @@
 import {
   type LifecycleRule,
+  type ResourceType,
   type Storage as StorageConfig,
   StorageSchema,
-  type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 

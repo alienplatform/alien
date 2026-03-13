@@ -1,11 +1,11 @@
-import { start } from "workflow/api"
-import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
-import { syncIntegrationMetrics } from "@/workflows/sync-metrics"
+import { alien, config } from "@/lib/config"
 import { db } from "@/lib/db"
 import { integration, organizationMetadata } from "@/lib/schema"
-import { alien, config } from "@/lib/config"
+import { syncIntegrationMetrics } from "@/workflows/sync-metrics"
 import { eq } from "drizzle-orm"
+import { headers } from "next/headers"
+import { start } from "workflow/api"
 
 export async function POST(request: Request) {
   const session = await auth.api.getSession({
@@ -24,10 +24,7 @@ export async function POST(request: Request) {
   const { integrationId, agentId: providedAgentId } = await request.json()
 
   if (!integrationId) {
-    return Response.json(
-      { error: "integrationId is required" },
-      { status: 400 }
-    )
+    return Response.json({ error: "integrationId is required" }, { status: 400 })
   }
 
   // Verify integration belongs to organization
@@ -69,7 +66,7 @@ export async function POST(request: Request) {
   if (!agentId) {
     return Response.json(
       { error: "No agent available. Please deploy an agent first." },
-      { status: 400 }
+      { status: 400 },
     )
   }
 

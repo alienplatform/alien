@@ -43,33 +43,23 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
-            ]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
           }
         }
       },
       {
         "grant": {
-          "actions": [
-            "iam:PassRole"
-          ]
+          "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
           }
         }
       },
@@ -83,14 +73,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ecr:*:${managingAccountId}:repository/*"
-            ]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           }
         }
       }

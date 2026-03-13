@@ -6,9 +6,7 @@
   },
   "security": [
     {
-      "azure_auth": [
-        "user_impersonation"
-      ]
+      "azure_auth": ["user_impersonation"]
     }
   ],
   "paths": {},
@@ -566,13 +564,8 @@
                     "cpu": 0.5,
                     "memory": "1Gi"
                   },
-                  "command": [
-                    "/bin/sh"
-                  ],
-                  "args": [
-                    "-c",
-                    "while true; do echo hello; sleep 10;done"
-                  ]
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
                 }
               ],
               "scale": {
@@ -893,26 +886,11 @@
           "customDomainVerificationFailureInfo": {},
           "hasConflictOnManagedEnvironment": false,
           "conflictingContainerAppResourceId": "",
-          "cNameRecords": [
-            "cNameRecord1",
-            "cNameRecord2"
-          ],
-          "txtRecords": [
-            "txtRecord1",
-            "txtRecord2"
-          ],
-          "aRecords": [
-            "aRecord1",
-            "aRecord2"
-          ],
-          "alternateCNameRecords": [
-            "cNameRecord1",
-            "cNameRecord2"
-          ],
-          "alternateTxtRecords": [
-            "txtRecord1",
-            "txtRecord2"
-          ]
+          "cNameRecords": ["cNameRecord1", "cNameRecord2"],
+          "txtRecords": ["txtRecord1", "txtRecord2"],
+          "aRecords": ["aRecord1", "aRecord2"],
+          "alternateCNameRecords": ["cNameRecord1", "cNameRecord2"],
+          "alternateTxtRecords": ["txtRecord1", "txtRecord2"]
         }
       },
       "List_Container_Apps_Secrets": {
@@ -1347,16 +1325,11 @@
             "items": {
               "$ref": "#/components/schemas/Secret"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "activeRevisionsMode": {
             "description": "ActiveRevisionsMode controls how active revisions are handled for the Container app:\n<list><item>Multiple: multiple revisions can be active.</item><item>Single: Only one revision can be active at a time. Revision weights can not be used in this mode. If no value if provided, this is the default.</item></list>",
-            "enum": [
-              "Multiple",
-              "Single"
-            ],
+            "enum": ["Multiple", "Single"],
             "type": "string",
             "default": "Single",
             "x-ms-enum": {
@@ -1373,9 +1346,7 @@
             "items": {
               "$ref": "#/components/schemas/RegistryCredentials"
             },
-            "x-ms-identifiers": [
-              "server"
-            ]
+            "x-ms-identifiers": ["server"]
           },
           "dapr": {
             "$ref": "#/components/schemas/Dapr"
@@ -1397,9 +1368,7 @@
             "items": {
               "$ref": "#/components/schemas/IdentitySettings"
             },
-            "x-ms-identifiers": [
-              "identity"
-            ]
+            "x-ms-identifiers": ["identity"]
           }
         }
       },
@@ -1420,11 +1389,7 @@
           },
           "managedBy": {
             "type": "string",
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["read", "create", "update"],
             "description": "The fully qualified resource ID of the resource that manages this resource. Indicates if this resource is managed by another Azure resource. If this is present, complete mode deployment will not delete the resource if it is removed from the template since it is managed by another resource."
           },
           "properties": {
@@ -1433,13 +1398,7 @@
             "properties": {
               "provisioningState": {
                 "description": "Provisioning state of the Container App.",
-                "enum": [
-                  "InProgress",
-                  "Succeeded",
-                  "Failed",
-                  "Canceled",
-                  "Deleting"
-                ],
+                "enum": ["InProgress", "Succeeded", "Failed", "Canceled", "Deleting"],
                 "type": "string",
                 "readOnly": true,
                 "x-ms-enum": {
@@ -1449,13 +1408,7 @@
               },
               "runningStatus": {
                 "description": "Running status of the Container App.",
-                "enum": [
-                  "Progressing",
-                  "Running",
-                  "Stopped",
-                  "Suspended",
-                  "Ready"
-                ],
+                "enum": ["Progressing", "Running", "Stopped", "Suspended", "Ready"],
                 "type": "string",
                 "readOnly": true,
                 "x-ms-enum": {
@@ -1488,18 +1441,12 @@
               "managedEnvironmentId": {
                 "description": "Deprecated. Resource ID of the Container App's environment.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create",
-                  "read"
-                ]
+                "x-ms-mutability": ["create", "read"]
               },
               "environmentId": {
                 "description": "Resource ID of environment.",
                 "type": "string",
-                "x-ms-mutability": [
-                  "create",
-                  "read"
-                ]
+                "x-ms-mutability": ["create", "read"]
               },
               "workloadProfileName": {
                 "$ref": "#/components/schemas/WorkloadProfileName"
@@ -1550,9 +1497,7 @@
       },
       "ContainerAppCollection": {
         "description": "Container App collection ARM resource.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1584,10 +1529,7 @@
           },
           "appProtocol": {
             "description": "Tells Dapr which protocol your application is using. Valid options are http and grpc. Default is http",
-            "enum": [
-              "http",
-              "grpc"
-            ],
+            "enum": ["http", "grpc"],
             "type": "string",
             "default": "http",
             "x-ms-enum": {
@@ -1612,12 +1554,7 @@
           },
           "logLevel": {
             "description": "Sets the log level for the Dapr sidecar. Allowed values are debug, info, warn, error. Default is info.",
-            "enum": [
-              "info",
-              "debug",
-              "warn",
-              "error"
-            ],
+            "enum": ["info", "debug", "warn", "error"],
             "type": "string",
             "x-ms-enum": {
               "name": "logLevel",
@@ -1672,12 +1609,7 @@
           },
           "transport": {
             "description": "Ingress transport protocol",
-            "enum": [
-              "auto",
-              "http",
-              "http2",
-              "tcp"
-            ],
+            "enum": ["auto", "http", "http2", "tcp"],
             "type": "string",
             "default": "auto",
             "x-ms-enum": {
@@ -1691,9 +1623,7 @@
             "items": {
               "$ref": "#/components/schemas/TrafficWeight"
             },
-            "x-ms-identifiers": [
-              "revisionName"
-            ]
+            "x-ms-identifiers": ["revisionName"]
           },
           "customDomains": {
             "description": "custom domain bindings for Container Apps' hostnames.",
@@ -1701,9 +1631,7 @@
             "items": {
               "$ref": "#/components/schemas/CustomDomain"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "allowInsecure": {
             "description": "Bool indicating if HTTP connections to is allowed. If set to false HTTP connections are automatically redirected to HTTPS connections",
@@ -1716,9 +1644,7 @@
             "items": {
               "$ref": "#/components/schemas/IpSecurityRestrictionRule"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "stickySessions": {
             "description": "Sticky Sessions for Single Revision Mode",
@@ -1726,10 +1652,7 @@
             "properties": {
               "affinity": {
                 "description": "Sticky Session Affinity",
-                "enum": [
-                  "sticky",
-                  "none"
-                ],
+                "enum": ["sticky", "none"],
                 "type": "string",
                 "x-ms-enum": {
                   "name": "affinity",
@@ -1740,11 +1663,7 @@
           },
           "clientCertificateMode": {
             "description": "Client certificate mode for mTLS authentication. Ignore indicates server drops client certificate on forwarding. Accept indicates server forwards client certificate but does not require a client certificate. Require indicates server requires a client certificate.",
-            "enum": [
-              "ignore",
-              "accept",
-              "require"
-            ],
+            "enum": ["ignore", "accept", "require"],
             "type": "string",
             "x-ms-enum": {
               "name": "IngressClientCertificateMode",
@@ -1760,9 +1679,7 @@
             "items": {
               "$ref": "#/components/schemas/IngressPortMapping"
             },
-            "x-ms-identifiers": [
-              "targetPort"
-            ]
+            "x-ms-identifiers": ["targetPort"]
           }
         }
       },
@@ -1790,9 +1707,7 @@
       },
       "SecretsCollection": {
         "description": "Container App Secrets Collection ARM resource.",
-        "required": [
-          "value"
-        ],
+        "required": ["value"],
         "type": "object",
         "properties": {
           "value": {
@@ -1801,9 +1716,7 @@
             "items": {
               "$ref": "#/components/schemas/ContainerAppSecret"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -1861,9 +1774,7 @@
       "CustomDomain": {
         "description": "Custom Domain of a Container App",
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "properties": {
           "name": {
             "description": "Hostname.",
@@ -1871,10 +1782,7 @@
           },
           "bindingType": {
             "description": "Custom Domain binding type.",
-            "enum": [
-              "Disabled",
-              "SniEnabled"
-            ],
+            "enum": ["Disabled", "SniEnabled"],
             "type": "string",
             "x-ms-enum": {
               "name": "bindingType",
@@ -1890,11 +1798,7 @@
       "IpSecurityRestrictionRule": {
         "description": "Rule to restrict incoming IP address.",
         "type": "object",
-        "required": [
-          "name",
-          "ipAddressRange",
-          "action"
-        ],
+        "required": ["name", "ipAddressRange", "action"],
         "properties": {
           "name": {
             "description": "Name for the IP restriction rule.",
@@ -1910,10 +1814,7 @@
           },
           "action": {
             "description": "Allow or Deny rules to determine for incoming IP. Note: Rules can only consist of ALL Allow or ALL Deny",
-            "enum": [
-              "Allow",
-              "Deny"
-            ],
+            "enum": ["Allow", "Deny"],
             "type": "string",
             "x-ms-enum": {
               "name": "action",
@@ -1925,9 +1826,7 @@
       "CorsPolicy": {
         "description": "Cross-Origin-Resource-Sharing policy",
         "type": "object",
-        "required": [
-          "allowedOrigins"
-        ],
+        "required": ["allowedOrigins"],
         "properties": {
           "allowedOrigins": {
             "description": "Specifies the content for the access-control-allow-origins header",
@@ -1971,10 +1870,7 @@
       "IngressPortMapping": {
         "description": "Port mappings of container app ingress",
         "type": "object",
-        "required": [
-          "external",
-          "targetPort"
-        ],
+        "required": ["external", "targetPort"],
         "properties": {
           "external": {
             "description": "Specifies whether the app port is accessible outside of the environment",
@@ -2008,11 +1904,7 @@
           },
           "customDomainVerificationTest": {
             "description": "DNS verification test result.",
-            "enum": [
-              "Passed",
-              "Failed",
-              "Skipped"
-            ],
+            "enum": ["Passed", "Failed", "Skipped"],
             "type": "string",
             "readOnly": true,
             "x-ms-enum": {
@@ -2064,9 +1956,7 @@
                   },
                   "readOnly": true
                 },
-                "x-ms-identifiers": [
-                  "code"
-                ]
+                "x-ms-identifiers": ["code"]
               }
             },
             "readOnly": true
@@ -2156,9 +2046,7 @@
       "Service": {
         "description": "Container App to be a dev service",
         "type": "object",
-        "required": [
-          "type"
-        ],
+        "required": ["type"],
         "properties": {
           "type": {
             "description": "Dev ContainerApp service type",
@@ -2214,9 +2102,7 @@
                   },
                   "readOnly": true
                 },
-                "x-ms-identifiers": [
-                  "code"
-                ]
+                "x-ms-identifiers": ["code"]
               },
               "innererror": {
                 "description": "More information to debug error.",
@@ -2239,12 +2125,7 @@
           "createdByType": {
             "type": "string",
             "description": "The type of identity that created the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -2261,12 +2142,7 @@
           "lastModifiedByType": {
             "type": "string",
             "description": "The type of identity that last modified the resource.",
-            "enum": [
-              "User",
-              "Application",
-              "ManagedIdentity",
-              "Key"
-            ],
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
             "x-ms-enum": {
               "name": "createdByType",
               "modelAsString": true
@@ -2317,24 +2193,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "x-ms-mutability": [
-              "read",
-              "create",
-              "update"
-            ]
+            "x-ms-mutability": ["read", "create", "update"]
           },
           "location": {
             "type": "string",
             "description": "The geo-location where the resource lives",
-            "x-ms-mutability": [
-              "read",
-              "create"
-            ]
+            "x-ms-mutability": ["read", "create"]
           }
         },
-        "required": [
-          "location"
-        ],
+        "required": ["location"],
         "allOf": [
           {
             "$ref": "#/components/schemas/Resource"
@@ -2344,9 +2211,7 @@
       "ExtendedLocationType": {
         "type": "string",
         "description": "The type of extendedLocation.",
-        "enum": [
-          "CustomLocation"
-        ],
+        "enum": ["CustomLocation"],
         "x-ms-enum": {
           "name": "ExtendedLocationTypes",
           "modelAsString": true
@@ -2368,12 +2233,7 @@
       "ManagedServiceIdentityType": {
         "type": "string",
         "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
-        "enum": [
-          "None",
-          "SystemAssigned",
-          "UserAssigned",
-          "SystemAssigned,UserAssigned"
-        ],
+        "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
         "x-ms-enum": {
           "name": "ManagedServiceIdentityType",
           "modelAsString": true
@@ -2428,9 +2288,7 @@
             "$ref": "#/components/schemas/UserAssignedIdentities"
           }
         },
-        "required": [
-          "type"
-        ]
+        "required": ["type"]
       },
       "WorkloadProfileName": {
         "description": "Workload profile name for container apps to execute on.",
@@ -2447,10 +2305,7 @@
           "value": {
             "description": "Secret Value.",
             "type": "string",
-            "x-ms-mutability": [
-              "create",
-              "update"
-            ],
+            "x-ms-mutability": ["create", "update"],
             "x-ms-secret": true
           },
           "identity": {
@@ -2466,9 +2321,7 @@
       "IdentitySettings": {
         "description": "Optional settings for a Managed Identity that is assigned to the Container App.",
         "type": "object",
-        "required": [
-          "identity"
-        ],
+        "required": ["identity"],
         "properties": {
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -2476,12 +2329,7 @@
           },
           "lifecycle": {
             "description": "Use to select the lifecycle stages of a Container App during which the Managed Identity should be available.",
-            "enum": [
-              "Init",
-              "Main",
-              "None",
-              "All"
-            ],
+            "enum": ["Init", "Main", "None", "All"],
             "type": "string",
             "default": "All",
             "x-ms-enum": {
@@ -2579,9 +2427,7 @@
             "items": {
               "$ref": "#/components/schemas/EnvironmentVar"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "resources": {
             "$ref": "#/components/schemas/ContainerResources"
@@ -2592,9 +2438,7 @@
             "items": {
               "$ref": "#/components/schemas/VolumeMount"
             },
-            "x-ms-identifiers": [
-              "volumeName"
-            ]
+            "x-ms-identifiers": ["volumeName"]
           }
         }
       },
@@ -2619,9 +2463,7 @@
           "httpGet": {
             "description": "HTTPGet specifies the http request to perform.",
             "type": "object",
-            "required": [
-              "port"
-            ],
+            "required": ["port"],
             "properties": {
               "host": {
                 "description": "Host name to connect to, defaults to the pod IP. You probably want to set \"Host\" in httpHeaders instead.",
@@ -2633,10 +2475,7 @@
                 "items": {
                   "description": "HTTPHeader describes a custom header to be used in HTTP probes",
                   "type": "object",
-                  "required": [
-                    "name",
-                    "value"
-                  ],
+                  "required": ["name", "value"],
                   "properties": {
                     "name": {
                       "description": "The header field name",
@@ -2648,9 +2487,7 @@
                     }
                   }
                 },
-                "x-ms-identifiers": [
-                  "name"
-                ]
+                "x-ms-identifiers": ["name"]
               },
               "path": {
                 "description": "Path to access on the HTTP server.",
@@ -2663,10 +2500,7 @@
               },
               "scheme": {
                 "description": "Scheme to use for connecting to the host. Defaults to HTTP.",
-                "enum": [
-                  "HTTP",
-                  "HTTPS"
-                ],
+                "enum": ["HTTP", "HTTPS"],
                 "type": "string",
                 "x-ms-enum": {
                   "name": "Scheme",
@@ -2693,9 +2527,7 @@
           "tcpSocket": {
             "description": "TCPSocket specifies an action involving a TCP port. TCP hooks not yet supported.",
             "type": "object",
-            "required": [
-              "port"
-            ],
+            "required": ["port"],
             "properties": {
               "host": {
                 "description": "Optional: Host name to connect to, defaults to the pod IP.",
@@ -2720,11 +2552,7 @@
           },
           "type": {
             "description": "The type of probe.",
-            "enum": [
-              "Liveness",
-              "Readiness",
-              "Startup"
-            ],
+            "enum": ["Liveness", "Readiness", "Startup"],
             "type": "string",
             "x-ms-enum": {
               "name": "Type",
@@ -2748,9 +2576,7 @@
             "items": {
               "$ref": "#/components/schemas/ContainerAppProbe"
             },
-            "x-ms-identifiers": [
-              "type"
-            ]
+            "x-ms-identifiers": ["type"]
           }
         }
       },
@@ -2791,9 +2617,7 @@
             "items": {
               "$ref": "#/components/schemas/ScaleRuleAuth"
             },
-            "x-ms-identifiers": [
-              "triggerParameter"
-            ]
+            "x-ms-identifiers": ["triggerParameter"]
           },
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -2822,9 +2646,7 @@
             "items": {
               "$ref": "#/components/schemas/ScaleRuleAuth"
             },
-            "x-ms-identifiers": [
-              "triggerParameter"
-            ]
+            "x-ms-identifiers": ["triggerParameter"]
           },
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -2849,9 +2671,7 @@
             "items": {
               "$ref": "#/components/schemas/ScaleRuleAuth"
             },
-            "x-ms-identifiers": [
-              "triggerParameter"
-            ]
+            "x-ms-identifiers": ["triggerParameter"]
           },
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -2876,9 +2696,7 @@
             "items": {
               "$ref": "#/components/schemas/ScaleRuleAuth"
             },
-            "x-ms-identifiers": [
-              "triggerParameter"
-            ]
+            "x-ms-identifiers": ["triggerParameter"]
           },
           "identity": {
             "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
@@ -2939,9 +2757,7 @@
             "items": {
               "$ref": "#/components/schemas/ScaleRule"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           }
         }
       },
@@ -2969,12 +2785,7 @@
           },
           "storageType": {
             "description": "Storage type for the volume. If not provided, use EmptyDir.",
-            "enum": [
-              "AzureFile",
-              "EmptyDir",
-              "Secret",
-              "NfsAzureFile"
-            ],
+            "enum": ["AzureFile", "EmptyDir", "Secret", "NfsAzureFile"],
             "type": "string",
             "x-ms-enum": {
               "name": "StorageType",
@@ -2991,9 +2802,7 @@
             "items": {
               "$ref": "#/components/schemas/SecretVolumeItem"
             },
-            "x-ms-identifiers": [
-              "secretRef"
-            ]
+            "x-ms-identifiers": ["secretRef"]
           },
           "mountOptions": {
             "description": "Mount options used while mounting the Azure file share or NFS Azure file share. Must be a comma-separated string.",
@@ -3034,9 +2843,7 @@
             "items": {
               "$ref": "#/components/schemas/InitContainer"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "containers": {
             "description": "List of container definitions for the Container App.",
@@ -3044,9 +2851,7 @@
             "items": {
               "$ref": "#/components/schemas/Container"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "scale": {
             "$ref": "#/components/schemas/Scale"
@@ -3057,9 +2862,7 @@
             "items": {
               "$ref": "#/components/schemas/Volume"
             },
-            "x-ms-identifiers": [
-              "name"
-            ]
+            "x-ms-identifiers": ["name"]
           },
           "serviceBinds": {
             "description": "List of container app services bound to the app",
@@ -3067,9 +2870,7 @@
             "items": {
               "$ref": "#/components/schemas/ServiceBind"
             },
-            "x-ms-identifier": [
-              "name"
-            ]
+            "x-ms-identifier": ["name"]
           }
         }
       }
