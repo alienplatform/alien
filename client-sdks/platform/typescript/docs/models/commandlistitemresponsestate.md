@@ -5,7 +5,7 @@ Command states in the ARC protocol lifecycle
 ## Example Usage
 
 ```typescript
-import { CommandListItemResponseState } from "@aliendotdev/platform-api/models";
+import { CommandListItemResponseState } from "@alienplatform/platform-api/models";
 
 let value: CommandListItemResponseState = "PENDING_UPLOAD";
 ```

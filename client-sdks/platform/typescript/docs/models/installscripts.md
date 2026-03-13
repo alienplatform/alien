@@ -5,7 +5,7 @@ Install script URLs for each OS
 ## Example Usage
 
 ```typescript
-import { InstallScripts } from "@aliendotdev/platform-api/models";
+import { InstallScripts } from "@alienplatform/platform-api/models";
 
 let value: InstallScripts = {
   windows: "https://amused-muscat.info/",

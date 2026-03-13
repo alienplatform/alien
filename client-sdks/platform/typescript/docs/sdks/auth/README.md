@@ -14,7 +14,7 @@ Get current authenticated principal information (user or service account). Works
 
 <!-- UsageSnippet language="typescript" operationID="whoami" method="get" path="/v1/whoami" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -34,8 +34,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { authWhoami } from "@aliendotdev/platform-api/funcs/authWhoami.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { authWhoami } from "@alienplatform/platform-api/funcs/authWhoami.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

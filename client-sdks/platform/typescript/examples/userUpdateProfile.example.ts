@@ -5,13 +5,13 @@
 import dotenv from "dotenv"
 dotenv.config()
 /**
- * Example usage of the @aliendotdev/platform-api SDK
+ * Example usage of the @alienplatform/platform-api SDK
  *
  * To run this example from the examples directory:
  * npm run build && npx tsx userUpdateProfile.example.ts
  */
 
-import { Alien } from "@aliendotdev/platform-api"
+import { Alien } from "@alienplatform/platform-api"
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",

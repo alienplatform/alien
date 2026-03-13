@@ -1,4 +1,4 @@
-import { command as arcCommand } from "@aliendotdev/bindings"
+import { command as arcCommand } from "@alienplatform/bindings"
 import { applyLabels, classifyPullRequests, computeMetrics, fetchPullRequests } from "./github.js"
 import { loadIntegrationConfig, saveIntegrationConfig } from "./integrations.js"
 import type { IntegrationConfig, LabelResult } from "./types.js"

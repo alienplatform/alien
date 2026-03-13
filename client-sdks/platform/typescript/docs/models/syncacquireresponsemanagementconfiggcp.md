@@ -5,7 +5,7 @@ GCP management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseManagementConfigGcp } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseManagementConfigGcp } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseManagementConfigGcp = {
   serviceAccountEmail: "<value>",

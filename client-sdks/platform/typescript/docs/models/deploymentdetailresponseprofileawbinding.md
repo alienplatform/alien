@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileAwBinding } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileAwBinding } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileAwBinding = {};
 ```

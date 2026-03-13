@@ -25,7 +25,7 @@ Retrieve all managers.
 
 <!-- UsageSnippet language="typescript" operationID="listManagers" method="get" path="/v1/managers" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -47,8 +47,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersList } from "@aliendotdev/platform-api/funcs/agentManagersList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersList } from "@alienplatform/platform-api/funcs/agentManagersList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -99,7 +99,7 @@ Create a new manager.
 
 <!-- UsageSnippet language="typescript" operationID="createManager" method="post" path="/v1/managers" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -121,8 +121,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersCreate } from "@aliendotdev/platform-api/funcs/agentManagersCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersCreate } from "@alienplatform/platform-api/funcs/agentManagersCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -174,7 +174,7 @@ Retrieve a manager by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getManager" method="get" path="/v1/managers/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -197,8 +197,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersGet } from "@aliendotdev/platform-api/funcs/agentManagersGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersGet } from "@alienplatform/platform-api/funcs/agentManagersGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -251,7 +251,7 @@ Delete a manager by ID.
 
 <!-- UsageSnippet language="typescript" operationID="deleteManager" method="delete" path="/v1/managers/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -274,8 +274,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersDelete } from "@aliendotdev/platform-api/funcs/agentManagersDelete.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersDelete } from "@alienplatform/platform-api/funcs/agentManagersDelete.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -328,7 +328,7 @@ Get the management configuration for a manager.
 
 <!-- UsageSnippet language="typescript" operationID="getManagerManagementConfig" method="get" path="/v1/managers/{id}/management-config" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -351,8 +351,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersGetManagementConfig } from "@aliendotdev/platform-api/funcs/agentManagersGetManagementConfig.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersGetManagementConfig } from "@alienplatform/platform-api/funcs/agentManagersGetManagementConfig.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -405,7 +405,7 @@ Enqueue provisioning for a manager by ID.
 
 <!-- UsageSnippet language="typescript" operationID="provisionManager" method="post" path="/v1/managers/{id}/provision" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -428,8 +428,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersProvision } from "@aliendotdev/platform-api/funcs/agentManagersProvision.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersProvision } from "@alienplatform/platform-api/funcs/agentManagersProvision.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -482,7 +482,7 @@ Update a manager to a specific release ID or active release.
 
 <!-- UsageSnippet language="typescript" operationID="updateManager" method="post" path="/v1/managers/{id}/update" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -508,8 +508,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersUpdate } from "@aliendotdev/platform-api/funcs/agentManagersUpdate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersUpdate } from "@alienplatform/platform-api/funcs/agentManagersUpdate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -565,7 +565,7 @@ Retrieve all events of a manager.
 
 <!-- UsageSnippet language="typescript" operationID="listManagerEvents" method="get" path="/v1/managers/{id}/events" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -588,8 +588,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersListEvents } from "@aliendotdev/platform-api/funcs/agentManagersListEvents.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersListEvents } from "@alienplatform/platform-api/funcs/agentManagersListEvents.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -642,7 +642,7 @@ Generate a JWT token and connection info for querying manager logs directly. Ret
 
 <!-- UsageSnippet language="typescript" operationID="generateDeepstoreToken" method="post" path="/v1/managers/{id}/deepstore/token" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -666,8 +666,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersGenerateDeepstoreToken } from "@aliendotdev/platform-api/funcs/agentManagersGenerateDeepstoreToken.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersGenerateDeepstoreToken } from "@alienplatform/platform-api/funcs/agentManagersGenerateDeepstoreToken.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -721,7 +721,7 @@ Report Manager health status and metrics.
 
 <!-- UsageSnippet language="typescript" operationID="reportManagerHeartbeat" method="post" path="/v1/managers/{id}/heartbeat" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -744,8 +744,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersReportHeartbeat } from "@aliendotdev/platform-api/funcs/agentManagersReportHeartbeat.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersReportHeartbeat } from "@alienplatform/platform-api/funcs/agentManagersReportHeartbeat.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -798,7 +798,7 @@ Get deployment details for a user manager (internal agent platform, status, reso
 
 <!-- UsageSnippet language="typescript" operationID="getManagerDeployment" method="get" path="/v1/managers/{id}/deployment" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -821,8 +821,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersGetDeployment } from "@aliendotdev/platform-api/funcs/agentManagersGetDeployment.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersGetDeployment } from "@alienplatform/platform-api/funcs/agentManagersGetDeployment.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -875,7 +875,7 @@ Connect a Google Cloud manager via OAuth.
 
 <!-- UsageSnippet language="typescript" operationID="connectManagerToGoogleCloud" method="get" path="/v1/managers/{id}/google-cloud-connect" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -900,8 +900,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { agentManagersGoogleCloudConnect } from "@aliendotdev/platform-api/funcs/agentManagersGoogleCloudConnect.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentManagersGoogleCloudConnect } from "@alienplatform/platform-api/funcs/agentManagersGoogleCloudConnect.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

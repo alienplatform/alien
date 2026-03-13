@@ -5,7 +5,7 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseStackStateLifecycle } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseStackStateLifecycle } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseStackStateLifecycle = "live";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetContainerAttentionType } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerAttentionType } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerAttentionType = "crashloop";
 ```

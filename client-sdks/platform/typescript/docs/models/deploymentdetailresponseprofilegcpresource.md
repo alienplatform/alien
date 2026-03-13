@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileGcpResource } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileGcpResource } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileGcpResource = {
   scope: "<value>",

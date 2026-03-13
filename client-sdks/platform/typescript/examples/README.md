@@ -1,6 +1,6 @@
-# @aliendotdev/platform-api Examples
+# @alienplatform/platform-api Examples
 
-This directory contains example scripts demonstrating how to use the @aliendotdev/platform-api SDK.
+This directory contains example scripts demonstrating how to use the @alienplatform/platform-api SDK.
 
 ## Prerequisites
 

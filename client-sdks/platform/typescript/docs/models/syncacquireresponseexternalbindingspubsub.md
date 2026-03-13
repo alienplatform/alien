@@ -5,7 +5,7 @@ GCP Pub/Sub parameters
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsPubsub } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsPubsub } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsPubsub = {
   service: "pubsub",

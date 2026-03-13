@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { ListDeploymentsStatus } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentsStatus } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentsStatus = "delete-pending";
 ```

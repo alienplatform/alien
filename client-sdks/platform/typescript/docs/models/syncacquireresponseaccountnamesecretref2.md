@@ -5,7 +5,7 @@ Reference to a Kubernetes Secret
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseAccountNameSecretRef2 } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseAccountNameSecretRef2 } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseAccountNameSecretRef2 = {
   key: "<key>",

@@ -5,7 +5,7 @@ Platform-specific certificate references for custom domains.
 ## Example Usage
 
 ```typescript
-import { DeploymentCertificate } from "@aliendotdev/platform-api/models";
+import { DeploymentCertificate } from "@alienplatform/platform-api/models";
 
 let value: DeploymentCertificate = {};
 ```

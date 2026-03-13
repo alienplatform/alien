@@ -4,7 +4,7 @@
  *
  * @example Basic Usage
  * ```typescript
- * import { AlienError, defineError } from '@aliendotdev/core'
+ * import { AlienError, defineError } from '@alienplatform/core'
  * import { z } from 'zod'
  *
  * // Define a type-safe error

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GcpTargetConfig } from "@aliendotdev/platform-api/models";
+import { GcpTargetConfig } from "@alienplatform/platform-api/models";
 
 let value: GcpTargetConfig = {
   certificateName: "<value>",

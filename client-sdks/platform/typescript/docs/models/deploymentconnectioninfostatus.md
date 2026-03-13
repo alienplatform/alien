@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { DeploymentConnectionInfoStatus } from "@aliendotdev/platform-api/models";
+import { DeploymentConnectionInfoStatus } from "@alienplatform/platform-api/models";
 
 let value: DeploymentConnectionInfoStatus = "initial-setup-failed";
 ```

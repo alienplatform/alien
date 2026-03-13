@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendAzure } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendAzure } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendAzure = {
   binding: {},

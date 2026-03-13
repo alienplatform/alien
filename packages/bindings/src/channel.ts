@@ -2,7 +2,7 @@
  * gRPC channel management for the Alien bindings SDK.
  */
 
-import { AlienError } from "@aliendotdev/core"
+import { AlienError } from "@alienplatform/core"
 import { type Channel, createChannel } from "nice-grpc"
 import { GrpcConnectionError, MissingEnvVarError } from "./errors.js"
 

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateManagerRequest } from "@aliendotdev/platform-api/models/operations";
+import { UpdateManagerRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateManagerRequest = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

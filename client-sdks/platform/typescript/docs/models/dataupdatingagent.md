@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataUpdatingAgent } from "@aliendotdev/platform-api/models";
+import { DataUpdatingAgent } from "@alienplatform/platform-api/models";
 
 let value: DataUpdatingAgent = {
   agentId: "<id>",

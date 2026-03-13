@@ -5,7 +5,7 @@ Request to reconcile deployment state
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequest } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequest } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequest = {
   deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",

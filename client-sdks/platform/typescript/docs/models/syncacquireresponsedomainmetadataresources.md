@@ -8,7 +8,7 @@ Private keys are deployment-scoped secrets (like environment variables).
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseDomainMetadataResources } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseDomainMetadataResources } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDomainMetadataResources = {
   certificateId: "<id>",

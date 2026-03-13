@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataCleaningUpEnvironment } from "@aliendotdev/platform-api/models";
+import { DataCleaningUpEnvironment } from "@alienplatform/platform-api/models";
 
 let value: DataCleaningUpEnvironment = {
   stackName: "<value>",

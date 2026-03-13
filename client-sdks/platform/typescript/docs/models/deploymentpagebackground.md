@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentPageBackground } from "@aliendotdev/platform-api/models";
+import { DeploymentPageBackground } from "@alienplatform/platform-api/models";
 
 let value: DeploymentPageBackground = {
   type: "gradient-mesh",

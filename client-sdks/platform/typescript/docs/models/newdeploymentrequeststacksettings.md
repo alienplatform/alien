@@ -5,7 +5,7 @@ Stack settings for deployment customization
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestStackSettings } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestStackSettings } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestStackSettings = {};
 ```

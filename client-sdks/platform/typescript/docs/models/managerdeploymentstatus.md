@@ -5,7 +5,7 @@ Deployment status of the internal agent
 ## Example Usage
 
 ```typescript
-import { ManagerDeploymentStatus } from "@aliendotdev/platform-api/models";
+import { ManagerDeploymentStatus } from "@alienplatform/platform-api/models";
 
 let value: ManagerDeploymentStatus = "delete-failed";
 ```

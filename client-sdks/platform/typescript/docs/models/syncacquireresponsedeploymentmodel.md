@@ -5,7 +5,7 @@ Deployment model: how updates are delivered to the remote environment.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseDeploymentModel } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseDeploymentModel } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDeploymentModel = "pull";
 ```

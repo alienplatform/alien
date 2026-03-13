@@ -1,4 +1,4 @@
-# @aliendotdev/core
+# @alienplatform/core
 
 TypeScript SDK for defining Alien stacks and resources. Types are generated from the Rust schemas.
 
@@ -61,7 +61,7 @@ When you modify types in `alien-core` (Rust), run `pnpm generate` to update Type
 The `Stack` class is a builder for defining resources:
 
 ```typescript
-import { Stack, Storage, Function } from "@aliendotdev/core"
+import { Stack, Storage, Function } from "@alienplatform/core"
 
 const storage = new Storage("data").build()
 const fn = new Function("processor")

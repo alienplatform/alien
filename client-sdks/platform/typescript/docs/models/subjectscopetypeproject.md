@@ -5,7 +5,7 @@ Project-scoped access
 ## Example Usage
 
 ```typescript
-import { SubjectScopeTypeProject } from "@aliendotdev/client-sdk/models";
+import { SubjectScopeTypeProject } from "@alienplatform/client-sdk/models";
 
 let value: SubjectScopeTypeProject = "project";
 ```

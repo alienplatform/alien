@@ -5,7 +5,7 @@ GCP-specific environment information
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseEnvironmentInfoGcp } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseEnvironmentInfoGcp } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseEnvironmentInfoGcp = {
   projectId: "<id>",

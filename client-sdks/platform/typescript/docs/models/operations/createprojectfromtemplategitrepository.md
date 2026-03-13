@@ -5,7 +5,7 @@ The Git Repository that will be connected to the project. When this is defined, 
 ## Example Usage
 
 ```typescript
-import { CreateProjectFromTemplateGitRepository } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectFromTemplateGitRepository } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateGitRepository = {
   type: "github",

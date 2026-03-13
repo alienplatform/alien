@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentNetworkByoVpcGcp } from "@aliendotdev/platform-api/models";
+import { DeploymentNetworkByoVpcGcp } from "@alienplatform/platform-api/models";
 
 let value: DeploymentNetworkByoVpcGcp = {
   networkName: "<value>",

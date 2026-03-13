@@ -4,7 +4,7 @@ Core types and abstractions for the Alien platform.
 
 ## Type Generation & Code Sync
 
-Types in this crate are exported to TypeScript for use in `@aliendotdev/core`.
+Types in this crate are exported to TypeScript for use in `@alienplatform/core`.
 
 ### Quick Reference
 
@@ -22,7 +22,7 @@ Rust types (alien-core)
 OpenAPI JSON
   ↓ Kubb (packages/core/kubb.config.ts)
 Zod schemas + TypeScript types
-  ↓ Published as @aliendotdev/core
+  ↓ Published as @alienplatform/core
 ```
 
 ### Adding New Types

@@ -5,7 +5,7 @@ Test platform environment information (mock)
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseEnvironmentInfoTest } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseEnvironmentInfoTest } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseEnvironmentInfoTest = {
   testId: "<id>",

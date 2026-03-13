@@ -5,7 +5,7 @@ How telemetry (logs, metrics, traces) is handled.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseTelemetry } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseTelemetry } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseTelemetry = "auto";
 ```

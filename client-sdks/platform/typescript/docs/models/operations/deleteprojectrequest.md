@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeleteProjectRequest } from "@aliendotdev/platform-api/models/operations";
+import { DeleteProjectRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: DeleteProjectRequest = {
   idOrName: "my-project",

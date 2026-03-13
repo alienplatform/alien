@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleaseManagementEnum } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleaseManagementEnum } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleaseManagementEnum = "auto";
 ```

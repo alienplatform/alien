@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataPushingImage } from "@aliendotdev/platform-api/models";
+import { DataPushingImage } from "@alienplatform/platform-api/models";
 
 let value: DataPushingImage = {
   image: "https://picsum.photos/seed/bgd6b4HoNE/948/3236",

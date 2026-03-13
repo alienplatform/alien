@@ -5,7 +5,7 @@ DNS record status in the DNS lifecycle
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseDnsStatus } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseDnsStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDnsStatus = "deleting";
 ```

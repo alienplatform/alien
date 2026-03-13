@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { DeploymentListItemResponseStatus } from "@aliendotdev/platform-api/models";
+import { DeploymentListItemResponseStatus } from "@alienplatform/platform-api/models";
 
 let value: DeploymentListItemResponseStatus = "delete-failed";
 ```

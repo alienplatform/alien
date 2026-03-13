@@ -5,7 +5,7 @@ Distinct platforms retrieved.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentFilterPlatformsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentFilterPlatformsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentFilterPlatformsResponse = {
   items: [

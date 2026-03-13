@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseOverride } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseOverride } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseOverride = {
   description: "skeletal swear indelible than french boo tune-up yahoo yum",

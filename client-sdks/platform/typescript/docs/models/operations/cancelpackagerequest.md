@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CancelPackageRequest } from "@aliendotdev/platform-api/models/operations";
+import { CancelPackageRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CancelPackageRequest = {
   id: "pkg_jebo2o5jmm7raefl2m1pe3cz",

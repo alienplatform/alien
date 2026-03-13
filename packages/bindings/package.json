@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/bindings",
+  "name": "@alienplatform/bindings",
   "version": "1.0.0",
   "type": "module",
   "exports": {
@@ -30,7 +30,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@aliendotdev/typescript-config": "workspace:^",
+    "@alienplatform/typescript-config": "workspace:^",
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^24.0.15",
     "ts-proto": "^2.7.0",
@@ -39,7 +39,7 @@
     "vitest": "^3.1.4"
   },
   "dependencies": {
-    "@aliendotdev/core": "workspace:^",
+    "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",
     "@grpc/grpc-js": "^1.13.4",
     "long": "^5.3.2",

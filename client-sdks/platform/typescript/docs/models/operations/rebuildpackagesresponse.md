@@ -5,7 +5,7 @@ Packages rebuilt successfully.
 ## Example Usage
 
 ```typescript
-import { RebuildPackagesResponse } from "@aliendotdev/platform-api/models/operations";
+import { RebuildPackagesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: RebuildPackagesResponse = {
   packagesCreated: 686417,

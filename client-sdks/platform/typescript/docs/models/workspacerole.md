@@ -5,7 +5,7 @@ Role for workspace-scoped service accounts
 ## Example Usage
 
 ```typescript
-import { WorkspaceRole } from "@aliendotdev/platform-api/models";
+import { WorkspaceRole } from "@alienplatform/platform-api/models";
 
 let value: WorkspaceRole = "workspace.member";
 ```

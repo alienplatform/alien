@@ -5,7 +5,7 @@ Project created successfully.
 ## Example Usage
 
 ```typescript
-import { CreateProjectResponse } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectResponse = {
   id: "prj_mcytp6z3j91f7tn5ryqsfwtr",

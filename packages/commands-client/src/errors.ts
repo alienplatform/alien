@@ -2,7 +2,7 @@
  * Commands Client Error Definitions
  */
 
-import { defineError } from "@aliendotdev/core"
+import { defineError } from "@alienplatform/core"
 import { z } from "zod/v4"
 
 /**

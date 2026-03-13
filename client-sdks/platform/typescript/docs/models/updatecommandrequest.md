@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateCommandRequest } from "@aliendotdev/platform-api/models";
+import { UpdateCommandRequest } from "@alienplatform/platform-api/models";
 
 let value: UpdateCommandRequest = {};
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Machine } from "@aliendotdev/platform-api/models/operations";
+import { Machine } from "@alienplatform/platform-api/models/operations";
 
 let value: Machine = {
   machineId: "<id>",

@@ -5,7 +5,7 @@ Terraform provider package configuration. If null, Terraform packages will not b
 ## Example Usage
 
 ```typescript
-import { ProjectTerraform } from "@aliendotdev/platform-api/models";
+import { ProjectTerraform } from "@alienplatform/platform-api/models";
 
 let value: ProjectTerraform = {
   providerName: "<value>",

@@ -69,7 +69,7 @@ cargo build
 npm test
 ```
 
-The tests use `@aliendotdev/testing` with the `dev` deployer for local testing.
+The tests use `@alienplatform/testing` with the `dev` deployer for local testing.
 
 ### Deploy
 
@@ -82,7 +82,7 @@ alien deploy --platform local
 ### Using ARC Client (TypeScript)
 
 ```typescript
-import { ArcClient } from "@aliendotdev/arc-client"
+import { ArcClient } from "@alienplatform/arc-client"
 
 const arc = new ArcClient({
   managerUrl: "https://am.example.com",

@@ -5,7 +5,7 @@ Azure Container Registry binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsAcr } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsAcr } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsAcr = {
   service: "acr",

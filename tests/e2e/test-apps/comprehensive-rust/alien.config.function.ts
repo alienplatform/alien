@@ -1,4 +1,4 @@
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const storage = new alien.Storage("test-alien-storage").build()
 const artifactRegistry = new alien.ArtifactRegistry("test-alien-artifact-registry").build()

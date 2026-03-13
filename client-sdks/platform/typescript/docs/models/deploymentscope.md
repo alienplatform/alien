@@ -5,7 +5,7 @@ Deployment-scoped configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentScope } from "@aliendotdev/platform-api/models";
+import { DeploymentScope } from "@alienplatform/platform-api/models";
 
 let value: DeploymentScope = {
   type: "deployment",

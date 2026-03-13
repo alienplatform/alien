@@ -1,4 +1,4 @@
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 // Simplified config for local dev - excludes Build and Queue resources
 // that don't have local controllers

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseManagementConfigKubernetes } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseManagementConfigKubernetes } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseManagementConfigKubernetes = {
   platform: "kubernetes",

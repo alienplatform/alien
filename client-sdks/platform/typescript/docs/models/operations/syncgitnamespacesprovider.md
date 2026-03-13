@@ -5,7 +5,7 @@ Git provider to sync
 ## Example Usage
 
 ```typescript
-import { SyncGitNamespacesProvider } from "@aliendotdev/platform-api/models/operations";
+import { SyncGitNamespacesProvider } from "@alienplatform/platform-api/models/operations";
 
 let value: SyncGitNamespacesProvider = "github";
 ```

@@ -5,7 +5,7 @@ Resource that can hold any resource type in the Alien system. All resources shar
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreviousConfig } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreviousConfig } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreviousConfig = {
   id: "<id>",

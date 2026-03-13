@@ -5,7 +5,7 @@ A bag of resources, unaware of any cloud.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseStack } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseStack } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseStack = {
   id: "<id>",

@@ -5,7 +5,7 @@ Image pull credentials for container registries
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseImagePullCredentials } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseImagePullCredentials } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseImagePullCredentials = {
   password: "2bazurwG7aW1oYx",

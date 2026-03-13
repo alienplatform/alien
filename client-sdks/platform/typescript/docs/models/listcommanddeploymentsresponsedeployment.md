@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListCommandDeploymentsResponseDeployment } from "@aliendotdev/platform-api/models";
+import { ListCommandDeploymentsResponseDeployment } from "@alienplatform/platform-api/models";
 
 let value: ListCommandDeploymentsResponseDeployment = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

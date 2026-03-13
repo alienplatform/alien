@@ -7,7 +7,7 @@ When you deploy a Function or Container built from source, the image includes `a
 Access cloud resources without platform-specific code:
 
 ```typescript
-import { storage, kv, queue } from "@aliendotdev/bindings"
+import { storage, kv, queue } from "@alienplatform/bindings"
 
 await storage("uploads").put("report.json", data)
 const value = await kv("cache").get("session-123")
@@ -21,7 +21,7 @@ Same code runs on S3, Cloud Storage, Blob Storage, MinIO, or local filesystem â€
 React to things happening in the remote environment:
 
 ```typescript
-import { onStorageEvent, onQueueMessage, onCronEvent } from "@aliendotdev/bindings"
+import { onStorageEvent, onQueueMessage, onCronEvent } from "@alienplatform/bindings"
 
 onStorageEvent("uploads", async (event) => {
   // File was uploaded to the storage bucket
@@ -41,7 +41,7 @@ onCronEvent("daily-cleanup", async () => {
 Receive remote commands from the control plane:
 
 ```typescript
-import { command } from "@aliendotdev/bindings"
+import { command } from "@alienplatform/bindings"
 
 command("generate-report", async (params) => {
   const report = await buildReport(params.startDate, params.endDate)
@@ -56,7 +56,7 @@ The control plane sends a command; your app processes it and returns a response.
 Run background work that completes before the function shuts down:
 
 ```typescript
-import { waitUntil } from "@aliendotdev/bindings"
+import { waitUntil } from "@alienplatform/bindings"
 
 app.post("/ingest", async (c) => {
   waitUntil(async () => {

@@ -5,7 +5,7 @@ GCP IAM condition
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackProfileConditionResource } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackProfileConditionResource } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackProfileConditionResource = {
   expression: "<value>",

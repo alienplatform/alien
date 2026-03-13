@@ -23,7 +23,7 @@ Bird's-eye view of all container definitions across all deployments, with aggreg
 
 <!-- UsageSnippet language="typescript" operationID="getContainerOverview" method="get" path="/v1/containers/overview" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -46,8 +46,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetOverview } from "@aliendotdev/platform-api/funcs/containersGetOverview.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetOverview } from "@alienplatform/platform-api/funcs/containersGetOverview.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -99,7 +99,7 @@ Returns deployments that need attention: crash loops, scheduling failures, unhea
 
 <!-- UsageSnippet language="typescript" operationID="getContainerAttention" method="get" path="/v1/containers/attention" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -122,8 +122,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetAttention } from "@aliendotdev/platform-api/funcs/containersGetAttention.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetAttention } from "@alienplatform/platform-api/funcs/containersGetAttention.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -175,7 +175,7 @@ Per-deployment breakdown for a container: status, replicas, metrics, and HTTP pe
 
 <!-- UsageSnippet language="typescript" operationID="getContainerDefinitionDeployments" method="get" path="/v1/containers/{containerName}/deployments" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -199,8 +199,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetDeployments } from "@aliendotdev/platform-api/funcs/containersGetDeployments.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetDeployments } from "@alienplatform/platform-api/funcs/containersGetDeployments.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -253,7 +253,7 @@ Cross-deployment machine health: per-deployment machine counts by status, capaci
 
 <!-- UsageSnippet language="typescript" operationID="getContainerMachines" method="get" path="/v1/containers/machines" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -276,8 +276,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetMachines } from "@aliendotdev/platform-api/funcs/containersGetMachines.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetMachines } from "@alienplatform/platform-api/funcs/containersGetMachines.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -329,7 +329,7 @@ Container cluster overview for a specific deployment: machine count, container c
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentCluster" method="get" path="/v1/containers/deployments/{id}/cluster" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -352,8 +352,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetDeploymentCluster } from "@aliendotdev/platform-api/funcs/containersGetDeploymentCluster.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetDeploymentCluster } from "@alienplatform/platform-api/funcs/containersGetDeploymentCluster.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -406,7 +406,7 @@ List all containers running in a specific deployment.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentContainers" method="get" path="/v1/containers/deployments/{id}/containers" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -429,8 +429,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersListDeploymentContainers } from "@aliendotdev/platform-api/funcs/containersListDeploymentContainers.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersListDeploymentContainers } from "@alienplatform/platform-api/funcs/containersListDeploymentContainers.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -483,7 +483,7 @@ Get detailed status, configuration, and replica metrics for a specific container
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentContainer" method="get" path="/v1/containers/deployments/{id}/containers/{containerName}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -507,8 +507,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersGetDeploymentContainer } from "@aliendotdev/platform-api/funcs/containersGetDeploymentContainer.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersGetDeploymentContainer } from "@alienplatform/platform-api/funcs/containersGetDeploymentContainer.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -562,7 +562,7 @@ List all compute machines in a deployment's container cluster.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentMachines" method="get" path="/v1/containers/deployments/{id}/machines" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -585,8 +585,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersListDeploymentMachines } from "@aliendotdev/platform-api/funcs/containersListDeploymentMachines.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersListDeploymentMachines } from "@alienplatform/platform-api/funcs/containersListDeploymentMachines.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -639,7 +639,7 @@ List orchestration events for a deployment's container cluster.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentContainerEvents" method="get" path="/v1/containers/deployments/{id}/events" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -662,8 +662,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersListDeploymentEvents } from "@aliendotdev/platform-api/funcs/containersListDeploymentEvents.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersListDeploymentEvents } from "@alienplatform/platform-api/funcs/containersListDeploymentEvents.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -716,7 +716,7 @@ List orchestration events for a specific container in a deployment.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentContainerInstanceEvents" method="get" path="/v1/containers/deployments/{id}/containers/{containerName}/events" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -740,8 +740,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { containersListDeploymentContainerInstanceEvents } from "@aliendotdev/platform-api/funcs/containersListDeploymentContainerInstanceEvents.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { containersListDeploymentContainerInstanceEvents } from "@alienplatform/platform-api/funcs/containersListDeploymentContainerInstanceEvents.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

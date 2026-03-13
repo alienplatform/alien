@@ -15,7 +15,7 @@ Retrieve all events.
 
 <!-- UsageSnippet language="typescript" operationID="listEvents" method="get" path="/v1/events" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -38,8 +38,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { eventsList } from "@aliendotdev/platform-api/funcs/eventsList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { eventsList } from "@alienplatform/platform-api/funcs/eventsList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -91,7 +91,7 @@ Retrieve an event by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getEvent" method="get" path="/v1/events/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -114,8 +114,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { eventsGet } from "@aliendotdev/platform-api/funcs/eventsGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { eventsGet } from "@alienplatform/platform-api/funcs/eventsGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

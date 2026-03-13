@@ -16,7 +16,7 @@ Acquire a batch of deployments for processing. Used by Manager to atomically loc
 
 <!-- UsageSnippet language="typescript" operationID="syncAcquire" method="post" path="/v1/sync/acquire" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -45,8 +45,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { syncAcquire } from "@aliendotdev/platform-api/funcs/syncAcquire.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { syncAcquire } from "@alienplatform/platform-api/funcs/syncAcquire.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -105,7 +105,7 @@ Reconcile agent deployment state. Push model (with session) verifies lock owners
 
 <!-- UsageSnippet language="typescript" operationID="syncReconcile" method="post" path="/v1/sync/reconcile" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -134,8 +134,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { syncReconcile } from "@aliendotdev/platform-api/funcs/syncReconcile.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { syncReconcile } from "@alienplatform/platform-api/funcs/syncReconcile.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -194,7 +194,7 @@ Release an agent's deployment lock. Must be called after processing an acquired 
 
 <!-- UsageSnippet language="typescript" operationID="syncRelease" method="post" path="/v1/sync/release" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -220,8 +220,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { syncRelease } from "@aliendotdev/platform-api/funcs/syncRelease.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { syncRelease } from "@alienplatform/platform-api/funcs/syncRelease.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

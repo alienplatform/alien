@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestAzure } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestAzure } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestAzure = {
   keyVaultCertificateId: "<id>",

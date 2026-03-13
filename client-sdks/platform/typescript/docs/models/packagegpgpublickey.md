@@ -5,7 +5,7 @@ GPG public key for Terraform provider signature verification
 ## Example Usage
 
 ```typescript
-import { PackageGpgPublicKey } from "@aliendotdev/platform-api/models";
+import { PackageGpgPublicKey } from "@alienplatform/platform-api/models";
 
 let value: PackageGpgPublicKey = {
   asciiArmor: "<value>",

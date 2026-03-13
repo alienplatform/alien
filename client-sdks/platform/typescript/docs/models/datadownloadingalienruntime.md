@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataDownloadingAlienRuntime } from "@aliendotdev/platform-api/models";
+import { DataDownloadingAlienRuntime } from "@alienplatform/platform-api/models";
 
 let value: DataDownloadingAlienRuntime = {
   targetTriple: "<value>",

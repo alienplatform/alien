@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { OutputsTypeTerraform } from "@aliendotdev/platform-api/models";
+import { OutputsTypeTerraform } from "@alienplatform/platform-api/models";
 
 let value: OutputsTypeTerraform = "terraform";
 ```

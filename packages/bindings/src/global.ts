@@ -49,7 +49,7 @@ async function getGlobalContext(): Promise<AlienContext> {
  *
  * @example
  * ```typescript
- * import { storage } from "@aliendotdev/bindings"
+ * import { storage } from "@alienplatform/bindings"
  *
  * const bucket = await storage("my-bucket")
  * await bucket.put("hello.txt", "Hello, World!")
@@ -67,7 +67,7 @@ export async function storage(name: string): Promise<Storage> {
  *
  * @example
  * ```typescript
- * import { kv } from "@aliendotdev/bindings"
+ * import { kv } from "@alienplatform/bindings"
  *
  * const cache = await kv("my-cache")
  * await cache.set("key", "value")
@@ -86,7 +86,7 @@ export async function kv(name: string): Promise<Kv> {
  *
  * @example
  * ```typescript
- * import { queue } from "@aliendotdev/bindings"
+ * import { queue } from "@alienplatform/bindings"
  *
  * const tasks = await queue("task-queue")
  * await tasks.send("job-type", { jobId: "123" })
@@ -104,7 +104,7 @@ export async function queue(name: string): Promise<Queue> {
  *
  * @example
  * ```typescript
- * import { vault } from "@aliendotdev/bindings"
+ * import { vault } from "@alienplatform/bindings"
  *
  * const secrets = await vault("app-secrets")
  * const apiKey = await secrets.get("API_KEY")
@@ -122,7 +122,7 @@ export async function vault(name: string): Promise<Vault> {
  *
  * @example
  * ```typescript
- * import { build } from "@aliendotdev/bindings"
+ * import { build } from "@alienplatform/bindings"
  *
  * const builder = await build("my-builder")
  * const execution = await builder.start({ script: "npm run build" })
@@ -140,7 +140,7 @@ export async function build(name: string): Promise<Build> {
  *
  * @example
  * ```typescript
- * import { artifactRegistry } from "@aliendotdev/bindings"
+ * import { artifactRegistry } from "@alienplatform/bindings"
  *
  * const registry = await artifactRegistry("my-registry")
  * const repo = await registry.createRepository("my-app")
@@ -158,7 +158,7 @@ export async function artifactRegistry(name: string): Promise<ArtifactRegistry> 
  *
  * @example
  * ```typescript
- * import { func } from "@aliendotdev/bindings"
+ * import { func } from "@alienplatform/bindings"
  *
  * const processor = await func("image-processor")
  * const result = await processor.invokeJson("resize", { width: 800 })
@@ -176,7 +176,7 @@ export async function func(name: string): Promise<FunctionBinding> {
  *
  * @example
  * ```typescript
- * import { serviceAccount } from "@aliendotdev/bindings"
+ * import { serviceAccount } from "@alienplatform/bindings"
  *
  * const sa = await serviceAccount("deployment-account")
  * const info = await sa.getInfo()
@@ -200,7 +200,7 @@ export async function serviceAccount(name: string): Promise<ServiceAccount> {
  *
  * @example
  * ```typescript
- * import { onStorageEvent } from "@aliendotdev/bindings"
+ * import { onStorageEvent } from "@alienplatform/bindings"
  *
  * onStorageEvent("uploads", async (event) => {
  *   console.log("File uploaded:", event.objectKey)
@@ -224,7 +224,7 @@ export function onStorageEvent(
  *
  * @example
  * ```typescript
- * import { onCronEvent } from "@aliendotdev/bindings"
+ * import { onCronEvent } from "@alienplatform/bindings"
  *
  * onCronEvent("0 * * * *", async (event) => {
  *   console.log("Hourly task running at:", event.timestamp)
@@ -247,7 +247,7 @@ export function onCronEvent(
  *
  * @example
  * ```typescript
- * import { onQueueMessage } from "@aliendotdev/bindings"
+ * import { onQueueMessage } from "@alienplatform/bindings"
  *
  * onQueueMessage("tasks", async (message) => {
  *   console.log("Processing:", message.payload)
@@ -274,7 +274,7 @@ export function onQueueMessage<T = unknown>(
  *
  * @example
  * ```typescript
- * import { command } from "@aliendotdev/bindings"
+ * import { command } from "@alienplatform/bindings"
  *
  * command("migrate", "Run database migrations", async (args) => {
  *   await runMigrations()
@@ -301,7 +301,7 @@ export function command(
  *
  * @example
  * ```typescript
- * import { waitUntil } from "@aliendotdev/bindings"
+ * import { waitUntil } from "@alienplatform/bindings"
  *
  * export default {
  *   async fetch(request: Request): Promise<Response> {

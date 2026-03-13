@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataEnsuringDockerRepository } from "@aliendotdev/platform-api/models";
+import { DataEnsuringDockerRepository } from "@alienplatform/platform-api/models";
 
 let value: DataEnsuringDockerRepository = {
   repositoryName: "<value>",

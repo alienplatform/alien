@@ -5,7 +5,7 @@ Request schema for updating agent environment variables
 ## Example Usage
 
 ```typescript
-import { UpdateDeploymentEnvironmentVariablesRequest } from "@aliendotdev/platform-api/models";
+import { UpdateDeploymentEnvironmentVariablesRequest } from "@alienplatform/platform-api/models";
 
 let value: UpdateDeploymentEnvironmentVariablesRequest = {
   variables: [

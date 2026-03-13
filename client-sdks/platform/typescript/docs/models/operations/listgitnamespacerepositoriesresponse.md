@@ -5,7 +5,7 @@ List of repositories.
 ## Example Usage
 
 ```typescript
-import { ListGitNamespaceRepositoriesResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListGitNamespaceRepositoriesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListGitNamespaceRepositoriesResponse = {
   items: [],

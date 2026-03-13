@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeRunningPreflights } from "@aliendotdev/client-sdk/models";
+import { TypeRunningPreflights } from "@alienplatform/client-sdk/models";
 
 let value: TypeRunningPreflights = "RunningPreflights";
 ```

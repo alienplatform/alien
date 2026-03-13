@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentConnectionInfo } from "@aliendotdev/platform-api/models";
+import { DeploymentConnectionInfo } from "@alienplatform/platform-api/models";
 
 let value: DeploymentConnectionInfo = {
   arc: {

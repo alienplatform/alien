@@ -5,7 +5,7 @@ Azure Table Storage KV binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsTablestorage } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsTablestorage } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsTablestorage = {
   service: "tablestorage",

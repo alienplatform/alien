@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { DeploymentProfile } from "@aliendotdev/platform-api/models";
+import { DeploymentProfile } from "@alienplatform/platform-api/models";
 
 let value: DeploymentProfile = {
   description:

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { APIError } from "@aliendotdev/platform-api/models/errors";
+import { APIError } from "@alienplatform/platform-api/models/errors";
 
 // No examples available for this model
 ```

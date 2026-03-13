@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagerPlatformKubernetes } from "@aliendotdev/platform-api/models";
+import { ManagerPlatformKubernetes } from "@alienplatform/platform-api/models";
 
 let value: ManagerPlatformKubernetes = "kubernetes";
 ```

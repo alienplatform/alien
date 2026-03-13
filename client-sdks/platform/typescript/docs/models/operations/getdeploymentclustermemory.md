@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentClusterMemory } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentClusterMemory } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentClusterMemory = {
   total: 963852,

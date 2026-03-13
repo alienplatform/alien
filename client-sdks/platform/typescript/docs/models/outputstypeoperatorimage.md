@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { OutputsTypeOperatorImage } from "@aliendotdev/platform-api/models";
+import { OutputsTypeOperatorImage } from "@alienplatform/platform-api/models";
 
 let value: OutputsTypeOperatorImage = "operator-image";
 ```

@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfo } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfo } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfo = {
   description: "um contractor likewise",

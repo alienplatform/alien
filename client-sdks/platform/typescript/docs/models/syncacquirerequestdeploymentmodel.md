@@ -5,7 +5,7 @@ Filter by deployment model from stackSettings.deploymentModel (Manager should us
 ## Example Usage
 
 ```typescript
-import { SyncAcquireRequestDeploymentModel } from "@aliendotdev/platform-api/models";
+import { SyncAcquireRequestDeploymentModel } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireRequestDeploymentModel = "pull";
 ```

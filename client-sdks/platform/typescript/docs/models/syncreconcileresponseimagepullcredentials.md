@@ -5,7 +5,7 @@ Image pull credentials for container registries
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseImagePullCredentials } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseImagePullCredentials } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseImagePullCredentials = {
   password: "apVd_US99ovybFp",

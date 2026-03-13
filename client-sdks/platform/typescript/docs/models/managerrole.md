@@ -5,7 +5,7 @@ Role for manager-scoped service accounts
 ## Example Usage
 
 ```typescript
-import { ManagerRole } from "@aliendotdev/platform-api/models";
+import { ManagerRole } from "@alienplatform/platform-api/models";
 
 let value: ManagerRole = "manager.runtime";
 ```

@@ -1,4 +1,4 @@
-import { AlienError } from "@aliendotdev/core"
+import { AlienError } from "@alienplatform/core"
 
 export function failCheck(
   check: string,

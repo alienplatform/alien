@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseManagementEnum } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseManagementEnum } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseManagementEnum = "auto";
 ```

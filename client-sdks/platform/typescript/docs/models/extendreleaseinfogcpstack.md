@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { ExtendReleaseInfoGcpStack } from "@aliendotdev/platform-api/models";
+import { ExtendReleaseInfoGcpStack } from "@alienplatform/platform-api/models";
 
 let value: ExtendReleaseInfoGcpStack = {
   scope: "<value>",

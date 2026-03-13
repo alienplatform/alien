@@ -5,7 +5,7 @@ GCP IAM condition
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendConditionResource } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendConditionResource } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendConditionResource = {
   expression: "<value>",

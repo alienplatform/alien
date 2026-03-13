@@ -5,7 +5,7 @@ Local development vault binding (for testing/development)
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsLocalVault } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsLocalVault } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsLocalVault = {
   vaultName: "<value>",

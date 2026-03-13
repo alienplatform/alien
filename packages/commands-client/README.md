@@ -1,17 +1,17 @@
-# @aliendotdev/commands-client
+# @alienplatform/commands-client
 
 Lightweight TypeScript client for Alien command invocation.
 
 ## Installation
 
 ```bash
-npm install @aliendotdev/commands-client
+npm install @alienplatform/commands-client
 ```
 
 ## Usage
 
 ```typescript
-import { CommandsClient } from "@aliendotdev/commands-client"
+import { CommandsClient } from "@alienplatform/commands-client"
 
 const commands = new CommandsClient({
   managerUrl: "https://manager.example.com",

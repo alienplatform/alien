@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GitHubProviderType } from "@aliendotdev/platform-api/models";
+import { GitHubProviderType } from "@alienplatform/platform-api/models";
 
 let value: GitHubProviderType = "github";
 ```

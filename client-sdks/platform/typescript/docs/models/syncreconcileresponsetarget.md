@@ -5,7 +5,7 @@ Target deployment if update is needed
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTarget } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTarget } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTarget = {
   config: {

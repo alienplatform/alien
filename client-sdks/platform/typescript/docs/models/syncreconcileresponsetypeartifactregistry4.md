@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTypeArtifactRegistry4 } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTypeArtifactRegistry4 } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTypeArtifactRegistry4 = "artifact_registry";
 ```

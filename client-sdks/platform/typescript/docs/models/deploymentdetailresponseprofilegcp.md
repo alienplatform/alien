@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileGcp } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileGcp } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileGcp = {
   binding: {},

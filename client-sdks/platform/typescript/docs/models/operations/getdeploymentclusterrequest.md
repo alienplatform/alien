@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentClusterRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentClusterRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentClusterRequest = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

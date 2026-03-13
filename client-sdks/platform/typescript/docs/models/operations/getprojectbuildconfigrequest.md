@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetProjectBuildConfigRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectBuildConfigRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectBuildConfigRequest = {
   idOrName: "my-project",

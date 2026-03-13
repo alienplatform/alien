@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponsePreparedStackOverrideGcpStack } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponsePreparedStackOverrideGcpStack } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponsePreparedStackOverrideGcpStack = {
   scope: "<value>",

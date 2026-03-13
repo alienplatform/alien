@@ -1,10 +1,10 @@
 /**
  * GitHub Agent Remote - Integration Tests
  *
- * Uses @aliendotdev/testing with the dev deployer for pure local command testing.
+ * Uses @alienplatform/testing with the dev deployer for pure local command testing.
  */
 
-import { type Deployment, deploy } from "@aliendotdev/testing"
+import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 const integrationId = "demo-repo"

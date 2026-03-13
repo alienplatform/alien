@@ -5,7 +5,7 @@ Retrieved events.
 ## Example Usage
 
 ```typescript
-import { ListManagerEventsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListManagerEventsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListManagerEventsResponse = {
   items: [

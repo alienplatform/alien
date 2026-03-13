@@ -5,7 +5,7 @@ Profile updated.
 ## Example Usage
 
 ```typescript
-import { UpdateUserProfileResponse } from "@aliendotdev/platform-api/models/operations";
+import { UpdateUserProfileResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateUserProfileResponse = {
   id: "<id>",

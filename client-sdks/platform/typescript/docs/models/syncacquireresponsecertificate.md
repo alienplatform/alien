@@ -5,7 +5,7 @@ Platform-specific certificate references for custom domains.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCertificate } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCertificate } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCertificate = {};
 ```

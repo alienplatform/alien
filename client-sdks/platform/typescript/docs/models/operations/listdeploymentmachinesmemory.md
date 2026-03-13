@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListDeploymentMachinesMemory } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentMachinesMemory } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentMachinesMemory = {
   total: 790295,

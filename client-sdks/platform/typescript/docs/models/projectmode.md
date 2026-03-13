@@ -5,7 +5,7 @@ Color mode for the background animation.
 ## Example Usage
 
 ```typescript
-import { ProjectMode } from "@aliendotdev/platform-api/models";
+import { ProjectMode } from "@alienplatform/platform-api/models";
 
 let value: ProjectMode = "dark";
 ```

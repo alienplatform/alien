@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDomainRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetDomainRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDomainRequest = {
   id: "dom_469m0agk8luj4s16sakmmpdd",

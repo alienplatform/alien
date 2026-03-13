@@ -5,7 +5,7 @@ Request schema for importing an agent from existing infrastructure
 ## Example Usage
 
 ```typescript
-import { ImportDeploymentRequest } from "@aliendotdev/platform-api/models";
+import { ImportDeploymentRequest } from "@alienplatform/platform-api/models";
 
 let value: ImportDeploymentRequest = {
   name: "acme-prod",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTypeByoVpcAws } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTypeByoVpcAws } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTypeByoVpcAws = "byo-vpc-aws";
 ```

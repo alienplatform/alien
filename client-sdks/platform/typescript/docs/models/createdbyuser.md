@@ -5,7 +5,7 @@ User information associated with the API key
 ## Example Usage
 
 ```typescript
-import { CreatedByUser } from "@aliendotdev/platform-api/models";
+import { CreatedByUser } from "@alienplatform/platform-api/models";
 
 let value: CreatedByUser = {
   id: "<id>",

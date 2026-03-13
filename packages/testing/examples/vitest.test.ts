@@ -4,7 +4,7 @@
  * This shows the recommended pattern for writing tests with the testing framework.
  */
 
-import { type Deployment, deploy } from "@aliendotdev/testing"
+import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 describe("My Alien App", () => {

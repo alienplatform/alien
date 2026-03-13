@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ReleaseAuthorFilterItem } from "@aliendotdev/platform-api/models";
+import { ReleaseAuthorFilterItem } from "@alienplatform/platform-api/models";
 
 let value: ReleaseAuthorFilterItem = {
   login: null,

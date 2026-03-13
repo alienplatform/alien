@@ -2,7 +2,7 @@
  * E2E test configuration from environment variables
  */
 
-import type { Platform, PlatformCredentials } from "@aliendotdev/testing"
+import type { Platform, PlatformCredentials } from "@alienplatform/testing"
 
 export interface E2EConfig {
   /** Skip cleanup after tests (for debugging) */

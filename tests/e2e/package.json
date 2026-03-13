@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/e2e-tests",
+  "name": "@alienplatform/e2e-tests",
   "version": "1.0.0",
   "type": "module",
   "private": true,
@@ -11,8 +11,8 @@
     "test:azure": "vitest run tests/*/azure.test.ts"
   },
   "dependencies": {
-    "@aliendotdev/testing": "workspace:*",
-    "@aliendotdev/core": "workspace:*"
+    "@alienplatform/testing": "workspace:*",
+    "@alienplatform/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

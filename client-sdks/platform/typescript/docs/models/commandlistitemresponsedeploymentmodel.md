@@ -5,7 +5,7 @@ Deployment model captured from deployment at creation time
 ## Example Usage
 
 ```typescript
-import { CommandListItemResponseDeploymentModel } from "@aliendotdev/platform-api/models";
+import { CommandListItemResponseDeploymentModel } from "@alienplatform/platform-api/models";
 
 let value: CommandListItemResponseDeploymentModel = "pull";
 ```

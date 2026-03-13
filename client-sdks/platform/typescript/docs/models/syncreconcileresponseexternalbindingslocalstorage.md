@@ -5,7 +5,7 @@ Local filesystem storage binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsLocalStorage } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsLocalStorage } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsLocalStorage = {
   service: "local-storage",

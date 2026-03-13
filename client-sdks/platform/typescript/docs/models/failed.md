@@ -5,7 +5,7 @@ Event failed with an error
 ## Example Usage
 
 ```typescript
-import { Failed } from "@aliendotdev/platform-api/models";
+import { Failed } from "@alienplatform/platform-api/models";
 
 let value: Failed = {};
 ```

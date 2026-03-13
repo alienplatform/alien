@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseStatus } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseStatus = "deleted";
 ```

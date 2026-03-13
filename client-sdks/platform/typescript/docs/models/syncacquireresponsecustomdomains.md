@@ -5,7 +5,7 @@ Custom domain configuration for a single resource.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCustomDomains } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCustomDomains } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCustomDomains = {
   certificate: {},

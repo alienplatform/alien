@@ -8,7 +8,7 @@ the Horizon control plane API for container operations.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseClusters } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseClusters } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseClusters = {
   clusterId: "<id>",

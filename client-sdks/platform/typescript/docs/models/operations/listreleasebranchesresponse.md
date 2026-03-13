@@ -5,7 +5,7 @@ Retrieved distinct branches.
 ## Example Usage
 
 ```typescript
-import { ListReleaseBranchesResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListReleaseBranchesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListReleaseBranchesResponse = {
   items: [

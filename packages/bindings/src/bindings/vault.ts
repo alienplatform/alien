@@ -16,7 +16,7 @@ import { wrapGrpcCall } from "../grpc-utils.js"
  *
  * @example
  * ```typescript
- * import { vault } from "@aliendotdev/bindings"
+ * import { vault } from "@alienplatform/bindings"
  *
  * const secrets = vault("app-secrets")
  *

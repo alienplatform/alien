@@ -4,8 +4,8 @@
  * Provides access to all bindings and control plane functionality.
  */
 
-import type { StorageEvent } from "@aliendotdev/core"
-import { AlienError } from "@aliendotdev/core"
+import type { StorageEvent } from "@alienplatform/core"
+import { AlienError } from "@alienplatform/core"
 import type { Channel } from "nice-grpc"
 import { createClient } from "nice-grpc"
 import { ArtifactRegistry } from "./bindings/artifact-registry.js"
@@ -45,7 +45,7 @@ function generateInstanceId(): string {
  *
  * @example
  * ```typescript
- * import { AlienContext } from "@aliendotdev/bindings"
+ * import { AlienContext } from "@alienplatform/bindings"
  *
  * // Create context from environment
  * const ctx = AlienContext.fromEnv()

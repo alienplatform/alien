@@ -5,7 +5,7 @@ Current deployment state after reconciliation
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseCurrent } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseCurrent } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseCurrent = {
   platform: "local",

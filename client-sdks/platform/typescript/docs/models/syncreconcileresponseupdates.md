@@ -5,7 +5,7 @@ How updates are delivered to the agent.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseUpdates } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseUpdates } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseUpdates = "auto";
 ```

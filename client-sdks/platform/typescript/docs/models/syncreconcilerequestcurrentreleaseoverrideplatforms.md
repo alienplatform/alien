@@ -5,7 +5,7 @@ Platform-specific permission configurations
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseOverridePlatforms } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseOverridePlatforms } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseOverridePlatforms = {};
 ```

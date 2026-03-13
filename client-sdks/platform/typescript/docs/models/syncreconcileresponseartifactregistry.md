@@ -9,7 +9,7 @@ instead of native registry mechanisms (ECR/GCR/ACR).
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseArtifactRegistry } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseArtifactRegistry } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseArtifactRegistry = {
   managerUrl: "https://misguided-impostor.net",

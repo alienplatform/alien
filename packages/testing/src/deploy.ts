@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process"
 import { existsSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { AlienError } from "@aliendotdev/core"
+import { AlienError } from "@alienplatform/core"
 import getPort from "get-port"
 import { Deployment } from "./deployment.js"
 import { TestingOperationFailedError, withTestingContext } from "./errors.js"

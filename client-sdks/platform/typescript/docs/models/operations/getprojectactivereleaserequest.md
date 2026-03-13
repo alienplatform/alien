@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetProjectActiveReleaseRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectActiveReleaseRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectActiveReleaseRequest = {
   idOrName: "my-project",

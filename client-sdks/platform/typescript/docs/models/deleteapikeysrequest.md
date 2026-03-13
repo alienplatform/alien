@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeleteAPIKeysRequest } from "@aliendotdev/platform-api/models";
+import { DeleteAPIKeysRequest } from "@alienplatform/platform-api/models";
 
 let value: DeleteAPIKeysRequest = {
   ids: [

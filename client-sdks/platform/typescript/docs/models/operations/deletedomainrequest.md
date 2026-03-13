@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeleteDomainRequest } from "@aliendotdev/platform-api/models/operations";
+import { DeleteDomainRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: DeleteDomainRequest = {
   id: "dom_469m0agk8luj4s16sakmmpdd",

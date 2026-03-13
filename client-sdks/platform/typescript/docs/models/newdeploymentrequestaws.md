@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestAws } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestAws } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestAws = {
   certificateArn: "<value>",

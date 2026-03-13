@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { DeploymentOverride } from "@aliendotdev/platform-api/models";
+import { DeploymentOverride } from "@alienplatform/platform-api/models";
 
 let value: DeploymentOverride = {
   description: "technician um however academics",

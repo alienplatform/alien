@@ -1,6 +1,6 @@
 # Testing Framework
 
-`@aliendotdev/testing` deploys applications to real environments — AWS, GCP, Azure, Kubernetes, or locally with Docker. No mocks, no simulators — test deployments are regular Alien deployments. The same provisioning engine, the same runtime, the same infrastructure.
+`@alienplatform/testing` deploys applications to real environments — AWS, GCP, Azure, Kubernetes, or locally with Docker. No mocks, no simulators — test deployments are regular Alien deployments. The same provisioning engine, the same runtime, the same infrastructure.
 
 ## How It Works
 
@@ -33,14 +33,14 @@ No workspace, no project, no deployment method selection. The framework manages 
 ## Installation
 
 ```bash
-npm install --save-dev @aliendotdev/testing
+npm install --save-dev @alienplatform/testing
 ```
 
 ## Basic Usage
 
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { deploy, type Deployment } from '@aliendotdev/testing'
+import { deploy, type Deployment } from '@alienplatform/testing'
 
 describe('My Alien App', () => {
   let deployment: Deployment

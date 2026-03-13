@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseExtendAwBinding } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseExtendAwBinding } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseExtendAwBinding = {};
 ```

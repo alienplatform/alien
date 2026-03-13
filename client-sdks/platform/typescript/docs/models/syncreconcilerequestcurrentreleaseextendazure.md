@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseExtendAzure } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseExtendAzure } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseExtendAzure = {
   binding: {},

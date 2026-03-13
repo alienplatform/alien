@@ -5,7 +5,7 @@ GCP IAM condition
 ## Example Usage
 
 ```typescript
-import { ProfileConditionReleaseInfoResource } from "@aliendotdev/platform-api/models";
+import { ProfileConditionReleaseInfoResource } from "@alienplatform/platform-api/models";
 
 let value: ProfileConditionReleaseInfoResource = {
   expression: "<value>",

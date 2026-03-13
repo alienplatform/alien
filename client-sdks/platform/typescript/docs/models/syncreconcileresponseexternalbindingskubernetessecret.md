@@ -5,7 +5,7 @@ Kubernetes Secrets vault binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsKubernetesSecret } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsKubernetesSecret } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsKubernetesSecret = {
   service: "kubernetes-secret",

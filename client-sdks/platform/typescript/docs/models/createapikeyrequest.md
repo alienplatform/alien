@@ -5,7 +5,7 @@ Request schema for creating a new API key
 ## Example Usage
 
 ```typescript
-import { CreateAPIKeyRequest } from "@aliendotdev/platform-api/models";
+import { CreateAPIKeyRequest } from "@alienplatform/platform-api/models";
 
 let value: CreateAPIKeyRequest = {
   description: "inside hence fast bad",

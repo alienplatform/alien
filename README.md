@@ -91,7 +91,7 @@ The Operator polls alien-server for updates and deploys using in-cluster credent
 Define your stack in `alien.config.ts`. Use any framework — **Next.js**, **Hono**, **FastAPI**, **Axum**. Bring existing containers or use cloud-agnostic bindings:
 
 ```typescript
-import { ai } from "@aliendotdev/sdk"
+import { ai } from "@alienplatform/sdk"
 import postgres from "postgres"
 
 const db = postgres(process.env.DATABASE_URL)
@@ -125,7 +125,7 @@ The SDK is entirely optional. Call low-level cloud APIs directly or use any exis
 Invoke code on deployments from your control plane. Zero inbound networking. Zero open ports:
 
 ```typescript
-import { storage, command } from "@aliendotdev/sdk"
+import { storage, command } from "@alienplatform/sdk"
 
 command("generate-report", async ({ startDate, endDate }) => {
   const events = await storage("data").list({ prefix: "events/" })

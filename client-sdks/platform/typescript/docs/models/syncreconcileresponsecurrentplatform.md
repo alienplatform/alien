@@ -5,7 +5,7 @@ Represents the target cloud platform.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseCurrentPlatform } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseCurrentPlatform } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseCurrentPlatform = "test";
 ```

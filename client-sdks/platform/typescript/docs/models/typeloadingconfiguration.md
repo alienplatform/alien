@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeLoadingConfiguration } from "@aliendotdev/client-sdk/models";
+import { TypeLoadingConfiguration } from "@alienplatform/client-sdk/models";
 
 let value: TypeLoadingConfiguration = "LoadingConfiguration";
 ```

@@ -5,7 +5,7 @@ AWS SSM Parameter Store vault binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsParameterStore } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsParameterStore } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsParameterStore = {
   service: "parameter-store",

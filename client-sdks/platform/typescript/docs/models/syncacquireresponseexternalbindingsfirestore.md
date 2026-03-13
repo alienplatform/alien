@@ -5,7 +5,7 @@ GCP Firestore KV binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsFirestore } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsFirestore } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsFirestore = {
   service: "firestore",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentTypeUseDefault } from "@aliendotdev/platform-api/models";
+import { DeploymentTypeUseDefault } from "@alienplatform/platform-api/models";
 
 let value: DeploymentTypeUseDefault = "use-default";
 ```

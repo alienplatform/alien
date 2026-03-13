@@ -5,7 +5,7 @@ Cluster overview.
 ## Example Usage
 
 ```typescript
-import { GetDeploymentClusterResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentClusterResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentClusterResponse = {
   machineCount: 931058,

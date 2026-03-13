@@ -5,7 +5,7 @@ Represents the state of a single resource within the stack for a specific platfo
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestStackStateResources } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestStackStateResources } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestStackStateResources = {
   config: {

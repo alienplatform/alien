@@ -5,7 +5,7 @@ Azure-specific binding specification
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendAzureStack } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendAzureStack } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendAzureStack = {
   scope: "<value>",

@@ -5,7 +5,7 @@ Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
 ## Example Usage
 
 ```typescript
-import { ProjectPackagesConfig } from "@aliendotdev/platform-api/models";
+import { ProjectPackagesConfig } from "@alienplatform/platform-api/models";
 
 let value: ProjectPackagesConfig = {};
 ```

@@ -5,7 +5,7 @@ API key information
 ## Example Usage
 
 ```typescript
-import { APIKey } from "@aliendotdev/platform-api/models";
+import { APIKey } from "@alienplatform/platform-api/models";
 
 let value: APIKey = {
   id: "apikey_ye96yxs1tjnrrwulp8frh",

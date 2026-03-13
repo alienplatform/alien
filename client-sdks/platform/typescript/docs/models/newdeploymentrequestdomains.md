@@ -8,7 +8,7 @@ domains and certificates. Otherwise, Alien auto-generates domains.
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestDomains } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestDomains } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestDomains = {};
 ```

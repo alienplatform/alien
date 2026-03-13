@@ -19,7 +19,7 @@ import type { ReceivedQueueMessage } from "../types.js"
  *
  * @example
  * ```typescript
- * import { queue } from "@aliendotdev/bindings"
+ * import { queue } from "@alienplatform/bindings"
  *
  * const tasks = queue("task-queue")
  *

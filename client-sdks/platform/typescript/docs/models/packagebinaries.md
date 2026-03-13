@@ -5,7 +5,7 @@ Information about a single binary artifact
 ## Example Usage
 
 ```typescript
-import { PackageBinaries } from "@aliendotdev/platform-api/models";
+import { PackageBinaries } from "@alienplatform/platform-api/models";
 
 let value: PackageBinaries = {
   sha256: "<value>",

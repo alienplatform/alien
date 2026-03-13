@@ -5,7 +5,7 @@ Environment variables updated successfully.
 ## Example Usage
 
 ```typescript
-import { UpdateDeploymentEnvironmentVariablesResponse } from "@aliendotdev/platform-api/models/operations";
+import { UpdateDeploymentEnvironmentVariablesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateDeploymentEnvironmentVariablesResponse = {
   message: "<value>",

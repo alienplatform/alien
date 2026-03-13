@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataBuildingResource } from "@aliendotdev/platform-api/models";
+import { DataBuildingResource } from "@alienplatform/platform-api/models";
 
 let value: DataBuildingResource = {
   resourceName: "<value>",

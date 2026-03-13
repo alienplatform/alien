@@ -5,7 +5,7 @@ Outputs from a CloudFormation package build
 ## Example Usage
 
 ```typescript
-import { OutputsCloudformation } from "@aliendotdev/platform-api/models";
+import { OutputsCloudformation } from "@alienplatform/platform-api/models";
 
 let value: OutputsCloudformation = {
   launchStackUrl: "https://weird-newsprint.info/",

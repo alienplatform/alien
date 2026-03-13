@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListDeploymentMachinesCpu } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentMachinesCpu } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentMachinesCpu = {
   total: 6070.53,

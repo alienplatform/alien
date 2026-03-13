@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseTypeUseDefault } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseTypeUseDefault } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseTypeUseDefault = "use-default";
 ```

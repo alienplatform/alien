@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SubjectScopeManager } from "@aliendotdev/platform-api/models";
+import { SubjectScopeManager } from "@alienplatform/platform-api/models";
 
 let value: SubjectScopeManager = {
   type: "manager",

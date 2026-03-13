@@ -5,7 +5,7 @@ List of user's git namespaces.
 ## Example Usage
 
 ```typescript
-import { ListGitNamespacesResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListGitNamespacesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListGitNamespacesResponse = {
   items: [

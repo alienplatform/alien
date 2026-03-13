@@ -5,7 +5,7 @@ DNS record status in the DNS lifecycle
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseDnsStatus } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseDnsStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseDnsStatus = "failed";
 ```

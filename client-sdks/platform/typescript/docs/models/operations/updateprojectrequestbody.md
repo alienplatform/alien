@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateProjectRequestBody } from "@aliendotdev/platform-api/models/operations";
+import { UpdateProjectRequestBody } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateProjectRequestBody = {
   gitRepository: {

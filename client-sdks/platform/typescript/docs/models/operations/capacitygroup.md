@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CapacityGroup } from "@aliendotdev/platform-api/models/operations";
+import { CapacityGroup } from "@alienplatform/platform-api/models/operations";
 
 let value: CapacityGroup = {
   groupId: "<id>",

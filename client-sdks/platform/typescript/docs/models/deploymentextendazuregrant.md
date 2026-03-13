@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendAzureGrant } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendAzureGrant } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendAzureGrant = {};
 ```

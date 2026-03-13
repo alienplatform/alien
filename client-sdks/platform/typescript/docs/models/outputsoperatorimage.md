@@ -5,7 +5,7 @@ Outputs from an operator image package build
 ## Example Usage
 
 ```typescript
-import { OutputsOperatorImage } from "@aliendotdev/platform-api/models";
+import { OutputsOperatorImage } from "@alienplatform/platform-api/models";
 
 let value: OutputsOperatorImage = {
   digest: "<value>",

@@ -5,7 +5,7 @@ The Git Repository that will be connected to the project. When this is defined, 
 ## Example Usage
 
 ```typescript
-import { UpdateProjectGitRepository } from "@aliendotdev/platform-api/models/operations";
+import { UpdateProjectGitRepository } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateProjectGitRepository = {
   type: "github",

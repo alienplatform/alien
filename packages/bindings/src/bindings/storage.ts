@@ -29,7 +29,7 @@ import type {
  *
  * @example
  * ```typescript
- * import { storage } from "@aliendotdev/bindings"
+ * import { storage } from "@alienplatform/bindings"
  *
  * const bucket = storage("my-bucket")
  *

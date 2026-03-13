@@ -5,7 +5,7 @@ Azure Key Vault binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsKeyVault } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsKeyVault } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsKeyVault = {
   service: "key-vault",

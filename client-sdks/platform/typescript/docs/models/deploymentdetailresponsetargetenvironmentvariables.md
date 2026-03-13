@@ -5,7 +5,7 @@ Snapshot of target environment variables for the deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseTargetEnvironmentVariables } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseTargetEnvironmentVariables } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseTargetEnvironmentVariables = {
   variables: [],

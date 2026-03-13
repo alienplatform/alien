@@ -5,7 +5,7 @@ Combined permissions configuration that contains both profiles and management
 ## Example Usage
 
 ```typescript
-import { DeploymentPermissions } from "@aliendotdev/platform-api/models";
+import { DeploymentPermissions } from "@alienplatform/platform-api/models";
 
 let value: DeploymentPermissions = {
   profiles: {

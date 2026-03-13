@@ -8,7 +8,7 @@ Note: Credentials (ClientConfig) are passed separately to step() function.
 ## Example Usage
 
 ```typescript
-import { TargetConfig } from "@aliendotdev/platform-api/models";
+import { TargetConfig } from "@alienplatform/platform-api/models";
 
 let value: TargetConfig = {
   environmentVariables: {

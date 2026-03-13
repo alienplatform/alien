@@ -5,7 +5,7 @@ How heartbeat health checks are handled.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseHeartbeats } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseHeartbeats } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseHeartbeats = "on";
 ```

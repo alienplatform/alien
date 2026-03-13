@@ -1,4 +1,4 @@
-import { vault } from "@aliendotdev/bindings"
+import { vault } from "@alienplatform/bindings"
 import type { IntegrationConfig } from "./types.js"
 
 const VAULT_NAME = "integrations"

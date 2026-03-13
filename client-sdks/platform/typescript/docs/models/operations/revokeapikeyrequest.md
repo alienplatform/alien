@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { RevokeAPIKeyRequest } from "@aliendotdev/platform-api/models/operations";
+import { RevokeAPIKeyRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: RevokeAPIKeyRequest = {
   id: "apikey_ye96yxs1tjnrrwulp8frh",

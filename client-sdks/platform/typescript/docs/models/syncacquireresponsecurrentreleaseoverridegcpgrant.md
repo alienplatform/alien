@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCurrentReleaseOverrideGcpGrant } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCurrentReleaseOverrideGcpGrant } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCurrentReleaseOverrideGcpGrant = {};
 ```

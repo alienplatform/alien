@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleaseExtendAwStack } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleaseExtendAwStack } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleaseExtendAwStack = {
   resources: [

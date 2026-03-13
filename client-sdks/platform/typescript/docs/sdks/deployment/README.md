@@ -14,7 +14,7 @@ Get deployment information for the deployment page. Accepts both agent-scoped an
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentInfo" method="get" path="/v1/deployment-info" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -36,8 +36,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGetInfo } from "@aliendotdev/platform-api/funcs/deploymentGetInfo.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGetInfo } from "@alienplatform/platform-api/funcs/deploymentGetInfo.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/platform-api-examples",
+  "name": "@alienplatform/platform-api-examples",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -13,6 +13,6 @@
     "tsx": "^4.19.2"
   },
   "dependencies": {
-    "@aliendotdev/platform-api": "file:.."
+    "@alienplatform/platform-api": "file:.."
   }
 }

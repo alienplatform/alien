@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendAwBinding } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendAwBinding } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendAwBinding = {};
 ```

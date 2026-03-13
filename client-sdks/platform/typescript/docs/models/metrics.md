@@ -5,7 +5,7 @@ Optional runtime metrics
 ## Example Usage
 
 ```typescript
-import { Metrics } from "@aliendotdev/platform-api/models";
+import { Metrics } from "@alienplatform/platform-api/models";
 
 let value: Metrics = {};
 ```

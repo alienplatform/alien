@@ -36,7 +36,7 @@ const permissionMap: Record<ArtifactRegistryPermissions, PermissionsProto> = {
  *
  * @example
  * ```typescript
- * import { artifactRegistry } from "@aliendotdev/bindings"
+ * import { artifactRegistry } from "@alienplatform/bindings"
  *
  * const registry = artifactRegistry("my-registry")
  *

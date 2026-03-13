@@ -5,7 +5,7 @@ Container overview across all deployments.
 ## Example Usage
 
 ```typescript
-import { GetContainerOverviewResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerOverviewResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerOverviewResponse = {
   containerDefinitions: [],

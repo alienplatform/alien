@@ -5,7 +5,7 @@ Configuration for the Operator binary
 ## Example Usage
 
 ```typescript
-import { ConfigOperatorImage } from "@aliendotdev/platform-api/models";
+import { ConfigOperatorImage } from "@alienplatform/platform-api/models";
 
 let value: ConfigOperatorImage = {
   displayName: "Gilda_Gibson",

@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { ExtendReleaseInfoGcp } from "@aliendotdev/platform-api/models";
+import { ExtendReleaseInfoGcp } from "@alienplatform/platform-api/models";
 
 let value: ExtendReleaseInfoGcp = {
   binding: {},

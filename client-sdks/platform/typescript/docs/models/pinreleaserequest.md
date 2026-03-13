@@ -5,7 +5,7 @@ Request schema for pinning/unpinning agent release
 ## Example Usage
 
 ```typescript
-import { PinReleaseRequest } from "@aliendotdev/platform-api/models";
+import { PinReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: PinReleaseRequest = {
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

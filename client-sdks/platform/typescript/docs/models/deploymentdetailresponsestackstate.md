@@ -5,7 +5,7 @@ State of infrastructure components managed by this deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStackState } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStackState } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStackState = {
   platform: "gcp",

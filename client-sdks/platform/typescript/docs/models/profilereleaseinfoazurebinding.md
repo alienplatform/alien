@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { ProfileReleaseInfoAzureBinding } from "@aliendotdev/platform-api/models";
+import { ProfileReleaseInfoAzureBinding } from "@alienplatform/platform-api/models";
 
 let value: ProfileReleaseInfoAzureBinding = {};
 ```

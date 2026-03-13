@@ -5,7 +5,7 @@ Acquired deployments and failures
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponse } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponse } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponse = {
   deployments: [],

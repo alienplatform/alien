@@ -5,7 +5,7 @@ AWS-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackExtendAw } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackExtendAw } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackExtendAw = {
   binding: {},

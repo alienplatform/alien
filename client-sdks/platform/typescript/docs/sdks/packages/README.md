@@ -17,7 +17,7 @@ List packages with optional filters. Returns packages ordered by creation date (
 
 <!-- UsageSnippet language="typescript" operationID="listPackages" method="get" path="/v1/packages" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -40,8 +40,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { packagesList } from "@aliendotdev/platform-api/funcs/packagesList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { packagesList } from "@alienplatform/platform-api/funcs/packagesList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -94,7 +94,7 @@ Get details of a specific package.
 
 <!-- UsageSnippet language="typescript" operationID="getPackage" method="get" path="/v1/packages/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -117,8 +117,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { packagesGet } from "@aliendotdev/platform-api/funcs/packagesGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { packagesGet } from "@alienplatform/platform-api/funcs/packagesGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -171,7 +171,7 @@ Rebuild packages for a project. This will cancel any pending packages and create
 
 <!-- UsageSnippet language="typescript" operationID="rebuildPackages" method="post" path="/v1/packages/rebuild" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -196,8 +196,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { packagesRebuild } from "@aliendotdev/platform-api/funcs/packagesRebuild.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { packagesRebuild } from "@alienplatform/platform-api/funcs/packagesRebuild.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -252,7 +252,7 @@ Cancel a pending or building package.
 
 <!-- UsageSnippet language="typescript" operationID="cancelPackage" method="post" path="/v1/packages/{id}/cancel" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -275,8 +275,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { packagesCancel } from "@aliendotdev/platform-api/funcs/packagesCancel.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { packagesCancel } from "@alienplatform/platform-api/funcs/packagesCancel.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

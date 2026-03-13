@@ -5,7 +5,7 @@ CLI package configuration. If null, CLI packages will not be generated.
 ## Example Usage
 
 ```typescript
-import { ProjectCli } from "@aliendotdev/platform-api/models";
+import { ProjectCli } from "@alienplatform/platform-api/models";
 
 let value: ProjectCli = {
   displayName: "Lavern97",

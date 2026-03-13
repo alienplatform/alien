@@ -5,7 +5,7 @@ GCP-specific environment information
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestEnvironmentInfoGcp } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestEnvironmentInfoGcp } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestEnvironmentInfoGcp = {
   projectId: "<id>",

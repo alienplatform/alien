@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { DeploymentProfileAwStack } from "@aliendotdev/platform-api/models";
+import { DeploymentProfileAwStack } from "@alienplatform/platform-api/models";
 
 let value: DeploymentProfileAwStack = {
   resources: [

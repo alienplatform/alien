@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { KeyInfo } from "@aliendotdev/platform-api/models";
+import { KeyInfo } from "@alienplatform/platform-api/models";
 
 let value: KeyInfo = {
   id: "apikey_ye96yxs1tjnrrwulp8frh",

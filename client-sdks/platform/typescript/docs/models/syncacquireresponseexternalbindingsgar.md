@@ -5,7 +5,7 @@ Google Artifact Registry binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsGar } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsGar } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsGar = {
   service: "gar",

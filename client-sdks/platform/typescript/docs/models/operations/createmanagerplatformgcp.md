@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateManagerPlatformGcp } from "@aliendotdev/platform-api/models/operations";
+import { CreateManagerPlatformGcp } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateManagerPlatformGcp = "gcp";
 ```

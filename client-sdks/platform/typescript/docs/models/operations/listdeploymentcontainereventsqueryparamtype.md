@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListDeploymentContainerEventsQueryParamType } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentContainerEventsQueryParamType } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentContainerEventsQueryParamType = "info";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateDeploymentTokenRequest } from "@aliendotdev/platform-api/models";
+import { CreateDeploymentTokenRequest } from "@alienplatform/platform-api/models";
 
 let value: CreateDeploymentTokenRequest = {
   description: "excluding but yum consequently",

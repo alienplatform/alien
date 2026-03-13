@@ -5,7 +5,7 @@ Target platform for the deployment
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestPlatform } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestPlatform } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestPlatform = "local";
 ```

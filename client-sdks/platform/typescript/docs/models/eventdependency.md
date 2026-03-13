@@ -6,7 +6,7 @@ This can eventually replace the enum-based ResourceRef for full extensibility.
 ## Example Usage
 
 ```typescript
-import { EventDependency } from "@aliendotdev/platform-api/models";
+import { EventDependency } from "@alienplatform/platform-api/models";
 
 let value: EventDependency = {
   id: "<id>",

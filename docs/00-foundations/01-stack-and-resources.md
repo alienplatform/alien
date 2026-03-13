@@ -59,7 +59,7 @@ The initial setup (CloudFormation/Terraform) creates frozen resources and grants
 ## Complete Example
 
 ```typescript
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const storage = new alien.Storage("data-storage").build()
 

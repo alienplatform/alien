@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Failure } from "@aliendotdev/platform-api/models";
+import { Failure } from "@alienplatform/platform-api/models";
 
 let value: Failure = {
   deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",

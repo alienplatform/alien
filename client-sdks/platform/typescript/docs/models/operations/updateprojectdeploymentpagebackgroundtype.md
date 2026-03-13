@@ -5,7 +5,7 @@ Type of animated background to display on the deployment page.
 ## Example Usage
 
 ```typescript
-import { UpdateProjectDeploymentPageBackgroundType } from "@aliendotdev/platform-api/models/operations";
+import { UpdateProjectDeploymentPageBackgroundType } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateProjectDeploymentPageBackgroundType = "gradient-mesh";
 ```

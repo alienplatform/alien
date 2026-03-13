@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataCompilingCode } from "@aliendotdev/platform-api/models";
+import { DataCompilingCode } from "@alienplatform/platform-api/models";
 
 let value: DataCompilingCode = {
   language: "<value>",

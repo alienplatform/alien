@@ -5,7 +5,7 @@ Role for project-scoped service accounts
 ## Example Usage
 
 ```typescript
-import { ProjectRole } from "@aliendotdev/platform-api/models";
+import { ProjectRole } from "@alienplatform/platform-api/models";
 
 let value: ProjectRole = "project.developer";
 ```

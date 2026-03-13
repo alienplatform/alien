@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetContainerMachinesTotalsMachinesByStatus } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerMachinesTotalsMachinesByStatus } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerMachinesTotalsMachinesByStatus = {
   running: 770003,

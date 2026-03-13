@@ -11,7 +11,7 @@ in distributed systems.
 ## Example Usage
 
 ```typescript
-import { DataError } from "@aliendotdev/platform-api/models";
+import { DataError } from "@alienplatform/platform-api/models";
 
 let value: DataError = {
   code: "<value>",

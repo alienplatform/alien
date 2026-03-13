@@ -5,7 +5,7 @@ Type of environment variable
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseEnvironmentVariablesType } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseEnvironmentVariablesType } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseEnvironmentVariablesType = "secret";
 ```

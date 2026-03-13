@@ -8,7 +8,7 @@ When None, the platform default is used (Horizon for cloud platforms).
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseComputeBackend } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseComputeBackend } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseComputeBackend = {
   clusters: {},

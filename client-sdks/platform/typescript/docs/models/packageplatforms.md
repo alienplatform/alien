@@ -5,7 +5,7 @@ Information about a single Terraform provider package for a specific platform
 ## Example Usage
 
 ```typescript
-import { PackagePlatforms } from "@aliendotdev/platform-api/models";
+import { PackagePlatforms } from "@alienplatform/platform-api/models";
 
 let value: PackagePlatforms = {
   downloadUrl: "https://best-attraction.info",

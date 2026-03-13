@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CommandDeploymentInfoPlatformLocal } from "@aliendotdev/platform-api/models";
+import { CommandDeploymentInfoPlatformLocal } from "@alienplatform/platform-api/models";
 
 let value: CommandDeploymentInfoPlatformLocal = "local";
 ```

@@ -5,7 +5,7 @@ Represents the target cloud platform.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStackStatePlatform } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStackStatePlatform } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStackStatePlatform = "test";
 ```

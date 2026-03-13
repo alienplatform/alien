@@ -5,7 +5,7 @@ AWS management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseManagementConfigAws } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseManagementConfigAws } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseManagementConfigAws = {
   managingRoleArn: "<value>",

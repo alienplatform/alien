@@ -12,7 +12,7 @@ is platform-derived (from the Agent Manager's ServiceAccount).
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseStackSettings } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseStackSettings } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseStackSettings = {};
 ```

@@ -11,7 +11,7 @@ in distributed systems.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestErrorState } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestErrorState } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestErrorState = {
   code: "<value>",

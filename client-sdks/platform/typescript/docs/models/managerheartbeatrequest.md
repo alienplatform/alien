@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagerHeartbeatRequest } from "@aliendotdev/platform-api/models";
+import { ManagerHeartbeatRequest } from "@alienplatform/platform-api/models";
 
 let value: ManagerHeartbeatRequest = {
   status: "healthy",

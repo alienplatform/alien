@@ -1,11 +1,11 @@
 /**
  * Tests for the Minimal Cloud Agent
  *
- * Uses @aliendotdev/testing with the "dev" deployment method for pure local testing.
+ * Uses @alienplatform/testing with the "dev" deployment method for pure local testing.
  * No Agent Manager, no API calls, no cloud dependencies.
  */
 
-import { type Deployment, deploy } from "@aliendotdev/testing"
+import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 describe("Minimal Cloud Agent", () => {

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GenerateDeepstoreTokenRequest } from "@aliendotdev/platform-api/models";
+import { GenerateDeepstoreTokenRequest } from "@alienplatform/platform-api/models";
 
 let value: GenerateDeepstoreTokenRequest = {};
 ```

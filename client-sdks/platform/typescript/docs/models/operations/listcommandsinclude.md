@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListCommandsInclude } from "@aliendotdev/platform-api/models/operations";
+import { ListCommandsInclude } from "@alienplatform/platform-api/models/operations";
 
 let value: ListCommandsInclude = "project";
 ```

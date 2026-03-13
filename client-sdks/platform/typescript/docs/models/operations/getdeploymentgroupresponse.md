@@ -5,7 +5,7 @@ Deployment group details
 ## Example Usage
 
 ```typescript
-import { GetDeploymentGroupResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentGroupResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentGroupResponse = {
   id: "dg_r27ict8c7vcgsumpj90ackf7b",

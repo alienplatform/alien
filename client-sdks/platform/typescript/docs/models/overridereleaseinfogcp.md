@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoGcp } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoGcp } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoGcp = {
   binding: {},

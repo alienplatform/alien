@@ -3,7 +3,7 @@
  * These errors are thrown when binding operations fail.
  */
 
-import { defineError } from "@aliendotdev/core"
+import { defineError } from "@alienplatform/core"
 import * as z from "zod/v4"
 
 /**

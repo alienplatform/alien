@@ -5,7 +5,7 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ## Example Usage
 
 ```typescript
-import { DeploymentLifecycleStackState } from "@aliendotdev/platform-api/models";
+import { DeploymentLifecycleStackState } from "@alienplatform/platform-api/models";
 
 let value: DeploymentLifecycleStackState = "live-on-setup";
 ```

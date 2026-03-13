@@ -5,7 +5,7 @@ Workspace-scoped access
 ## Example Usage
 
 ```typescript
-import { SubjectScopeTypeWorkspace } from "@aliendotdev/client-sdk/models";
+import { SubjectScopeTypeWorkspace } from "@alienplatform/client-sdk/models";
 
 let value: SubjectScopeTypeWorkspace = "workspace";
 ```

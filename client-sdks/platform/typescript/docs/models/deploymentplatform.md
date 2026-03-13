@@ -5,7 +5,7 @@ Target platform for the deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentPlatform } from "@aliendotdev/platform-api/models";
+import { DeploymentPlatform } from "@alienplatform/platform-api/models";
 
 let value: DeploymentPlatform = "kubernetes";
 ```

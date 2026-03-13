@@ -5,7 +5,7 @@ GCP Secret Manager vault binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsSecretManager } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsSecretManager } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsSecretManager = {
   service: "secret-manager",

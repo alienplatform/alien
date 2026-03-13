@@ -5,7 +5,7 @@ Represents the collective state of all resources in a stack, including platform 
 ## Example Usage
 
 ```typescript
-import { NextState } from "@aliendotdev/platform-api/models";
+import { NextState } from "@alienplatform/platform-api/models";
 
 let value: NextState = {
   platform: "kubernetes",

@@ -25,7 +25,7 @@ const commands: Map<string, CommandDefinition> = new Map()
  *
  * @example
  * ```typescript
- * import { command } from "@aliendotdev/bindings"
+ * import { command } from "@alienplatform/bindings"
  *
  * command("echo", async ({ message }: { message: string }) => {
  *   return {

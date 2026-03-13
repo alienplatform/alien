@@ -32,7 +32,7 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm changeset version
-          publish: pnpm -r --filter @aliendotdev/core --filter @aliendotdev/bindings --filter @aliendotdev/testing --filter @aliendotdev/commands-client --filter @aliendotdev/platform-api publish --access public --no-git-checks
+          publish: pnpm -r --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/testing --filter @alienplatform/commands-client --filter @alienplatform/platform-api publish --access public --no-git-checks
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

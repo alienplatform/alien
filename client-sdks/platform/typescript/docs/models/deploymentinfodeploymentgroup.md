@@ -5,7 +5,7 @@ Deployment group details (present when using a deployment-group token)
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoDeploymentGroup } from "@aliendotdev/platform-api/models";
+import { DeploymentInfoDeploymentGroup } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoDeploymentGroup = {
   id: "dg_r27ict8c7vcgsumpj90ackf7b",

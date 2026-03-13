@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateProjectGithubSetup } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectGithubSetup } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectGithubSetup = {
   pullRequestUrl: "https://digital-icebreaker.info/",

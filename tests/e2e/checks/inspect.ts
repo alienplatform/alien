@@ -1,4 +1,4 @@
-import type { Deployment } from "@aliendotdev/testing"
+import type { Deployment } from "@alienplatform/testing"
 import { assertCheck, assertResponseOk, failCheck } from "./errors.js"
 
 function deepEqual(a: unknown, b: unknown): boolean {

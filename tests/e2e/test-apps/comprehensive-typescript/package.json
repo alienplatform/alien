@@ -8,8 +8,8 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@aliendotdev/bindings": "workspace:*",
-    "@aliendotdev/core": "workspace:*",
+    "@alienplatform/bindings": "workspace:*",
+    "@alienplatform/core": "workspace:*",
     "hono": "^4.0.0"
   },
   "devDependencies": {

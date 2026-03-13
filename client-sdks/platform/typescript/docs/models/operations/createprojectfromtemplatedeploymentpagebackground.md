@@ -5,7 +5,7 @@ Customization settings for the deployment page background animation.
 ## Example Usage
 
 ```typescript
-import { CreateProjectFromTemplateDeploymentPageBackground } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectFromTemplateDeploymentPageBackground } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateDeploymentPageBackground = {
   type: "gradient-mesh",

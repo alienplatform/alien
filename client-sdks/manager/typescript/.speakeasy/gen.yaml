@@ -74,7 +74,7 @@ typescript:
   moduleFormat: esm
   multipartArrayFormat: legacy
   outputModelSuffix: output
-  packageName: '@aliendotdev/manager-api'
+  packageName: '@alienplatform/manager-api'
   preApplyUnionDiscriminators: true
   responseFormat: flat
   sseFlatResponse: true

@@ -19,7 +19,7 @@ Retrieve all API keys for the current workspace.
 
 <!-- UsageSnippet language="typescript" operationID="listAPIKeys" method="get" path="/v1/api-keys" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -41,8 +41,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysList } from "@aliendotdev/platform-api/funcs/apiKeysList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysList } from "@alienplatform/platform-api/funcs/apiKeysList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -93,7 +93,7 @@ Create a new API key.
 
 <!-- UsageSnippet language="typescript" operationID="createAPIKey" method="post" path="/v1/api-keys" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -124,8 +124,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysCreate } from "@aliendotdev/platform-api/funcs/apiKeysCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysCreate } from "@alienplatform/platform-api/funcs/apiKeysCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -186,7 +186,7 @@ Retrieve a specific API key.
 
 <!-- UsageSnippet language="typescript" operationID="getAPIKey" method="get" path="/v1/api-keys/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -209,8 +209,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysGet } from "@aliendotdev/platform-api/funcs/apiKeysGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysGet } from "@alienplatform/platform-api/funcs/apiKeysGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -263,7 +263,7 @@ Revoke (soft delete) an API key.
 
 <!-- UsageSnippet language="typescript" operationID="revokeAPIKey" method="delete" path="/v1/api-keys/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -286,8 +286,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysRevoke } from "@aliendotdev/platform-api/funcs/apiKeysRevoke.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysRevoke } from "@alienplatform/platform-api/funcs/apiKeysRevoke.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -340,7 +340,7 @@ Update an API key (enable/disable, change description).
 
 <!-- UsageSnippet language="typescript" operationID="updateAPIKey" method="patch" path="/v1/api-keys/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -363,8 +363,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysUpdate } from "@aliendotdev/platform-api/funcs/apiKeysUpdate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysUpdate } from "@alienplatform/platform-api/funcs/apiKeysUpdate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -417,7 +417,7 @@ Permanently delete multiple API keys.
 
 <!-- UsageSnippet language="typescript" operationID="deleteAPIKeys" method="post" path="/v1/api-keys/batch-delete" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -444,8 +444,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { apiKeysDeleteMultiple } from "@aliendotdev/platform-api/funcs/apiKeysDeleteMultiple.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { apiKeysDeleteMultiple } from "@alienplatform/platform-api/funcs/apiKeysDeleteMultiple.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

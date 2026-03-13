@@ -5,7 +5,7 @@ Environment variable for deployment
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseVariable } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseVariable } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseVariable = {
   name: "<value>",

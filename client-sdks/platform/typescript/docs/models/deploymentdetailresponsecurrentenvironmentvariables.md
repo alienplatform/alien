@@ -5,7 +5,7 @@ Snapshot of current environment variables for the deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseCurrentEnvironmentVariables } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseCurrentEnvironmentVariables } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseCurrentEnvironmentVariables = {
   variables: [

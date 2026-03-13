@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { RebuildPackagesRequest } from "@aliendotdev/platform-api/models/operations";
+import { RebuildPackagesRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: RebuildPackagesRequest = {
   workspace: "my-workspace",

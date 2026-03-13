@@ -22,7 +22,7 @@ Works with any framework that exposes a `fetch` function (Hono, Express via adap
 Import and use directly. Connects lazily on first call.
 
 ```typescript
-import { storage, kv } from "@aliendotdev/sdk"
+import { storage, kv } from "@alienplatform/sdk"
 
 const bucket = storage("my-bucket")
 await bucket.put("key", data)
@@ -36,7 +36,7 @@ await cache.get("key")
 Register handlers at module scope. Fire-and-forget.
 
 ```typescript
-import { onStorageEvent, onCronEvent, onQueueMessage } from "@aliendotdev/sdk"
+import { onStorageEvent, onCronEvent, onQueueMessage } from "@alienplatform/sdk"
 
 onStorageEvent("uploads", async (event) => {
   console.log(`File ${event.key} was ${event.type}`)
@@ -56,7 +56,7 @@ onQueueMessage("tasks", async (message) => {
 Register handlers. Request-response pattern.
 
 ```typescript
-import { command } from "@aliendotdev/sdk"
+import { command } from "@alienplatform/sdk"
 
 command("health-check", async () => {
   return { healthy: true }
@@ -72,7 +72,7 @@ command<{ reportType: string }>("generate-report", async (params) => {
 Run background work without blocking the response (serverless functions).
 
 ```typescript
-import { waitUntil } from "@aliendotdev/sdk"
+import { waitUntil } from "@alienplatform/sdk"
 
 app.post("/process", async (c) => {
   waitUntil(async () => {
@@ -87,7 +87,7 @@ app.post("/process", async (c) => {
 For explicit control or remote bindings:
 
 ```typescript
-import { AlienContext } from "@aliendotdev/sdk"
+import { AlienContext } from "@alienplatform/sdk"
 
 // Explicit context
 const ctx = await AlienContext.fromEnv()

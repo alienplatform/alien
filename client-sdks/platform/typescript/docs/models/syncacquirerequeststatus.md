@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { SyncAcquireRequestStatus } from "@aliendotdev/platform-api/models";
+import { SyncAcquireRequestStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireRequestStatus = "updating";
 ```

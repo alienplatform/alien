@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestTargetReleaseExtendAwGrant } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestTargetReleaseExtendAwGrant } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestTargetReleaseExtendAwGrant = {};
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeEnsuringDockerRepository } from "@aliendotdev/client-sdk/models";
+import { TypeEnsuringDockerRepository } from "@alienplatform/client-sdk/models";
 
 let value: TypeEnsuringDockerRepository = "EnsuringDockerRepository";
 ```

@@ -5,7 +5,7 @@ Local container registry binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsLocal } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsLocal } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsLocal = {
   service: "local",

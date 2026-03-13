@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagerPlatformAzure } from "@aliendotdev/platform-api/models";
+import { ManagerPlatformAzure } from "@alienplatform/platform-api/models";
 
 let value: ManagerPlatformAzure = "azure";
 ```

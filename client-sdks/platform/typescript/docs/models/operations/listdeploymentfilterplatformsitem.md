@@ -5,7 +5,7 @@ Represents the target cloud platform.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentFilterPlatformsItem } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentFilterPlatformsItem } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentFilterPlatformsItem = "local";
 ```

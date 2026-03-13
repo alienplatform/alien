@@ -27,7 +27,7 @@ Retrieve all agents.
 
 <!-- UsageSnippet language="typescript" operationID="listDeployments" method="get" path="/v1/deployments" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -50,8 +50,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsList } from "@aliendotdev/platform-api/funcs/deploymentsList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsList } from "@alienplatform/platform-api/funcs/deploymentsList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -103,7 +103,7 @@ Create a new agent. Deployment group tokens automatically use their group. Works
 
 <!-- UsageSnippet language="typescript" operationID="createDeployment" method="post" path="/v1/deployments" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -132,8 +132,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsCreate } from "@aliendotdev/platform-api/funcs/deploymentsCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsCreate } from "@alienplatform/platform-api/funcs/deploymentsCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -192,7 +192,7 @@ Get aggregated agent statistics. Returns total count and breakdown by status.
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentStats" method="get" path="/v1/deployments/stats" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -215,8 +215,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsGetStats } from "@aliendotdev/platform-api/funcs/deploymentsGetStats.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGetStats } from "@alienplatform/platform-api/funcs/deploymentsGetStats.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -268,7 +268,7 @@ List distinct platforms used by agents. Used for filter dropdowns.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentFilterPlatforms" method="get" path="/v1/deployments/filter-platforms" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -291,8 +291,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsListFilterPlatforms } from "@aliendotdev/platform-api/funcs/deploymentsListFilterPlatforms.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsListFilterPlatforms } from "@alienplatform/platform-api/funcs/deploymentsListFilterPlatforms.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -344,7 +344,7 @@ List deployment groups with agent counts. Used for filter dropdowns.
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentFilterDeploymentGroups" method="get" path="/v1/deployments/filter-deployment-groups" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -367,8 +367,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsListFilterDeploymentGroups } from "@aliendotdev/platform-api/funcs/deploymentsListFilterDeploymentGroups.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsListFilterDeploymentGroups } from "@alienplatform/platform-api/funcs/deploymentsListFilterDeploymentGroups.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -420,7 +420,7 @@ Retrieve an agent by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getDeployment" method="get" path="/v1/deployments/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -443,8 +443,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsGet } from "@aliendotdev/platform-api/funcs/deploymentsGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGet } from "@alienplatform/platform-api/funcs/deploymentsGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -497,7 +497,7 @@ Delete an agent by ID. This can be used to start deletion or retry failed deleti
 
 <!-- UsageSnippet language="typescript" operationID="deleteDeployment" method="delete" path="/v1/deployments/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -520,8 +520,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsDelete } from "@aliendotdev/platform-api/funcs/deploymentsDelete.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsDelete } from "@alienplatform/platform-api/funcs/deploymentsDelete.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -574,7 +574,7 @@ Get deployment connection information including ARC endpoint and resource URLs.
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentConnectionInfo" method="get" path="/v1/deployments/{id}/info" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -597,8 +597,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsGetInfo } from "@aliendotdev/platform-api/funcs/deploymentsGetInfo.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGetInfo } from "@alienplatform/platform-api/funcs/deploymentsGetInfo.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -651,7 +651,7 @@ Import an agent from existing infrastructure (e.g., CloudFormation stack). The a
 
 <!-- UsageSnippet language="typescript" operationID="importDeployment" method="post" path="/v1/deployments/import" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -685,8 +685,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsImport } from "@aliendotdev/platform-api/funcs/deploymentsImport.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsImport } from "@alienplatform/platform-api/funcs/deploymentsImport.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -750,7 +750,7 @@ Redeploy a running agent with the same release and fresh environment variables. 
 
 <!-- UsageSnippet language="typescript" operationID="redeployDeployment" method="post" path="/v1/deployments/{id}/redeploy" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -773,8 +773,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsRedeploy } from "@aliendotdev/platform-api/funcs/deploymentsRedeploy.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsRedeploy } from "@alienplatform/platform-api/funcs/deploymentsRedeploy.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -827,7 +827,7 @@ Pin or unpin agent to a specific release. Only works for running agents. Control
 
 <!-- UsageSnippet language="typescript" operationID="pinDeploymentRelease" method="post" path="/v1/deployments/{id}/pin-release" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -853,8 +853,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsPinRelease } from "@aliendotdev/platform-api/funcs/deploymentsPinRelease.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsPinRelease } from "@alienplatform/platform-api/funcs/deploymentsPinRelease.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -910,7 +910,7 @@ Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume fr
 
 <!-- UsageSnippet language="typescript" operationID="retryDeployment" method="post" path="/v1/deployments/{id}/retry" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -933,8 +933,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsRetry } from "@aliendotdev/platform-api/funcs/deploymentsRetry.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsRetry } from "@alienplatform/platform-api/funcs/deploymentsRetry.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -987,7 +987,7 @@ Update an agent's environment variables. If the agent is running and not locked,
 
 <!-- UsageSnippet language="typescript" operationID="updateDeploymentEnvironmentVariables" method="patch" path="/v1/deployments/{id}/environment-variables" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -1010,8 +1010,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsUpdateEnvironmentVariables } from "@aliendotdev/platform-api/funcs/deploymentsUpdateEnvironmentVariables.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsUpdateEnvironmentVariables } from "@alienplatform/platform-api/funcs/deploymentsUpdateEnvironmentVariables.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -1064,7 +1064,7 @@ Create an agent token (agent-scoped API key) for this agent. The agent must exis
 
 <!-- UsageSnippet language="typescript" operationID="createDeploymentToken" method="post" path="/v1/deployments/{id}/token" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -1087,8 +1087,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentsCreateToken } from "@aliendotdev/platform-api/funcs/deploymentsCreateToken.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsCreateToken } from "@alienplatform/platform-api/funcs/deploymentsCreateToken.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

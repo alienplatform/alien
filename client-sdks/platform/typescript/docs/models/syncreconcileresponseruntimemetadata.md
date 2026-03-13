@@ -7,7 +7,7 @@ Stores deployment state that needs to persist across step calls.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseRuntimeMetadata } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseRuntimeMetadata } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseRuntimeMetadata = {};
 ```

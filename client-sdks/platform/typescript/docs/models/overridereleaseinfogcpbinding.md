@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoGcpBinding } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoGcpBinding } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoGcpBinding = {};
 ```

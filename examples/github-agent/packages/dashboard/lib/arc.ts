@@ -1,4 +1,4 @@
-import { CommandsClient } from "@aliendotdev/commands-client"
+import { CommandsClient } from "@alienplatform/commands-client"
 import { alien, config } from "./config"
 
 /**

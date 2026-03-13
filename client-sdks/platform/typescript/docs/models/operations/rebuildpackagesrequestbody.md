@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { RebuildPackagesRequestBody } from "@aliendotdev/platform-api/models/operations";
+import { RebuildPackagesRequestBody } from "@alienplatform/platform-api/models/operations";
 
 let value: RebuildPackagesRequestBody = {
   project: "<value>",

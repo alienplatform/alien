@@ -17,7 +17,7 @@ import type { KvPutOptions, KvScanResult } from "../types.js"
  *
  * @example
  * ```typescript
- * import { kv } from "@aliendotdev/bindings"
+ * import { kv } from "@alienplatform/bindings"
  *
  * const cache = kv("my-cache")
  *

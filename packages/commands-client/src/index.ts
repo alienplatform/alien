@@ -1,11 +1,11 @@
 /**
- * @aliendotdev/commands-client
+ * @alienplatform/commands-client
  *
  * Lightweight client for Alien Commands protocol.
  *
  * @example
  * ```typescript
- * import { CommandsClient } from "@aliendotdev/commands-client"
+ * import { CommandsClient } from "@alienplatform/commands-client"
  *
  * const commands = new CommandsClient({
  *   managerUrl: "https://manager.example.com",

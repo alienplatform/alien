@@ -1,11 +1,11 @@
 /**
  * Commands Protocol Types
  *
- * Core command types are re-exported from @aliendotdev/core,
+ * Core command types are re-exported from @alienplatform/core,
  * which auto-generates them from the Rust implementation.
  */
 
-// Re-export core command types from @aliendotdev/core
+// Re-export core command types from @alienplatform/core
 export type {
   BodySpec,
   CommandState,
@@ -15,7 +15,7 @@ export type {
   PresignedRequest,
   PresignedRequestBackend,
   StorageUpload,
-} from "@aliendotdev/core"
+} from "@alienplatform/core"
 
 /**
  * Options for invoking a command

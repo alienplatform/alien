@@ -2,7 +2,7 @@
  * gRPC utility functions for error handling and type conversion.
  */
 
-import { AlienError } from "@aliendotdev/core"
+import { AlienError } from "@alienplatform/core"
 import { Status } from "nice-grpc"
 import {
   BindingNotFoundError,

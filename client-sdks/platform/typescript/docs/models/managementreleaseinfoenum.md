@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagementReleaseInfoEnum } from "@aliendotdev/platform-api/models";
+import { ManagementReleaseInfoEnum } from "@alienplatform/platform-api/models";
 
 let value: ManagementReleaseInfoEnum = "auto";
 ```

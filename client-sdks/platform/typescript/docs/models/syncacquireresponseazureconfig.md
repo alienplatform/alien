@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseAzureConfig } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseAzureConfig } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseAzureConfig = {
   keyVaultCertificateId: "<id>",

@@ -479,7 +479,7 @@ TypeScript and Python SDKs are gRPC clients that connect to the same server:
 
 ```typescript
 // TypeScript
-import { AlienContext } from "@aliendotdev/bindings"
+import { AlienContext } from "@alienplatform/bindings"
 
 const ctx = await AlienContext.fromEnv()
 const storage = await ctx.bindings().loadStorage("data-storage")

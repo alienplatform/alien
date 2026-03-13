@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoGcpResource } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoGcpResource } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoGcpResource = {
   scope: "<value>",

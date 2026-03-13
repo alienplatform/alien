@@ -5,7 +5,7 @@ List of containers.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentContainersResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentContainersResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentContainersResponse = {
   containers: [],

@@ -14,7 +14,7 @@ startup script fetches it at boot via IAM.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseMonitoring } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseMonitoring } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseMonitoring = {
   logsAuthHeader: "<value>",

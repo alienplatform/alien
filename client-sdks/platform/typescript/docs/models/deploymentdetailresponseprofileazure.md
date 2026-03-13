@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileAzure } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileAzure } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileAzure = {
   binding: {},

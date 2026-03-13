@@ -5,7 +5,7 @@ Local platform environment information
 ## Example Usage
 
 ```typescript
-import { DeploymentEnvironmentInfoLocal } from "@aliendotdev/platform-api/models";
+import { DeploymentEnvironmentInfoLocal } from "@alienplatform/platform-api/models";
 
 let value: DeploymentEnvironmentInfoLocal = {
   arch: "<value>",

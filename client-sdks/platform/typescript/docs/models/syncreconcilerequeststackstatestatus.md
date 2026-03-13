@@ -5,7 +5,7 @@ Represents the high-level status of a resource during its lifecycle.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestStackStateStatus } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestStackStateStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestStackStateStatus = "provision-failed";
 ```

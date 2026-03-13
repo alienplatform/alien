@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { ExtendReleaseInfoAwResource } from "@aliendotdev/platform-api/models";
+import { ExtendReleaseInfoAwResource } from "@alienplatform/platform-api/models";
 
 let value: ExtendReleaseInfoAwResource = {
   resources: [

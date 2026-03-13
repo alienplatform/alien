@@ -5,7 +5,7 @@ Release pin updated successfully.
 ## Example Usage
 
 ```typescript
-import { PinDeploymentReleaseResponse } from "@aliendotdev/platform-api/models/operations";
+import { PinDeploymentReleaseResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: PinDeploymentReleaseResponse = {
   message: "<value>",

@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackExtendAzureBinding } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackExtendAzureBinding } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackExtendAzureBinding = {};
 ```

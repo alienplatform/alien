@@ -5,7 +5,7 @@ User-provided configuration (network, deployment model, approvals)
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStackSettings } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStackSettings } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStackSettings = {};
 ```

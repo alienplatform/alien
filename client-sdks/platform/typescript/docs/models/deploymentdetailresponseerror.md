@@ -5,7 +5,7 @@ Latest error information if the deployment is in a failed state
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseError } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseError } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseError = {
   code: "<value>",

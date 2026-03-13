@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentManagement1 } from "@aliendotdev/platform-api/models";
+import { DeploymentManagement1 } from "@alienplatform/platform-api/models";
 
 let value: DeploymentManagement1 = {
   extend: {

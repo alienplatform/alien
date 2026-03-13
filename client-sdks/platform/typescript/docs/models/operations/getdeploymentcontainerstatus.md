@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentContainerStatus } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentContainerStatus } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentContainerStatus = "stopped";
 ```

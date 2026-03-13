@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateProjectRequestBody } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectRequestBody } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectRequestBody = {
   name: "my-app",

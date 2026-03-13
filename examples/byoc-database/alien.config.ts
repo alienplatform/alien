@@ -1,6 +1,6 @@
 // EXAMPLE: Zero-disk vector database deployed to the customer's cloud
 
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 // Object storage for vector data
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure

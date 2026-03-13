@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GitMetadata } from "@aliendotdev/platform-api/models";
+import { GitMetadata } from "@alienplatform/platform-api/models";
 
 let value: GitMetadata = {
   commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",

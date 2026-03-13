@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataGeneratingTemplate } from "@aliendotdev/platform-api/models";
+import { DataGeneratingTemplate } from "@alienplatform/platform-api/models";
 
 let value: DataGeneratingTemplate = {
   platform: "<value>",

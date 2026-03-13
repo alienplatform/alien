@@ -5,7 +5,7 @@ Azure management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseManagementConfigAzure } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseManagementConfigAzure } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseManagementConfigAzure = {
   managementPrincipalId: "<id>",

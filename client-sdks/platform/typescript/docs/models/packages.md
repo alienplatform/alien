@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Packages } from "@aliendotdev/platform-api/models";
+import { Packages } from "@alienplatform/platform-api/models";
 
 let value: Packages = {
   ready: false,

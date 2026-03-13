@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataDeployingCloudFormationStack } from "@aliendotdev/platform-api/models";
+import { DataDeployingCloudFormationStack } from "@alienplatform/platform-api/models";
 
 let value: DataDeployingCloudFormationStack = {
   cfnStackName: "<value>",

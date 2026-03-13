@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponsePlatformTest } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponsePlatformTest } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponsePlatformTest = "test";
 ```

@@ -5,7 +5,7 @@ Resource that can hold any resource type in the Alien system. All resources shar
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponsePreparedStackConfig } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponsePreparedStackConfig } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponsePreparedStackConfig = {
   id: "<id>",

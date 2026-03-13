@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Issue } from "@aliendotdev/platform-api/models/operations";
+import { Issue } from "@alienplatform/platform-api/models/operations";
 
 let value: Issue = {
   type: "scheduling_failure",

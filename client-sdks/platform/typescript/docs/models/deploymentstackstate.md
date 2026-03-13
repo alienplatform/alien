@@ -5,7 +5,7 @@ State of infrastructure components managed by this deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentStackState } from "@aliendotdev/platform-api/models";
+import { DeploymentStackState } from "@alienplatform/platform-api/models";
 
 let value: DeploymentStackState = {
   platform: "local",

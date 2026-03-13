@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetManagerRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetManagerRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetManagerRequest = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

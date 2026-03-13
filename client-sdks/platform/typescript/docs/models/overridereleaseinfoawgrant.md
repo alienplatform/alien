@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoAwGrant } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoAwGrant } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoAwGrant = {};
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestTargetReleaseManagement2 } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestTargetReleaseManagement2 } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestTargetReleaseManagement2 = {
   override: {

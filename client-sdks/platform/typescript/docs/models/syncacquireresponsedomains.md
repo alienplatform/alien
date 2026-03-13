@@ -8,7 +8,7 @@ domains and certificates. Otherwise, Alien auto-generates domains.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseDomains } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseDomains } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDomains = {};
 ```

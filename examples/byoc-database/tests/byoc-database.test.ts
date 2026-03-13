@@ -1,7 +1,7 @@
 /**
  * BYOC Database - Integration Tests
  *
- * Uses @aliendotdev/testing with the dev deployer for local testing.
+ * Uses @alienplatform/testing with the dev deployer for local testing.
  * Tests the complete flow:
  * 1. Upsert vectors
  * 2. Query by similarity
@@ -9,7 +9,7 @@
  * 4. Query again to verify persistence
  */
 
-import { type Deployment, deploy } from "@aliendotdev/testing"
+import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 describe("BYOC Database", () => {

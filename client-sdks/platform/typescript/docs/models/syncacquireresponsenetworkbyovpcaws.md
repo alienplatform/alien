@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseNetworkByoVpcAws } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseNetworkByoVpcAws } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseNetworkByoVpcAws = {
   privateSubnetIds: [],

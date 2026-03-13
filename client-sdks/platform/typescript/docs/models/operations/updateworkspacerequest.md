@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateWorkspaceRequest } from "@aliendotdev/platform-api/models/operations";
+import { UpdateWorkspaceRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateWorkspaceRequest = {
   id: "ws_It13CUaGEhLLAB87simX0",

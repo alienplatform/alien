@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateDomainRequest } from "@aliendotdev/platform-api/models/operations";
+import { CreateDomainRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateDomainRequest = {
   workspace: "my-workspace",

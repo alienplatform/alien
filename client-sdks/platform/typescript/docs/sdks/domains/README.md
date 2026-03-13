@@ -17,7 +17,7 @@ List system domains and workspace domains.
 
 <!-- UsageSnippet language="typescript" operationID="listDomains" method="get" path="/v1/domains" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -39,8 +39,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { domainsList } from "@aliendotdev/platform-api/funcs/domainsList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { domainsList } from "@alienplatform/platform-api/funcs/domainsList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -91,7 +91,7 @@ Create a workspace domain.
 
 <!-- UsageSnippet language="typescript" operationID="createDomain" method="post" path="/v1/domains" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -113,8 +113,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { domainsCreate } from "@aliendotdev/platform-api/funcs/domainsCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { domainsCreate } from "@alienplatform/platform-api/funcs/domainsCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -165,7 +165,7 @@ Get domain by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getDomain" method="get" path="/v1/domains/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -188,8 +188,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { domainsGet } from "@aliendotdev/platform-api/funcs/domainsGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { domainsGet } from "@alienplatform/platform-api/funcs/domainsGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -242,7 +242,7 @@ Delete a workspace domain.
 
 <!-- UsageSnippet language="typescript" operationID="deleteDomain" method="delete" path="/v1/domains/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -265,8 +265,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { domainsDelete } from "@aliendotdev/platform-api/funcs/domainsDelete.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { domainsDelete } from "@alienplatform/platform-api/funcs/domainsDelete.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

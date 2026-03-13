@@ -5,7 +5,7 @@ Status of a package build
 ## Example Usage
 
 ```typescript
-import { CloudformationStatus } from "@aliendotdev/platform-api/models";
+import { CloudformationStatus } from "@alienplatform/platform-api/models";
 
 let value: CloudformationStatus = "failed";
 ```

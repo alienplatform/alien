@@ -5,7 +5,7 @@ GCP management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { Gcp } from "@aliendotdev/platform-api/models/operations";
+import { Gcp } from "@alienplatform/platform-api/models/operations";
 
 let value: Gcp = {
   serviceAccountEmail: "<value>",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ProvisionManagerRequest } from "@aliendotdev/platform-api/models/operations";
+import { ProvisionManagerRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ProvisionManagerRequest = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

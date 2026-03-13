@@ -5,7 +5,7 @@ Manager schema
 ## Example Usage
 
 ```typescript
-import { CreateManagerResponse } from "@aliendotdev/platform-api/models/operations";
+import { CreateManagerResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateManagerResponse = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

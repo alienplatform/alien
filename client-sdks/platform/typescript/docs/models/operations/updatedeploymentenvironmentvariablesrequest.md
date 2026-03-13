@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateDeploymentEnvironmentVariablesRequest } from "@aliendotdev/platform-api/models/operations";
+import { UpdateDeploymentEnvironmentVariablesRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateDeploymentEnvironmentVariablesRequest = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

@@ -5,7 +5,7 @@ Container orchestration events.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentContainerInstanceEventsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentContainerInstanceEventsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentContainerInstanceEventsResponse = {
   events: [

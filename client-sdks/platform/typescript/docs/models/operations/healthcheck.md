@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { HealthCheck } from "@aliendotdev/platform-api/models/operations";
+import { HealthCheck } from "@alienplatform/platform-api/models/operations";
 
 let value: HealthCheck = {
   path: "/usr",

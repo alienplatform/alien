@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GitNamespace } from "@aliendotdev/platform-api/models";
+import { GitNamespace } from "@alienplatform/platform-api/models";
 
 let value: GitNamespace = {
   id: 5821.47,

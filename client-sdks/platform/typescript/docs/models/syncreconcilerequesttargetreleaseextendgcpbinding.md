@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestTargetReleaseExtendGcpBinding } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestTargetReleaseExtendGcpBinding } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestTargetReleaseExtendGcpBinding = {};
 ```

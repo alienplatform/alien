@@ -5,7 +5,7 @@ AWS-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleaseOverrideAw } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleaseOverrideAw } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleaseOverrideAw = {
   binding: {},

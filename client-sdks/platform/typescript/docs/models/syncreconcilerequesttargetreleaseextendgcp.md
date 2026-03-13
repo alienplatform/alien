@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestTargetReleaseExtendGcp } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestTargetReleaseExtendGcp } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestTargetReleaseExtendGcp = {
   binding: {},

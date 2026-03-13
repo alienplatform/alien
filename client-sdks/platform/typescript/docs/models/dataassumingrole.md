@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataAssumingRole } from "@aliendotdev/platform-api/models";
+import { DataAssumingRole } from "@alienplatform/platform-api/models";
 
 let value: DataAssumingRole = {
   roleArn: "<value>",

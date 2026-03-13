@@ -1,10 +1,10 @@
 /**
- * Basic example of using @aliendotdev/testing
+ * Basic example of using @alienplatform/testing
  *
  * This demonstrates the simplest use case: deploy an app, test it, tear it down.
  */
 
-import { deploy } from "@aliendotdev/testing"
+import { deploy } from "@alienplatform/testing"
 
 async function main() {
   console.log("Deploying test application...")

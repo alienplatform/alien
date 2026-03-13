@@ -5,7 +5,7 @@ AWS-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileAw } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileAw } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileAw = {
   binding: {},

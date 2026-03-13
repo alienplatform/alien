@@ -5,7 +5,7 @@ Configuration for the Helm chart package
 ## Example Usage
 
 ```typescript
-import { ConfigHelm } from "@aliendotdev/platform-api/models";
+import { ConfigHelm } from "@alienplatform/platform-api/models";
 
 let value: ConfigHelm = {
   chartName: "<value>",

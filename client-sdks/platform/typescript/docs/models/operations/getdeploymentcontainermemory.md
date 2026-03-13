@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentContainerMemory } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentContainerMemory } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentContainerMemory = {
   min: "<value>",

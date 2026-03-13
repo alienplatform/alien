@@ -11,7 +11,7 @@ in distributed systems.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseErrorStackState } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseErrorStackState } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseErrorStackState = {
   code: "<value>",

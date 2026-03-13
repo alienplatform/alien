@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetContainerAttentionDeployment } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerAttentionDeployment } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerAttentionDeployment = {
   clusterId: "<id>",

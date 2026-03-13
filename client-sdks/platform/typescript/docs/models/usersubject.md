@@ -5,7 +5,7 @@ Authenticated user subject with workspace-scoped permissions
 ## Example Usage
 
 ```typescript
-import { UserSubject } from "@aliendotdev/platform-api/models";
+import { UserSubject } from "@alienplatform/platform-api/models";
 
 let value: UserSubject = {
   kind: "user",

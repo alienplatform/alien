@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackProfileGcp } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackProfileGcp } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackProfileGcp = {
   binding: {},

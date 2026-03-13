@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ReleaseListItemResponse } from "@aliendotdev/platform-api/models";
+import { ReleaseListItemResponse } from "@alienplatform/platform-api/models";
 
 let value: ReleaseListItemResponse = {
   id: "rel_WbhQgksrawSKIpEN0NAssHX9",

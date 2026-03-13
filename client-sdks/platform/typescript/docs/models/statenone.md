@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { StateNone } from "@aliendotdev/platform-api/models";
+import { StateNone } from "@alienplatform/platform-api/models";
 
 let value: StateNone = "none";
 ```

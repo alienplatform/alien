@@ -5,7 +5,7 @@ How to dispatch the command
 ## Example Usage
 
 ```typescript
-import { CreateCommandResponseDeploymentModel } from "@aliendotdev/platform-api/models";
+import { CreateCommandResponseDeploymentModel } from "@alienplatform/platform-api/models";
 
 let value: CreateCommandResponseDeploymentModel = "push";
 ```

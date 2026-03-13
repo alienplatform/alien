@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DomainStatus } from "@aliendotdev/platform-api/models";
+import { DomainStatus } from "@alienplatform/platform-api/models";
 
 let value: DomainStatus = "pending-verification";
 ```

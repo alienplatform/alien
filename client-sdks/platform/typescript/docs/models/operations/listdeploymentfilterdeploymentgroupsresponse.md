@@ -5,7 +5,7 @@ Deployment groups for filter retrieved.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentFilterDeploymentGroupsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentFilterDeploymentGroupsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentFilterDeploymentGroupsResponse = {
   items: [],

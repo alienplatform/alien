@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { DeploymentStatus } from "@aliendotdev/platform-api/models";
+import { DeploymentStatus } from "@alienplatform/platform-api/models";
 
 let value: DeploymentStatus = "update-failed";
 ```

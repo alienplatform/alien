@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTargetReleaseProfile } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTargetReleaseProfile } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTargetReleaseProfile = {
   description: "nudge phew ack unto",

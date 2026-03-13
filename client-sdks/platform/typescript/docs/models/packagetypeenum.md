@@ -5,7 +5,7 @@ Types of packages that can be built
 ## Example Usage
 
 ```typescript
-import { PackageTypeEnum } from "@aliendotdev/platform-api/models";
+import { PackageTypeEnum } from "@alienplatform/platform-api/models";
 
 let value: PackageTypeEnum = "operator-image";
 ```

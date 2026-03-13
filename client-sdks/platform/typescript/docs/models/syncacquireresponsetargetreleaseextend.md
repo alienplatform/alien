@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleaseExtend } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleaseExtend } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleaseExtend = {
   description: "given artistic bowler valiantly",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { EphemeralStorage } from "@aliendotdev/platform-api/models/operations";
+import { EphemeralStorage } from "@alienplatform/platform-api/models/operations";
 
 let value: EphemeralStorage = {
   total: 868173,

@@ -5,7 +5,7 @@ AWS ECR (Elastic Container Registry) binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsEcr } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsEcr } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsEcr = {
   service: "ecr",

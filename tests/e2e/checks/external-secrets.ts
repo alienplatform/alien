@@ -1,4 +1,4 @@
-import type { Deployment } from "@aliendotdev/testing"
+import type { Deployment } from "@alienplatform/testing"
 import { assertCheck, assertResponseOk } from "./errors.js"
 
 export async function checkExternalSecret(deployment: Deployment): Promise<void> {

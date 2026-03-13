@@ -5,7 +5,7 @@ AWS S3 storage binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsS3 } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsS3 } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsS3 = {
   service: "s3",

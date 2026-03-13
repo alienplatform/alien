@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackOverrideAwBinding } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackOverrideAwBinding } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackOverrideAwBinding = {};
 ```

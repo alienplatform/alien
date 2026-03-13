@@ -5,7 +5,7 @@ Runtime metadata for deployment state persistence
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseRuntimeMetadata } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseRuntimeMetadata } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseRuntimeMetadata = {};
 ```

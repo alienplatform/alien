@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetProjectTemplateUrlsRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectTemplateUrlsRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectTemplateUrlsRequest = {
   idOrName: "my-project",

@@ -15,8 +15,8 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
-    "@aliendotdev/commands-client": "^1.0.0",
-    "@aliendotdev/platform-api": "^1.0.52",
+    "@alienplatform/commands-client": "^1.0.0",
+    "@alienplatform/platform-api": "^1.0.52",
     "github-agent-remote-agent": "file:../remote-agent",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",

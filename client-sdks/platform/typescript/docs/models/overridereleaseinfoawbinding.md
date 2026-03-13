@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoAwBinding } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoAwBinding } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoAwBinding = {};
 ```

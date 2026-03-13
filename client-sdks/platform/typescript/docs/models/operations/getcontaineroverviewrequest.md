@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetContainerOverviewRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerOverviewRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerOverviewRequest = {
   workspace: "my-workspace",

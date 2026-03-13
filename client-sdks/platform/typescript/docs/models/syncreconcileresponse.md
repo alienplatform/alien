@@ -5,7 +5,7 @@ State reconciliation result with optional target
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponse } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponse } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponse = {
   success: false,

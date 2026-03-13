@@ -5,7 +5,7 @@ Request schema for updating an API key
 ## Example Usage
 
 ```typescript
-import { UpdateAPIKeyRequest } from "@aliendotdev/platform-api/models";
+import { UpdateAPIKeyRequest } from "@alienplatform/platform-api/models";
 
 let value: UpdateAPIKeyRequest = {};
 ```

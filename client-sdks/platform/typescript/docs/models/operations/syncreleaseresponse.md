@@ -5,7 +5,7 @@ Lock released successfully.
 ## Example Usage
 
 ```typescript
-import { SyncReleaseResponse } from "@aliendotdev/platform-api/models/operations";
+import { SyncReleaseResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: SyncReleaseResponse = {
   success: true,

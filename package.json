@@ -32,12 +32,12 @@
   "packageManager": "pnpm@10.11.0",
   "pnpm": {
     "overrides": {
-      "@aliendotdev/commands-client": "file:packages/commands-client",
-      "@aliendotdev/core": "file:packages/core",
-      "@aliendotdev/typescript-config": "file:packages/config-typescript",
-      "@aliendotdev/testing": "file:packages/testing",
-      "@aliendotdev/bindings": "file:packages/bindings",
-      "@aliendotdev/platform-api": "file:client-sdks/platform/typescript"
+      "@alienplatform/commands-client": "file:packages/commands-client",
+      "@alienplatform/core": "file:packages/core",
+      "@alienplatform/typescript-config": "file:packages/config-typescript",
+      "@alienplatform/testing": "file:packages/testing",
+      "@alienplatform/bindings": "file:packages/bindings",
+      "@alienplatform/platform-api": "file:client-sdks/platform/typescript"
     }
   }
 }

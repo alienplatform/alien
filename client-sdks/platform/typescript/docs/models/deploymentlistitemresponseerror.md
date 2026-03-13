@@ -5,7 +5,7 @@ Latest error information if in a failed state
 ## Example Usage
 
 ```typescript
-import { DeploymentListItemResponseError } from "@aliendotdev/platform-api/models";
+import { DeploymentListItemResponseError } from "@alienplatform/platform-api/models";
 
 let value: DeploymentListItemResponseError = {
   code: "<value>",

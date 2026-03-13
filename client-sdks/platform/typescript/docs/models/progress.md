@@ -5,7 +5,7 @@ Progress information for image push operations
 ## Example Usage
 
 ```typescript
-import { Progress } from "@aliendotdev/platform-api/models";
+import { Progress } from "@alienplatform/platform-api/models";
 
 let value: Progress = {
   bytesUploaded: 641278,

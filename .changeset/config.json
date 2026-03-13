@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@aliendotdev/typescript-config"]
+  "ignore": ["@alienplatform/typescript-config"]
 }

@@ -5,7 +5,7 @@ Represents the state of a single resource within the stack for a specific platfo
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStackStateResources } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStackStateResources } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStackStateResources = {
   config: {

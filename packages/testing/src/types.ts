@@ -1,8 +1,8 @@
 /**
- * Core types for @aliendotdev/testing
+ * Core types for @alienplatform/testing
  */
 
-import type { Platform } from "@aliendotdev/core"
+import type { Platform } from "@alienplatform/core"
 
 export type { Platform }
 

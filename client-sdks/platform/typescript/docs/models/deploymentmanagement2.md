@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentManagement2 } from "@aliendotdev/platform-api/models";
+import { DeploymentManagement2 } from "@alienplatform/platform-api/models";
 
 let value: DeploymentManagement2 = {
   override: {

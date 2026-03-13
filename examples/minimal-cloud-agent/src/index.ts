@@ -1,4 +1,4 @@
-import { command } from "@aliendotdev/bindings"
+import { command } from "@alienplatform/bindings"
 /**
  * Minimal Cloud Agent - src/index.ts
  *

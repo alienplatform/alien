@@ -5,7 +5,7 @@ Role for deployment group-scoped service accounts
 ## Example Usage
 
 ```typescript
-import { DeploymentGroupRole } from "@aliendotdev/platform-api/models";
+import { DeploymentGroupRole } from "@alienplatform/platform-api/models";
 
 let value: DeploymentGroupRole = "deployment-group.deployer";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateProjectFromTemplateGithubSetup } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectFromTemplateGithubSetup } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateGithubSetup = {
   pullRequestUrl: "https://colorless-volleyball.org/",

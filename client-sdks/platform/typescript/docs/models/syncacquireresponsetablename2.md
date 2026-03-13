@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTableName2 } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTableName2 } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTableName2 = {
   secretRef: {

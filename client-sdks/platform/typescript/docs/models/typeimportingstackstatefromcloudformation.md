@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeImportingStackStateFromCloudFormation } from "@aliendotdev/client-sdk/models";
+import { TypeImportingStackStateFromCloudFormation } from "@alienplatform/client-sdk/models";
 
 let value: TypeImportingStackStateFromCloudFormation =
   "ImportingStackStateFromCloudFormation";

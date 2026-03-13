@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/testing",
+  "name": "@alienplatform/testing",
   "version": "0.1.0",
   "description": "Testing framework for Alien applications",
   "type": "module",
@@ -23,8 +23,8 @@
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
-    "@aliendotdev/commands-client": "workspace:*",
-    "@aliendotdev/core": "workspace:*",
+    "@alienplatform/commands-client": "workspace:*",
+    "@alienplatform/core": "workspace:*",
     "get-port": "^7.1.0",
     "zod": "4.3.2"
   },
@@ -57,7 +57,7 @@
     }
   },
   "devDependencies": {
-    "@aliendotdev/typescript-config": "workspace:^",
+    "@alienplatform/typescript-config": "workspace:^",
     "@aws-sdk/client-cloudformation": "^3.0.0",
     "@aws-sdk/client-ssm": "^3.0.0",
     "@azure/identity": "^4.0.0",

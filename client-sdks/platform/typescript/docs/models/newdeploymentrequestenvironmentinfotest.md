@@ -5,7 +5,7 @@ Test platform environment information (mock)
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestEnvironmentInfoTest } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestEnvironmentInfoTest } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestEnvironmentInfoTest = {
   testId: "<id>",

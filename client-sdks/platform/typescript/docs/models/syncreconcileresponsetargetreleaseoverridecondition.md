@@ -5,7 +5,7 @@ GCP IAM condition
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTargetReleaseOverrideCondition } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTargetReleaseOverrideCondition } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTargetReleaseOverrideCondition = {
   expression: "<value>",

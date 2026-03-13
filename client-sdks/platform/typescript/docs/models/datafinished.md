@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataFinished } from "@aliendotdev/platform-api/models";
+import { DataFinished } from "@alienplatform/platform-api/models";
 
 let value: DataFinished = {
   type: "Finished",

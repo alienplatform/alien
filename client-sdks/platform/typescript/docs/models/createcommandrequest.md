@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateCommandRequest } from "@aliendotdev/platform-api/models";
+import { CreateCommandRequest } from "@alienplatform/platform-api/models";
 
 let value: CreateCommandRequest = {
   deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",

@@ -19,7 +19,7 @@ Update the current user's profile (display name).
 
 <!-- UsageSnippet language="typescript" operationID="updateUserProfile" method="patch" path="/v1/user/profile" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -39,8 +39,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userUpdateProfile } from "@aliendotdev/platform-api/funcs/userUpdateProfile.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userUpdateProfile } from "@alienplatform/platform-api/funcs/userUpdateProfile.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -90,7 +90,7 @@ List all workspaces the current user has access to.
 
 <!-- UsageSnippet language="typescript" operationID="listMemberships" method="get" path="/v1/user/memberships" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -110,8 +110,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userListMemberships } from "@aliendotdev/platform-api/funcs/userListMemberships.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userListMemberships } from "@alienplatform/platform-api/funcs/userListMemberships.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -160,7 +160,7 @@ Create a new workspace. The current user will be automatically added as an admin
 
 <!-- UsageSnippet language="typescript" operationID="createWorkspace" method="post" path="/v1/user/workspaces" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -180,8 +180,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userCreateWorkspace } from "@aliendotdev/platform-api/funcs/userCreateWorkspace.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userCreateWorkspace } from "@alienplatform/platform-api/funcs/userCreateWorkspace.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -231,7 +231,7 @@ List all git namespaces (GitHub installations) the current user has access to.
 
 <!-- UsageSnippet language="typescript" operationID="listGitNamespaces" method="get" path="/v1/user/git-namespaces" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -251,8 +251,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userListGitNamespaces } from "@aliendotdev/platform-api/funcs/userListGitNamespaces.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userListGitNamespaces } from "@alienplatform/platform-api/funcs/userListGitNamespaces.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -302,7 +302,7 @@ Sync git namespaces from the provider. For GitHub, this fetches all app installa
 
 <!-- UsageSnippet language="typescript" operationID="syncGitNamespaces" method="post" path="/v1/user/git-namespaces/sync" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -322,8 +322,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userSyncGitNamespaces } from "@aliendotdev/platform-api/funcs/userSyncGitNamespaces.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userSyncGitNamespaces } from "@alienplatform/platform-api/funcs/userSyncGitNamespaces.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -373,7 +373,7 @@ List repositories accessible through a git namespace (GitHub installation).
 
 <!-- UsageSnippet language="typescript" operationID="listGitNamespaceRepositories" method="get" path="/v1/user/git-namespaces/{id}/repositories" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -395,8 +395,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userListGitNamespaceRepositories } from "@aliendotdev/platform-api/funcs/userListGitNamespaceRepositories.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userListGitNamespaceRepositories } from "@alienplatform/platform-api/funcs/userListGitNamespaceRepositories.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

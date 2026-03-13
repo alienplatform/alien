@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackProfileAzure } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackProfileAzure } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackProfileAzure = {
   binding: {},

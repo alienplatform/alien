@@ -1,13 +1,13 @@
 /**
  * Endpoint Agent - Integration Tests
  *
- * Uses @aliendotdev/testing with the dev deployer for pure local ARC testing.
+ * Uses @alienplatform/testing with the dev deployer for pure local ARC testing.
  */
 
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
-import { type Deployment, deploy } from "@aliendotdev/testing"
+import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 describe("Endpoint Agent", () => {

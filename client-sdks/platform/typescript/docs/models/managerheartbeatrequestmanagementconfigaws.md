@@ -5,7 +5,7 @@ AWS management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { ManagerHeartbeatRequestManagementConfigAws } from "@aliendotdev/platform-api/models";
+import { ManagerHeartbeatRequestManagementConfigAws } from "@alienplatform/platform-api/models";
 
 let value: ManagerHeartbeatRequestManagementConfigAws = {
   managingRoleArn: "<value>",

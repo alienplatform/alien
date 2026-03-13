@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Package } from "@aliendotdev/platform-api/models";
+import { Package } from "@alienplatform/platform-api/models";
 
 let value: Package = {
   id: "pkg_jebo2o5jmm7raefl2m1pe3cz",

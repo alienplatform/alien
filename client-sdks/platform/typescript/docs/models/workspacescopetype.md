@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { WorkspaceScopeType } from "@aliendotdev/client-sdk/models";
+import { WorkspaceScopeType } from "@alienplatform/client-sdk/models";
 
 let value: WorkspaceScopeType = "workspace";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { UpdateProjectRequest } from "@aliendotdev/platform-api/models/operations";
+import { UpdateProjectRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateProjectRequest = {
   idOrName: "my-project",

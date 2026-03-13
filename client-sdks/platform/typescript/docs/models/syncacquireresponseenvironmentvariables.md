@@ -5,7 +5,7 @@ Snapshot of environment variables at a point in time
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseEnvironmentVariables } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseEnvironmentVariables } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseEnvironmentVariables = {
   createdAt: "1726232482767",

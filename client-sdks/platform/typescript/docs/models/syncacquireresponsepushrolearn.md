@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePushRoleArn } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePushRoleArn } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePushRoleArn = {
   secretRef: {

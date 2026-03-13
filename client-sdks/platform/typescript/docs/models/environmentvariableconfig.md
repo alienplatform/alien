@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { EnvironmentVariableConfig } from "@aliendotdev/platform-api/models";
+import { EnvironmentVariableConfig } from "@alienplatform/platform-api/models";
 
 let value: EnvironmentVariableConfig = {
   name: "<value>",

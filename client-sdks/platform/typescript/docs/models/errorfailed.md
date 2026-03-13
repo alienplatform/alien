@@ -11,7 +11,7 @@ in distributed systems.
 ## Example Usage
 
 ```typescript
-import { ErrorFailed } from "@aliendotdev/platform-api/models";
+import { ErrorFailed } from "@alienplatform/platform-api/models";
 
 let value: ErrorFailed = {
   code: "<value>",

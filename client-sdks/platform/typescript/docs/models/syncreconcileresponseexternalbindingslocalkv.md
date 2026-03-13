@@ -5,7 +5,7 @@ Local development KV binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsLocalKv } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsLocalKv } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsLocalKv = {
   service: "local-kv",

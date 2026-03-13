@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ConnectManagerToGoogleCloudRequest } from "@aliendotdev/platform-api/models/operations";
+import { ConnectManagerToGoogleCloudRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ConnectManagerToGoogleCloudRequest = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

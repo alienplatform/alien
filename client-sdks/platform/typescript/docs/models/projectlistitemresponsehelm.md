@@ -5,7 +5,7 @@ Helm chart package configuration. If null, Helm packages will not be generated.
 ## Example Usage
 
 ```typescript
-import { ProjectListItemResponseHelm } from "@aliendotdev/platform-api/models";
+import { ProjectListItemResponseHelm } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseHelm = {
   chartName: "<value>",

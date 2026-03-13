@@ -21,7 +21,7 @@ Retrieve all workspaces.
 
 <!-- UsageSnippet language="typescript" operationID="listWorkspaces" method="get" path="/v1/workspaces" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -43,8 +43,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesList } from "@aliendotdev/platform-api/funcs/workspacesList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesList } from "@alienplatform/platform-api/funcs/workspacesList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -95,7 +95,7 @@ Retrieve a workspace by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getWorkspace" method="get" path="/v1/workspaces/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -118,8 +118,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesGet } from "@aliendotdev/platform-api/funcs/workspacesGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesGet } from "@alienplatform/platform-api/funcs/workspacesGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -172,7 +172,7 @@ Delete a workspace. The workspace must have no projects.
 
 <!-- UsageSnippet language="typescript" operationID="deleteWorkspace" method="delete" path="/v1/workspaces/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -195,8 +195,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesDelete } from "@aliendotdev/platform-api/funcs/workspacesDelete.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesDelete } from "@alienplatform/platform-api/funcs/workspacesDelete.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -249,7 +249,7 @@ Update a workspace.
 
 <!-- UsageSnippet language="typescript" operationID="updateWorkspace" method="patch" path="/v1/workspaces/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -272,8 +272,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesUpdate } from "@aliendotdev/platform-api/funcs/workspacesUpdate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesUpdate } from "@alienplatform/platform-api/funcs/workspacesUpdate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -326,7 +326,7 @@ List all members of a workspace.
 
 <!-- UsageSnippet language="typescript" operationID="listWorkspaceMembers" method="get" path="/v1/workspaces/{id}/members" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -349,8 +349,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesListMembers } from "@aliendotdev/platform-api/funcs/workspacesListMembers.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesListMembers } from "@alienplatform/platform-api/funcs/workspacesListMembers.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -403,7 +403,7 @@ Add a member to a workspace by email. The user must already have an account.
 
 <!-- UsageSnippet language="typescript" operationID="addWorkspaceMember" method="post" path="/v1/workspaces/{id}/members" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -430,8 +430,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesAddMember } from "@aliendotdev/platform-api/funcs/workspacesAddMember.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesAddMember } from "@alienplatform/platform-api/funcs/workspacesAddMember.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -488,7 +488,7 @@ Remove a member from a workspace.
 
 <!-- UsageSnippet language="typescript" operationID="removeWorkspaceMember" method="delete" path="/v1/workspaces/{id}/members/{userId}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -512,8 +512,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesRemoveMember } from "@aliendotdev/platform-api/funcs/workspacesRemoveMember.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesRemoveMember } from "@alienplatform/platform-api/funcs/workspacesRemoveMember.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -567,7 +567,7 @@ Update a workspace member's role.
 
 <!-- UsageSnippet language="typescript" operationID="updateWorkspaceMember" method="patch" path="/v1/workspaces/{id}/members/{userId}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -594,8 +594,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { workspacesUpdateMember } from "@aliendotdev/platform-api/funcs/workspacesUpdateMember.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { workspacesUpdateMember } from "@alienplatform/platform-api/funcs/workspacesUpdateMember.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

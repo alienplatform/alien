@@ -1,4 +1,4 @@
-import { defineFunction, kv, queue, storage } from "@aliendotdev/core"
+import { defineFunction, kv, queue, storage } from "@alienplatform/core"
 
 export default defineFunction({
   name: "alien-test-app",

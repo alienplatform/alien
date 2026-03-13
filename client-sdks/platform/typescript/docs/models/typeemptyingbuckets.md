@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeEmptyingBuckets } from "@aliendotdev/client-sdk/models";
+import { TypeEmptyingBuckets } from "@alienplatform/client-sdk/models";
 
 let value: TypeEmptyingBuckets = "EmptyingBuckets";
 ```

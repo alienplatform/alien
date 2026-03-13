@@ -5,7 +5,7 @@ Agent retry enqueued successfully.
 ## Example Usage
 
 ```typescript
-import { RetryDeploymentResponse } from "@aliendotdev/platform-api/models/operations";
+import { RetryDeploymentResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: RetryDeploymentResponse = {
   message: "<value>",

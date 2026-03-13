@@ -5,7 +5,7 @@ Container details with replica metrics.
 ## Example Usage
 
 ```typescript
-import { GetDeploymentContainerResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentContainerResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentContainerResponse = {
   name: "<value>",

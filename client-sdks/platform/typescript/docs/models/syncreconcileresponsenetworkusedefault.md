@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseNetworkUseDefault } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseNetworkUseDefault } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseNetworkUseDefault = {
   type: "use-default",

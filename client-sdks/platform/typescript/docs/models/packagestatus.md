@@ -5,7 +5,7 @@ Status of a package build
 ## Example Usage
 
 ```typescript
-import { PackageStatus } from "@aliendotdev/platform-api/models";
+import { PackageStatus } from "@alienplatform/platform-api/models";
 
 let value: PackageStatus = "pending";
 ```

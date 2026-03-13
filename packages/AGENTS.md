@@ -51,10 +51,10 @@ if (!user.permissions.includes("admin")) {
 
 ## Designing Error Definitions
 
-Use `defineError()` from `@aliendotdev/core` with Zod schemas:
+Use `defineError()` from `@alienplatform/core` with Zod schemas:
 
 ```typescript
-import { defineError } from "@aliendotdev/core"
+import { defineError } from "@alienplatform/core"
 import { z } from "zod/v4"
 
 export const PaymentProviderUnreachableError = defineError({

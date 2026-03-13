@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeBuildingFunction } from "@aliendotdev/client-sdk/models";
+import { TypeBuildingFunction } from "@alienplatform/client-sdk/models";
 
 let value: TypeBuildingFunction = "BuildingFunction";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListDeploymentContainerEventsEvent } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentContainerEventsEvent } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentContainerEventsEvent = {
   eventId: "<id>",

@@ -226,7 +226,7 @@ export function getWaitUntilManager(): WaitUntilManager | undefined {
  *
  * @example
  * ```typescript
- * import { waitUntil } from "@aliendotdev/bindings"
+ * import { waitUntil } from "@alienplatform/bindings"
  *
  * export default {
  *   async fetch(request: Request): Promise<Response> {

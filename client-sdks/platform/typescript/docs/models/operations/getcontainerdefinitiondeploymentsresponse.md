@@ -5,7 +5,7 @@ Per-deployment breakdown.
 ## Example Usage
 
 ```typescript
-import { GetContainerDefinitionDeploymentsResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerDefinitionDeploymentsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerDefinitionDeploymentsResponse = {
   containerName: "<value>",

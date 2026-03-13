@@ -5,7 +5,7 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ## Example Usage
 
 ```typescript
-import { EventLifecycle } from "@aliendotdev/platform-api/models";
+import { EventLifecycle } from "@alienplatform/platform-api/models";
 
 let value: EventLifecycle = "frozen";
 ```

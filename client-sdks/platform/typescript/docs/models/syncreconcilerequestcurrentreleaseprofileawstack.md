@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseProfileAwStack } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseProfileAwStack } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseProfileAwStack = {
   resources: [

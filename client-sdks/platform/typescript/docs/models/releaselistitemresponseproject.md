@@ -5,7 +5,7 @@ Project info, included when ?include=project is used
 ## Example Usage
 
 ```typescript
-import { ReleaseListItemResponseProject } from "@aliendotdev/platform-api/models";
+import { ReleaseListItemResponseProject } from "@alienplatform/platform-api/models";
 
 let value: ReleaseListItemResponseProject = {
   id: "<id>",

@@ -5,7 +5,7 @@ Azure-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackOverrideAzureResource } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackOverrideAzureResource } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackOverrideAzureResource = {
   scope: "<value>",

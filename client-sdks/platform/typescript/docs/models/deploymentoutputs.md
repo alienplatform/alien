@@ -5,7 +5,7 @@ Resource outputs that can hold output data for any resource type in the Alien sy
 ## Example Usage
 
 ```typescript
-import { DeploymentOutputs } from "@aliendotdev/platform-api/models";
+import { DeploymentOutputs } from "@alienplatform/platform-api/models";
 
 let value: DeploymentOutputs = {
   type: "<value>",

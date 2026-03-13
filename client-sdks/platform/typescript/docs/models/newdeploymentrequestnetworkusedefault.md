@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestNetworkUseDefault } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestNetworkUseDefault } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestNetworkUseDefault = {
   type: "use-default",

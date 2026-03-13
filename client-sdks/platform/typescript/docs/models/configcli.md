@@ -5,7 +5,7 @@ Configuration for the project CLI binary
 ## Example Usage
 
 ```typescript
-import { ConfigCli } from "@aliendotdev/platform-api/models";
+import { ConfigCli } from "@alienplatform/platform-api/models";
 
 let value: ConfigCli = {
   displayName: "Triston_Hodkiewicz",

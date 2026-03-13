@@ -7,7 +7,7 @@ Remote commands let you invoke code on running deployments. Deployments run wher
 Deployments register command handlers using the SDK:
 
 ```typescript
-import { command } from "@aliendotdev/sdk"
+import { command } from "@alienplatform/sdk"
 
 command("generate-report", async ({ startDate }) => {
   const data = await queryDatabase(startDate)

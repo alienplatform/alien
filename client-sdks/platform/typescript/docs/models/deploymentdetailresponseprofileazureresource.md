@@ -5,7 +5,7 @@ Azure-specific binding specification
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseProfileAzureResource } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseProfileAzureResource } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseProfileAzureResource = {
   scope: "<value>",

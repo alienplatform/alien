@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTargetReleaseProfileAzureGrant } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTargetReleaseProfileAzureGrant } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTargetReleaseProfileAzureGrant = {};
 ```

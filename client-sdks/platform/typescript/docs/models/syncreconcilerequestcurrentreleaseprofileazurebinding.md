@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseProfileAzureBinding } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseProfileAzureBinding } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseProfileAzureBinding = {};
 ```

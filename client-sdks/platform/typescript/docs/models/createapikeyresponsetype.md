@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateAPIKeyResponseType } from "@aliendotdev/platform-api/models";
+import { CreateAPIKeyResponseType } from "@alienplatform/platform-api/models";
 
 let value: CreateAPIKeyResponseType = "manager";
 ```

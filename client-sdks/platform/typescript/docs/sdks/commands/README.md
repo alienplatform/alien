@@ -19,7 +19,7 @@ Retrieve commands. Use for dashboard analytics and command history.
 
 <!-- UsageSnippet language="typescript" operationID="listCommands" method="get" path="/v1/commands" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -43,8 +43,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsList } from "@aliendotdev/platform-api/funcs/commandsList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsList } from "@alienplatform/platform-api/funcs/commandsList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -97,7 +97,7 @@ Create command metadata. Called by Agent Manager when processing ARC commands. R
 
 <!-- UsageSnippet language="typescript" operationID="createCommand" method="post" path="/v1/commands" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -123,8 +123,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsCreate } from "@aliendotdev/platform-api/funcs/commandsCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsCreate } from "@alienplatform/platform-api/funcs/commandsCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -180,7 +180,7 @@ List distinct command names. Use for filter dropdowns in the dashboard.
 
 <!-- UsageSnippet language="typescript" operationID="listCommandNames" method="get" path="/v1/commands/names" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -203,8 +203,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsListNames } from "@aliendotdev/platform-api/funcs/commandsListNames.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsListNames } from "@alienplatform/platform-api/funcs/commandsListNames.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -256,7 +256,7 @@ List distinct deployments that have commands, including deployment group info. U
 
 <!-- UsageSnippet language="typescript" operationID="listCommandAgents" method="get" path="/v1/commands/deployments" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -279,8 +279,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsListDeployments } from "@aliendotdev/platform-api/funcs/commandsListDeployments.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsListDeployments } from "@alienplatform/platform-api/funcs/commandsListDeployments.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -332,7 +332,7 @@ Retrieve a command by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getCommand" method="get" path="/v1/commands/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -355,8 +355,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsGet } from "@aliendotdev/platform-api/funcs/commandsGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsGet } from "@alienplatform/platform-api/funcs/commandsGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -409,7 +409,7 @@ Update command state. Called by Agent Manager when command is dispatched or comp
 
 <!-- UsageSnippet language="typescript" operationID="updateCommand" method="patch" path="/v1/commands/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -432,8 +432,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { commandsUpdate } from "@aliendotdev/platform-api/funcs/commandsUpdate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsUpdate } from "@alienplatform/platform-api/funcs/commandsUpdate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

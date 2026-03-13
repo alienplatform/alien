@@ -5,7 +5,7 @@ Project created successfully from template.
 ## Example Usage
 
 ```typescript
-import { CreateProjectFromTemplateResponse } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectFromTemplateResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateResponse = {
   id: "prj_mcytp6z3j91f7tn5ryqsfwtr",

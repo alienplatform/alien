@@ -5,7 +5,7 @@ Outputs from a Terraform provider package build
 ## Example Usage
 
 ```typescript
-import { OutputsTerraform } from "@aliendotdev/platform-api/models";
+import { OutputsTerraform } from "@alienplatform/platform-api/models";
 
 let value: OutputsTerraform = {
   gpgPublicKey: {

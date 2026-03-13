@@ -5,7 +5,7 @@ Agent redeployment triggered successfully.
 ## Example Usage
 
 ```typescript
-import { RedeployDeploymentResponse } from "@aliendotdev/platform-api/models/operations";
+import { RedeployDeploymentResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: RedeployDeploymentResponse = {
   message: "<value>",

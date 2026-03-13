@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Arc } from "@aliendotdev/platform-api/models";
+import { Arc } from "@alienplatform/platform-api/models";
 
 let value: Arc = {
   url: "https://simple-impact.info/",

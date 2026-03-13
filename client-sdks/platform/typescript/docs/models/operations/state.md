@@ -5,7 +5,7 @@ Filter by command state
 ## Example Usage
 
 ```typescript
-import { State } from "@aliendotdev/platform-api/models/operations";
+import { State } from "@alienplatform/platform-api/models/operations";
 
 let value: State = "PENDING_UPLOAD";
 ```

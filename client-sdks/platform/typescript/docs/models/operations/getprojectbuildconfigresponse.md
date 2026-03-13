@@ -5,7 +5,7 @@ Build configuration retrieved successfully.
 ## Example Usage
 
 ```typescript
-import { GetProjectBuildConfigResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectBuildConfigResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectBuildConfigResponse = {
   managerUrl: "https://which-backburn.biz/",

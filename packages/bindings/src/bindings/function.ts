@@ -17,7 +17,7 @@ import type { FunctionInvokeRequest, FunctionInvokeResponse } from "../types.js"
  *
  * @example
  * ```typescript
- * import { func } from "@aliendotdev/bindings"
+ * import { func } from "@alienplatform/bindings"
  *
  * const processor = func("image-processor")
  *

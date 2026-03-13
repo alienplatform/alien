@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Metrics } from "@aliendotdev/platform-api/models/operations";
+import { Metrics } from "@alienplatform/platform-api/models/operations";
 
 let value: Metrics = {
   status: "<value>",

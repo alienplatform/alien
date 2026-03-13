@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoGcpGrant } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoGcpGrant } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoGcpGrant = {};
 ```

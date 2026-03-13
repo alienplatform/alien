@@ -17,7 +17,7 @@ Each TypeScript binding must match its Rust counterpart in `alien-bindings/src/p
      User calls              Internal only            User receives
 ```
 
-**Public API types** come from `@aliendotdev/core` or `../types.ts`. Proto types are **internal only** - never exposed to users.
+**Public API types** come from `@alienplatform/core` or `../types.ts`. Proto types are **internal only** - never exposed to users.
 
 ```typescript
 // ❌ Bad - exposing proto types

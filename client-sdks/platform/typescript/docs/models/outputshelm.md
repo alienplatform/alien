@@ -5,7 +5,7 @@ Outputs from a Helm chart package build
 ## Example Usage
 
 ```typescript
-import { OutputsHelm } from "@aliendotdev/platform-api/models";
+import { OutputsHelm } from "@alienplatform/platform-api/models";
 
 let value: OutputsHelm = {
   chart: "<value>",

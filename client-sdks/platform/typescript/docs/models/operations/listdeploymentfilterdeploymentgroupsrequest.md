@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListDeploymentFilterDeploymentGroupsRequest } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentFilterDeploymentGroupsRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentFilterDeploymentGroupsRequest = {
   workspace: "my-workspace",

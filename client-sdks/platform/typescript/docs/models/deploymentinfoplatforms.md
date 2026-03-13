@@ -5,7 +5,7 @@ Information about a single Terraform provider package for a specific platform
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoPlatforms } from "@aliendotdev/platform-api/models";
+import { DeploymentInfoPlatforms } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoPlatforms = {
   downloadUrl: "https://kooky-bin.name/",

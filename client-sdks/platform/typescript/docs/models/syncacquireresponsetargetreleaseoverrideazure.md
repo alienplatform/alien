@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleaseOverrideAzure } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleaseOverrideAzure } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleaseOverrideAzure = {
   binding: {},

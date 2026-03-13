@@ -5,7 +5,7 @@ Color scheme for the background animation.
 ## Example Usage
 
 ```typescript
-import { ProjectListItemResponseColorScheme } from "@aliendotdev/platform-api/models";
+import { ProjectListItemResponseColorScheme } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseColorScheme = "blue";
 ```

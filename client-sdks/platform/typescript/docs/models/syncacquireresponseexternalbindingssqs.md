@@ -5,7 +5,7 @@ AWS SQS queue parameters
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsSqs } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsSqs } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsSqs = {
   service: "sqs",

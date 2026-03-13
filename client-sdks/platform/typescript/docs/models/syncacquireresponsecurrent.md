@@ -5,7 +5,7 @@ Current deployment state (includes releases)
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCurrent } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCurrent } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCurrent = {
   platform: "test",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentConnectionInfoRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentConnectionInfoRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentConnectionInfoRequest = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

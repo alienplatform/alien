@@ -5,7 +5,7 @@ Azure management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { ManagerManagementConfigAzure } from "@aliendotdev/platform-api/models";
+import { ManagerManagementConfigAzure } from "@alienplatform/platform-api/models";
 
 let value: ManagerManagementConfigAzure = {
   managementPrincipalId: "<id>",

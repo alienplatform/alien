@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseServiceLocal3 } from "@aliendotdev/client-sdk/models";
+import { SyncAcquireResponseServiceLocal3 } from "@alienplatform/client-sdk/models";
 
 let value: SyncAcquireResponseServiceLocal3 = "local";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataSettingUpPlatformContext } from "@aliendotdev/platform-api/models";
+import { DataSettingUpPlatformContext } from "@alienplatform/platform-api/models";
 
 let value: DataSettingUpPlatformContext = {
   platformName: "<value>",

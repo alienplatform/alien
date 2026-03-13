@@ -5,7 +5,7 @@ Template root directory inside alienplatform/alien
 ## Example Usage
 
 ```typescript
-import { TemplatePathRequest } from "@aliendotdev/platform-api/models/operations";
+import { TemplatePathRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: TemplatePathRequest = "examples/byoc-database";
 ```

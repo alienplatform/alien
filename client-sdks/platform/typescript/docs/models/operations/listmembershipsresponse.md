@@ -5,7 +5,7 @@ List of user's workspaces.
 ## Example Usage
 
 ```typescript
-import { ListMembershipsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListMembershipsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListMembershipsResponse = {
   items: [],

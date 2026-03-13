@@ -5,7 +5,7 @@ Template URLs for deploying an AWS agent
 ## Example Usage
 
 ```typescript
-import { GetProjectTemplateUrlsAws } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectTemplateUrlsAws } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectTemplateUrlsAws = {
   templateUrl: "https://competent-cheese.name/",

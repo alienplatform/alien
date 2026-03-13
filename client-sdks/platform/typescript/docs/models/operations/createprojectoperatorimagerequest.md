@@ -5,7 +5,7 @@ Operator image package configuration. Required when Helm is enabled. If null, op
 ## Example Usage
 
 ```typescript
-import { CreateProjectOperatorImageRequest } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectOperatorImageRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectOperatorImageRequest = {
   displayName: "Sigmund_Ferry",

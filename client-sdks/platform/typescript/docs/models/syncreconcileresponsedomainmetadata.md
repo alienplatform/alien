@@ -5,7 +5,7 @@ Domain metadata for auto-managed public resources (no private keys).
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseDomainMetadata } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseDomainMetadata } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseDomainMetadata = {
   baseDomain: "<value>",

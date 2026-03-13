@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/examples-workspace",
+  "name": "@alienplatform/examples-workspace",
   "private": true,
   "scripts": {
     "test": "pnpm run test:projects",

@@ -5,7 +5,7 @@ Target platform for the deployment
 ## Example Usage
 
 ```typescript
-import { DeploymentListItemResponsePlatform } from "@aliendotdev/platform-api/models";
+import { DeploymentListItemResponsePlatform } from "@alienplatform/platform-api/models";
 
 let value: DeploymentListItemResponsePlatform = "test";
 ```

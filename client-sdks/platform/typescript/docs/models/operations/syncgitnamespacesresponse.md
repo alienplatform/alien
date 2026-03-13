@@ -5,7 +5,7 @@ Synced git namespaces.
 ## Example Usage
 
 ```typescript
-import { SyncGitNamespacesResponse } from "@aliendotdev/platform-api/models/operations";
+import { SyncGitNamespacesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: SyncGitNamespacesResponse = {
   items: [],

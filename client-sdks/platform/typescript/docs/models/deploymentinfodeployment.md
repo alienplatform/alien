@@ -5,7 +5,7 @@ Deployment details (present when using a deployment-scoped token)
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoDeployment } from "@aliendotdev/platform-api/models";
+import { DeploymentInfoDeployment } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoDeployment = {
   name: "<value>",

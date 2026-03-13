@@ -3,7 +3,7 @@
  */
 
 // Re-export build types from core
-export type { BuildStatus, ComputeType } from "@aliendotdev/core"
+export type { BuildStatus, ComputeType } from "@alienplatform/core"
 
 /**
  * Branded type for binding names.
@@ -132,7 +132,7 @@ export interface KvScanResult {
 
 /**
  * A message received from a queue via the Queue binding.
- * (Not to be confused with QueueMessage from @aliendotdev/core which is used for event handlers)
+ * (Not to be confused with QueueMessage from @alienplatform/core which is used for event handlers)
  */
 export interface ReceivedQueueMessage<T = unknown> {
   /** Message payload */
@@ -145,7 +145,7 @@ export interface ReceivedQueueMessage<T = unknown> {
 // Build Types
 // ============================================================================
 
-// BuildStatus and ComputeType are re-exported from @aliendotdev/core above
+// BuildStatus and ComputeType are re-exported from @alienplatform/core above
 
 /**
  * Configuration for starting a build via the Build binding.
@@ -157,7 +157,7 @@ export interface BuildStartConfig {
   /** Environment variables */
   environment?: Record<string, string>
   /** Compute type */
-  computeType?: import("@aliendotdev/core").ComputeType
+  computeType?: import("@alienplatform/core").ComputeType
   /** Timeout in seconds */
   timeoutSeconds?: number
   /** Monitoring configuration */
@@ -177,7 +177,7 @@ export interface BuildExecution {
   /** Build execution ID */
   id: string
   /** Current status */
-  status: import("@aliendotdev/core").BuildStatus
+  status: import("@alienplatform/core").BuildStatus
   /** Start timestamp */
   startTime?: Date
   /** End timestamp */

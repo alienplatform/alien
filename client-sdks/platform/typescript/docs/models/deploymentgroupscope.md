@@ -5,7 +5,7 @@ Deployment group-scoped configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentGroupScope } from "@aliendotdev/platform-api/models";
+import { DeploymentGroupScope } from "@alienplatform/platform-api/models";
 
 let value: DeploymentGroupScope = {
   type: "deployment-group",

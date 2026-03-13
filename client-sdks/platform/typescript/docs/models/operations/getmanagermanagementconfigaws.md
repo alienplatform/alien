@@ -5,7 +5,7 @@ AWS management configuration extracted from stack settings
 ## Example Usage
 
 ```typescript
-import { GetManagerManagementConfigAws } from "@aliendotdev/platform-api/models/operations";
+import { GetManagerManagementConfigAws } from "@alienplatform/platform-api/models/operations";
 
 let value: GetManagerManagementConfigAws = {
   managingRoleArn: "<value>",

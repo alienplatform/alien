@@ -5,7 +5,7 @@ The Git Provider of the repository
 ## Example Usage
 
 ```typescript
-import { ProjectListItemResponseTypeGithub } from "@aliendotdev/platform-api/models";
+import { ProjectListItemResponseTypeGithub } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseTypeGithub = "github";
 ```

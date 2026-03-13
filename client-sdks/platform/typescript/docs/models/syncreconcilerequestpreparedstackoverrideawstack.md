@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestPreparedStackOverrideAwStack } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestPreparedStackOverrideAwStack } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestPreparedStackOverrideAwStack = {
   resources: [

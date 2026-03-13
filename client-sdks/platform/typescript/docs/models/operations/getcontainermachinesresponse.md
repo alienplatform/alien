@@ -5,7 +5,7 @@ Machine health across all deployments.
 ## Example Usage
 
 ```typescript
-import { GetContainerMachinesResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerMachinesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerMachinesResponse = {
   deployments: [],

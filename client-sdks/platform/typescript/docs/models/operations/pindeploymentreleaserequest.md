@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { PinDeploymentReleaseRequest } from "@aliendotdev/platform-api/models/operations";
+import { PinDeploymentReleaseRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: PinDeploymentReleaseRequest = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

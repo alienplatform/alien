@@ -5,7 +5,7 @@ Platform-specific permission configurations
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponsePreparedStackProfilePlatforms } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponsePreparedStackProfilePlatforms } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponsePreparedStackProfilePlatforms = {};
 ```

@@ -8,7 +8,7 @@
  * - Error handling and timeout
  */
 
-import { AlienError } from "@aliendotdev/core"
+import { AlienError } from "@alienplatform/core"
 import {
   CommandCreationFailedError,
   CommandExpiredError,

@@ -5,7 +5,7 @@ Represents the target cloud platform.
 ## Example Usage
 
 ```typescript
-import { ManagerTarget } from "@aliendotdev/platform-api/models";
+import { ManagerTarget } from "@alienplatform/platform-api/models";
 
 let value: ManagerTarget = "local";
 ```

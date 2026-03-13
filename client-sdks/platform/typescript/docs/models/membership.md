@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Membership } from "@aliendotdev/platform-api/models";
+import { Membership } from "@alienplatform/platform-api/models";
 
 let value: Membership = {
   id: "ws_It13CUaGEhLLAB87simX0",

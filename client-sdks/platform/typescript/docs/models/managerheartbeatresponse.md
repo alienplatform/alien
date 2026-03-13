@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagerHeartbeatResponse } from "@aliendotdev/platform-api/models";
+import { ManagerHeartbeatResponse } from "@alienplatform/platform-api/models";
 
 let value: ManagerHeartbeatResponse = {
   acknowledged: true,

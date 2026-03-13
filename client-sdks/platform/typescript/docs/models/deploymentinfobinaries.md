@@ -5,7 +5,7 @@ Information about a single binary artifact
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoBinaries } from "@aliendotdev/platform-api/models";
+import { DeploymentInfoBinaries } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoBinaries = {
   sha256: "<value>",

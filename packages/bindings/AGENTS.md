@@ -1,4 +1,4 @@
-# @aliendotdev/bindings
+# @alienplatform/bindings
 
 TypeScript SDK for Alien bindings. Provides gRPC clients for Storage, KV, Queue, Vault, Build, ArtifactRegistry, Function, and ServiceAccount.
 
@@ -36,7 +36,7 @@ pnpm test:ts   # Type check
    in binding implementations
 ```
 
-**Key principle:** Domain types (`BuildStatus`, `StorageEvent`, etc.) come from `@aliendotdev/core`. Proto types are internal - used only for gRPC wire format. Bindings transform proto ↔ public types.
+**Key principle:** Domain types (`BuildStatus`, `StorageEvent`, etc.) come from `@alienplatform/core`. Proto types are internal - used only for gRPC wire format. Bindings transform proto ↔ public types.
 
 ## Package Structure
 

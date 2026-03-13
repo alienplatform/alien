@@ -5,7 +5,7 @@ AWS DynamoDB KV binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsDynamodb } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsDynamodb } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsDynamodb = {
   service: "dynamodb",

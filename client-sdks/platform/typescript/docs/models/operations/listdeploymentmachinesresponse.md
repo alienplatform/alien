@@ -5,7 +5,7 @@ List of machines.
 ## Example Usage
 
 ```typescript
-import { ListDeploymentMachinesResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListDeploymentMachinesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListDeploymentMachinesResponse = {
   machines: [],

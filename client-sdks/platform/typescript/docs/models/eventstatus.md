@@ -5,7 +5,7 @@ Represents the high-level status of a resource during its lifecycle.
 ## Example Usage
 
 ```typescript
-import { EventStatus } from "@aliendotdev/platform-api/models";
+import { EventStatus } from "@alienplatform/platform-api/models";
 
 let value: EventStatus = "deleting";
 ```

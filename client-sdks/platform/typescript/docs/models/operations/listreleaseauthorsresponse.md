@@ -5,7 +5,7 @@ Retrieved distinct authors.
 ## Example Usage
 
 ```typescript
-import { ListReleaseAuthorsResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListReleaseAuthorsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListReleaseAuthorsResponse = {
   items: [

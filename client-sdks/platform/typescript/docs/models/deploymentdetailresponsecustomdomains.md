@@ -5,7 +5,7 @@ Custom domain configuration for a single resource.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseCustomDomains } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseCustomDomains } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseCustomDomains = {
   certificate: {},

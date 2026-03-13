@@ -5,7 +5,7 @@ Authenticated service account subject with scoped permissions (workspace, projec
 ## Example Usage
 
 ```typescript
-import { ServiceAccountSubject } from "@aliendotdev/platform-api/models";
+import { ServiceAccountSubject } from "@alienplatform/platform-api/models";
 
 let value: ServiceAccountSubject = {
   kind: "serviceAccount",

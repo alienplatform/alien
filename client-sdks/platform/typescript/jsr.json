@@ -1,5 +1,5 @@
 {
-  "name": "@aliendotdev/platform-api",
+  "name": "@alienplatform/platform-api",
   "version": "1.0.68",
   "exports": {
     ".": "./src/index.ts",

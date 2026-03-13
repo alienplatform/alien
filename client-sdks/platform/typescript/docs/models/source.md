@@ -5,7 +5,7 @@ Import source configuration
 ## Example Usage
 
 ```typescript
-import { Source } from "@aliendotdev/platform-api/models";
+import { Source } from "@alienplatform/platform-api/models";
 
 let value: Source = {
   type: "cloudformation",

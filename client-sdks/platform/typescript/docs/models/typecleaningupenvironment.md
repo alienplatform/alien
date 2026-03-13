@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeCleaningUpEnvironment } from "@aliendotdev/client-sdk/models";
+import { TypeCleaningUpEnvironment } from "@alienplatform/client-sdk/models";
 
 let value: TypeCleaningUpEnvironment = "CleaningUpEnvironment";
 ```

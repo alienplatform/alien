@@ -5,7 +5,7 @@ Manager schema
 ## Example Usage
 
 ```typescript
-import { Manager } from "@aliendotdev/platform-api/models";
+import { Manager } from "@alienplatform/platform-api/models";
 
 let value: Manager = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentContainerCpu } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentContainerCpu } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentContainerCpu = {
   min: "<value>",

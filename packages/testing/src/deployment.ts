@@ -3,7 +3,7 @@
  */
 
 import type { ChildProcess } from "node:child_process"
-import { CommandsClient } from "@aliendotdev/commands-client"
+import { CommandsClient } from "@alienplatform/commands-client"
 import type { Platform, PlatformCredentials } from "./types.js"
 
 /**

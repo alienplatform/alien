@@ -1,4 +1,4 @@
-import { AlienError, defineError } from "@aliendotdev/core"
+import { AlienError, defineError } from "@alienplatform/core"
 import * as z from "zod/v4"
 
 export const TestingOperationFailedError = defineError({

@@ -5,7 +5,7 @@ Manager provisioning enqueued successfully.
 ## Example Usage
 
 ```typescript
-import { ProvisionManagerResponse } from "@aliendotdev/platform-api/models/operations";
+import { ProvisionManagerResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ProvisionManagerResponse = {
   message: "<value>",

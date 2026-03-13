@@ -5,7 +5,7 @@ Google Cloud Storage binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsGcs } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsGcs } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsGcs = {
   service: "gcs",

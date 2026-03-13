@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ManagementConfigKubernetes } from "@aliendotdev/platform-api/models/operations";
+import { ManagementConfigKubernetes } from "@alienplatform/platform-api/models/operations";
 
 let value: ManagementConfigKubernetes = {
   platform: "kubernetes",

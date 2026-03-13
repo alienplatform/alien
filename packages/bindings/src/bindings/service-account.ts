@@ -18,7 +18,7 @@ import type { ImpersonationRequest, ServiceAccountInfo } from "../types.js"
  *
  * @example
  * ```typescript
- * import { serviceAccount } from "@aliendotdev/bindings"
+ * import { serviceAccount } from "@alienplatform/bindings"
  *
  * const sa = serviceAccount("deployment-account")
  *

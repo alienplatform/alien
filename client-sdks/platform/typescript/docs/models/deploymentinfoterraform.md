@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoTerraform } from "@aliendotdev/platform-api/models";
+import { DeploymentInfoTerraform } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoTerraform = {
   status: "canceled",

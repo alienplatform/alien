@@ -5,7 +5,7 @@ Project-scoped configuration
 ## Example Usage
 
 ```typescript
-import { ProjectScope } from "@aliendotdev/platform-api/models";
+import { ProjectScope } from "@alienplatform/platform-api/models";
 
 let value: ProjectScope = {
   type: "project",

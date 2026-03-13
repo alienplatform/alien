@@ -4,7 +4,7 @@
  * This shows how to pass platform credentials explicitly instead of using environment variables.
  */
 
-import { deploy } from "@aliendotdev/testing"
+import { deploy } from "@alienplatform/testing"
 
 async function main() {
   console.log("Deploying to AWS with explicit credentials...")

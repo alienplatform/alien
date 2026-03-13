@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseNetworkByoVnetAzure } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseNetworkByoVnetAzure } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseNetworkByoVnetAzure = {
   privateSubnetName: "<value>",

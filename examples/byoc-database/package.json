@@ -7,8 +7,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@aliendotdev/core": "^1.0.1",
-    "@aliendotdev/testing": "^0.1.0",
+    "@alienplatform/core": "^1.0.1",
+    "@alienplatform/testing": "^0.1.0",
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

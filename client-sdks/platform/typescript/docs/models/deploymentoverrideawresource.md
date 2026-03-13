@@ -5,7 +5,7 @@ AWS-specific binding specification
 ## Example Usage
 
 ```typescript
-import { DeploymentOverrideAwResource } from "@aliendotdev/platform-api/models";
+import { DeploymentOverrideAwResource } from "@alienplatform/platform-api/models";
 
 let value: DeploymentOverrideAwResource = {
   resources: [

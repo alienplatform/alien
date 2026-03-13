@@ -5,7 +5,7 @@ CloudFormation package configuration. If null, CloudFormation packages will not 
 ## Example Usage
 
 ```typescript
-import { CreateProjectFromTemplateCloudformationResponse } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectFromTemplateCloudformationResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateCloudformationResponse = {
   enabled: true,

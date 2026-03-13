@@ -5,7 +5,7 @@ Redis KV binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseExternalBindingsRedis } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseExternalBindingsRedis } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseExternalBindingsRedis = {
   service: "redis",

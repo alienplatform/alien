@@ -5,7 +5,7 @@ Color mode for the background animation.
 ## Example Usage
 
 ```typescript
-import { DeploymentPageBackgroundMode } from "@aliendotdev/platform-api/models";
+import { DeploymentPageBackgroundMode } from "@alienplatform/platform-api/models";
 
 let value: DeploymentPageBackgroundMode = "dark";
 ```

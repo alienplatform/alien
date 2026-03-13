@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Autoscaling } from "@aliendotdev/platform-api/models/operations";
+import { Autoscaling } from "@alienplatform/platform-api/models/operations";
 
 let value: Autoscaling = {
   min: 387400,

@@ -5,7 +5,7 @@ Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls 
 ## Example Usage
 
 ```typescript
-import { OtlpConfig } from "@aliendotdev/platform-api/models";
+import { OtlpConfig } from "@alienplatform/platform-api/models";
 
 let value: OtlpConfig = {
   logsEndpoint: "https://lazy-fishery.name",

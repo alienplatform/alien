@@ -5,7 +5,7 @@ Template URLs retrieved successfully.
 ## Example Usage
 
 ```typescript
-import { GetProjectTemplateUrlsResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetProjectTemplateUrlsResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetProjectTemplateUrlsResponse = {};
 ```

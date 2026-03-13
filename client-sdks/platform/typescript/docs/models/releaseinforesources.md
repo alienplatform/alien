@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ReleaseInfoResources } from "@aliendotdev/platform-api/models";
+import { ReleaseInfoResources } from "@alienplatform/platform-api/models";
 
 let value: ReleaseInfoResources = {
   config: {

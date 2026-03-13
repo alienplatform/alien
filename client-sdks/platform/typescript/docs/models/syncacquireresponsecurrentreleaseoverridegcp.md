@@ -5,7 +5,7 @@ GCP-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCurrentReleaseOverrideGcp } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCurrentReleaseOverrideGcp } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCurrentReleaseOverrideGcp = {
   binding: {},

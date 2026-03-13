@@ -22,7 +22,7 @@ Retrieve all projects.
 
 <!-- UsageSnippet language="typescript" operationID="listProjects" method="get" path="/v1/projects" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -44,8 +44,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsList } from "@aliendotdev/platform-api/funcs/projectsList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsList } from "@alienplatform/platform-api/funcs/projectsList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -96,7 +96,7 @@ Create a new project.
 
 <!-- UsageSnippet language="typescript" operationID="createProject" method="post" path="/v1/projects" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -125,8 +125,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsCreate } from "@aliendotdev/platform-api/funcs/projectsCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsCreate } from "@alienplatform/platform-api/funcs/projectsCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -185,7 +185,7 @@ Retrieve a project by ID or name.
 
 <!-- UsageSnippet language="typescript" operationID="getProject" method="get" path="/v1/projects/{idOrName}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -208,8 +208,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsGet } from "@aliendotdev/platform-api/funcs/projectsGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGet } from "@alienplatform/platform-api/funcs/projectsGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -262,7 +262,7 @@ Delete a project. The project must have no agents.
 
 <!-- UsageSnippet language="typescript" operationID="deleteProject" method="delete" path="/v1/projects/{idOrName}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -285,8 +285,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsDelete } from "@aliendotdev/platform-api/funcs/projectsDelete.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsDelete } from "@alienplatform/platform-api/funcs/projectsDelete.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -339,7 +339,7 @@ Update a project.
 
 <!-- UsageSnippet language="typescript" operationID="updateProject" method="patch" path="/v1/projects/{idOrName}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -371,8 +371,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsUpdate } from "@aliendotdev/platform-api/funcs/projectsUpdate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsUpdate } from "@alienplatform/platform-api/funcs/projectsUpdate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -434,7 +434,7 @@ Create a project by forking alienplatform/alien into your namespace, then config
 
 <!-- UsageSnippet language="typescript" operationID="createProjectFromTemplate" method="post" path="/v1/projects/import-template" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -461,8 +461,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsCreateFromTemplate } from "@aliendotdev/platform-api/funcs/projectsCreateFromTemplate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsCreateFromTemplate } from "@alienplatform/platform-api/funcs/projectsCreateFromTemplate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -519,7 +519,7 @@ Get template URLs for deploying agents in this project.
 
 <!-- UsageSnippet language="typescript" operationID="getProjectTemplateUrls" method="get" path="/v1/projects/{idOrName}/template-urls" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -542,8 +542,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsGetTemplateUrls } from "@aliendotdev/platform-api/funcs/projectsGetTemplateUrls.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetTemplateUrls } from "@alienplatform/platform-api/funcs/projectsGetTemplateUrls.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -596,7 +596,7 @@ Get the active release for this project. Returns the latest release, or the pinn
 
 <!-- UsageSnippet language="typescript" operationID="getProjectActiveRelease" method="get" path="/v1/projects/{idOrName}/active-release" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -619,8 +619,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsGetActiveRelease } from "@aliendotdev/platform-api/funcs/projectsGetActiveRelease.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetActiveRelease } from "@alienplatform/platform-api/funcs/projectsGetActiveRelease.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -673,7 +673,7 @@ Get build configuration for a specific platform. Returns agent manager URL and r
 
 <!-- UsageSnippet language="typescript" operationID="getProjectBuildConfig" method="get" path="/v1/projects/{idOrName}/build-config/{platform}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -697,8 +697,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { projectsGetBuildConfig } from "@aliendotdev/platform-api/funcs/projectsGetBuildConfig.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetBuildConfig } from "@alienplatform/platform-api/funcs/projectsGetBuildConfig.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

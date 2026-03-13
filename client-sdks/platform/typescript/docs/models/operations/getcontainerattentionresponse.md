@@ -5,7 +5,7 @@ Deployments needing attention.
 ## Example Usage
 
 ```typescript
-import { GetContainerAttentionResponse } from "@aliendotdev/platform-api/models/operations";
+import { GetContainerAttentionResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetContainerAttentionResponse = {
   deployments: [],

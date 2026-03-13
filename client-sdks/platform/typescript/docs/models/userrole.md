@@ -5,7 +5,7 @@ User's role within the workspace
 ## Example Usage
 
 ```typescript
-import { UserRole } from "@aliendotdev/platform-api/models";
+import { UserRole } from "@alienplatform/platform-api/models";
 
 let value: UserRole = "workspace.member";
 ```

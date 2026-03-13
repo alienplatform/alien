@@ -5,7 +5,7 @@ Manager-scoped configuration
 ## Example Usage
 
 ```typescript
-import { ManagerScope } from "@aliendotdev/platform-api/models";
+import { ManagerScope } from "@alienplatform/platform-api/models";
 
 let value: ManagerScope = {
   type: "manager",

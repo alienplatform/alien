@@ -5,7 +5,7 @@ Subject type identifier
 ## Example Usage
 
 ```typescript
-import { UserSubjectKind } from "@aliendotdev/client-sdk/models";
+import { UserSubjectKind } from "@alienplatform/client-sdk/models";
 
 let value: UserSubjectKind = "user";
 ```

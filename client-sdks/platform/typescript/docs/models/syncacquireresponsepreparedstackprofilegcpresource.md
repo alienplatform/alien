@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackProfileGcpResource } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackProfileGcpResource } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackProfileGcpResource = {
   scope: "<value>",

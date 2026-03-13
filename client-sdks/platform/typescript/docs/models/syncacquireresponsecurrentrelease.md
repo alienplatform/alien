@@ -9,7 +9,7 @@ and which is the target.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseCurrentRelease } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseCurrentRelease } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseCurrentRelease = {
   releaseId: "<id>",

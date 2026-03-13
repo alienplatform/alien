@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateManagerRequest } from "@aliendotdev/platform-api/models/operations";
+import { CreateManagerRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateManagerRequest = {
   workspace: "my-workspace",

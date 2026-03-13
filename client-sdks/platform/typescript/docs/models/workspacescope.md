@@ -5,7 +5,7 @@ Workspace-scoped configuration
 ## Example Usage
 
 ```typescript
-import { WorkspaceScope } from "@aliendotdev/platform-api/models";
+import { WorkspaceScope } from "@alienplatform/platform-api/models";
 
 let value: WorkspaceScope = {
   type: "workspace",

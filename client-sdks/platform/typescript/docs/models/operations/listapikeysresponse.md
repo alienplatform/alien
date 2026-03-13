@@ -5,7 +5,7 @@ Paginated response
 ## Example Usage
 
 ```typescript
-import { ListAPIKeysResponse } from "@aliendotdev/platform-api/models/operations";
+import { ListAPIKeysResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: ListAPIKeysResponse = {
   items: [

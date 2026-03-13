@@ -5,12 +5,12 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@aliendotdev/commands-client': file:packages/commands-client
-  '@aliendotdev/core': file:packages/core
-  '@aliendotdev/typescript-config': file:packages/config-typescript
-  '@aliendotdev/testing': file:packages/testing
-  '@aliendotdev/bindings': file:packages/bindings
-  '@aliendotdev/platform-api': file:client-sdks/platform/typescript
+  '@alienplatform/commands-client': file:packages/commands-client
+  '@alienplatform/core': file:packages/core
+  '@alienplatform/typescript-config': file:packages/config-typescript
+  '@alienplatform/testing': file:packages/testing
+  '@alienplatform/bindings': file:packages/bindings
+  '@alienplatform/platform-api': file:client-sdks/platform/typescript
 
 importers:
 
@@ -75,7 +75,7 @@ importers:
 
   packages/bindings:
     dependencies:
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../core
         version: file:packages/core(openapi-types@12.1.3)
       '@bufbuild/protobuf':
@@ -103,7 +103,7 @@ importers:
         specifier: 4.3.2
         version: 4.3.2
     devDependencies:
-      '@aliendotdev/typescript-config':
+      '@alienplatform/typescript-config':
         specifier: file:../config-typescript
         version: link:../config-typescript
       '@biomejs/biome':
@@ -127,17 +127,17 @@ importers:
 
   packages/commands-client:
     dependencies:
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../core
         version: file:packages/core(openapi-types@12.1.3)
-      '@aliendotdev/platform-api':
+      '@alienplatform/platform-api':
         specifier: file:../../client-sdks/platform/typescript
         version: link:../../client-sdks/platform/typescript
       zod:
         specifier: 4.3.2
         version: 4.3.2
     devDependencies:
-      '@aliendotdev/typescript-config':
+      '@alienplatform/typescript-config':
         specifier: file:../config-typescript
         version: link:../config-typescript
       '@biomejs/biome':
@@ -167,7 +167,7 @@ importers:
         specifier: 4.3.2
         version: 4.3.2
     devDependencies:
-      '@aliendotdev/typescript-config':
+      '@alienplatform/typescript-config':
         specifier: file:../config-typescript
         version: link:../config-typescript
       '@biomejs/biome':
@@ -200,14 +200,14 @@ importers:
 
   packages/test-app:
     dependencies:
-      '@aliendotdev/bindings':
+      '@alienplatform/bindings':
         specifier: file:../bindings
         version: link:../bindings
       hono:
         specifier: ^4.7.10
         version: 4.11.3
     devDependencies:
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../core
         version: file:packages/core(openapi-types@12.1.3)
       typescript:
@@ -216,10 +216,10 @@ importers:
 
   packages/testing:
     dependencies:
-      '@aliendotdev/commands-client':
+      '@alienplatform/commands-client':
         specifier: file:../commands-client
         version: link:../commands-client
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../core
         version: file:packages/core(openapi-types@12.1.3)
       get-port:
@@ -229,7 +229,7 @@ importers:
         specifier: 4.3.2
         version: 4.3.2
     devDependencies:
-      '@aliendotdev/typescript-config':
+      '@alienplatform/typescript-config':
         specifier: file:../config-typescript
         version: link:../config-typescript
       '@aws-sdk/client-cloudformation':
@@ -265,10 +265,10 @@ importers:
 
   tests/e2e:
     dependencies:
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../../packages/core
         version: file:packages/core(openapi-types@12.1.3)
-      '@aliendotdev/testing':
+      '@alienplatform/testing':
         specifier: file:../../packages/testing
         version: link:../../packages/testing
     devDependencies:
@@ -284,10 +284,10 @@ importers:
 
   tests/e2e/test-apps/comprehensive-rust:
     devDependencies:
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../../../../packages/core
         version: file:packages/core(openapi-types@12.1.3)
-      '@aliendotdev/typescript-config':
+      '@alienplatform/typescript-config':
         specifier: file:../../../../packages/config-typescript
         version: link:../../../../packages/config-typescript
       typescript:
@@ -296,10 +296,10 @@ importers:
 
   tests/e2e/test-apps/comprehensive-typescript:
     dependencies:
-      '@aliendotdev/bindings':
+      '@alienplatform/bindings':
         specifier: file:../../../../packages/bindings
         version: link:../../../../packages/bindings
-      '@aliendotdev/core':
+      '@alienplatform/core':
         specifier: file:../../../../packages/core
         version: file:packages/core(openapi-types@12.1.3)
       hono:
@@ -318,7 +318,7 @@ importers:
 
 packages:
 
-  '@aliendotdev/core@file:packages/core':
+  '@alienplatform/core@file:packages/core':
     resolution: {directory: packages/core, type: directory}
 
   '@apidevtools/json-schema-ref-parser@14.2.1':
@@ -4148,7 +4148,7 @@ packages:
 
 snapshots:
 
-  '@aliendotdev/core@file:packages/core(openapi-types@12.1.3)':
+  '@alienplatform/core@file:packages/core(openapi-types@12.1.3)':
     dependencies:
       '@openapi-contrib/json-schema-to-openapi-schema': 4.3.0(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       serialize-error: 12.0.0

@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStatus } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStatus } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStatus = "pending";
 ```

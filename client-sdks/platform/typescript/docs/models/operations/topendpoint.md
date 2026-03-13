@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TopEndpoint } from "@aliendotdev/platform-api/models/operations";
+import { TopEndpoint } from "@alienplatform/platform-api/models/operations";
 
 let value: TopEndpoint = {
   path: "/Applications",

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateDomainRequestBody } from "@aliendotdev/platform-api/models/operations";
+import { CreateDomainRequestBody } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateDomainRequestBody = {
   domain: "definite-technologist.info",

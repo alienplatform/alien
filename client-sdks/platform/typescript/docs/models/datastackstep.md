@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataStackStep } from "@aliendotdev/platform-api/models";
+import { DataStackStep } from "@alienplatform/platform-api/models";
 
 let value: DataStackStep = {
   nextState: {

@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { ExtendReleaseInfo } from "@aliendotdev/platform-api/models";
+import { ExtendReleaseInfo } from "@alienplatform/platform-api/models";
 
 let value: ExtendReleaseInfo = {
   description: "even though mmm contrast",

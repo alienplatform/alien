@@ -5,7 +5,7 @@ Color scheme for the background animation.
 ## Example Usage
 
 ```typescript
-import { ProjectColorScheme } from "@aliendotdev/platform-api/models";
+import { ProjectColorScheme } from "@alienplatform/platform-api/models";
 
 let value: ProjectColorScheme = "blue";
 ```

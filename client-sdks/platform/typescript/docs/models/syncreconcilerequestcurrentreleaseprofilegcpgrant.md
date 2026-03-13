@@ -5,7 +5,7 @@ Grant permissions for a specific cloud platform
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseProfileGcpGrant } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseProfileGcpGrant } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseProfileGcpGrant = {};
 ```

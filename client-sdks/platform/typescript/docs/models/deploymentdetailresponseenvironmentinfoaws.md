@@ -5,7 +5,7 @@ AWS-specific environment information
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseEnvironmentInfoAws } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseEnvironmentInfoAws } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseEnvironmentInfoAws = {
   accountId: "<id>",

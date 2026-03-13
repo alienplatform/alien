@@ -5,7 +5,7 @@ Status of a package build
 ## Example Usage
 
 ```typescript
-import { TerraformStatus } from "@aliendotdev/platform-api/models";
+import { TerraformStatus } from "@alienplatform/platform-api/models";
 
 let value: TerraformStatus = "canceled";
 ```

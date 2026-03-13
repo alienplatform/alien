@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { AzureTargetConfig } from "@aliendotdev/platform-api/models";
+import { AzureTargetConfig } from "@alienplatform/platform-api/models";
 
 let value: AzureTargetConfig = {
   keyVaultCertificateId: "<id>",

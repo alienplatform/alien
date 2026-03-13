@@ -5,7 +5,7 @@ Request to acquire deployments for processing
 ## Example Usage
 
 ```typescript
-import { SyncAcquireRequest } from "@aliendotdev/platform-api/models";
+import { SyncAcquireRequest } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",

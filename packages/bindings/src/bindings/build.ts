@@ -4,7 +4,7 @@
  * Provides build execution capabilities.
  */
 
-import type { BuildStatus } from "@aliendotdev/core"
+import type { BuildStatus } from "@alienplatform/core"
 import { type Channel, createClient } from "nice-grpc"
 import {
   type BuildConfig as BuildConfigProto,
@@ -41,7 +41,7 @@ const computeTypeMap: Record<string, ComputeType> = {
  *
  * @example
  * ```typescript
- * import { build } from "@aliendotdev/bindings"
+ * import { build } from "@alienplatform/bindings"
  *
  * const builder = build("my-builder")
  *

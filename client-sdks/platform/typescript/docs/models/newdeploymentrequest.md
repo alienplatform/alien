@@ -5,7 +5,7 @@ Request schema for creating a new agent
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequest } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequest } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequest = {
   name: "acme-prod",

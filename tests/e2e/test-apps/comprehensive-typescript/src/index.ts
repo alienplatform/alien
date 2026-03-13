@@ -14,8 +14,8 @@ import {
   storage,
   vault,
   waitUntil,
-} from "@aliendotdev/bindings"
-import { AlienError } from "@aliendotdev/core"
+} from "@alienplatform/bindings"
+import { AlienError } from "@alienplatform/core"
 import { Hono } from "hono"
 
 const app = new Hono()

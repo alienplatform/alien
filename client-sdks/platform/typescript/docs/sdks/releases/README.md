@@ -18,7 +18,7 @@ Retrieve all releases.
 
 <!-- UsageSnippet language="typescript" operationID="listReleases" method="get" path="/v1/releases" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -41,8 +41,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { releasesList } from "@aliendotdev/platform-api/funcs/releasesList.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesList } from "@alienplatform/platform-api/funcs/releasesList.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -94,7 +94,7 @@ Create a new release.
 
 <!-- UsageSnippet language="typescript" operationID="createRelease" method="post" path="/v1/releases" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -132,8 +132,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { releasesCreate } from "@aliendotdev/platform-api/funcs/releasesCreate.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesCreate } from "@alienplatform/platform-api/funcs/releasesCreate.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -201,7 +201,7 @@ List distinct git branches across releases. Used for filter dropdowns.
 
 <!-- UsageSnippet language="typescript" operationID="listReleaseBranches" method="get" path="/v1/releases/branches" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -224,8 +224,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { releasesListBranches } from "@aliendotdev/platform-api/funcs/releasesListBranches.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesListBranches } from "@alienplatform/platform-api/funcs/releasesListBranches.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -277,7 +277,7 @@ List distinct commit authors across releases. Used for filter dropdowns.
 
 <!-- UsageSnippet language="typescript" operationID="listReleaseAuthors" method="get" path="/v1/releases/authors" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -300,8 +300,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { releasesListAuthors } from "@aliendotdev/platform-api/funcs/releasesListAuthors.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesListAuthors } from "@alienplatform/platform-api/funcs/releasesListAuthors.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -353,7 +353,7 @@ Retrieve a release by ID.
 
 <!-- UsageSnippet language="typescript" operationID="getRelease" method="get" path="/v1/releases/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -376,8 +376,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { releasesGet } from "@aliendotdev/platform-api/funcs/releasesGet.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesGet } from "@alienplatform/platform-api/funcs/releasesGet.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

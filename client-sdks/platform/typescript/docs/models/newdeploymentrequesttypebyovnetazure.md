@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestTypeByoVnetAzure } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestTypeByoVnetAzure } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestTypeByoVnetAzure = "byo-vnet-azure";
 ```

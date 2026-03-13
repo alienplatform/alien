@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { DeploymentExtendGcpBinding } from "@aliendotdev/platform-api/models";
+import { DeploymentExtendGcpBinding } from "@alienplatform/platform-api/models";
 
 let value: DeploymentExtendGcpBinding = {};
 ```

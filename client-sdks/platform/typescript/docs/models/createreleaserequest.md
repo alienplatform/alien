@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { CreateReleaseRequest } from "@aliendotdev/platform-api/models";
+import { CreateReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: CreateReleaseRequest = {
   gitMetadata: {

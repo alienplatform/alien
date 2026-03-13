@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentClusterCpu } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentClusterCpu } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentClusterCpu = {
   total: 9520.2,

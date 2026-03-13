@@ -5,7 +5,7 @@ Azure-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseOverrideAzure } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseOverrideAzure } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseOverrideAzure = {
   binding: {},

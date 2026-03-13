@@ -7,7 +7,7 @@
 
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { type Deployment, type Platform, deploy } from "@aliendotdev/testing"
+import { type Deployment, type Platform, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, it } from "vitest"
 import * as checks from "../checks/index.js"
 import { getCredentials, getE2EConfig } from "./config.js"

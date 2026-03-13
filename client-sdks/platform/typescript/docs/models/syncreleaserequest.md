@@ -5,7 +5,7 @@ Request to release deployment lock
 ## Example Usage
 
 ```typescript
-import { SyncReleaseRequest } from "@aliendotdev/platform-api/models";
+import { SyncReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: SyncReleaseRequest = {
   deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",

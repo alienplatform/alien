@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ListGitNamespaceRepositoriesRequest } from "@aliendotdev/platform-api/models/operations";
+import { ListGitNamespaceRepositoriesRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ListGitNamespaceRepositoriesRequest = {
   id: "<id>",

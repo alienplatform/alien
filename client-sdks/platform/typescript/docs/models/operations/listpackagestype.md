@@ -5,7 +5,7 @@ Filter by package type
 ## Example Usage
 
 ```typescript
-import { ListPackagesType } from "@aliendotdev/platform-api/models/operations";
+import { ListPackagesType } from "@alienplatform/platform-api/models/operations";
 
 let value: ListPackagesType = "operator-image";
 ```

@@ -1,5 +1,5 @@
-import { getResourceOutputs } from "@aliendotdev/core"
-import { getStackState } from "@aliendotdev/core/tests"
+import { getResourceOutputs } from "@alienplatform/core"
+import { getStackState } from "@alienplatform/core/tests"
 import { beforeAll, describe, expect, it } from "vitest"
 
 const state = getStackState()

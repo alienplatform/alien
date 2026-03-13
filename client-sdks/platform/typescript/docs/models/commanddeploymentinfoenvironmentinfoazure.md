@@ -5,7 +5,7 @@ Azure-specific environment information
 ## Example Usage
 
 ```typescript
-import { CommandDeploymentInfoEnvironmentInfoAzure } from "@aliendotdev/platform-api/models";
+import { CommandDeploymentInfoEnvironmentInfoAzure } from "@alienplatform/platform-api/models";
 
 let value: CommandDeploymentInfoEnvironmentInfoAzure = {
   location: "<value>",

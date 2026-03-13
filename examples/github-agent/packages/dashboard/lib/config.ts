@@ -1,4 +1,4 @@
-import { Alien } from "@aliendotdev/platform-api"
+import { Alien } from "@alienplatform/platform-api"
 
 /**
  * Configuration and SDK clients for the GitHub Agent dashboard.

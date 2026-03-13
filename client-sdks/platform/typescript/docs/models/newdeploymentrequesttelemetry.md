@@ -5,7 +5,7 @@ How telemetry (logs, metrics, traces) is handled.
 ## Example Usage
 
 ```typescript
-import { NewDeploymentRequestTelemetry } from "@aliendotdev/platform-api/models";
+import { NewDeploymentRequestTelemetry } from "@alienplatform/platform-api/models";
 
 let value: NewDeploymentRequestTelemetry = "approval-required";
 ```

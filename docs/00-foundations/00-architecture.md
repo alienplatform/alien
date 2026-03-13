@@ -6,7 +6,7 @@ An Alien application starts with an `alien.config.ts` file. It looks like this:
 
 ```typescript
 // alien.config.ts
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const storage = new alien.Storage("uploads").build()
 
@@ -25,7 +25,7 @@ This file — combined with your application code — is everything Alien needs 
 
 ## How the Pieces Fit Together
 
-**Defining resources.** The `alien.config.ts` above produces a `Stack` — a description of cloud-agnostic resources (Functions, Storage, KV, Queues, etc.) defined using `@aliendotdev/core`.
+**Defining resources.** The `alien.config.ts` above produces a `Stack` — a description of cloud-agnostic resources (Functions, Storage, KV, Queues, etc.) defined using `@alienplatform/core`.
 
 **Building.** `alien-build` reads the Stack, compiles source code with the right toolchain (TypeScript via Bun, Rust via cargo-zigbuild), and packages each compute resource as an OCI image containing `alien-runtime` + the app binary.
 

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { EventState } from "@aliendotdev/platform-api/models";
+import { EventState } from "@alienplatform/platform-api/models";
 
 let value: EventState = {
   failed: {},

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeDownloadingAlienRuntime } from "@aliendotdev/client-sdk/models";
+import { TypeDownloadingAlienRuntime } from "@alienplatform/client-sdk/models";
 
 let value: TypeDownloadingAlienRuntime = "DownloadingAlienRuntime";
 ```

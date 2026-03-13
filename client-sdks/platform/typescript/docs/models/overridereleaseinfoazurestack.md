@@ -5,7 +5,7 @@ Azure-specific binding specification
 ## Example Usage
 
 ```typescript
-import { OverrideReleaseInfoAzureStack } from "@aliendotdev/platform-api/models";
+import { OverrideReleaseInfoAzureStack } from "@alienplatform/platform-api/models";
 
 let value: OverrideReleaseInfoAzureStack = {
   scope: "<value>",

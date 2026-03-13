@@ -5,7 +5,7 @@ GCP-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackExtendGcpStack } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackExtendGcpStack } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackExtendGcpStack = {
   scope: "<value>",

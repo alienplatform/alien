@@ -10,7 +10,7 @@ import type {
   ScheduledEvent,
   StorageEvent,
   StorageEventType,
-} from "@aliendotdev/core"
+} from "@alienplatform/core"
 import { type Channel, createClient } from "nice-grpc"
 import { getCommands, runCommand } from "./commands.js"
 import {
@@ -89,7 +89,7 @@ let handlerIdCounter = 0
  *
  * @example
  * ```typescript
- * import { onStorageEvent } from "@aliendotdev/bindings"
+ * import { onStorageEvent } from "@alienplatform/bindings"
  *
  * onStorageEvent("uploads", async (event) => {
  *   console.log("File uploaded:", event.objectKey)
@@ -128,7 +128,7 @@ export function onStorageEvent(
  *
  * @example
  * ```typescript
- * import { onCronEvent } from "@aliendotdev/bindings"
+ * import { onCronEvent } from "@alienplatform/bindings"
  *
  * onCronEvent("hourly-task", async (event) => {
  *   console.log("Scheduled run at:", event.timestamp)
@@ -165,7 +165,7 @@ export function onCronEvent(
  *
  * @example
  * ```typescript
- * import { onQueueMessage } from "@aliendotdev/bindings"
+ * import { onQueueMessage } from "@alienplatform/bindings"
  *
  * onQueueMessage("tasks", async (message) => {
  *   console.log("Processing task:", message.payload)

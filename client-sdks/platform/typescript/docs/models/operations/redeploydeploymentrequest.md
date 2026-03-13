@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { RedeployDeploymentRequest } from "@aliendotdev/platform-api/models/operations";
+import { RedeployDeploymentRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: RedeployDeploymentRequest = {
   id: "ag_pnj2da55wi5sxbdcav9t273je",

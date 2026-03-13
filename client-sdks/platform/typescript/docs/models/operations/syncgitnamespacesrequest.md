@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncGitNamespacesRequest } from "@aliendotdev/platform-api/models/operations";
+import { SyncGitNamespacesRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: SyncGitNamespacesRequest = {
   provider: "github",

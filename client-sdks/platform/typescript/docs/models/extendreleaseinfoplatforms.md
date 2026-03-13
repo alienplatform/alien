@@ -5,7 +5,7 @@ Platform-specific permission configurations
 ## Example Usage
 
 ```typescript
-import { ExtendReleaseInfoPlatforms } from "@aliendotdev/platform-api/models";
+import { ExtendReleaseInfoPlatforms } from "@alienplatform/platform-api/models";
 
 let value: ExtendReleaseInfoPlatforms = {};
 ```

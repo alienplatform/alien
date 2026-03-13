@@ -5,7 +5,7 @@ Request schema for updating a manager to a new release
 ## Example Usage
 
 ```typescript
-import { UpdateManagerRequest } from "@aliendotdev/platform-api/models";
+import { UpdateManagerRequest } from "@alienplatform/platform-api/models";
 
 let value: UpdateManagerRequest = {
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

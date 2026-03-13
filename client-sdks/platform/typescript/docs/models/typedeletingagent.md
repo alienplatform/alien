@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeDeletingAgent } from "@aliendotdev/client-sdk/models";
+import { TypeDeletingAgent } from "@alienplatform/client-sdk/models";
 
 let value: TypeDeletingAgent = "DeletingAgent";
 ```

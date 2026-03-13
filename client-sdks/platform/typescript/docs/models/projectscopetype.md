@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { ProjectScopeType } from "@aliendotdev/client-sdk/models";
+import { ProjectScopeType } from "@alienplatform/client-sdk/models";
 
 let value: ProjectScopeType = "project";
 ```

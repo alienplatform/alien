@@ -5,7 +5,7 @@ Resource that can hold any resource type in the Alien system. All resources shar
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponsePreviousConfig } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponsePreviousConfig } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponsePreviousConfig = {
   id: "<id>",

@@ -5,7 +5,7 @@ Azure-specific environment information
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseEnvironmentInfoAzure } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseEnvironmentInfoAzure } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseEnvironmentInfoAzure = {
   location: "<value>",

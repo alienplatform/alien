@@ -5,7 +5,7 @@ Azure-specific binding specification
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseTargetReleaseProfileAzureStack } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseTargetReleaseProfileAzureStack } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseTargetReleaseProfileAzureStack = {
   scope: "<value>",

@@ -5,7 +5,7 @@ Local platform environment information
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseEnvironmentInfoLocal } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseEnvironmentInfoLocal } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseEnvironmentInfoLocal = {
   arch: "<value>",

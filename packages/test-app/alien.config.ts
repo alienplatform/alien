@@ -1,4 +1,4 @@
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const fn = new alien.Function("my-function")
   .code({

@@ -5,7 +5,7 @@ How heartbeat health checks are handled.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseHeartbeats } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseHeartbeats } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseHeartbeats = "on";
 ```

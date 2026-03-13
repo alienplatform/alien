@@ -5,7 +5,7 @@ Error that occurred during context building
 ## Example Usage
 
 ```typescript
-import { APIError } from "@aliendotdev/platform-api/models";
+import { APIError } from "@alienplatform/platform-api/models";
 
 let value: APIError = {
   code: "<value>",

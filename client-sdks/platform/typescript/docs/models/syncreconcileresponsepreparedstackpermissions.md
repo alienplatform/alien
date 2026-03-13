@@ -5,7 +5,7 @@ Combined permissions configuration that contains both profiles and management
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponsePreparedStackPermissions } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponsePreparedStackPermissions } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponsePreparedStackPermissions = {
   profiles: {

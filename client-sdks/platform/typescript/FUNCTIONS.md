@@ -19,8 +19,8 @@ specific category of applications.
 ## Example
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { userUpdateProfile } from "@aliendotdev/platform-api/funcs/userUpdateProfile.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { userUpdateProfile } from "@alienplatform/platform-api/funcs/userUpdateProfile.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

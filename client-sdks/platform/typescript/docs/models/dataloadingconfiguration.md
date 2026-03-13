@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataLoadingConfiguration } from "@aliendotdev/platform-api/models";
+import { DataLoadingConfiguration } from "@alienplatform/platform-api/models";
 
 let value: DataLoadingConfiguration = {
   type: "LoadingConfiguration",

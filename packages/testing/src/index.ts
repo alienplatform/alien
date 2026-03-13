@@ -1,5 +1,5 @@
 /**
- * @aliendotdev/testing — Testing framework for Alien applications
+ * @alienplatform/testing — Testing framework for Alien applications
  */
 
 export { deploy } from "./deploy.js"

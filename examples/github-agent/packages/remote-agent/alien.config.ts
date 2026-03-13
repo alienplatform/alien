@@ -4,7 +4,7 @@
  * Provides a vault for GitHub integrations and an ARC-enabled function
  * that can be invoked by the control plane or directly over HTTP.
  */
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const integrations = new alien.Vault("integrations").build()
 

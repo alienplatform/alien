@@ -5,7 +5,7 @@ Combined permissions configuration that contains both profiles and management
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseTargetReleasePermissions } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseTargetReleasePermissions } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseTargetReleasePermissions = {
   profiles: {

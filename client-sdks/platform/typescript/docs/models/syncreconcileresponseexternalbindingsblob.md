@@ -5,7 +5,7 @@ Azure Blob Storage binding configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsBlob } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsBlob } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsBlob = {
   service: "blob",

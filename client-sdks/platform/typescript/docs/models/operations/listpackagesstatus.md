@@ -5,7 +5,7 @@ Filter by package status
 ## Example Usage
 
 ```typescript
-import { ListPackagesStatus } from "@aliendotdev/platform-api/models/operations";
+import { ListPackagesStatus } from "@alienplatform/platform-api/models/operations";
 
 let value: ListPackagesStatus = "pending";
 ```

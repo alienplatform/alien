@@ -95,7 +95,7 @@ test-apps/comprehensive-typescript/
 └── tsdown.config.ts
 ```
 
-Same bindings, same checks, different language and toolchain. The TypeScript app uses `@aliendotdev/bindings` for binding access and `hono` for HTTP routing.
+Same bindings, same checks, different language and toolchain. The TypeScript app uses `@alienplatform/bindings` for binding access and `hono` for HTTP routing.
 
 ### Test App Endpoint Convention
 
@@ -216,7 +216,7 @@ export async function checkCommandLargePayload(deployment: Deployment): Promise<
 Every test file follows the same pattern. Only the app path, config file, and platform change:
 
 ```typescript
-import { deploy, type Deployment } from '@aliendotdev/testing'
+import { deploy, type Deployment } from '@alienplatform/testing'
 import * as checks from '../../checks/index.js'
 
 describe('Rust function - AWS', () => {

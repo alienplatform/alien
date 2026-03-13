@@ -5,7 +5,7 @@ The Git Provider of the repository
 ## Example Usage
 
 ```typescript
-import { CreateProjectTypeRequest } from "@aliendotdev/platform-api/models/operations";
+import { CreateProjectTypeRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectTypeRequest = "github";
 ```

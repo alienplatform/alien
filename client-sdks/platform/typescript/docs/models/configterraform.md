@@ -5,7 +5,7 @@ Configuration for the Terraform provider binary
 ## Example Usage
 
 ```typescript
-import { ConfigTerraform } from "@aliendotdev/platform-api/models";
+import { ConfigTerraform } from "@alienplatform/platform-api/models";
 
 let value: ConfigTerraform = {
   providerName: "<value>",

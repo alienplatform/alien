@@ -5,7 +5,7 @@ Deployment status in the deployment lifecycle
 ## Example Usage
 
 ```typescript
-import { GetDeploymentStatsStatus } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentStatsStatus } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentStatsStatus = "update-pending";
 ```

@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetPackageRequest } from "@aliendotdev/platform-api/models/operations";
+import { GetPackageRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetPackageRequest = {
   id: "pkg_jebo2o5jmm7raefl2m1pe3cz",

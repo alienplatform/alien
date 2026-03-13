@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { GetDeploymentContainerGpu } from "@aliendotdev/platform-api/models/operations";
+import { GetDeploymentContainerGpu } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentContainerGpu = {
   type: "<value>",

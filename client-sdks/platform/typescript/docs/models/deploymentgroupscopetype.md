@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DeploymentGroupScopeType } from "@aliendotdev/client-sdk/models";
+import { DeploymentGroupScopeType } from "@alienplatform/client-sdk/models";
 
 let value: DeploymentGroupScopeType = "deployment-group";
 ```

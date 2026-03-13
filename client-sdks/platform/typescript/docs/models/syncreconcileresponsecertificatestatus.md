@@ -5,7 +5,7 @@ Certificate status in the certificate lifecycle
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseCertificateStatus } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseCertificateStatus } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseCertificateStatus = "issued";
 ```

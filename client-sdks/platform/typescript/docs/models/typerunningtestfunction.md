@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeRunningTestFunction } from "@aliendotdev/client-sdk/models";
+import { TypeRunningTestFunction } from "@alienplatform/client-sdk/models";
 
 let value: TypeRunningTestFunction = "RunningTestFunction";
 ```

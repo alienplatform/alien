@@ -1,4 +1,4 @@
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 // Encrypted local storage for events
 const events = new alien.Storage("events").build()

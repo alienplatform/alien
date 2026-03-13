@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { APIKeyType } from "@aliendotdev/platform-api/models";
+import { APIKeyType } from "@alienplatform/platform-api/models";
 
 let value: APIKeyType = "deployment";
 ```

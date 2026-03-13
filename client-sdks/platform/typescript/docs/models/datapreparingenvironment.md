@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataPreparingEnvironment } from "@aliendotdev/platform-api/models";
+import { DataPreparingEnvironment } from "@alienplatform/platform-api/models";
 
 let value: DataPreparingEnvironment = {
   strategyName: "<value>",

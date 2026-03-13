@@ -1,4 +1,4 @@
-import * as alien from "@aliendotdev/core"
+import * as alien from "@alienplatform/core"
 
 const storage = new alien.Storage("test-alien-storage").build()
 const vault = new alien.Vault("test-alien-vault").build()
@@ -26,7 +26,7 @@ const fn = new alien.Function("test-alien-ts-function")
   .link(queue)
   .build()
 
-// Event subscriptions (uncomment when supported by @aliendotdev/core)
+// Event subscriptions (uncomment when supported by @alienplatform/core)
 // storage.onEvent("*", fn)
 // queue.onMessage(fn)
 

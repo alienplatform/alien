@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@aliendotdev/core": "workspace:*",
-    "@aliendotdev/typescript-config": "workspace:*",
+    "@alienplatform/core": "workspace:*",
+    "@alienplatform/typescript-config": "workspace:*",
     "typescript": "^5.8.3"
   }
 }

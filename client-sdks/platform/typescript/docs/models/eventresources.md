@@ -5,7 +5,7 @@ Represents the state of a single resource within the stack for a specific platfo
 ## Example Usage
 
 ```typescript
-import { EventResources } from "@aliendotdev/platform-api/models";
+import { EventResources } from "@alienplatform/platform-api/models";
 
 let value: EventResources = {
   config: {

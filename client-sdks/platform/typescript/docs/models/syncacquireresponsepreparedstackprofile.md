@@ -5,7 +5,7 @@ A permission set that can be applied across different cloud platforms
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackProfile } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackProfile } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackProfile = {
   description: "every connect since",

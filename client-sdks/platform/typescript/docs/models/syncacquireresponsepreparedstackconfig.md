@@ -5,7 +5,7 @@ Resource that can hold any resource type in the Alien system. All resources shar
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponsePreparedStackConfig } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponsePreparedStackConfig } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponsePreparedStackConfig = {
   id: "<id>",

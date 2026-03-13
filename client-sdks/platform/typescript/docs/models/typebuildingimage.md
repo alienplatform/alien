@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypeBuildingImage } from "@aliendotdev/client-sdk/models";
+import { TypeBuildingImage } from "@alienplatform/client-sdk/models";
 
 let value: TypeBuildingImage = "BuildingImage";
 ```

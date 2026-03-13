@@ -5,7 +5,7 @@ Platform where the Manager will be deployed (must be aws, gcp, or azure)
 ## Example Usage
 
 ```typescript
-import { NewManagerRequestPlatform } from "@aliendotdev/platform-api/models";
+import { NewManagerRequestPlatform } from "@alienplatform/platform-api/models";
 
 let value: NewManagerRequestPlatform = "test";
 ```

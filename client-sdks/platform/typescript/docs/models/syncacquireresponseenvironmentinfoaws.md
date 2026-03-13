@@ -5,7 +5,7 @@ AWS-specific environment information
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseEnvironmentInfoAws } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseEnvironmentInfoAws } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseEnvironmentInfoAws = {
   accountId: "<id>",

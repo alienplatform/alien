@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { DataDeployingStack } from "@aliendotdev/platform-api/models";
+import { DataDeployingStack } from "@alienplatform/platform-api/models";
 
 let value: DataDeployingStack = {
   stackName: "<value>",

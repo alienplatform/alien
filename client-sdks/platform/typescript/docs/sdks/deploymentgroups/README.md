@@ -19,7 +19,7 @@ List deployment groups
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentGroups" method="get" path="/v1/deployment-groups" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -42,8 +42,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsListDeploymentGroups } from "@aliendotdev/platform-api/funcs/deploymentGroupsListDeploymentGroups.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsListDeploymentGroups } from "@alienplatform/platform-api/funcs/deploymentGroupsListDeploymentGroups.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -95,7 +95,7 @@ Create a new deployment group
 
 <!-- UsageSnippet language="typescript" operationID="createDeploymentGroup" method="post" path="/v1/deployment-groups" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -117,8 +117,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsCreateDeploymentGroup } from "@aliendotdev/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsCreateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -170,7 +170,7 @@ Get deployment group details
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentGroup" method="get" path="/v1/deployment-groups/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -193,8 +193,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsGetDeploymentGroup } from "@aliendotdev/platform-api/funcs/deploymentGroupsGetDeploymentGroup.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsGetDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsGetDeploymentGroup.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -247,7 +247,7 @@ Delete deployment group
 
 <!-- UsageSnippet language="typescript" operationID="deleteDeploymentGroup" method="delete" path="/v1/deployment-groups/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -270,8 +270,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsDeleteDeploymentGroup } from "@aliendotdev/platform-api/funcs/deploymentGroupsDeleteDeploymentGroup.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsDeleteDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsDeleteDeploymentGroup.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -324,7 +324,7 @@ Update deployment group
 
 <!-- UsageSnippet language="typescript" operationID="updateDeploymentGroup" method="patch" path="/v1/deployment-groups/{id}" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -347,8 +347,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsUpdateDeploymentGroup } from "@aliendotdev/platform-api/funcs/deploymentGroupsUpdateDeploymentGroup.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsUpdateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsUpdateDeploymentGroup.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -401,7 +401,7 @@ Creates a deployment-group scoped API key and returns both the token and formatt
 
 <!-- UsageSnippet language="typescript" operationID="createDeploymentGroupToken" method="post" path="/v1/deployment-groups/{id}/tokens" -->
 ```typescript
-import { Alien } from "@aliendotdev/platform-api";
+import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
@@ -424,8 +424,8 @@ run();
 The standalone function version of this method:
 
 ```typescript
-import { AlienCore } from "@aliendotdev/platform-api/core.js";
-import { deploymentGroupsCreateDeploymentGroupToken } from "@aliendotdev/platform-api/funcs/deploymentGroupsCreateDeploymentGroupToken.js";
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsCreateDeploymentGroupToken } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroupToken.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.

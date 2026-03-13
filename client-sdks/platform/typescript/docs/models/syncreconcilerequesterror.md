@@ -5,7 +5,7 @@ Deployment error from step() result. Set when deployment fails, null to clear.
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestError } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestError } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestError = {
   code: "<value>",

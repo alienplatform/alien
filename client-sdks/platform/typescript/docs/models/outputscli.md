@@ -5,7 +5,7 @@ Outputs from a CLI package build
 ## Example Usage
 
 ```typescript
-import { OutputsCli } from "@aliendotdev/platform-api/models";
+import { OutputsCli } from "@alienplatform/platform-api/models";
 
 let value: OutputsCli = {
   binaries: {},

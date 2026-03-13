@@ -6,7 +6,7 @@ This can eventually replace the enum-based ResourceRef for full extensibility.
 ## Example Usage
 
 ```typescript
-import { DeploymentDetailResponseStackStateDependency } from "@aliendotdev/platform-api/models";
+import { DeploymentDetailResponseStackStateDependency } from "@alienplatform/platform-api/models";
 
 let value: DeploymentDetailResponseStackStateDependency = {
   id: "<id>",

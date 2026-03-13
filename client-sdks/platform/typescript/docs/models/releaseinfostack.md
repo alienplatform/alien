@@ -5,7 +5,7 @@ A bag of resources, unaware of any cloud.
 ## Example Usage
 
 ```typescript
-import { ReleaseInfoStack } from "@aliendotdev/platform-api/models";
+import { ReleaseInfoStack } from "@alienplatform/platform-api/models";
 
 let value: ReleaseInfoStack = {
   id: "<id>",

@@ -6,11 +6,11 @@
     "build": "bun build ./src/index.ts --outfile dist/app.js --target bun --minify"
   },
   "dependencies": {
-    "@aliendotdev/bindings": "workspace:^",
+    "@alienplatform/bindings": "workspace:^",
     "hono": "^4.7.10"
   },
   "devDependencies": {
-    "@aliendotdev/core": "workspace:^",
+    "@alienplatform/core": "workspace:^",
     "typescript": "^5.9.3"
   }
 }

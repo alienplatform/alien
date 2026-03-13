@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseGcpConfig } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseGcpConfig } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseGcpConfig = {
   certificateName: "<value>",

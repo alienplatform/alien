@@ -5,7 +5,7 @@ API keys deleted successfully.
 ## Example Usage
 
 ```typescript
-import { DeleteAPIKeysResponse } from "@aliendotdev/platform-api/models/operations";
+import { DeleteAPIKeysResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: DeleteAPIKeysResponse = {
   deletedCount: 9835.23,

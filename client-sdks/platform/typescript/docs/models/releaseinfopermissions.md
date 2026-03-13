@@ -5,7 +5,7 @@ Combined permissions configuration that contains both profiles and management
 ## Example Usage
 
 ```typescript
-import { ReleaseInfoPermissions } from "@aliendotdev/platform-api/models";
+import { ReleaseInfoPermissions } from "@alienplatform/platform-api/models";
 
 let value: ReleaseInfoPermissions = {
   profiles: {

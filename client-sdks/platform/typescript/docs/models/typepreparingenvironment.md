@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { TypePreparingEnvironment } from "@aliendotdev/client-sdk/models";
+import { TypePreparingEnvironment } from "@alienplatform/client-sdk/models";
 
 let value: TypePreparingEnvironment = "PreparingEnvironment";
 ```

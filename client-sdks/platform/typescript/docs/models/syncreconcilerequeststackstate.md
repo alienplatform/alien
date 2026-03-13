@@ -5,7 +5,7 @@ Represents the collective state of all resources in a stack, including platform 
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestStackState } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestStackState } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestStackState = {
   platform: "local",

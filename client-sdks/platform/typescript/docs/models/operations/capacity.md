@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { Capacity } from "@aliendotdev/platform-api/models/operations";
+import { Capacity } from "@alienplatform/platform-api/models/operations";
 
 let value: Capacity = {
   cpu: {

@@ -5,7 +5,7 @@ Current health status
 ## Example Usage
 
 ```typescript
-import { ManagerHeartbeatRequestStatus } from "@aliendotdev/platform-api/models";
+import { ManagerHeartbeatRequestStatus } from "@alienplatform/platform-api/models";
 
 let value: ManagerHeartbeatRequestStatus = "degraded";
 ```

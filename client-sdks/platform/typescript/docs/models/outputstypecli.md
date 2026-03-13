@@ -3,7 +3,7 @@
 ## Example Usage
 
 ```typescript
-import { OutputsTypeCli } from "@aliendotdev/platform-api/models";
+import { OutputsTypeCli } from "@alienplatform/platform-api/models";
 
 let value: OutputsTypeCli = "cli";
 ```

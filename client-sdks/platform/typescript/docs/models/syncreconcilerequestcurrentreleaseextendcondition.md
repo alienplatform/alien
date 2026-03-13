@@ -5,7 +5,7 @@ GCP IAM condition
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestCurrentReleaseExtendCondition } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestCurrentReleaseExtendCondition } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestCurrentReleaseExtendCondition = {
   expression: "<value>",

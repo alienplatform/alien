@@ -5,7 +5,7 @@ Generic binding configuration for permissions
 ## Example Usage
 
 ```typescript
-import { DeploymentProfileAzureBinding } from "@aliendotdev/platform-api/models";
+import { DeploymentProfileAzureBinding } from "@alienplatform/platform-api/models";
 
 let value: DeploymentProfileAzureBinding = {};
 ```

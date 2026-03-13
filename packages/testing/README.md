@@ -1,17 +1,17 @@
-# @aliendotdev/testing
+# @alienplatform/testing
 
 Testing framework for Alien applications. Deploy, test, and tear down Alien apps in real environments.
 
 ## Installation
 
 ```bash
-npm install @aliendotdev/testing
+npm install @alienplatform/testing
 ```
 
 ## Quick Start
 
 ```typescript
-import { deploy } from "@aliendotdev/testing"
+import { deploy } from "@alienplatform/testing"
 
 const deployment = await deploy({
   app: "./my-app",
@@ -268,7 +268,7 @@ const deployment = await deploy({
 
 ```typescript
 import { describe, it, expect } from "vitest"
-import { deploy } from "@aliendotdev/testing"
+import { deploy } from "@alienplatform/testing"
 
 describe("my app", () => {
   it("should deploy and respond", async () => {

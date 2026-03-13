@@ -5,7 +5,7 @@ Deployment configuration
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseConfig } from "@aliendotdev/platform-api/models";
+import { SyncAcquireResponseConfig } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseConfig = {
   environmentVariables: {

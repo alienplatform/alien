@@ -5,7 +5,7 @@ Azure Service Bus parameters
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseExternalBindingsServicebus } from "@aliendotdev/platform-api/models";
+import { SyncReconcileResponseExternalBindingsServicebus } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileResponseExternalBindingsServicebus = {
   service: "servicebus",

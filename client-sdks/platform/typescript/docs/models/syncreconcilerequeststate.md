@@ -5,7 +5,7 @@ Complete deployment state after step() execution
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestState } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestState } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestState = {
   platform: "local",

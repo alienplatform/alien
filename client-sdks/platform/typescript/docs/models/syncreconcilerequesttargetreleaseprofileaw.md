@@ -5,7 +5,7 @@ AWS-specific platform permission configuration
 ## Example Usage
 
 ```typescript
-import { SyncReconcileRequestTargetReleaseProfileAw } from "@aliendotdev/platform-api/models";
+import { SyncReconcileRequestTargetReleaseProfileAw } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestTargetReleaseProfileAw = {
   binding: {},

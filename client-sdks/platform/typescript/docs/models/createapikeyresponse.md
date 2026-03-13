@@ -5,7 +5,7 @@ Response containing the new API key and its metadata
 ## Example Usage
 
 ```typescript
-import { CreateAPIKeyResponse } from "@aliendotdev/platform-api/models";
+import { CreateAPIKeyResponse } from "@alienplatform/platform-api/models";
 
 let value: CreateAPIKeyResponse = {
   apiKey: "<value>",
