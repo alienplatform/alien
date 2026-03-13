@@ -37,8 +37,7 @@
       "@aliendotdev/typescript-config": "file:packages/config-typescript",
       "@aliendotdev/testing": "file:packages/testing",
       "@aliendotdev/bindings": "file:packages/bindings",
-      "@aliendotdev/platform-api": "file:client-sdks/platform/typescript",
-      "@deepstore/client": "^0.1.0"
+      "@aliendotdev/platform-api": "file:client-sdks/platform/typescript"
     }
   }
 }

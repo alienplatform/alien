@@ -59,6 +59,3 @@ release = false
 name = "endpoint-agent"
 release = false
 
-[[package]]
-name = "dockdash"
-release = false
