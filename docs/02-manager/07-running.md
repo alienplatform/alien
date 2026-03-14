@@ -188,7 +188,7 @@ alien-manager provides a Helm chart for Kubernetes deployments.
 ### Install
 
 ```bash
-helm install alien-manager oci://ghcr.io/aliendotdev/charts/alien-manager \
+helm install alien-manager oci://ghcr.io/alienplatform/charts/alien-manager \
   --namespace alien \
   --create-namespace \
   --values values.yaml

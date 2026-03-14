@@ -30,7 +30,9 @@ jobs:
           cache: pnpm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
 
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest

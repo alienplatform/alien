@@ -2452,6 +2452,7 @@ dependencies = [
 [[package]]
 name = "deepstore-agent-client"
 version = "0.1.0"
+source = "git+https://github.com/alienplatform/deepstore?tag=deepstore-client-v0.1.0#9bf64bb2ee58a09da04e642bc01fd80b5666ad44"
 dependencies = [
  "chrono",
  "futures",
@@ -2469,6 +2470,7 @@ dependencies = [
 [[package]]
 name = "deepstore-client"
 version = "0.1.0"
+source = "git+https://github.com/alienplatform/deepstore?tag=deepstore-client-v0.1.0#9bf64bb2ee58a09da04e642bc01fd80b5666ad44"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2490,6 +2492,7 @@ dependencies = [
 [[package]]
 name = "deepstore-server-client"
 version = "0.1.0"
+source = "git+https://github.com/alienplatform/deepstore?tag=deepstore-client-v0.1.0#9bf64bb2ee58a09da04e642bc01fd80b5666ad44"
 dependencies = [
  "chrono",
  "futures",
@@ -3596,6 +3599,7 @@ dependencies = [
 [[package]]
 name = "horizon-client-sdk"
 version = "0.1.0"
+source = "git+https://github.com/alienplatform/horizon?tag=horizon-client-sdk-v0.1.0#8babd81a3a3247178cca8d999f6c8aa638269209"
 dependencies = [
  "chrono",
  "futures",

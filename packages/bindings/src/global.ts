@@ -284,7 +284,7 @@ export function onQueueMessage<T = unknown>(
  */
 export function command(
   name: string,
-  description: string,
+  _description: string,
   handler: (args: string[]) => Promise<number>,
 ): void {
   commandImpl(name, handler)

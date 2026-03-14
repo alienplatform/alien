@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -54,7 +56,7 @@ jobs:
         id: meta_base
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/aliendotdev/alien-base
+          images: ghcr.io/alienplatform/alien-base
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
@@ -76,7 +78,7 @@ jobs:
         id: meta_builder
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/aliendotdev/alien-builder
+          images: ghcr.io/alienplatform/alien-builder
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-

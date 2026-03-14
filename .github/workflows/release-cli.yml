@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
 
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild --locked
