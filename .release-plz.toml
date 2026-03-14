@@ -10,10 +10,12 @@ pr_name = "chore(rust): release crates"
 [[package]]
 name = "alien-cli"
 release = false
+publish = false
 
 [[package]]
 name = "alien-cli-common"
 release = false
+publish = false
 
 [[package]]
 name = "alien-runtime"

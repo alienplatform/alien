@@ -287,7 +287,7 @@ export function command(
   description: string,
   handler: (args: string[]) => Promise<number>,
 ): void {
-  commandImpl(name, description, handler)
+  commandImpl(name, handler)
 }
 
 // ============================================================================
