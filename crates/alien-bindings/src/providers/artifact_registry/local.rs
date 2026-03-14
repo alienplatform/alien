@@ -88,8 +88,7 @@ impl LocalArtifactRegistry {
     /// Creates an OCI client for communicating with the local registry
     fn create_oci_client(&self) -> OciClient {
         OciClient::new(OciClientConfig {
-            protocol: ClientProtocol::Http, // Local registry uses HTTP
-            use_monolithic_push: true,      // Required for pushing to non-existent repositories
+            protocol: ClientProtocol::Http,
             ..Default::default()
         })
     }

@@ -46,8 +46,6 @@ export {
   onStorageEvent,
   onCronEvent,
   onQueueMessage,
-  // Commands
-  command,
   // WaitUntil
   waitUntil,
 } from "./global.js"
@@ -147,7 +145,7 @@ export {
 // Commands
 // ============================================================================
 
-export { runCommand, getCommands, type CommandDefinition } from "./commands.js"
+export { command, runCommand, getCommands, type CommandDefinition } from "./commands.js"
 
 // ============================================================================
 // Re-export from core for convenience

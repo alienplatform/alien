@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+
+jobs:
+  prepare:
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+
+      - name: Set workspace Cargo version
+        run: |
+          sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = .*/version = "${{ inputs.version }}"/' Cargo.toml
+
+      - name: Set npm package versions
+        run: |
+          for pkg in packages/core packages/bindings packages/testing packages/commands-client; do
+            node -e "
+              const fs = require('fs');
+              const p = fs.readFileSync('${pkg}/package.json', 'utf8');
+              const j = JSON.parse(p);
+              j.version = '${{ inputs.version }}';
+              fs.writeFileSync('${pkg}/package.json', JSON.stringify(j, null, 2) + '\n');
+            "
+          done
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml packages/core/package.json packages/bindings/package.json packages/testing/package.json packages/commands-client/package.json
+          git commit -m "chore: release v${{ inputs.version }}"
+          git tag "v${{ inputs.version }}"
+          git push
+          git push --tags
+
+  publish-crates:
+    needs: prepare
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Publish crates
+        run: |
+          for crate in \
+            alien-error \
+            alien-permissions \
+            alien-commands \
+            alien-macros \
+            alien-client-config \
+            alien-client-core \
+            alien-aws-clients \
+            alien-gcp-clients \
+            alien-azure-clients \
+            alien-k8s-clients \
+            alien-core \
+            alien-bindings \
+            alien-platform-api \
+            alien-manager-api; do
+            echo "Publishing $crate..."
+            depot cargo publish -p "$crate" --no-verify
+          done
+
+  publish-npm:
+    needs: prepare
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm --filter @alienplatform/core publish --access public --no-git-checks
+          pnpm --filter @alienplatform/bindings publish --access public --no-git-checks
+          pnpm --filter @alienplatform/testing publish --access public --no-git-checks
+          pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
+
+  publish-cli:
+    needs: prepare
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: depot cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Build alien CLI (x86_64)
+        run: |
+          depot cargo zigbuild -p alien-cli --release \
+            --target x86_64-unknown-linux-musl
+
+      - name: Build alien CLI (aarch64)
+        run: |
+          depot cargo zigbuild -p alien-cli --release \
+            --target aarch64-unknown-linux-musl
+
+      - name: Upload to R2 (versioned + latest)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          S3="aws s3 --endpoint-url ${R2_ENDPOINT}"
+
+          $S3 cp \
+            target/x86_64-unknown-linux-musl/release/alien \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien"
+
+          $S3 cp \
+            target/aarch64-unknown-linux-musl/release/alien \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien"
+
+          $S3 cp \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien" \
+            "s3://${R2_BUCKET}/alien/latest/linux-x86_64/alien"
+
+          $S3 cp \
+            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien" \
+            "s3://${R2_BUCKET}/alien/latest/linux-aarch64/alien"
+
+      - name: Purge Cloudflare cache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"prefix_purge":["https://releases.alien.dev/alien/latest/"]}'

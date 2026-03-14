@@ -252,16 +252,17 @@ use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _};
 use alien_core::ClientConfig;
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, ComputeBackend, DeploymentConfig, EnvironmentVariablesSnapshot, Function,
-    FunctionCode, ManagementConfig, Platform, Resource, ResourceDefinition, ResourceEntry,
-    ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack, StackResourceState,
-    StackSettings, StackState, Storage,
+    AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
+    EnvironmentVariablesSnapshot, Function, FunctionCode, ManagementConfig, Platform, Resource,
+    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
+    ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
 };
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
 use serde_json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -317,6 +318,10 @@ pub struct SingleControllerExecutor {
     compute_backend: Option<ComputeBackend>,
     // Environment variables snapshot for deployment config
     environment_variables: EnvironmentVariablesSnapshot,
+    // Domain metadata for public resources (certificates, DNS)
+    domain_metadata: Option<DomainMetadata>,
+    // Public URL overrides for testing (resource_id -> url)
+    public_urls: Option<HashMap<String, String>>,
     // Stack and state
     desired_stack: Stack,
     stack_state: StackState,
@@ -374,6 +379,8 @@ impl SingleControllerExecutor {
                 .environment_variables(self.environment_variables.clone())
                 .external_bindings(alien_core::ExternalBindings::default())
                 .allow_frozen_changes(false)
+                .maybe_domain_metadata(self.domain_metadata.clone())
+                .maybe_public_urls(self.public_urls.clone())
                 .build(),
         };
 
@@ -547,6 +554,8 @@ pub struct SingleControllerExecutorBuilder {
     management_config: Option<ManagementConfig>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
+    domain_metadata: Option<DomainMetadata>,
+    public_urls: Option<HashMap<String, String>>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
 }
@@ -565,6 +574,8 @@ impl SingleControllerExecutorBuilder {
                 hash: String::new(),
                 created_at: String::new(),
             },
+            domain_metadata: None,
+            public_urls: None,
             dependencies: Vec::new(),
             service_provider: None,
         }
@@ -591,6 +602,20 @@ impl SingleControllerExecutorBuilder {
     /// Sets the environment variables snapshot.
     pub fn environment_variables(mut self, variables: EnvironmentVariablesSnapshot) -> Self {
         self.environment_variables = variables;
+        self
+    }
+
+    /// Sets the domain metadata for public resources (certificates, DNS).
+    pub fn domain_metadata(mut self, metadata: DomainMetadata) -> Self {
+        self.domain_metadata = Some(metadata);
+        self
+    }
+
+    /// Sets public URL overrides for testing (resource_id -> full URL).
+    /// Overrides the FQDN-derived URL from domain_metadata, useful for pointing
+    /// readiness probes at mock HTTP servers during tests.
+    pub fn public_urls(mut self, urls: HashMap<String, String>) -> Self {
+        self.public_urls = Some(urls);
         self
     }
 
@@ -982,6 +1007,8 @@ impl SingleControllerExecutorBuilder {
             management_config: self.management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
+            domain_metadata: self.domain_metadata,
+            public_urls: self.public_urls,
             desired_stack: stack,
             stack_state,
             registry: Arc::new(ResourceRegistry::with_built_ins()),

@@ -12,7 +12,7 @@ import type { Queue } from "./bindings/queue.js"
 import type { ServiceAccount } from "./bindings/service-account.js"
 import type { Storage } from "./bindings/storage.js"
 import type { Vault } from "./bindings/vault.js"
-import { command as commandImpl } from "./commands.js"
+
 import { AlienContext } from "./context.js"
 import {
   type CronEvent,
@@ -259,35 +259,6 @@ export function onQueueMessage<T = unknown>(
   handler: (message: QueueMessageEvent<T>) => Promise<void>,
 ): () => void {
   return onQueueMessageImpl(queueName, handler)
-}
-
-// ============================================================================
-// Commands
-// ============================================================================
-
-/**
- * Register a CLI command.
- *
- * @param name - Command name
- * @param description - Command description
- * @param handler - Command handler
- *
- * @example
- * ```typescript
- * import { command } from "@alienplatform/bindings"
- *
- * command("migrate", "Run database migrations", async (args) => {
- *   await runMigrations()
- *   return 0
- * })
- * ```
- */
-export function command(
-  name: string,
-  _description: string,
-  handler: (args: string[]) => Promise<number>,
-): void {
-  commandImpl(name, handler)
 }
 
 // ============================================================================

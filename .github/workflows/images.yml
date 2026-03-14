@@ -2,7 +2,6 @@ name: Images Publish
 
 on:
   push:
-    branches: [main]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -80,8 +79,7 @@ jobs:
         with:
           images: ghcr.io/alienplatform/alien-base
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            type=raw,value=latest
             type=ref,event=tag
 
       - name: Publish alien-base
@@ -103,8 +101,7 @@ jobs:
         with:
           images: ghcr.io/alienplatform/alien-builder
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            type=raw,value=latest
             type=ref,event=tag
 
       - name: Publish alien-builder

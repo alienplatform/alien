@@ -2323,11 +2323,20 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use std::collections::HashMap;
     use std::sync::Arc;
 
+    use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
+    use alien_aws_clients::apigatewayv2::{
+        Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
+        Route, Stage,
+    };
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
     use alien_client_core::ErrorData as CloudClientErrorData;
-    use alien_core::{Function, FunctionOutputs, Ingress, Platform, ResourceStatus};
+    use alien_core::{
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Function, FunctionOutputs, Ingress,
+        Platform, ResourceDomainInfo, ResourceStatus,
+    };
     use alien_error::AlienError;
     use httpmock::prelude::*;
     use rstest::rstest;
@@ -2352,23 +2361,181 @@ mod tests {
         }
     }
 
-    fn create_successful_url_response() -> alien_aws_clients::lambda::CreateFunctionUrlConfigResponse
-    {
-        alien_aws_clients::lambda::CreateFunctionUrlConfigResponse {
-            function_url: "https://abcd1234.lambda-url.us-east-1.on.aws/".to_string(),
-            function_arn: "arn:aws:lambda:us-east-1:123456789012:function:test".to_string(),
-            auth_type: "NONE".to_string(),
+    fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
+        let mut resources = HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: CertificateStatus::Issued,
+                dns_status: DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        );
+        DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
         }
     }
 
-    fn create_successful_url_response_with_mock_url(
-        mock_url: &str,
-    ) -> alien_aws_clients::lambda::CreateFunctionUrlConfigResponse {
-        alien_aws_clients::lambda::CreateFunctionUrlConfigResponse {
-            function_url: mock_url.to_string(),
-            function_arn: "arn:aws:lambda:us-east-1:123456789012:function:test".to_string(),
-            auth_type: "NONE".to_string(),
-        }
+    fn create_acm_mock_for_creation() -> Arc<MockAcmApi> {
+        let mut mock_acm = MockAcmApi::new();
+        mock_acm.expect_import_certificate().returning(|_| {
+            Ok(ImportCertificateResponse {
+                certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                    .to_string(),
+            })
+        });
+        Arc::new(mock_acm)
+    }
+
+    fn create_acm_mock_for_creation_and_deletion() -> Arc<MockAcmApi> {
+        let mut mock_acm = MockAcmApi::new();
+        mock_acm.expect_import_certificate().returning(|_| {
+            Ok(ImportCertificateResponse {
+                certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                    .to_string(),
+            })
+        });
+        mock_acm
+            .expect_delete_certificate()
+            .returning(|_| Ok(()));
+        Arc::new(mock_acm)
+    }
+
+    fn create_apigatewayv2_mock_for_creation() -> Arc<MockApiGatewayV2Api> {
+        let mut mock_apigw = MockApiGatewayV2Api::new();
+        mock_apigw.expect_create_api().returning(|_| {
+            Ok(Api {
+                api_id: Some("test-api-id".to_string()),
+                api_endpoint: Some(
+                    "https://test-api-id.execute-api.us-east-1.amazonaws.com".to_string(),
+                ),
+                name: None,
+                protocol_type: None,
+            })
+        });
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_, _| {
+                Ok(Integration {
+                    integration_id: Some("test-integration-id".to_string()),
+                    integration_type: None,
+                    integration_uri: None,
+                })
+            });
+        mock_apigw.expect_create_route().returning(|_, _| {
+            Ok(Route {
+                route_id: Some("test-route-id".to_string()),
+                route_key: None,
+            })
+        });
+        mock_apigw.expect_create_stage().returning(|_, _| {
+            Ok(Stage {
+                stage_name: Some("$default".to_string()),
+                auto_deploy: None,
+            })
+        });
+        mock_apigw.expect_create_domain_name().returning(|_| {
+            Ok(DomainName {
+                domain_name: Some("test.example.com".to_string()),
+                domain_name_configurations: Some(vec![DomainNameConfiguration {
+                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                        .to_string(),
+                    endpoint_type: "REGIONAL".to_string(),
+                    security_policy: "TLS_1_2".to_string(),
+                    api_gateway_domain_name: Some(
+                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
+                    ),
+                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
+                }]),
+            })
+        });
+        mock_apigw.expect_create_api_mapping().returning(|_, _| {
+            Ok(ApiMapping {
+                api_mapping_id: Some("test-mapping-id".to_string()),
+                api_mapping_key: None,
+                stage: None,
+            })
+        });
+        Arc::new(mock_apigw)
+    }
+
+    fn create_apigatewayv2_mock_for_creation_and_deletion() -> Arc<MockApiGatewayV2Api> {
+        let mut mock_apigw = MockApiGatewayV2Api::new();
+        mock_apigw.expect_create_api().returning(|_| {
+            Ok(Api {
+                api_id: Some("test-api-id".to_string()),
+                api_endpoint: Some(
+                    "https://test-api-id.execute-api.us-east-1.amazonaws.com".to_string(),
+                ),
+                name: None,
+                protocol_type: None,
+            })
+        });
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_, _| {
+                Ok(Integration {
+                    integration_id: Some("test-integration-id".to_string()),
+                    integration_type: None,
+                    integration_uri: None,
+                })
+            });
+        mock_apigw.expect_create_route().returning(|_, _| {
+            Ok(Route {
+                route_id: Some("test-route-id".to_string()),
+                route_key: None,
+            })
+        });
+        mock_apigw.expect_create_stage().returning(|_, _| {
+            Ok(Stage {
+                stage_name: Some("$default".to_string()),
+                auto_deploy: None,
+            })
+        });
+        mock_apigw.expect_create_domain_name().returning(|_| {
+            Ok(DomainName {
+                domain_name: Some("test.example.com".to_string()),
+                domain_name_configurations: Some(vec![DomainNameConfiguration {
+                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                        .to_string(),
+                    endpoint_type: "REGIONAL".to_string(),
+                    security_policy: "TLS_1_2".to_string(),
+                    api_gateway_domain_name: Some(
+                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
+                    ),
+                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
+                }]),
+            })
+        });
+        mock_apigw.expect_create_api_mapping().returning(|_, _| {
+            Ok(ApiMapping {
+                api_mapping_id: Some("test-mapping-id".to_string()),
+                api_mapping_key: None,
+                stage: None,
+            })
+        });
+        mock_apigw
+            .expect_delete_api_mapping()
+            .returning(|_, _| Ok(()));
+        mock_apigw
+            .expect_delete_domain_name()
+            .returning(|_| Ok(()));
+        mock_apigw.expect_delete_api().returning(|_| Ok(()));
+        Arc::new(mock_apigw)
     }
 
     fn setup_mock_client_for_creation_and_update(
@@ -2392,15 +2559,20 @@ mod tests {
             .expect_get_function_configuration()
             .returning(move |_, _| Ok(create_successful_function_response(&function_name_for_get)));
 
-        // Mock URL creation if public ingress
+        // Mock API Gateway permission and self-binding env var update if public ingress
         if has_url {
-            mock_lambda
-                .expect_create_function_url_config()
-                .returning(|_, _| Ok(create_successful_url_response()));
-
             mock_lambda
                 .expect_add_permission()
                 .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
+
+            let function_name_for_self_binding = function_name.clone();
+            mock_lambda
+                .expect_update_function_configuration()
+                .returning(move |_, _| {
+                    Ok(create_successful_function_response(
+                        &function_name_for_self_binding,
+                    ))
+                });
         }
 
         // Mock concurrency operations (may or may not be called depending on function config)
@@ -2421,14 +2593,16 @@ mod tests {
                 ))
             });
 
-        let function_name_for_config_update = function_name.clone();
-        mock_lambda
-            .expect_update_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_function_response(
-                    &function_name_for_config_update,
-                ))
-            });
+        if !has_url {
+            let function_name_for_config_update = function_name.clone();
+            mock_lambda
+                .expect_update_function_configuration()
+                .returning(move |_, _| {
+                    Ok(create_successful_function_response(
+                        &function_name_for_config_update,
+                    ))
+                });
+        }
 
         Arc::new(mock_lambda)
     }
@@ -2455,17 +2629,13 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_function_response(&function_name_for_get)))
             .times(1); // Only for creation flow
 
-        // Mock URL creation if public ingress
+        // Mock API Gateway permission and self-binding env var update if public ingress
         if has_url {
-            mock_lambda
-                .expect_create_function_url_config()
-                .returning(|_, _| Ok(create_successful_url_response()));
-
             mock_lambda
                 .expect_add_permission()
                 .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
 
-            // Mock update_function_configuration for env var update with self-binding URL
+            // Mock update_function_configuration for self-binding env var update
             let function_name_for_config_update = function_name.clone();
             mock_lambda
                 .expect_update_function_configuration()
@@ -2475,7 +2645,9 @@ mod tests {
                     ))
                 });
 
-            // Mock URL deletion
+            // delete_start calls delete_function_url_config when self.url is set;
+            // in the new flow this URL is the custom domain FQDN, not a Lambda URL,
+            // so gracefully returns Ok (the handler also tolerates NotFound)
             mock_lambda
                 .expect_delete_function_url_config()
                 .returning(|_, _| Ok(()));
@@ -2567,6 +2739,8 @@ mod tests {
 
     fn setup_mock_service_provider(
         mock_lambda: Arc<MockLambdaApi>,
+        mock_acm: Option<Arc<MockAcmApi>>,
+        mock_apigw: Option<Arc<MockApiGatewayV2Api>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
@@ -2574,16 +2748,37 @@ mod tests {
             .expect_get_aws_lambda_client()
             .returning(move |_| Ok(mock_lambda.clone()));
 
+        if let Some(acm) = mock_acm {
+            mock_provider
+                .expect_get_aws_acm_client()
+                .returning(move |_| Ok(acm.clone()));
+        }
+
+        if let Some(apigw) = mock_apigw {
+            mock_provider
+                .expect_get_aws_apigatewayv2_client()
+                .returning(move |_| Ok(apigw.clone()));
+        }
+
         Arc::new(mock_provider)
     }
 
-    /// Sets up mock Lambda client and optional readiness probe mock server
-    /// Returns (lambda_mock_provider, optional_mock_server)
+    /// Sets up all mocks for a function test, including Lambda, ACM, and API Gateway.
+    ///
+    /// Returns `(mock_provider, optional_mock_server, optional_domain_metadata, optional_public_urls)`.
+    /// For public functions, `domain_metadata` and `public_urls` must be set on the executor builder.
+    /// When a readiness probe is configured, `public_urls` overrides the FQDN URL so the probe
+    /// hits the local mock HTTP server instead.
     fn setup_mocks_for_function(
         function: &Function,
         function_name: &str,
         for_deletion: bool,
-    ) -> (Arc<MockPlatformServiceProvider>, Option<MockServer>) {
+    ) -> (
+        Arc<MockPlatformServiceProvider>,
+        Option<MockServer>,
+        Option<DomainMetadata>,
+        Option<HashMap<String, String>>,
+    ) {
         let has_url = function.ingress == Ingress::Public;
         let needs_readiness_probe = has_url && function.readiness_probe.is_some();
 
@@ -2594,174 +2789,40 @@ mod tests {
             None
         };
 
-        // Set up Lambda client mock
+        // Set up Lambda client mock (same for both flows; URL config calls are removed)
         let lambda_mock = if for_deletion {
-            if let Some(ref server) = mock_server {
-                setup_mock_client_for_creation_and_deletion_with_mock_url(
-                    function_name,
-                    has_url,
-                    &server.base_url(),
-                )
-            } else {
-                setup_mock_client_for_creation_and_deletion(function_name, has_url)
-            }
+            setup_mock_client_for_creation_and_deletion(function_name, has_url)
         } else {
-            if let Some(ref server) = mock_server {
-                setup_mock_client_for_creation_and_update_with_mock_url(
-                    function_name,
-                    has_url,
-                    &server.base_url(),
-                )
-            } else {
-                setup_mock_client_for_creation_and_update(function_name, has_url)
-            }
+            setup_mock_client_for_creation_and_update(function_name, has_url)
         };
 
-        let mock_provider = setup_mock_service_provider(lambda_mock);
-
-        (mock_provider, mock_server)
-    }
-
-    fn setup_mock_client_for_creation_and_update_with_mock_url(
-        function_name: &str,
-        has_url: bool,
-        mock_url: &str,
-    ) -> Arc<MockLambdaApi> {
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock successful function creation
-        let function_name = function_name.to_string();
-        let function_name_for_create = function_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &function_name_for_create,
-            ))
-        });
-
-        // Mock function status checks
-        let function_name_for_get = function_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&function_name_for_get)));
-
-        // Mock URL creation if public ingress - use mock URL
-        if has_url {
-            let mock_url = mock_url.to_string();
-            mock_lambda
-                .expect_create_function_url_config()
-                .returning(move |_, _| Ok(create_successful_url_response_with_mock_url(&mock_url)));
-
-            mock_lambda
-                .expect_add_permission()
-                .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
-        }
-
-        // Mock concurrency operations (may or may not be called depending on function config)
-        mock_lambda
-            .expect_put_function_concurrency()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_delete_function_concurrency()
-            .returning(|_| Ok(()));
-
-        // Mock successful updates
-        let function_name_for_code_update = function_name.clone();
-        mock_lambda
-            .expect_update_function_code()
-            .returning(move |_, _| {
-                Ok(create_successful_function_response(
-                    &function_name_for_code_update,
-                ))
+        // Set up ACM and API Gateway mocks for public functions
+        let (acm_mock, apigw_mock, domain_metadata, public_urls) = if has_url {
+            let dm = create_test_domain_metadata(&function.id);
+            let acm = if for_deletion {
+                create_acm_mock_for_creation_and_deletion()
+            } else {
+                create_acm_mock_for_creation()
+            };
+            let apigw = if for_deletion {
+                create_apigatewayv2_mock_for_creation_and_deletion()
+            } else {
+                create_apigatewayv2_mock_for_creation()
+            };
+            // For readiness probe tests, override the FQDN URL with the mock server URL
+            let pub_urls = mock_server.as_ref().map(|server| {
+                let mut map = HashMap::new();
+                map.insert(function.id.clone(), server.base_url());
+                map
             });
+            (Some(acm), Some(apigw), Some(dm), pub_urls)
+        } else {
+            (None, None, None, None)
+        };
 
-        let function_name_for_config_update = function_name.clone();
-        mock_lambda
-            .expect_update_function_configuration()
-            .returning(move |_, _| {
-                Ok(create_successful_function_response(
-                    &function_name_for_config_update,
-                ))
-            });
+        let mock_provider = setup_mock_service_provider(lambda_mock, acm_mock, apigw_mock);
 
-        Arc::new(mock_lambda)
-    }
-
-    fn setup_mock_client_for_creation_and_deletion_with_mock_url(
-        function_name: &str,
-        has_url: bool,
-        mock_url: &str,
-    ) -> Arc<MockLambdaApi> {
-        let mut mock_lambda = MockLambdaApi::new();
-
-        // Mock successful function creation
-        let function_name = function_name.to_string();
-        let function_name_for_create = function_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &function_name_for_create,
-            ))
-        });
-
-        // Mock function status checks
-        let function_name_for_get = function_name.clone();
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(move |_, _| Ok(create_successful_function_response(&function_name_for_get)))
-            .times(1); // Only for creation flow
-
-        // Mock URL creation if public ingress - use mock URL
-        if has_url {
-            let mock_url = mock_url.to_string();
-            mock_lambda
-                .expect_create_function_url_config()
-                .returning(move |_, _| Ok(create_successful_url_response_with_mock_url(&mock_url)));
-
-            mock_lambda
-                .expect_add_permission()
-                .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
-
-            // Mock update_function_configuration for env var update with self-binding URL
-            let function_name_for_config_update = function_name.clone();
-            mock_lambda
-                .expect_update_function_configuration()
-                .returning(move |_, _| {
-                    Ok(create_successful_function_response(
-                        &function_name_for_config_update,
-                    ))
-                });
-
-            // Mock URL deletion
-            mock_lambda
-                .expect_delete_function_url_config()
-                .returning(|_, _| Ok(()));
-        }
-
-        // Mock concurrency operations (may or may not be called depending on function config)
-        mock_lambda
-            .expect_put_function_concurrency()
-            .returning(|_, _| Ok(()));
-        mock_lambda
-            .expect_delete_function_concurrency()
-            .returning(|_| Ok(()));
-
-        // Mock successful function deletion
-        mock_lambda
-            .expect_delete_function()
-            .returning(|_, _| Ok(()));
-
-        // Mock function not found during deletion check
-        mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| {
-                Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceNotFound {
-                        resource_type: "Function".to_string(),
-                        resource_name: "test-function".to_string(),
-                    },
-                ))
-            });
-
-        Arc::new(mock_lambda)
+        (mock_provider, mock_server, domain_metadata, public_urls)
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
@@ -2784,18 +2845,24 @@ mod tests {
         #[case] _has_url: bool,
     ) {
         let function_name = format!("test-{}", function.id);
-        let (mock_provider, _mock_server) =
+        let (mock_provider, _mock_server, domain_metadata, public_urls) =
             setup_mocks_for_function(&function, &function_name, true);
 
-        let mut executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(function)
             .controller(AwsFunctionController::default())
             .platform(Platform::Aws)
             .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
+            .with_test_dependencies();
+
+        if let Some(dm) = domain_metadata {
+            builder = builder.domain_metadata(dm);
+        }
+        if let Some(urls) = public_urls {
+            builder = builder.public_urls(urls);
+        }
+
+        let mut executor = builder.build().await.unwrap();
 
         // Run create flow
         executor.run_until_terminal().await.unwrap();
@@ -2841,7 +2908,7 @@ mod tests {
         to_function.id = function_id.clone();
 
         let function_name = format!("test-{}", function_id);
-        let (mock_provider, mock_server) =
+        let (mock_provider, mock_server, domain_metadata, public_urls) =
             setup_mocks_for_function(&to_function, &function_name, false);
 
         // Start with the "from" function in Ready state
@@ -2854,15 +2921,21 @@ mod tests {
             }
         }
 
-        let mut executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(from_function)
             .controller(ready_controller)
             .platform(Platform::Aws)
             .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
+            .with_test_dependencies();
+
+        if let Some(dm) = domain_metadata {
+            builder = builder.domain_metadata(dm);
+        }
+        if let Some(urls) = public_urls {
+            builder = builder.public_urls(urls);
+        }
+
+        let mut executor = builder.build().await.unwrap();
 
         // Ensure we start in Running state
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -2896,7 +2969,7 @@ mod tests {
             url_missing,
             function_missing,
         );
-        let mock_provider = setup_mock_service_provider(mock_lambda);
+        let mock_provider = setup_mock_service_provider(mock_lambda, None, None);
 
         // Start with a ready controller
         let mut ready_controller = AwsFunctionController::mock_ready(&function_name);
@@ -2930,11 +3003,12 @@ mod tests {
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
 
-    /// Test that verifies public functions get URL creation
+    /// Test that verifies public functions go through ACM certificate import and API Gateway setup.
     #[tokio::test]
-    async fn test_public_function_creates_url_and_permission() {
+    async fn test_public_function_creates_api_gateway_and_certificate() {
         let function = function_public_ingress();
         let function_name = format!("test-{}", function.id);
+        let domain_metadata = create_test_domain_metadata(&function.id);
 
         let mut mock_lambda = MockLambdaApi::new();
 
@@ -2952,24 +3026,17 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_function_response(&function_name_for_get)))
             .times(1);
 
-        // Validate URL creation with correct auth type
-        mock_lambda
-            .expect_create_function_url_config()
-            .withf(|_, request| request.auth_type == "NONE")
-            .returning(|_, _| Ok(create_successful_url_response()));
-
-        // Validate permission addition with correct parameters
+        // Validate API Gateway permission is added with the correct apigateway principal
         mock_lambda
             .expect_add_permission()
             .withf(|_, request| {
-                request.statement_id == "FunctionURLAllowPublicAccess"
-                    && request.action == "lambda:InvokeFunctionUrl"
-                    && request.principal == "*"
-                    && request.function_url_auth_type.as_deref() == Some("NONE")
+                request.statement_id == "ApiGatewayInvoke"
+                    && request.action == "lambda:InvokeFunction"
+                    && request.principal == "apigateway.amazonaws.com"
             })
             .returning(|_, _| Ok(AddPermissionResponse { statement: None }));
 
-        // Mock update_function_configuration for env var update with self-binding URL
+        // Mock self-binding env var update and delete_start URL cleanup
         let function_name_for_config_update = function_name.clone();
         mock_lambda
             .expect_update_function_configuration()
@@ -2996,13 +3063,97 @@ mod tests {
                 ))
             });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda));
+        // Validate ACM certificate import
+        let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_import_certificate()
+            .times(1)
+            .returning(|_| {
+                Ok(ImportCertificateResponse {
+                    certificate_arn:
+                        "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id".to_string(),
+                })
+            });
+        mock_acm
+            .expect_delete_certificate()
+            .returning(|_| Ok(()));
+
+        // Validate API Gateway is created with the function's name in the API name
+        let mut mock_apigw = MockApiGatewayV2Api::new();
+        mock_apigw
+            .expect_create_api()
+            .withf(|request| request.name.contains("public-func"))
+            .returning(|_| {
+                Ok(Api {
+                    api_id: Some("test-api-id".to_string()),
+                    api_endpoint: None,
+                    name: None,
+                    protocol_type: None,
+                })
+            });
+        mock_apigw
+            .expect_create_integration()
+            .returning(|_, _| {
+                Ok(Integration {
+                    integration_id: Some("test-integration-id".to_string()),
+                    integration_type: None,
+                    integration_uri: None,
+                })
+            });
+        mock_apigw.expect_create_route().returning(|_, _| {
+            Ok(Route {
+                route_id: Some("test-route-id".to_string()),
+                route_key: None,
+            })
+        });
+        mock_apigw.expect_create_stage().returning(|_, _| {
+            Ok(Stage {
+                stage_name: Some("$default".to_string()),
+                auto_deploy: None,
+            })
+        });
+        mock_apigw.expect_create_domain_name().returning(|_| {
+            Ok(DomainName {
+                domain_name: Some("public-func.test.example.com".to_string()),
+                domain_name_configurations: Some(vec![DomainNameConfiguration {
+                    certificate_arn:
+                        "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id".to_string(),
+                    endpoint_type: "REGIONAL".to_string(),
+                    security_policy: "TLS_1_2".to_string(),
+                    api_gateway_domain_name: Some(
+                        "test.execute-api.us-east-1.amazonaws.com".to_string(),
+                    ),
+                    hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
+                }]),
+            })
+        });
+        mock_apigw.expect_create_api_mapping().returning(|_, _| {
+            Ok(ApiMapping {
+                api_mapping_id: Some("test-mapping-id".to_string()),
+                api_mapping_key: None,
+                stage: None,
+            })
+        });
+        mock_apigw
+            .expect_delete_api_mapping()
+            .returning(|_, _| Ok(()));
+        mock_apigw
+            .expect_delete_domain_name()
+            .returning(|_| Ok(()));
+        mock_apigw.expect_delete_api().returning(|_| Ok(()));
+
+        let mock_provider = setup_mock_service_provider(
+            Arc::new(mock_lambda),
+            Some(Arc::new(mock_acm)),
+            Some(Arc::new(mock_apigw)),
+        );
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
             .controller(AwsFunctionController::default())
             .platform(Platform::Aws)
             .service_provider(mock_provider)
+            .domain_metadata(domain_metadata)
             .with_test_dependencies()
             .build()
             .await
@@ -3011,7 +3162,7 @@ mod tests {
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
 
-        // Verify URL is in outputs
+        // Verify URL is in outputs (derived from domain_metadata FQDN)
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<FunctionOutputs>().unwrap();
         assert!(function_outputs.url.is_some());
@@ -3057,7 +3208,7 @@ mod tests {
                 ))
             });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
@@ -3126,7 +3277,7 @@ mod tests {
                 ))
             });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
@@ -3193,7 +3344,7 @@ mod tests {
                 ))
             });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
