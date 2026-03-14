@@ -27,7 +27,7 @@ fn get_bindings_package_path() -> PathBuf {
 // This avoids issues with workspace: protocol dependencies when using file: protocol.
 async fn install_bindings_package(project_dir: &std::path::Path) {
     let bindings_src = get_bindings_package_path();
-    let bindings_dest = project_dir.join("node_modules/@aliendotdev/bindings");
+    let bindings_dest = project_dir.join("node_modules/@alienplatform/bindings");
 
     // Create the destination directory
     fs::create_dir_all(&bindings_dest)

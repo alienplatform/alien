@@ -296,7 +296,7 @@ impl LambdaTestContext {
             .await;
 
         info!(
-            arc_base_url = %arc_server.arc_base_url(),
+            arc_base_url = %arc_server.base_url(),
             "ARC server started for lambda tests with cargo lambda invoke dispatcher"
         );
 
@@ -822,7 +822,7 @@ async fn test_lambda_arc_small_params_small_response(
     let params_bytes = serde_json::to_vec(&params)?;
 
     let request = CreateCommandRequest {
-        agent_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-agent".to_string(),
         command: "arc-test-small".to_string(),
         params: BodySpec::inline(&params_bytes),
         deadline: None,
@@ -886,7 +886,7 @@ async fn test_lambda_arc_small_params_large_response(
     let params_bytes = serde_json::to_vec(&params)?;
 
     let request = CreateCommandRequest {
-        agent_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-agent".to_string(),
         command: "arc-test-large".to_string(), // Uses large response handler
         params: BodySpec::inline(&params_bytes),
         deadline: None,
@@ -974,7 +974,7 @@ async fn test_lambda_arc_large_params_small_response(
     );
 
     let request = CreateCommandRequest {
-        agent_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-agent".to_string(),
         command: "arc-test-small".to_string(), // Small response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
@@ -1066,7 +1066,7 @@ async fn test_lambda_arc_large_params_large_response(
     );
 
     let request = CreateCommandRequest {
-        agent_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-agent".to_string(),
         command: "arc-test-large".to_string(), // Large response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
