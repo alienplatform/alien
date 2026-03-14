@@ -66,9 +66,7 @@
       // Per-container SA impersonation: VM generates access tokens for container SAs
       {
         "grant": {
-          "permissions": [
-            "iam.serviceAccounts.getAccessToken"
-          ]
+          "permissions": ["iam.serviceAccounts.getAccessToken"]
         },
         "binding": {
           "stack": {
