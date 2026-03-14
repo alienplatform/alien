@@ -16,12 +16,16 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 EXAMPLES_DIR="$ROOT_DIR/examples"
 EXAMPLES_PACKAGE_JSON="$EXAMPLES_DIR/package.json"
+EXAMPLES_LOCK_FILE="$EXAMPLES_DIR/pnpm-lock.yaml"
 EXAMPLES_PACKAGE_JSON_BACKUP="$(mktemp)"
+EXAMPLES_LOCK_FILE_BACKUP="$(mktemp)"
 
 cp "$EXAMPLES_PACKAGE_JSON" "$EXAMPLES_PACKAGE_JSON_BACKUP"
+cp "$EXAMPLES_LOCK_FILE" "$EXAMPLES_LOCK_FILE_BACKUP"
 cleanup() {
   cp "$EXAMPLES_PACKAGE_JSON_BACKUP" "$EXAMPLES_PACKAGE_JSON"
-  rm -f "$EXAMPLES_PACKAGE_JSON_BACKUP"
+  cp "$EXAMPLES_LOCK_FILE_BACKUP" "$EXAMPLES_LOCK_FILE"
+  rm -f "$EXAMPLES_PACKAGE_JSON_BACKUP" "$EXAMPLES_LOCK_FILE_BACKUP"
 }
 trap cleanup EXIT
 
@@ -61,7 +65,6 @@ NODE
 pnpm -C "$EXAMPLES_DIR" install \
   --force \
   --no-frozen-lockfile \
-  --lockfile=false \
   --config.link-workspace-packages=false \
   --config.prefer-workspace-packages=false
 
