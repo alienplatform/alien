@@ -49,6 +49,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
