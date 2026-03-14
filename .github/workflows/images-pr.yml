@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-core
     timeout-minutes: 120
 
     steps:
@@ -41,16 +41,11 @@ jobs:
           rustup target add aarch64-unknown-linux-musl
           rustup target add x86_64-unknown-linux-musl
 
-      - name: Build alien-runtime (x86_64)
-        run: |
-          cargo zigbuild -p alien-runtime --bin alien-runtime \
-            --target x86_64-unknown-linux-musl \
-            --release
-
-      - name: Build alien-runtime (aarch64)
+      - name: Build alien-runtime binaries
         run: |
           cargo zigbuild -p alien-runtime --bin alien-runtime \
             --target aarch64-unknown-linux-musl \
+            --target x86_64-unknown-linux-musl \
             --release
 
       - name: Build alien-base (no push)

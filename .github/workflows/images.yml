@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-core
     timeout-minutes: 180
 
     steps:
@@ -49,20 +49,13 @@ jobs:
           rustup target add aarch64-unknown-linux-musl
           rustup target add x86_64-unknown-linux-musl
 
-      - name: Build alien-runtime (x86_64)
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: |
-          cargo zigbuild -p alien-runtime --bin alien-runtime \
-            --target x86_64-unknown-linux-musl \
-            --release
-
-      - name: Build alien-runtime (aarch64)
+      - name: Build alien-runtime binaries
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           cargo zigbuild -p alien-runtime --bin alien-runtime \
             --target aarch64-unknown-linux-musl \
+            --target x86_64-unknown-linux-musl \
             --release
 
       - name: Login to GHCR
