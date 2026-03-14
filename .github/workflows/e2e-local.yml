@@ -38,8 +38,14 @@ jobs:
           git config --global credential.helper store
           echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript packages
+        run: pnpm build
 
       - name: Build alien CLI
         env:

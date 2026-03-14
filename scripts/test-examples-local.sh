@@ -28,11 +28,11 @@ trap cleanup EXIT
 cargo build -p alien-cli --bin alien
 
 pnpm -r \
-  --filter @aliendotdev/platform-api \
-  --filter @aliendotdev/core \
-  --filter @aliendotdev/commands-client \
-  --filter @aliendotdev/bindings \
-  --filter @aliendotdev/testing \
+  --filter @alienplatform/platform-api \
+  --filter @alienplatform/core \
+  --filter @alienplatform/commands-client \
+  --filter @alienplatform/bindings \
+  --filter @alienplatform/testing \
   run build
 
 node - "$EXAMPLES_PACKAGE_JSON" "$ROOT_DIR" <<'NODE'
@@ -48,11 +48,11 @@ packageJson.pnpm = packageJson.pnpm || {};
 // This avoids requiring workspace links or committed ../ paths in examples.
 packageJson.pnpm.overrides = {
   ...(packageJson.pnpm.overrides || {}),
-  "@aliendotdev/platform-api": `file:${path.join(rootDir, "client-sdks/platform/typescript")}`,
-  "@aliendotdev/core": `file:${path.join(rootDir, "packages/core")}`,
-  "@aliendotdev/commands-client": `file:${path.join(rootDir, "packages/commands-client")}`,
-  "@aliendotdev/bindings": `file:${path.join(rootDir, "packages/bindings")}`,
-  "@aliendotdev/testing": `file:${path.join(rootDir, "packages/testing")}`
+  "@alienplatform/platform-api": `file:${path.join(rootDir, "client-sdks/platform/typescript")}`,
+  "@alienplatform/core": `file:${path.join(rootDir, "packages/core")}`,
+  "@alienplatform/commands-client": `file:${path.join(rootDir, "packages/commands-client")}`,
+  "@alienplatform/bindings": `file:${path.join(rootDir, "packages/bindings")}`,
+  "@alienplatform/testing": `file:${path.join(rootDir, "packages/testing")}`
 };
 
 fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
