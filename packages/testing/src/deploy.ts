@@ -220,7 +220,7 @@ async function waitForDeploymentRunning(
   getExitCode: () => number | null,
   getStderr: () => string,
 ): Promise<DeploymentInfo> {
-  const timeout = 300_000
+  const timeout = 900_000
   const pollInterval = 2000
   const start = Date.now()
 
