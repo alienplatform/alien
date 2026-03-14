@@ -5,6 +5,7 @@ authors = ["OpenAPI Generator team and contributors"]
 description = "Auto-generated Rust SDK for the Alien Platform API"
 license = "MIT"
 edition = "2021"
+include = ["build.rs", "src/**/*", "openapi.json"]
 
 [features]
 default = ["rustls"]

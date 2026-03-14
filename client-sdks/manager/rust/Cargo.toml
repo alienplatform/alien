@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Auto-generated Rust SDK for the Alien Manager API"
 license = "MIT"
+include = ["build.rs", "src/**/*", "openapi-3.0.json"]
 
 [features]
 default = ["rustls"]
