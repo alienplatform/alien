@@ -1,6 +1,6 @@
 [package]
 name = "alien-error-derive"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Procedural macros for alien-error"
 license = "MIT"

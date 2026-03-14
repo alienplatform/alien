@@ -158,6 +158,11 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
 
     // Find workspace root and detect package manager
     let (install_dir, package_manager) = find_workspace_root(src_dir);
+
+    if install_dir.join("node_modules").exists() {
+        debug!("node_modules already exists, skipping install");
+        return Ok(());
+    }
     let pm_command = package_manager.command();
 
     info!("Detected package manager: {:?}", package_manager);

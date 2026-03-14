@@ -443,6 +443,8 @@ mod tests {
     #[tokio::test]
     async fn test_load_typescript_config() {
         let temp_dir = create_temp_app_dir("ts");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
         let result = load_configuration(temp_dir.path().to_path_buf()).await;
 
         match result {
@@ -465,6 +467,8 @@ mod tests {
     #[tokio::test]
     async fn test_load_javascript_config() {
         let temp_dir = create_temp_app_dir("js");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
         let result = load_configuration(temp_dir.path().to_path_buf()).await;
 
         match result {

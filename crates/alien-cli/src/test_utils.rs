@@ -1,3 +1,4 @@
+use alien_build::dependencies::install_dependencies;
 use alien_core::permissions::PermissionSetReference;
 use alien_core::{
     Function, FunctionCode, ManagementPermissions, PermissionProfile, PermissionsConfig,
@@ -5,9 +6,35 @@ use alien_core::{
 };
 use indexmap::IndexMap;
 use std::fs;
+use std::path::PathBuf;
 
 use tempfile::TempDir;
+use tokio::sync::OnceCell;
 use workspace_root::get_workspace_root;
+
+static SHARED_NODE_MODULES: OnceCell<PathBuf> = OnceCell::const_new();
+
+/// Returns the path to a shared pre-installed `node_modules` directory.
+/// Installs exactly once per test process; subsequent calls return immediately.
+pub async fn shared_node_modules_path() -> &'static PathBuf {
+    SHARED_NODE_MODULES
+        .get_or_init(|| async {
+            let temp_dir = TempDir::new().unwrap();
+            let temp_path = temp_dir.path().to_path_buf();
+
+            fs::write(temp_path.join("package.json"), create_package_json_content()).unwrap();
+
+            install_dependencies(&temp_path)
+                .await
+                .expect("Failed to install shared node_modules fixture");
+
+            // Leak TempDir so the directory is not deleted for the process lifetime
+            Box::leak(Box::new(temp_dir));
+
+            temp_path.join("node_modules")
+        })
+        .await
+}
 
 /// Helper to create package.json content with absolute path to @aliendotdev/core
 pub fn create_package_json_content() -> String {

@@ -1,6 +1,6 @@
 [package]
 name = "alien-platform-api"
-version = "0.1.0"
+version.workspace = true
 authors = ["OpenAPI Generator team and contributors"]
 description = "Auto-generated Rust SDK for the Alien Platform API"
 license = "MIT"
