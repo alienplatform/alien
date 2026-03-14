@@ -47,6 +47,9 @@ jobs:
         uses: depot/setup-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -69,6 +72,9 @@ jobs:
         uses: depot/setup-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -91,6 +97,9 @@ jobs:
         uses: depot/setup-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1

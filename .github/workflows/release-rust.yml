@@ -22,6 +22,9 @@ jobs:
         uses: depot/setup-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - name: Configure git credentials for cargo
@@ -50,6 +53,9 @@ jobs:
         uses: depot/setup-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - name: Configure git credentials for cargo

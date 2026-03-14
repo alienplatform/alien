@@ -33,6 +33,9 @@ jobs:
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
 
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
+
       - name: Install zig
         uses: goto-bus-stop/setup-zig@v2
 
