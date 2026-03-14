@@ -14,8 +14,10 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 180
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -24,14 +26,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Setup buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Configure git credentials for cargo
         run: |
@@ -83,8 +87,9 @@ jobs:
             type=ref,event=tag
 
       - name: Publish alien-base
-        uses: docker/build-push-action@v6
+        uses: depot/build-push-action@v1
         with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-base
           platforms: linux/amd64,linux/arm64
@@ -105,8 +110,9 @@ jobs:
             type=ref,event=tag
 
       - name: Publish alien-builder
-        uses: docker/build-push-action@v6
+        uses: depot/build-push-action@v1
         with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-builder
           platforms: linux/amd64,linux/arm64

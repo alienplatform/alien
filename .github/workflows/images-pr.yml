@@ -14,8 +14,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 120
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +26,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Setup buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Install zig
         uses: goto-bus-stop/setup-zig@v2
@@ -54,8 +61,9 @@ jobs:
             --release
 
       - name: Build alien-base (no push)
-        uses: docker/build-push-action@v6
+        uses: depot/build-push-action@v1
         with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-base
           platforms: linux/amd64,linux/arm64
@@ -64,8 +72,9 @@ jobs:
           sbom: false
 
       - name: Build alien-builder (no push)
-        uses: docker/build-push-action@v6
+        uses: depot/build-push-action@v1
         with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-builder
           platforms: linux/amd64,linux/arm64

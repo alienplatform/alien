@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   fast:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 60
 
     steps:
@@ -33,6 +33,9 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -69,17 +72,9 @@ jobs:
             --exclude alien-aws-clients \
             --exclude alien-gcp-clients \
             --exclude alien-azure-clients \
+            --exclude alien-k8s-clients \
             --exclude alien-bindings \
-            --exclude alien-build \
-            --exclude alien-runtime \
-            --exclude alien-local \
-            --exclude alien-cli \
-            --exclude alien-cli-common \
-            --exclude alien-infra \
-            --exclude alien-manager \
-            --exclude alien-deployment \
-            --exclude alien-preflights \
-            --exclude dockdash \
             --exclude byocdb \
             --exclude endpoint-agent \
-            --exclude alien-test-server
+            --exclude alien-test-server \
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests)'

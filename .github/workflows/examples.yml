@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   examples-published:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
 
     steps:
@@ -36,6 +36,9 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -69,7 +72,7 @@ jobs:
         run: pnpm test:examples
 
   examples-local:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
     # Only run local-override tests on PRs that touch relevant paths
     if: |
@@ -98,6 +101,9 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler

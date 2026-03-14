@@ -35,13 +35,15 @@ jobs:
   aws:
     # Skip on fork PRs (no access to secrets)
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -53,13 +55,15 @@ jobs:
 
   gcp:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -71,13 +75,15 @@ jobs:
 
   azure:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
