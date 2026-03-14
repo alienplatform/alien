@@ -14,7 +14,7 @@ rustls = ["reqwest/rustls-tls-webpki-roots"]
 [dependencies]
 alien-error = { workspace = true }
 futures = "0.3"
-progenitor-client = { git = "https://github.com/oxidecomputer/progenitor" }
+progenitor-client = { version = "0.11.0" }
 reqwest = { version = "0.12", features = ["json", "stream"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -23,6 +23,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [build-dependencies]
 prettyplease = "0.2.22"
-progenitor = { git = "https://github.com/oxidecomputer/progenitor" }
+progenitor = { version = "0.11.0" }
 serde_json = "1.0"
 syn = "2.0"

@@ -37,6 +37,9 @@ jobs:
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
