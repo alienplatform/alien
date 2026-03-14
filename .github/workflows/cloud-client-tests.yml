@@ -42,6 +42,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
       - name: Load .env.test from 1Password
         run: op document get "alien-test-env" --vault Engineering --output .env.test
@@ -58,6 +60,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
       - name: Load .env.test from 1Password
         run: op document get "alien-test-env" --vault Engineering --output .env.test
@@ -74,6 +78,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
       - name: Load .env.test from 1Password
         run: op document get "alien-test-env" --vault Engineering --output .env.test

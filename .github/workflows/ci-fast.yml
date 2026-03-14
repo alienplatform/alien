@@ -40,6 +40,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Configure git credentials for cargo
         run: |
           git config --global credential.helper store

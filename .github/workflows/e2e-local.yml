@@ -30,6 +30,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Configure git credentials for cargo
         run: |
           git config --global credential.helper store
