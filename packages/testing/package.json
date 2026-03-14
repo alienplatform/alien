@@ -1,6 +1,5 @@
 {
   "name": "@alienplatform/testing",
-  "version": "1.0.1",
   "description": "Testing framework for Alien applications",
   "type": "module",
   "main": "./dist/index.js",
