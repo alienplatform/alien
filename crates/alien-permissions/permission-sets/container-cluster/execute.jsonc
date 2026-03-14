@@ -67,8 +67,7 @@
       {
         "grant": {
           "permissions": [
-            "iam.serviceAccounts.getAccessToken",
-            "iam.serviceAccounts.generateAccessToken"
+            "iam.serviceAccounts.getAccessToken"
           ]
         },
         "binding": {
@@ -100,12 +99,11 @@
           }
         }
       },
-      // Per-container managed identity impersonation: VM acquires tokens for container MIs
+      // Per-container managed identity impersonation: VM reads federated identity credentials for container MIs
       {
         "grant": {
           "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read",
-            "Microsoft.ManagedIdentity/userAssignedIdentities/token/action"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read"
           ]
         },
         "binding": {
