@@ -11,11 +11,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
   R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-  DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
 jobs:
   release:

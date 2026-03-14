@@ -8,13 +8,12 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   examples-published:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - name: Checkout
@@ -78,8 +77,6 @@ jobs:
   examples-local:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     # Only run local-override tests on PRs that touch relevant paths
     if: |
       github.event_name == 'pull_request' ||

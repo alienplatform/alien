@@ -16,8 +16,6 @@ jobs:
   publish:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 180
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4

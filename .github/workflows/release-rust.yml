@@ -8,12 +8,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   release-pr:
     runs-on: depot-ubuntu-22.04-4
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -42,8 +41,6 @@ jobs:
     needs: release-pr
     runs-on: depot-ubuntu-22.04-4
     if: github.ref == 'refs/heads/main'
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

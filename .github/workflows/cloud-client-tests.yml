@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   aws:
@@ -37,8 +38,6 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -61,8 +60,6 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -85,8 +82,6 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
-    env:
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
