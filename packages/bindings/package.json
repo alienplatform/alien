@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "exports": {
     ".": {
@@ -17,7 +17,12 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "bindings", "grpc", "sdk"],
+  "keywords": [
+    "alien",
+    "bindings",
+    "grpc",
+    "sdk"
+  ],
   "author": "",
   "license": "ISC",
   "description": "TypeScript SDK for Alien bindings - gRPC client for Storage, KV, Queue, Vault, and more",
