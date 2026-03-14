@@ -24,7 +24,7 @@ const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * DO NOT EDIT - This file is generated during the build process.
  */
 import userModule from "__USER_ENTRY__"
-import { AlienContext } from "@aliendotdev/bindings"
+import { AlienContext } from "@alienplatform/bindings"
 
 async function __alienBootstrap() {
   // Create context from environment (connects to runtime via gRPC)

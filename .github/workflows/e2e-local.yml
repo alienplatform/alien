@@ -33,6 +33,17 @@ jobs:
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
+      - name: Install zig
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
+
       - name: Configure git credentials for cargo
         run: |
           git config --global credential.helper store
