@@ -40,6 +40,13 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -52,6 +59,8 @@ jobs:
         run: pnpm test:ts
 
       - name: Rust fast tests (non-cloud)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           cargo nextest run --workspace \
             --exclude alien-aws-clients \
