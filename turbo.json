@@ -14,7 +14,7 @@
       "cache": false
     },
     "test:ts": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "build"],
       "cache": false
     },
     "//#format-and-lint": {},

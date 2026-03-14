@@ -30,10 +30,17 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build alien CLI
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: cargo build -p alien-cli --bin alien
 
       - name: Run local e2e tests

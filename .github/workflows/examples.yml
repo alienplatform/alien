@@ -37,10 +37,17 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Run examples (primary mode with local fallback)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: pnpm test:examples
 
   examples-local:
@@ -74,8 +81,15 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Run examples (forced local override mode)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: pnpm test:examples:local
