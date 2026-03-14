@@ -29,6 +29,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install zig
+        uses: goto-bus-stop/setup-zig@v2
+
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild --locked
 

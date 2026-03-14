@@ -2,6 +2,8 @@
 name = "alien-bindings"
 version = "0.1.0"
 edition = "2021"
+description = "Alien platform runtime bindings"
+license = "MIT"
 
 [lib]
 crate-type = ["rlib"]

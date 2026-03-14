@@ -2,6 +2,8 @@
 name = "alien-error"
 version = "0.1.0"
 edition = "2021"
+description = "Error types for the Alien platform"
+license = "MIT"
 
 [lib]
 name = "alien_error"
