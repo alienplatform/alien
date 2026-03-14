@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   fast:
-    runs-on: depot-ubuntu-22.04-8
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
 
     steps:

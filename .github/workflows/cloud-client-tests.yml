@@ -36,7 +36,7 @@ jobs:
   aws:
     # Skip on fork PRs (no access to secrets)
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: depot-ubuntu-22.04-8
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
 
   gcp:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: depot-ubuntu-22.04-8
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
 
   azure:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
-    runs-on: depot-ubuntu-22.04-8
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4

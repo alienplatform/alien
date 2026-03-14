@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   drift:
-    runs-on: depot-ubuntu-22.04-4
+    runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
 
     steps:
