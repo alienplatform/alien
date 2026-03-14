@@ -29,7 +29,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cargo build -p alien-cli --bin alien
+# Use depot cargo when available (CI with Depot Cache); fall back to plain cargo locally
+if command -v depot &>/dev/null; then
+  depot cargo build -p alien-cli --bin alien
+else
+  cargo build -p alien-cli --bin alien
+fi
 
 pnpm -r \
   --filter @alienplatform/platform-api \

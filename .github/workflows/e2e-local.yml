@@ -13,6 +13,8 @@ jobs:
   e2e-local:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 120
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +32,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -40,7 +44,7 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        run: depot cargo install cargo-zigbuild --locked
 
       - name: Add musl targets
         run: |
@@ -66,7 +70,7 @@ jobs:
       - name: Build alien CLI
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: cargo build -p alien-cli --bin alien
+        run: depot cargo build -p alien-cli --bin alien
 
       - name: Run local e2e tests
         run: pnpm test:e2e:local

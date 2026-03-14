@@ -13,6 +13,8 @@ jobs:
   examples-published:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - name: Checkout
@@ -37,8 +39,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -50,7 +54,7 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        run: depot cargo install cargo-zigbuild --locked
 
       - name: Add musl targets
         run: |
@@ -74,6 +78,8 @@ jobs:
   examples-local:
     runs-on: depot-ubuntu-22.04-16
     timeout-minutes: 90
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     # Only run local-override tests on PRs that touch relevant paths
     if: |
       github.event_name == 'pull_request' ||
@@ -102,8 +108,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -115,7 +123,7 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        run: depot cargo install cargo-zigbuild --locked
 
       - name: Add musl targets
         run: |

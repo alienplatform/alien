@@ -15,6 +15,7 @@ permissions:
 env:
   R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
   R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+  DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
 jobs:
   release:
@@ -29,8 +30,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
@@ -39,7 +42,7 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        run: depot cargo install cargo-zigbuild --locked
 
       - name: Add musl targets
         run: |
@@ -59,12 +62,12 @@ jobs:
 
       - name: Build alien CLI (x86_64)
         run: |
-          cargo zigbuild -p alien-cli --release \
+          depot cargo zigbuild -p alien-cli --release \
             --target x86_64-unknown-linux-musl
 
       - name: Build alien CLI (aarch64)
         run: |
-          cargo zigbuild -p alien-cli --release \
+          depot cargo zigbuild -p alien-cli --release \
             --target aarch64-unknown-linux-musl
 
       - name: Upload to R2 (versioned + latest)

@@ -17,7 +17,12 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 # Ensure local dev CLI exists (testing framework will auto-discover target/debug/alien)
-cargo build -p alien-cli --bin alien
+# Use depot cargo when available (CI with Depot Cache); fall back to plain cargo locally
+if command -v depot &>/dev/null; then
+  depot cargo build -p alien-cli --bin alien
+else
+  cargo build -p alien-cli --bin alien
+fi
 
 if ! pnpm -C examples install \
   --force \

@@ -13,6 +13,8 @@ jobs:
   fast:
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 60
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
 
     steps:
       - name: Checkout
@@ -34,8 +36,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
 
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -68,7 +72,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          cargo nextest run --workspace \
+          depot cargo nextest run --workspace \
             --exclude alien-aws-clients \
             --exclude alien-gcp-clients \
             --exclude alien-azure-clients \

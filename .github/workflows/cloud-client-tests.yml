@@ -37,13 +37,17 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -51,19 +55,23 @@ jobs:
         run: op document get "alien-test-env" --vault Engineering --output .env.test
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-      - run: cargo test -p alien-aws-clients --tests
+      - run: depot cargo test -p alien-aws-clients --tests
 
   gcp:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -71,19 +79,23 @@ jobs:
         run: op document get "alien-test-env" --vault Engineering --output .env.test
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-      - run: cargo test -p alien-gcp-clients --tests --features gcp
+      - run: depot cargo test -p alien-gcp-clients --tests --features gcp
 
   azure:
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     runs-on: depot-ubuntu-22.04-8
     timeout-minutes: 120
+    env:
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: 1password/install-cli-action@v1
@@ -91,4 +103,4 @@ jobs:
         run: op document get "alien-test-env" --vault Engineering --output .env.test
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-      - run: cargo test -p alien-azure-clients --tests
+      - run: depot cargo test -p alien-azure-clients --tests

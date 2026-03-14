@@ -26,9 +26,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
@@ -46,7 +43,7 @@ jobs:
         uses: goto-bus-stop/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+        run: depot cargo install cargo-zigbuild --locked
 
       - name: Add musl targets
         run: |
@@ -57,7 +54,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          cargo zigbuild -p alien-runtime --bin alien-runtime \
+          depot cargo zigbuild -p alien-runtime --bin alien-runtime \
             --target x86_64-unknown-linux-musl \
             --release
 
@@ -65,7 +62,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          cargo zigbuild -p alien-runtime --bin alien-runtime \
+          depot cargo zigbuild -p alien-runtime --bin alien-runtime \
             --target aarch64-unknown-linux-musl \
             --release
 
