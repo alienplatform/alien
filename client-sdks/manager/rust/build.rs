@@ -1,9 +1,10 @@
 use progenitor::{GenerationSettings, InterfaceStyle};
 
 fn main() {
-    let src = "../openapi-3.0.json";
-    println!("cargo:rerun-if-changed={}", src);
-    let file = std::fs::File::open(src).unwrap();
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let src = std::path::Path::new(&manifest_dir).join("openapi-3.0.json");
+    println!("cargo:rerun-if-changed={}", src.display());
+    let file = std::fs::File::open(&src).unwrap();
     let spec = serde_json::from_reader(file).unwrap();
     let mut generator = progenitor::Generator::new(
         GenerationSettings::new().with_interface(InterfaceStyle::Builder),
