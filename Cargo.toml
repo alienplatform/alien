@@ -49,6 +49,7 @@ alien-commands = { path = "crates/alien-commands", default-features = false }
 alien-bindings = { path = "crates/alien-bindings", default-features = false }
 alien-runtime = { path = "crates/alien-runtime" }
 dockdash = "0.1.0"
+<<<<<<< Updated upstream
 alien-core = { path = "crates/alien-core" }
 alien-infra = { path = "crates/alien-infra" }
 alien-build = { path = "crates/alien-build" }
@@ -69,6 +70,28 @@ alien-local = { path = "crates/alien-local" }
 alien-manager = { path = "crates/alien-manager" }
 alien-manager-api = { path = "client-sdks/manager/rust", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", default-features = false, features = ["rustls"] }
+=======
+alien-core = { path = "crates/alien-core", version = "0.1.0" }
+alien-infra = { path = "crates/alien-infra", version = "0.1.0" }
+alien-build = { path = "crates/alien-build", version = "0.1.0" }
+alien-macros = { path = "crates/alien-macros", version = "0.1.0" }
+alien-client-core = { path = "crates/alien-client-core", version = "0.1.0" }
+alien-client-config = { path = "crates/alien-client-config", version = "0.1.0" }
+alien-aws-clients = { path = "crates/alien-aws-clients", version = "0.1.0" }
+alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "0.1.0" }
+alien-azure-clients = { path = "crates/alien-azure-clients", version = "0.1.0" }
+alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "0.1.0" }
+alien-error = { path = "crates/alien-error", version = "0.1.0", features = ["anyhow"] }
+alien-error-derive = { path = "crates/alien-error-derive", version = "0.1.0" }
+alien-permissions = { path = "crates/alien-permissions", version = "0.1.0" }
+alien-preflights = { path = "crates/alien-preflights", version = "0.1.0" }
+alien-deployment = { path = "crates/alien-deployment", version = "0.1.0" }
+alien-cli-common = { path = "crates/alien-cli-common", version = "0.1.0" }
+alien-local = { path = "crates/alien-local", version = "0.1.0" }
+alien-manager = { path = "crates/alien-manager", version = "0.1.0" }
+alien-manager-api = { path = "client-sdks/manager/rust", version = "0.1.0", default-features = false, features = ["rustls"] }
+alien-platform-api = { path = "client-sdks/platform/rust", version = "0.1.1", default-features = false, features = ["rustls"] }
+>>>>>>> Stashed changes
 horizon-client-sdk = { git = "https://github.com/alienplatform/horizon", tag = "horizon-client-sdk-v0.1.0" }
 deepstore-client = { git = "https://github.com/alienplatform/deepstore", tag = "deepstore-client-v0.1.0" }
 
