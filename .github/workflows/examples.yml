@@ -51,6 +51,7 @@ jobs:
       - name: Run examples (primary mode with local fallback)
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm test:examples
 
   examples-local:
@@ -98,4 +99,5 @@ jobs:
       - name: Run examples (forced local override mode)
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm test:examples:local

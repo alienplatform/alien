@@ -45,6 +45,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript packages
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm build
 
       - name: Build alien CLI
