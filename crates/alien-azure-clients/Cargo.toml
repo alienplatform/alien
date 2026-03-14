@@ -28,7 +28,7 @@ sha2 = { workspace = true }
 hmac = "0.12"
 backon = { workspace = true }
 url = { workspace = true }
-serde-aux = "*"
+serde-aux = "4"
 async-trait = { workspace = true }
 mockall = { workspace = true, optional = true }
 
