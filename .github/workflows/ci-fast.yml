@@ -44,6 +44,8 @@ jobs:
         run: pnpm format-and-lint
 
       - name: TypeScript typecheck
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm test:ts
 
       - name: Rust fast tests (non-cloud)

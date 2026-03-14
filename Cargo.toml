@@ -60,7 +60,7 @@ alien-gcp-clients = { path = "crates/alien-gcp-clients" }
 alien-azure-clients = { path = "crates/alien-azure-clients" }
 alien-k8s-clients = { path = "crates/alien-k8s-clients" }
 alien-error = { path = "crates/alien-error", features = ["anyhow"] }
-alien-error-derive = { path = "crates/alien-error-derive" }
+alien-error-derive = { path = "crates/alien-error-derive", version = "0.1.0" }
 alien-permissions = { path = "crates/alien-permissions" }
 alien-preflights = { path = "crates/alien-preflights" }
 alien-deployment = { path = "crates/alien-deployment" }
