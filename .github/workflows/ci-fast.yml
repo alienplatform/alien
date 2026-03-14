@@ -72,6 +72,13 @@ jobs:
             --exclude alien-bindings \
             --exclude alien-build \
             --exclude alien-runtime \
+            --exclude alien-local \
+            --exclude alien-cli \
+            --exclude alien-cli-common \
+            --exclude alien-infra \
+            --exclude alien-manager \
+            --exclude alien-deployment \
+            --exclude alien-preflights \
             --exclude dockdash \
             --exclude byocdb \
             --exclude endpoint-agent \
