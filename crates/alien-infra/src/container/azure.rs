@@ -2112,10 +2112,12 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
     use alien_azure_clients::azure::disks::MockManagedDisksApi;
+    use alien_azure_clients::azure::keyvault::MockKeyVaultCertificatesApi;
     use alien_azure_clients::azure::load_balancers::MockLoadBalancerApi;
     use alien_azure_clients::azure::long_running_operation::{
         MockLongRunningOperationApi, OperationResult,
     };
+    use alien_azure_clients::azure::models::certificates::CertificateBundle;
     use alien_azure_clients::azure::models::disk_rp::Disk;
     use alien_azure_clients::azure::models::public_ip_address::{
         PublicIpAddress, PublicIpAddressPropertiesFormat,
@@ -2124,13 +2126,43 @@ mod tests {
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::NetworkSettings;
     use alien_core::{
-        CapacityGroup, ComputeBackend, ContainerAutoscaling, EnvironmentVariablesSnapshot,
-        HorizonClusterConfig, HorizonConfig, Network, ResourceSpec,
+        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling,
+        DnsRecordStatus, DomainMetadata, EnvironmentVariablesSnapshot, HorizonClusterConfig,
+        HorizonConfig, Network, ResourceDomainInfo, ResourceSpec,
     };
     use httpmock::MockServer;
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
+        let mut resources = HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: CertificateStatus::Issued,
+                dns_status: DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN PRIVATE KEY-----\nMIIBtest\n-----END PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        );
+        DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
+        }
+    }
 
     fn setup_horizon_server(
         cluster_id: &str,
@@ -2214,6 +2246,7 @@ mod tests {
         load_balancer: Arc<MockLoadBalancerApi>,
         disks: Arc<MockManagedDisksApi>,
         lro: Arc<MockLongRunningOperationApi>,
+        key_vault: Option<Arc<MockKeyVaultCertificatesApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -2228,6 +2261,11 @@ mod tests {
         provider
             .expect_get_azure_long_running_operation_client()
             .returning(move |_| Ok(lro.clone()));
+        if let Some(kv) = key_vault {
+            provider
+                .expect_get_azure_key_vault_certificates_client()
+                .returning(move |_| Ok(kv.clone()));
+        }
         Arc::new(provider)
     }
 
@@ -2305,11 +2343,17 @@ mod tests {
         Arc<MockLoadBalancerApi>,
         Arc<MockManagedDisksApi>,
         Arc<MockLongRunningOperationApi>,
+        Arc<MockKeyVaultCertificatesApi>,
     ) {
         let mut network = MockNetworkApi::new();
         let mut load_balancer = MockLoadBalancerApi::new();
         let mut disks = MockManagedDisksApi::new();
         let lro = Arc::new(MockLongRunningOperationApi::new());
+        let mut key_vault = MockKeyVaultCertificatesApi::new();
+
+        key_vault
+            .expect_import_certificate()
+            .returning(|_, _, _| Ok(CertificateBundle::default()));
 
         network
             .expect_create_or_update_public_ip_address()
@@ -2357,6 +2401,7 @@ mod tests {
             Arc::new(load_balancer),
             Arc::new(disks),
             lro,
+            Arc::new(key_vault),
         )
     }
 
@@ -2471,8 +2516,9 @@ mod tests {
         let cluster_id = "test-cluster";
         let container_name = "api";
         let server = setup_horizon_server(cluster_id, container_name, 1);
-        let (network, load_balancer, disks, lro) = mock_clients_for_create_delete("203.0.113.10");
-        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro);
+        let (network, load_balancer, disks, lro, key_vault) =
+            mock_clients_for_create_delete("203.0.113.10");
+        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro, Some(key_vault));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(test_container("compute"))
@@ -2484,6 +2530,7 @@ mod tests {
                 hash: String::new(),
                 created_at: String::new(),
             })
+            .domain_metadata(create_test_domain_metadata(container_name))
             .service_provider(mock_provider)
             .with_dependency(
                 test_network(),
@@ -2511,8 +2558,10 @@ mod tests {
         let cluster_id = "test-cluster";
         let container_name = "api";
         let server = setup_horizon_server(cluster_id, container_name, 1);
-        let (network, load_balancer, disks, lro) = mock_clients_for_create_delete("203.0.113.11");
-        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro);
+        let (network, load_balancer, disks, lro, key_vault) =
+            mock_clients_for_create_delete("203.0.113.11");
+        let mock_provider =
+            setup_mock_provider(network, load_balancer, disks, lro, Some(key_vault));
 
         let mut container = test_container("compute");
         container.code = ContainerCode::Image {
@@ -2589,7 +2638,7 @@ mod tests {
         let container_name = "api";
         let server = setup_horizon_server(cluster_id, container_name, 1);
         let (network, load_balancer, disks, lro) = mock_clients_for_best_effort_delete();
-        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro);
+        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro, None);
 
         let mut controller = AzureContainerController::mock_ready(
             container_name,
@@ -2680,8 +2729,10 @@ mod tests {
             then.status(200).json_body(container_response.clone());
         });
 
-        let (network, load_balancer, disks, lro) = mock_clients_for_create_delete("203.0.113.12");
-        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro);
+        let (network, load_balancer, disks, lro, key_vault) =
+            mock_clients_for_create_delete("203.0.113.12");
+        let mock_provider =
+            setup_mock_provider(network, load_balancer, disks, lro, Some(key_vault));
 
         let updated_container = Container::new("api".to_string())
             .cluster("compute".to_string())

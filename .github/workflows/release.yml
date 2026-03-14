@@ -3,9 +3,10 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.0)'
-        required: true
+      dry_run:
+        description: 'Print the computed version without publishing'
+        type: boolean
+        default: false
 
 jobs:
   prepare:
@@ -13,39 +14,88 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: bump
+        run: |
+          LATEST_TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "v0.0.0")
+          CURRENT_VERSION=${LATEST_TAG#v}
+          echo "Latest tag: $LATEST_TAG"
+
+          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s%n%b")
+
+          if echo "$COMMITS" | grep -qE "(BREAKING[- ]CHANGE|^[a-z]+(\([^)]+\))?!:)"; then
+            BUMP=major
+          elif echo "$COMMITS" | grep -qE "^feat(\([^)]+\))?:"; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          case "$BUMP" in
+            major) VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+
+          echo "Bump type: $BUMP"
+          echo "New version: v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set workspace Cargo version
+        if: ${{ !inputs.dry_run }}
         run: |
-          sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = .*/version = "${{ inputs.version }}"/' Cargo.toml
+          VERSION="${{ steps.bump.outputs.version }}"
+          python3 - <<EOF
+          import re, os
+          v = os.environ['VERSION']
+          with open('Cargo.toml', 'r') as f:
+              content = f.read()
+          content = re.sub(r'(\[workspace\.package\]\nversion = )"[^"]+"', rf'\1"{v}"', content)
+          content = re.sub(r'(path = "[^"]+", version = )"[^"]+"', rf'\1"{v}"', content)
+          with open('Cargo.toml', 'w') as f:
+              f.write(content)
+          EOF
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Set npm package versions
+        if: ${{ !inputs.dry_run }}
         run: |
+          VERSION="${{ steps.bump.outputs.version }}"
           for pkg in packages/core packages/bindings packages/testing packages/commands-client; do
             node -e "
               const fs = require('fs');
               const p = fs.readFileSync('${pkg}/package.json', 'utf8');
               const j = JSON.parse(p);
-              j.version = '${{ inputs.version }}';
+              j.version = process.env.VERSION;
               fs.writeFileSync('${pkg}/package.json', JSON.stringify(j, null, 2) + '\n');
-            "
+            " VERSION="$VERSION"
           done
 
       - name: Commit and tag
+        if: ${{ !inputs.dry_run }}
         run: |
+          VERSION="${{ steps.bump.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml packages/core/package.json packages/bindings/package.json packages/testing/package.json packages/commands-client/package.json
-          git commit -m "chore: release v${{ inputs.version }}"
-          git tag "v${{ inputs.version }}"
+          git commit -m "chore: release v${VERSION}"
+          git tag "v${VERSION}"
           git push
           git push --tags
 
   publish-crates:
     needs: prepare
+    if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     permissions:
@@ -55,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: v${{ needs.prepare.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -91,16 +141,18 @@ jobs:
             alien-manager-api; do
             echo "Publishing $crate..."
             depot cargo publish -p "$crate" --no-verify
+            sleep 20
           done
 
   publish-npm:
     needs: prepare
+    if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: v${{ needs.prepare.outputs.version }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -129,6 +181,7 @@ jobs:
 
   publish-cli:
     needs: prepare
+    if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
     permissions:
@@ -140,7 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: v${{ needs.prepare.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -183,7 +236,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           S3="aws s3 --endpoint-url ${R2_ENDPOINT}"
 
           $S3 cp \

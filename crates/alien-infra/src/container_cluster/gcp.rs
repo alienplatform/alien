@@ -3417,8 +3417,15 @@ mod tests {
             clusters,
         });
 
+        let mut cluster = test_cluster();
+        cluster
+            .template_inputs
+            .as_mut()
+            .unwrap()
+            .horizon_api_url = horizon_server.base_url();
+
         let mut executor = SingleControllerExecutor::builder()
-            .resource(test_cluster())
+            .resource(cluster)
             .controller(GcpContainerClusterController::default())
             .platform(alien_core::Platform::Gcp)
             .compute_backend(compute_backend)

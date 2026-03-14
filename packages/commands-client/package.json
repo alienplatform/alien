@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/commands-client",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "type": "module",
   "exports": {
     ".": {
@@ -14,7 +14,12 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "commands", "remote-command", "command"],
+  "keywords": [
+    "alien",
+    "commands",
+    "remote-command",
+    "command"
+  ],
   "author": "",
   "license": "ISC",
   "description": "Lightweight client for Alien Commands protocol",

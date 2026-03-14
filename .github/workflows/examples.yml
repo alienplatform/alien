@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 jobs:
-  examples-published:
+  examples:
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 90
 
@@ -71,78 +71,8 @@ jobs:
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run examples (primary mode with local fallback)
+      - name: Run examples
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm test:examples
-
-  examples-local:
-    runs-on: depot-ubuntu-24.04-arm-16
-    timeout-minutes: 90
-    # Only run local-override tests on PRs that touch relevant paths
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'workflow_dispatch'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.11.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            examples/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
-
-      - name: Setup Depot
-        uses: depot/setup-action@v1
-        with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
-
-      - name: Install sccache
-        uses: taiki-e/install-action@sccache
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install zig
-        uses: goto-bus-stop/setup-zig@v2
-
-      - name: Install cargo-zigbuild
-        run: depot cargo install cargo-zigbuild --locked
-
-      - name: Add musl targets
-        run: |
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add x86_64-unknown-linux-musl
-
-      - name: Configure git credentials for cargo
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
-
-      - name: Install root dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run examples (forced local override mode)
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm test:examples:local

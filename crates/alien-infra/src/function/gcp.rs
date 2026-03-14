@@ -2698,14 +2698,16 @@ mod tests {
     use std::sync::Arc;
 
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
-    use alien_core::{Function, FunctionOutputs, HttpMethod, Ingress, Platform, ResourceStatus};
+    use alien_core::{
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Function, FunctionOutputs, HttpMethod,
+        Ingress, Platform, ResourceDomainInfo, ResourceStatus,
+    };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
+    use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation};
     use alien_gcp_clients::iam::IamPolicy;
-    use alien_gcp_clients::longrunning::Operation;
-    use alien_gcp_clients::longrunning::{
-        Operation as LongRunningOperation, OperationResult, Status,
-    };
+    use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
+    use alien_gcp_clients::longrunning::{OperationResult, Status};
     use httpmock::{prelude::*, Mock};
     use rstest::rstest;
 
@@ -2717,6 +2719,74 @@ mod tests {
     use crate::function::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::function::{fixtures::*, GcpFunctionController};
     use crate::GcpFunctionState;
+
+    fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
+        let mut resources = HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: CertificateStatus::Issued,
+                dns_status: DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        );
+        DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
+        }
+    }
+
+    fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockComputeApi> {
+        let mut mock = MockComputeApi::new();
+        mock.expect_insert_ssl_certificate()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_insert_region_network_endpoint_group()
+            .returning(|_, _| Ok(Operation::default()));
+        mock.expect_insert_backend_service()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_insert_url_map()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_insert_target_https_proxy()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_insert_global_address()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_get_global_address().returning(|_| {
+            Ok(Address {
+                address: Some("203.0.113.1".to_string()),
+                ..Default::default()
+            })
+        });
+        mock.expect_insert_global_forwarding_rule()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_global_forwarding_rule()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_target_https_proxy()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_url_map()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_backend_service()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_region_network_endpoint_group()
+            .returning(|_, _| Ok(Operation::default()));
+        mock.expect_delete_ssl_certificate()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_global_address()
+            .returning(|_| Ok(Operation::default()));
+        Arc::new(mock)
+    }
 
     fn create_successful_service_response(service_name: &str) -> Service {
         use alien_gcp_clients::cloudrun::Service;
@@ -2923,6 +2993,7 @@ mod tests {
 
     fn setup_mock_service_provider(
         mock_cloudrun: Arc<MockCloudRunApi>,
+        mock_compute: Option<Arc<MockComputeApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
@@ -2930,16 +3001,22 @@ mod tests {
             .expect_get_gcp_cloudrun_client()
             .returning(move |_| Ok(mock_cloudrun.clone()));
 
+        if let Some(compute) = mock_compute {
+            mock_provider
+                .expect_get_gcp_compute_client()
+                .returning(move |_| Ok(compute.clone()));
+        }
+
         Arc::new(mock_provider)
     }
 
     /// Sets up mock CloudRun client and optional readiness probe mock server
-    /// Returns (cloudrun_mock_provider, optional_mock_server)
+    /// Returns (cloudrun_mock_provider, optional_mock_server, optional_domain_metadata)
     fn setup_mocks_for_function(
         function: &Function,
         function_name: &str,
         for_deletion: bool,
-    ) -> (Arc<MockPlatformServiceProvider>, Option<MockServer>) {
+    ) -> (Arc<MockPlatformServiceProvider>, Option<MockServer>, Option<DomainMetadata>) {
         let has_public_access = function.ingress == Ingress::Public;
         let needs_readiness_probe = has_public_access && function.readiness_probe.is_some();
 
@@ -2973,9 +3050,18 @@ mod tests {
             }
         };
 
-        let mock_provider = setup_mock_service_provider(cloudrun_mock);
+        // For public functions, also set up compute mock and domain metadata
+        let (compute_mock, domain_metadata) = if has_public_access {
+            let dm = create_test_domain_metadata(&function.id);
+            let compute = create_ssl_compute_mock_for_creation_and_deletion();
+            (Some(compute), Some(dm))
+        } else {
+            (None, None)
+        };
 
-        (mock_provider, mock_server)
+        let mock_provider = setup_mock_service_provider(cloudrun_mock, compute_mock);
+
+        (mock_provider, mock_server, domain_metadata)
     }
 
     fn setup_mock_client_for_creation_and_update_with_mock_url(
@@ -3117,18 +3203,21 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] function: Function) {
         let function_name = format!("test-{}", function.id);
-        let (mock_provider, _mock_server) =
+        let (mock_provider, _mock_server, domain_metadata) =
             setup_mocks_for_function(&function, &function_name, true);
 
-        let mut executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(function)
             .controller(GcpFunctionController::default())
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
+            .with_test_dependencies();
+
+        if let Some(dm) = domain_metadata {
+            builder = builder.domain_metadata(dm);
+        }
+
+        let mut executor = builder.build().await.unwrap();
 
         // Run create flow
         executor.run_until_terminal().await.unwrap();
@@ -3174,7 +3263,7 @@ mod tests {
         to_function.id = function_id.clone();
 
         let function_name = format!("test-{}", function_id);
-        let (mock_provider, mock_server) =
+        let (mock_provider, mock_server, domain_metadata) =
             setup_mocks_for_function(&to_function, &function_name, false);
 
         // Start with the "from" function in Ready state
@@ -3187,15 +3276,18 @@ mod tests {
             }
         }
 
-        let mut executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(from_function)
             .controller(ready_controller)
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
+            .with_test_dependencies();
+
+        if let Some(dm) = domain_metadata {
+            builder = builder.domain_metadata(dm);
+        }
+
+        let mut executor = builder.build().await.unwrap();
 
         // Ensure we start in Running state
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -3223,7 +3315,7 @@ mod tests {
         let has_public_access = function.ingress == Ingress::Public;
         let mock_cloudrun =
             setup_mock_client_for_best_effort_deletion(&function_name, service_missing);
-        let mock_provider = setup_mock_service_provider(mock_cloudrun);
+        let mock_provider = setup_mock_service_provider(mock_cloudrun, None);
 
         // Start with a ready controller
         let mut ready_controller = GcpFunctionController::mock_ready(&function_name);
@@ -3327,13 +3419,16 @@ mod tests {
             ))
         });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun));
+        let compute_mock = create_ssl_compute_mock_for_creation_and_deletion();
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), Some(compute_mock));
+        let domain_metadata = create_test_domain_metadata(&function.id);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
             .controller(GcpFunctionController::default())
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
+            .domain_metadata(domain_metadata)
             .with_test_dependencies()
             .build()
             .await
@@ -3407,7 +3502,7 @@ mod tests {
             ))
         });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
@@ -3504,7 +3599,7 @@ mod tests {
             ))
         });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)
@@ -3599,7 +3694,7 @@ mod tests {
             ))
         });
 
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun));
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(function)

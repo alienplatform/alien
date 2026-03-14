@@ -361,7 +361,7 @@ CMD ["cat", "hello.txt"]
             build_dir: build_dir.path().to_path_buf(),
             cache_store: None,
             cache_prefix: "test".to_string(),
-            build_target: BinaryTarget::LinuxX64,
+            build_target: BinaryTarget::linux_container_target(),
             platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
@@ -381,7 +381,8 @@ CMD ["cat", "hello.txt"]
         );
 
         // Verify OCI tarball was created
-        let tarball_path = build_dir.path().join("linux-x64.oci.tar");
+        let target = BinaryTarget::linux_container_target();
+        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(
             tarball_path.exists(),
             "OCI tarball should exist at {}",
@@ -437,7 +438,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_dir: build_dir.path().to_path_buf(),
             cache_store: None,
             cache_prefix: "test".to_string(),
-            build_target: BinaryTarget::LinuxX64,
+            build_target: BinaryTarget::linux_container_target(),
             platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
@@ -449,7 +450,8 @@ RUN echo "Version: $VERSION" > version.txt
             .await
             .expect("Docker toolchain build with args should succeed");
 
-        let tarball_path = build_dir.path().join("linux-x64.oci.tar");
+        let target = BinaryTarget::linux_container_target();
+        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(tarball_path.exists(), "OCI tarball should exist");
 
         // Verify the image is valid
@@ -473,7 +475,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_dir: build_dir.path().to_path_buf(),
             cache_store: None,
             cache_prefix: "test".to_string(),
-            build_target: BinaryTarget::LinuxX64,
+            build_target: BinaryTarget::linux_container_target(),
             platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
@@ -522,7 +524,7 @@ WORKDIR /app
             build_dir: build_dir.path().to_path_buf(),
             cache_store: None,
             cache_prefix: "test".to_string(),
-            build_target: BinaryTarget::LinuxX64,
+            build_target: BinaryTarget::linux_container_target(),
             platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
@@ -534,7 +536,8 @@ WORKDIR /app
             .await
             .expect("Should build with custom Dockerfile name");
 
-        let tarball_path = build_dir.path().join("linux-x64.oci.tar");
+        let target = BinaryTarget::linux_container_target();
+        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(tarball_path.exists(), "OCI tarball should exist");
     }
 }

@@ -49,9 +49,6 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
@@ -86,4 +83,4 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests)'
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda)'

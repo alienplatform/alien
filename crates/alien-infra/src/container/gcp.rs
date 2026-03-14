@@ -281,9 +281,10 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
     use alien_core::NetworkSettings;
     use alien_core::{
-        CapacityGroup, ComputeBackend, ContainerAutoscaling, EnvironmentVariable,
-        EnvironmentVariableType, EnvironmentVariablesSnapshot, HealthCheck, HorizonClusterConfig,
-        HorizonConfig, Network, ResourceSpec,
+        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling,
+        DnsRecordStatus, DomainMetadata, EnvironmentVariable, EnvironmentVariableType,
+        EnvironmentVariablesSnapshot, HealthCheck, HorizonClusterConfig, HorizonConfig, Network,
+        ResourceDomainInfo, ResourceSpec,
     };
     use alien_gcp_clients::gcp::compute::MockComputeApi;
     use alien_gcp_clients::gcp::compute::{
@@ -294,6 +295,35 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
+        let mut resources = HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: CertificateStatus::Issued,
+                dns_status: DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN RSA PRIVATE KEY-----\nMIIBtest\n-----END RSA PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        );
+        DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
+        }
+    }
 
     fn setup_horizon_server(
         cluster_id: &str,
@@ -383,6 +413,8 @@ mod tests {
     fn mock_compute_for_create_delete(ip: &str) -> Arc<MockComputeApi> {
         let mut mock = MockComputeApi::new();
 
+        mock.expect_insert_ssl_certificate()
+            .returning(|_| Ok(Operation::default()));
         mock.expect_insert_health_check()
             .returning(|_| Ok(Operation::default()));
         mock.expect_insert_network_endpoint_group()
@@ -391,7 +423,7 @@ mod tests {
             .returning(|_| Ok(Operation::default()));
         mock.expect_insert_url_map()
             .returning(|_| Ok(Operation::default()));
-        mock.expect_insert_target_http_proxy()
+        mock.expect_insert_target_https_proxy()
             .returning(|_| Ok(Operation::default()));
         mock.expect_insert_global_address()
             .returning(|_| Ok(Operation::default()));
@@ -419,7 +451,9 @@ mod tests {
 
         mock.expect_delete_global_forwarding_rule()
             .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_target_http_proxy()
+        mock.expect_delete_target_https_proxy()
+            .returning(|_| Ok(Operation::default()));
+        mock.expect_delete_ssl_certificate()
             .returning(|_| Ok(Operation::default()));
         mock.expect_delete_url_map()
             .returning(|_| Ok(Operation::default()));
@@ -451,7 +485,7 @@ mod tests {
 
         mock.expect_delete_global_forwarding_rule()
             .returning(move |_| not_found());
-        mock.expect_delete_target_http_proxy()
+        mock.expect_delete_target_https_proxy()
             .returning(move |_| not_found());
         mock.expect_delete_url_map().returning(move |_| not_found());
         mock.expect_delete_backend_service()
@@ -553,6 +587,7 @@ mod tests {
                 hash: String::new(),
                 created_at: String::new(),
             })
+            .domain_metadata(create_test_domain_metadata(container_name))
             .service_provider(mock_provider)
             .with_dependency(
                 test_network(),

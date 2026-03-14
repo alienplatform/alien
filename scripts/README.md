@@ -8,8 +8,7 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 
 ## Example testing
 
-- **`test-examples-published.sh`** (`pnpm test:examples`) — Test examples against published `@alienplatform/*` packages. Falls back to local mode when packages are unavailable.
-- **`test-examples-local.sh`** (`pnpm test:examples:local`) — Test examples against local source by temporarily injecting `pnpm.overrides`. Always restores `examples/package.json` via trap cleanup.
+- **`test-examples-local.sh`** (`pnpm test:examples`) — Test examples against local source by temporarily injecting `pnpm.overrides`. Always restores `examples/package.json` via trap cleanup.
 
 ## Invariants
 

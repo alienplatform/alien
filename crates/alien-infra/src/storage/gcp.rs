@@ -929,6 +929,16 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone2)));
 
         // Mock IAM policy operations
+        mock_gcs.expect_get_bucket_iam_policy().returning(|_| {
+            Ok(IamPolicy {
+                version: Some(1),
+                bindings: vec![],
+                etag: None,
+                kind: Some("storage#policy".to_string()),
+                resource_id: None,
+            })
+        });
+
         mock_gcs.expect_set_bucket_iam_policy().returning(|_, _| {
             Ok(IamPolicy {
                 version: Some(1),
@@ -1442,6 +1452,11 @@ mod tests {
                 }
             })
             .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+
+        // Return empty policy for the read-modify-write pattern
+        mock_gcs
+            .expect_get_bucket_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
 
         // Validate IAM policy for public read access
         mock_gcs
