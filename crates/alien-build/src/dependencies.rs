@@ -71,7 +71,14 @@ fn find_workspace_root(src_dir: &Path) -> (PathBuf, PackageManager) {
         .unwrap_or_else(|_| src_dir.to_path_buf());
     let mut workspace_root = canonical_src_dir.clone();
     let mut current_dir: Option<&Path> = Some(&canonical_src_dir);
-    let mut detected_pm = PackageManager::Npm; // Default to npm
+    // Default to whatever is available; bun preferred so file: deps resolve correctly
+    let mut detected_pm = if PackageManager::Bun.is_available() {
+        PackageManager::Bun
+    } else if PackageManager::Pnpm.is_available() {
+        PackageManager::Pnpm
+    } else {
+        PackageManager::Npm
+    };
 
     debug!(
         "Finding workspace root starting from: {} (canonical: {})",
@@ -191,11 +198,16 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
         pm_command,
         install_dir.display()
     );
-    // Use frozen lockfile for pnpm/bun to avoid re-resolving workspace-linked
-    // packages (like @aliendotdev/core) from the npm registry.
+    // Use frozen lockfile for pnpm/bun only when a lockfile already exists, to avoid
+    // re-resolving workspace-linked packages from the npm registry.
+    let has_lockfile = install_dir.join("bun.lock").exists()
+        || install_dir.join("bun.lockb").exists()
+        || install_dir.join("pnpm-lock.yaml").exists()
+        || install_dir.join("package-lock.json").exists();
+
     let mut cmd = Command::new(pm_command);
     cmd.arg("install");
-    if matches!(package_manager, PackageManager::Pnpm | PackageManager::Bun) {
+    if has_lockfile && matches!(package_manager, PackageManager::Pnpm | PackageManager::Bun) {
         cmd.arg("--frozen-lockfile");
     }
     let install_output = cmd
