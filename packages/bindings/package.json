@@ -16,7 +16,12 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "bindings", "grpc", "sdk"],
+  "keywords": [
+    "alien",
+    "bindings",
+    "grpc",
+    "sdk"
+  ],
   "author": "",
   "license": "ISC",
   "description": "TypeScript SDK for Alien bindings - gRPC client for Storage, KV, Queue, Vault, and more",
