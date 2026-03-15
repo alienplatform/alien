@@ -20,7 +20,7 @@ required-features = ["openapi"]
 
 [features]
 default = ["sqlite"]
-sqlite = ["turso", "sea-query"]
+sqlite = ["turso", "sea-query", "aegis"]
 openapi = ["utoipa", "alien-core/openapi", "alien-error/openapi", "alien-commands/openapi"]
 
 [dependencies]
@@ -73,6 +73,7 @@ form_urlencoded = { workspace = true }
 # SQLite (optional, default)
 turso = { workspace = true, optional = true }
 sea-query = { workspace = true, optional = true }
+aegis = { workspace = true, optional = true }
 
 # Telemetry parsing
 prost = { workspace = true }
