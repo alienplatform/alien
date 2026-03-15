@@ -126,6 +126,7 @@ jobs:
       - name: Publish crates
         run: |
           for crate in \
+            alien-error-derive \
             alien-error \
             alien-permissions \
             alien-commands \
