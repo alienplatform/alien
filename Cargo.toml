@@ -69,8 +69,8 @@ alien-local = { path = "crates/alien-local", version = "1.0.5" }
 alien-manager = { path = "crates/alien-manager", version = "1.0.5" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "1.0.5", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "1.0.5", default-features = false, features = ["rustls"] }
-horizon-client-sdk = { git = "https://github.com/alienplatform/horizon", tag = "horizon-client-sdk-v0.1.0" }
-deepstore-client = { git = "https://github.com/alienplatform/deepstore", tag = "deepstore-client-v0.1.0" }
+horizon-client-sdk = { version = "1.0.0" }
+deepstore-client = { version = "1.0.0" }
 
 # External dependencies
 anyhow = "1.0"
