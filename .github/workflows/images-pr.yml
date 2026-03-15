@@ -37,7 +37,9 @@ jobs:
         uses: taiki-e/install-action@sccache
 
       - name: Install zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
 
       - name: Install cargo-zigbuild
         run: depot cargo install cargo-zigbuild --locked
