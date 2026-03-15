@@ -1,4 +1,3 @@
-use alien_build::dependencies::install_dependencies;
 use alien_core::permissions::PermissionSetReference;
 use alien_core::{
     Function, FunctionCode, ManagementPermissions, PermissionProfile, PermissionsConfig,
@@ -14,25 +13,14 @@ use workspace_root::get_workspace_root;
 
 static SHARED_NODE_MODULES: OnceCell<PathBuf> = OnceCell::const_new();
 
-/// Returns the path to a shared pre-installed `node_modules` directory.
-/// Installs exactly once per test process; subsequent calls return immediately.
+/// Returns the path to the workspace's pre-installed `node_modules` directory.
+///
+/// Re-using the workspace node_modules avoids a fresh `bun install` in a temp
+/// dir, which would fail because packages/core has `workspace:^` devDependencies
+/// that bun cannot resolve outside of the alien monorepo.
 pub async fn shared_node_modules_path() -> &'static PathBuf {
     SHARED_NODE_MODULES
-        .get_or_init(|| async {
-            let temp_dir = TempDir::new().unwrap();
-            let temp_path = temp_dir.path().to_path_buf();
-
-            fs::write(temp_path.join("package.json"), create_package_json_content()).unwrap();
-
-            install_dependencies(&temp_path)
-                .await
-                .expect("Failed to install shared node_modules fixture");
-
-            // Leak TempDir so the directory is not deleted for the process lifetime
-            Box::leak(Box::new(temp_dir));
-
-            temp_path.join("node_modules")
-        })
+        .get_or_init(|| async { get_workspace_root().join("node_modules") })
         .await
 }
 

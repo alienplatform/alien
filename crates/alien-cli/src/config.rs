@@ -502,6 +502,8 @@ mod tests {
     #[tokio::test]
     async fn test_load_specific_typescript_file() {
         let temp_dir = create_temp_app_dir("ts");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
         let config_path = temp_dir.path().join("alien.config.ts");
         let result = load_configuration(config_path).await;
 
@@ -523,6 +525,8 @@ mod tests {
     #[tokio::test]
     async fn test_load_specific_javascript_file() {
         let temp_dir = create_temp_app_dir("js");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
         let config_path = temp_dir.path().join("alien.config.js");
         let result = load_configuration(config_path).await;
 
@@ -578,10 +582,8 @@ mod tests {
         )
         .unwrap();
 
-        // Install dependencies for JS/TS files
-        install_dependencies(temp_path)
-            .await
-            .expect("Failed to install dependencies");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_path.join("node_modules")).unwrap();
 
         let result = load_configuration(temp_path.to_path_buf()).await;
 
@@ -622,10 +624,8 @@ mod tests {
         )
         .unwrap();
 
-        // Install dependencies for JS files
-        install_dependencies(temp_path)
-            .await
-            .expect("Failed to install dependencies");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_path.join("node_modules")).unwrap();
 
         let result = load_configuration(temp_path.to_path_buf()).await;
 
@@ -793,10 +793,8 @@ mod tests {
         )
         .unwrap();
 
-        // Install dependencies even for syntax error test
-        install_dependencies(temp_path)
-            .await
-            .expect("Failed to install dependencies");
+        let shared_nm = shared_node_modules_path().await;
+        std::os::unix::fs::symlink(shared_nm, temp_path.join("node_modules")).unwrap();
 
         let result = load_configuration(temp_path.to_path_buf()).await;
 
