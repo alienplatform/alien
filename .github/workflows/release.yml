@@ -181,17 +181,19 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
-  publish-cli:
+  build-cli:
     needs: prepare
     if: ${{ !inputs.dry_run }}
-    runs-on: depot-ubuntu-24.04-arm-16
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
       id-token: write
-    env:
-      R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
-      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -220,20 +222,40 @@ jobs:
       - name: Install cargo-zigbuild
         run: depot cargo install cargo-zigbuild --locked
 
-      - name: Add musl targets
-        run: |
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add x86_64-unknown-linux-musl
+      - name: Add musl target
+        run: rustup target add ${{ matrix.target }}
 
-      - name: Build alien CLI (x86_64)
+      - name: Build alien CLI
         run: |
           depot cargo zigbuild -p alien-cli --release \
-            --target x86_64-unknown-linux-musl
+            --target ${{ matrix.target }}
 
-      - name: Build alien CLI (aarch64)
-        run: |
-          depot cargo zigbuild -p alien-cli --release \
-            --target aarch64-unknown-linux-musl
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien
+
+  upload-cli:
+    needs: [prepare, build-cli]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    env:
+      R2_BUCKET: ${{ vars.RELEASES_R2_BUCKET }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+    steps:
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-cli-x86_64-unknown-linux-musl
+          path: ./x86_64
+
+      - name: Download aarch64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-cli-aarch64-unknown-linux-musl
+          path: ./aarch64
 
       - name: Upload to R2 (versioned + latest)
         env:
@@ -244,21 +266,10 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           S3="aws s3 --endpoint-url ${R2_ENDPOINT}"
 
-          $S3 cp \
-            target/x86_64-unknown-linux-musl/release/alien \
-            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien"
-
-          $S3 cp \
-            target/aarch64-unknown-linux-musl/release/alien \
-            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien"
-
-          $S3 cp \
-            target/x86_64-unknown-linux-musl/release/alien \
-            "s3://${R2_BUCKET}/alien/latest/linux-x86_64/alien"
-
-          $S3 cp \
-            target/aarch64-unknown-linux-musl/release/alien \
-            "s3://${R2_BUCKET}/alien/latest/linux-aarch64/alien"
+          $S3 cp ./x86_64/alien "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien"
+          $S3 cp ./aarch64/alien "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien"
+          $S3 cp ./x86_64/alien "s3://${R2_BUCKET}/alien/latest/linux-x86_64/alien"
+          $S3 cp ./aarch64/alien "s3://${R2_BUCKET}/alien/latest/linux-aarch64/alien"
 
       - name: Purge Cloudflare cache
         env:
