@@ -127,20 +127,20 @@ jobs:
         run: |
           for crate in \
             alien-error-derive \
-            alien-error \
-            alien-permissions \
-            alien-commands \
             alien-macros \
-            alien-client-config \
+            alien-error \
+            alien-core \
             alien-client-core \
             alien-aws-clients \
             alien-gcp-clients \
             alien-azure-clients \
             alien-k8s-clients \
-            alien-core \
-            alien-bindings \
             alien-platform-api \
-            alien-manager-api; do
+            alien-manager-api \
+            alien-client-config \
+            alien-permissions \
+            alien-bindings \
+            alien-commands; do
             echo "Publishing $crate..."
             depot cargo publish -p "$crate" --no-verify
             sleep 20
