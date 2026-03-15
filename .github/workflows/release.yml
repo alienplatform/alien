@@ -253,11 +253,11 @@ jobs:
             "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien"
 
           $S3 cp \
-            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-x86_64/alien" \
+            target/x86_64-unknown-linux-musl/release/alien \
             "s3://${R2_BUCKET}/alien/latest/linux-x86_64/alien"
 
           $S3 cp \
-            "s3://${R2_BUCKET}/alien/v${VERSION}/linux-aarch64/alien" \
+            target/aarch64-unknown-linux-musl/release/alien \
             "s3://${R2_BUCKET}/alien/latest/linux-aarch64/alien"
 
       - name: Purge Cloudflare cache
