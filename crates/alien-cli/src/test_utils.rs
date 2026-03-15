@@ -36,7 +36,7 @@ pub async fn shared_node_modules_path() -> &'static PathBuf {
         .await
 }
 
-/// Helper to create package.json content with absolute path to @aliendotdev/core
+/// Helper to create package.json content with absolute path to @alienplatform/core
 pub fn create_package_json_content() -> String {
     let workspace_root = get_workspace_root();
     let core_path = workspace_root.join("packages/core");
@@ -46,7 +46,7 @@ pub fn create_package_json_content() -> String {
   "name": "test-alien-app",
   "type": "module",
   "devDependencies": {{
-    "@aliendotdev/core": "file://{}"
+    "@alienplatform/core": "file://{}"
   }}
 }}"#,
         core_path.display()
@@ -55,7 +55,7 @@ pub fn create_package_json_content() -> String {
 
 /// Helper to create alien.config.ts content without Functions (to avoid image building)
 pub fn create_basic_alien_config_ts() -> String {
-    r#"import * as alien from "@aliendotdev/core";
+    r#"import * as alien from "@alienplatform/core";
 
 const storage = new alien.Storage("test-storage")
   .publicRead(true)
@@ -76,7 +76,7 @@ export default stack;
 
 /// Helper to create alien.config.ts content with Functions
 pub fn create_full_alien_config_ts() -> String {
-    r#"import * as alien from "@aliendotdev/core";
+    r#"import * as alien from "@alienplatform/core";
 
 const storage = new alien.Storage("test-storage")
   .publicRead(true)
@@ -116,7 +116,7 @@ export default stack;
 
 /// Helper to create alien.config.js content
 pub fn create_javascript_config_content() -> String {
-    r#"import * as alien from "@aliendotdev/core";
+    r#"import * as alien from "@alienplatform/core";
 
 const storage = new alien.Storage("test-storage")
   .publicRead(true)

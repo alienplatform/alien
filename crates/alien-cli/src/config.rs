@@ -789,7 +789,7 @@ mod tests {
         // Create TypeScript config with syntax error
         fs::write(
             temp_path.join("alien.config.ts"),
-            "import * alien from '@aliendotdev/core'; // missing {",
+            "import * alien from '@alienplatform/core'; // missing {",
         )
         .unwrap();
 
