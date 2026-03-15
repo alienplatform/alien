@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -381,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-error",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -702,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-error",
  "chrono",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -736,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "alien-runtime"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.0.8"
+version = "1.0.11"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -2499,9 +2499,9 @@ dependencies = [
 
 [[package]]
 name = "deepstore-agent-client"
-version = "1.0.2"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d73aa624711205b2f38a0d3f0451b9ea46eabaafe79648081d5671f7812c5720"
+checksum = "870e88fe5c3e875030eda47db8c8343a03fd0c41202d40235b6c1fab1bbe7a15"
 dependencies = [
  "chrono",
  "futures",
@@ -2518,9 +2518,9 @@ dependencies = [
 
 [[package]]
 name = "deepstore-client"
-version = "1.0.2"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "717450996165244df638ca77f01959dd9e84f907a92904e664a65b1a080b64e6"
+checksum = "2e645197091f4f4716e1c72fb57b0024958061970dfc8c5801f56faec86008d8"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2541,9 +2541,9 @@ dependencies = [
 
 [[package]]
 name = "deepstore-server-client"
-version = "1.0.2"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1528ba45db16986b6ae3f8033bd869e7d91322b793bb3753089fe7378b90ccb0"
+checksum = "c421fa4e720d95c5cd806297249ca50e3532f6740b9b0fe79b4b47a4f120c93c"
 dependencies = [
  "chrono",
  "futures",
@@ -3827,7 +3827,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.4.10",
+ "socket2 0.5.9",
  "tokio",
  "tower-service",
  "tracing",
@@ -5277,7 +5277,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.16",
  "http 1.4.0",
@@ -9423,7 +9423,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
