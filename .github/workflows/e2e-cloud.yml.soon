@@ -4,8 +4,6 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
   merge_group:
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,7 +13,6 @@ jobs:
   e2e-cloud:
     if: |
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
       github.event_name == 'merge_group' ||
       (github.event_name == 'pull_request' && contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
     runs-on: ubuntu-latest

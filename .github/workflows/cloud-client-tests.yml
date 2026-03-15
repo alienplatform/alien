@@ -24,8 +24,6 @@ on:
       - 'crates/alien-core/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
