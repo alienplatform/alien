@@ -62,12 +62,24 @@ jobs:
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
 
-      - name: Setup Depot
-        uses: depot/setup-action@v1
-        with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
+      - name: Get registry endpoints
+        id: registries
+        working-directory: tests/infra
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          AWS_LAMBDA_IMAGE=$(terraform output -raw aws_lambda_image_uri)
+          GCP_CLOUDRUN_IMAGE=$(terraform output -raw gcp_cloudrun_image_uri)
+          AZURE_CONTAINER_APP_IMAGE=$(terraform output -raw azure_container_app_image_uri)
+          echo "aws_lambda_image=$AWS_LAMBDA_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "gcp_cloudrun_image=$GCP_CLOUDRUN_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "azure_container_app_image=$AZURE_CONTAINER_APP_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "ecr_registry=$(echo "$AWS_LAMBDA_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+          echo "ecr_region=$(echo "$AWS_LAMBDA_IMAGE" | cut -d/ -f1 | cut -d. -f4)" >> "$GITHUB_OUTPUT"
+          echo "gcr_registry=$(echo "$GCP_CLOUDRUN_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+          echo "acr_registry=$(echo "$AZURE_CONTAINER_APP_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push test images
+      - name: Login to registries
         working-directory: tests/infra
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
@@ -76,30 +88,38 @@ jobs:
           AZURE_MGMT_CLIENT_ID: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
           AZURE_MGMT_CLIENT_SECRET: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
         run: |
-          AWS_LAMBDA_IMAGE=$(terraform output -raw aws_lambda_image_uri)
-          GCP_CLOUDRUN_IMAGE=$(terraform output -raw gcp_cloudrun_image_uri)
-          AZURE_CONTAINER_APP_IMAGE=$(terraform output -raw azure_container_app_image_uri)
-
-          # AWS ECR login
-          ECR_REGISTRY=$(echo "$AWS_LAMBDA_IMAGE" | cut -d/ -f1)
-          ECR_REGION=$(echo "$ECR_REGISTRY" | cut -d. -f4)
-          aws ecr get-login-password --region "$ECR_REGION" \
-            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-          # GCP Artifact Registry login (alien-test-manager SA, has artifactregistry.admin)
-          GCR_REGISTRY=$(echo "$GCP_CLOUDRUN_IMAGE" | cut -d/ -f1)
+          # AWS ECR (needs token from aws CLI)
+          aws ecr get-login-password --region "${{ steps.registries.outputs.ecr_region }}" \
+            | docker login --username AWS --password-stdin "${{ steps.registries.outputs.ecr_registry }}"
+          # GCP Artifact Registry (alien-test-manager SA key from terraform state)
           terraform output -raw gcp_management_sa_key \
-            | docker login -u _json_key --password-stdin "https://$GCR_REGISTRY"
-
-          # Azure ACR login (management SP, has AcrPush)
-          ACR_REGISTRY=$(echo "$AZURE_CONTAINER_APP_IMAGE" | cut -d/ -f1)
-          docker login "$ACR_REGISTRY" \
+            | docker login -u _json_key --password-stdin \
+                "https://${{ steps.registries.outputs.gcr_registry }}"
+          # Azure ACR (management SP has AcrPush)
+          docker login "${{ steps.registries.outputs.acr_registry }}" \
             -u "$AZURE_MGMT_CLIENT_ID" -p "$AZURE_MGMT_CLIENT_SECRET"
 
-          # Build and push — Depot handles cross-platform (amd64 from arm runner)
-          depot build --push --platform linux/arm64 -t "$AWS_LAMBDA_IMAGE" images/lambda
-          depot build --push --platform linux/amd64 -t "$GCP_CLOUDRUN_IMAGE" images/http-server
-          depot build --push --platform linux/amd64 -t "$AZURE_CONTAINER_APP_IMAGE" images/http-server
+      - name: Build and push Lambda image (AWS ECR, linux/arm64)
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: tests/infra/images/lambda
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.registries.outputs.aws_lambda_image }}
+          provenance: false
+
+      - name: Build and push http-server image (GCP AR + Azure ACR, linux/amd64)
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: tests/infra/images/http-server
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.registries.outputs.gcp_cloudrun_image }}
+            ${{ steps.registries.outputs.azure_container_app_image }}
+          provenance: false
 
       - name: Generate .env.test
         run: ./scripts/gen-env-test.sh
