@@ -13,14 +13,40 @@ use workspace_root::get_workspace_root;
 
 static SHARED_NODE_MODULES: OnceCell<PathBuf> = OnceCell::const_new();
 
-/// Returns the path to the workspace's pre-installed `node_modules` directory.
+/// Returns a `node_modules` directory containing `@alienplatform/core`, suitable
+/// for symlinking into test temp dirs so bun can resolve the package.
 ///
-/// Re-using the workspace node_modules avoids a fresh `bun install` in a temp
-/// dir, which would fail because packages/core has `workspace:^` devDependencies
-/// that bun cannot resolve outside of the alien monorepo.
+/// Creates a minimal `node_modules` with a direct symlink to `packages/core`.
+/// Builds `packages/core` first if `dist/` is missing. This avoids a fresh
+/// `bun install` in a temp dir, which fails because packages/core has
+/// `workspace:^` devDependencies that bun cannot resolve outside the monorepo.
 pub async fn shared_node_modules_path() -> &'static PathBuf {
     SHARED_NODE_MODULES
-        .get_or_init(|| async { get_workspace_root().join("node_modules") })
+        .get_or_init(|| async {
+            let workspace_root = get_workspace_root();
+            let core_path = workspace_root.join("packages/core");
+
+            // Build packages/core if dist/ doesn't exist yet
+            if !core_path.join("dist").exists() {
+                tokio::process::Command::new("pnpm")
+                    .args(["--filter", "@alienplatform/core", "build"])
+                    .current_dir(&workspace_root)
+                    .output()
+                    .await
+                    .expect("Failed to build @alienplatform/core");
+            }
+
+            // Create a minimal node_modules with a direct symlink to packages/core.
+            // We leak the TempDir so it lives for the whole test process.
+            let temp_dir = TempDir::new().unwrap();
+            let temp_path = temp_dir.path().to_path_buf();
+            let scope_dir = temp_path.join("node_modules/@alienplatform");
+            fs::create_dir_all(&scope_dir).unwrap();
+            std::os::unix::fs::symlink(&core_path, scope_dir.join("core")).unwrap();
+            Box::leak(Box::new(temp_dir));
+
+            temp_path.join("node_modules")
+        })
         .await
 }
 

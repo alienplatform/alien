@@ -131,7 +131,7 @@ pub struct DevCommand {
 
     /// Path to write status file (JSON with DevStatus type)
     /// The status file includes API URL, resource URLs, and deployment status
-    /// Type definition: alien_core::DevStatus (auto-generated to @aliendotdev/core)
+    /// Type definition: alien_core::DevStatus (auto-generated to @alienplatform/core)
     #[arg(long)]
     pub status_file: Option<PathBuf>,
 
