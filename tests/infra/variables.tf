@@ -33,7 +33,7 @@ variable "aws_target_secret_access_key" {
 variable "aws_target_region" {
   description = "AWS target account region"
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 # GCP - Management
@@ -69,7 +69,7 @@ variable "google_target_project_id" {
 variable "google_target_region" {
   description = "GCP target project region"
   type        = string
-  default     = "us-central1"
+  default     = "us-east4"
 }
 
 # Azure - Management
@@ -126,9 +126,3 @@ variable "azure_target_client_secret" {
   sensitive   = true
 }
 
-# Axiom
-variable "axiom_api_token" {
-  description = "Axiom API token with permissions to create datasets"
-  type        = string
-  sensitive   = true
-}

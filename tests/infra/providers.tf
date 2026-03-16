@@ -5,7 +5,6 @@ terraform {
     azurerm = { source = "hashicorp/azurerm",  version = "~> 3.0" }
     docker  = { source = "kreuzwerker/docker", version = "~> 3.0" }
     random  = { source = "hashicorp/random",   version = "~> 3.0" }
-    axiom   = { source = "axiomhq/axiom",      version = "~> 1.0" }
   }
 }
 
@@ -56,7 +55,3 @@ provider "azurerm" {
 }
 
 provider "docker" {}
-
-provider "axiom" {
-  api_token = var.axiom_api_token
-}

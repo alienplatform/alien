@@ -154,17 +154,3 @@ output "azure_managed_environment" {
 output "azure_acr_name" {
   value = module.azure.acr_name
 }
-
-# Axiom
-output "axiom_token" {
-  value     = var.axiom_api_token
-  sensitive = true
-}
-
-output "axiom_dataset" {
-  value = axiom_dataset.test.name
-}
-
-output "axiom_otlp_endpoint" {
-  value = "https://api.axiom.co/v1/traces"
-}

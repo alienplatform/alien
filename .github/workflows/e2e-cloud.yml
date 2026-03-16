@@ -1,0 +1,212 @@
+name: E2E Cloud
+
+on:
+  workflow_dispatch:
+  merge_group:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # Setup and build run in parallel -- build doesn't need .env.test.
+  # Test jobs wait for both, then fan out across the matrix.
+
+  setup:
+    # Skip on fork PRs (no access to secrets)
+    if: |
+      github.event_name != 'pull_request' || (
+        !github.event.pull_request.head.repo.fork && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'merge_group' ||
+          contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e')
+        )
+      )
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: tests/infra
+        run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform apply
+        working-directory: tests/infra
+        run: terraform apply -auto-approve
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          TF_VAR_aws_management_access_key_id: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
+          TF_VAR_aws_management_secret_access_key: ${{ secrets.TEST_AWS_MGMT_SECRET_ACCESS_KEY }}
+          TF_VAR_aws_target_access_key_id: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          TF_VAR_aws_target_secret_access_key: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          TF_VAR_google_management_service_account_key: ${{ secrets.TEST_GCP_MGMT_SA_KEY }}
+          TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
+          TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
+          TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
+          TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
+          TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
+          TF_VAR_azure_management_client_secret: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
+          TF_VAR_azure_target_subscription_id: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+
+      - name: Generate .env.test
+        run: ./scripts/gen-env-test.sh
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+
+      - name: Upload .env.test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-test-e2e
+          path: .env.test
+          retention-days: 1
+
+  build:
+    # Runs in parallel with setup -- build doesn't depend on .env.test
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
+      (github.event_name == 'pull_request' &&
+        !github.event.pull_request.head.repo.fork &&
+        contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+
+      - name: Install sccache
+        uses: taiki-e/install-action@sccache
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: depot cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript packages
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm build
+
+      - name: Build alien CLI
+        run: depot cargo build -p alien-cli --bin alien
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-e2e
+          path: |
+            target/debug/alien
+            node_modules/
+            packages/*/dist/
+            tests/e2e/node_modules/
+          retention-days: 1
+
+  test:
+    needs: [setup, build]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
+      (github.event_name == 'pull_request' &&
+        !github.event.pull_request.head.repo.fork &&
+        contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - rust-function
+          - rust-container
+          - typescript-function
+          - typescript-container
+        platform:
+          - aws
+          - gcp
+          - azure
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-e2e
+
+      - name: Make alien CLI executable
+        run: chmod +x target/debug/alien
+
+      - name: Run E2E test
+        run: |
+          set -a && source .env.test && set +a
+          pnpm -C tests/e2e test tests/${{ matrix.suite }}/${{ matrix.platform }}.test.ts

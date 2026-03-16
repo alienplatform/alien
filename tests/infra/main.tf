@@ -49,10 +49,3 @@ module "azure" {
 data "aws_caller_identity" "management" {
   provider = aws.management
 }
-
-# ── Axiom ─────────────────────────────────────────────────────────────────────
-
-resource "axiom_dataset" "test" {
-  name        = "alien-test"
-  description = "Telemetry dataset for alien integration and E2E tests"
-}
