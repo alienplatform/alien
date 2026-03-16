@@ -44,10 +44,18 @@ impl HasCommandServer for AppState {
 
 /// Create the complete router with all routes.
 pub fn create_router(state: AppState) -> Router {
+    create_router_inner(state, true)
+}
+
+/// Like [`create_router`], but lets the caller opt-out of the default `/v1/initialize` route.
+///
+/// Set `include_initialize = false` when embedding alien-manager in a process that needs to
+/// replace `/v1/initialize` with a custom implementation via `extra_routes`.
+pub(crate) fn create_router_inner(state: AppState, include_initialize: bool) -> Router {
     // Command server routes (nested under /v1)
     let commands_router: Router<AppState> = create_axum_router();
 
-    Router::new()
+    let mut router = Router::new()
         // Health (no auth)
         .route("/health", get(health::health))
         // Identity
@@ -65,10 +73,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/logs", post(telemetry::ingest_logs))
         .route("/v1/traces", post(telemetry::ingest_traces))
         .route("/v1/metrics", post(telemetry::ingest_metrics))
-        // Sync
+        // Sync (acquire / reconcile / release / operator-sync)
         .merge(sync::router())
         // Credentials
-        .merge(credentials::router())
-        .with_state(state)
-        .layer(CorsLayer::permissive())
+        .merge(credentials::router());
+
+    if include_initialize {
+        router = router.merge(sync::initialize_router());
+    }
+
+    router.with_state(state).layer(CorsLayer::permissive())
 }

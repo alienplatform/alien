@@ -24,6 +24,9 @@ pub struct AlienManagerBuilder {
     server_bindings: Option<ServerBindings>,
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
+    /// When `true`, the default `/v1/initialize` route is omitted from the router.
+    /// Use this when embedding in a process that overrides initialize via `extra_routes`.
+    skip_initialize: bool,
 }
 
 impl AlienManagerBuilder {
@@ -39,6 +42,7 @@ impl AlienManagerBuilder {
             server_bindings: None,
             extra_routes: None,
             dev_status_tx: None,
+            skip_initialize: false,
         }
     }
 
@@ -84,6 +88,12 @@ impl AlienManagerBuilder {
 
     pub fn dev_status(mut self, tx: tokio::sync::watch::Sender<()>) -> Self {
         self.dev_status_tx = Some(tx);
+        self
+    }
+
+    /// Skip the default `/v1/initialize` route so a custom one can be provided via `extra_routes`.
+    pub fn skip_initialize(mut self) -> Self {
+        self.skip_initialize = true;
         self
     }
 
@@ -250,7 +260,7 @@ impl AlienManagerBuilder {
         };
 
         // --- Router ---
-        let mut router = crate::routes::create_router(app_state.clone());
+        let mut router = crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }
@@ -361,7 +371,7 @@ impl AlienManagerBuilder {
             config: config.clone(),
         };
 
-        let mut router = crate::routes::create_router(app_state.clone());
+        let mut router = crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }

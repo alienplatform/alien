@@ -18,16 +18,20 @@ pub struct ManagerConfig {
     pub otlp_endpoint: Option<String>,
     /// Whether this is dev mode (permissive auth, local credentials, in-memory telemetry).
     pub dev_mode: bool,
+    /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
+    /// Defaults to http://localhost:{port} when not set.
+    pub base_url: Option<String>,
 }
 
 impl ManagerConfig {
     pub fn base_url(&self) -> String {
-        format!("http://localhost:{}", self.port)
+        self.base_url
+            .clone()
+            .unwrap_or_else(|| format!("http://localhost:{}", self.port))
     }
 
     pub fn commands_base_url(&self) -> String {
-        // Used by CommandServer and runtime polling — they add /commands/{id}/response and /commands/leases
-        format!("http://localhost:{}/v1", self.port)
+        format!("{}/v1", self.base_url())
     }
 }
 
@@ -41,6 +45,7 @@ impl Default for ManagerConfig {
             heartbeat_interval_secs: 60,
             otlp_endpoint: None,
             dev_mode: false,
+            base_url: None,
         }
     }
 }

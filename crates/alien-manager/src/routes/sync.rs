@@ -121,7 +121,14 @@ pub fn router() -> Router<AppState> {
         .route("/v1/sync/reconcile", post(reconcile))
         .route("/v1/sync/release", post(release))
         .route("/v1/sync", post(operator_sync))
-        .route("/v1/initialize", post(initialize))
+}
+
+/// Router for the `/v1/initialize` endpoint only.
+///
+/// Separated so embedders (e.g. alien-platform-manager) can replace it with a
+/// platform-specific implementation that proxies token creation to the Platform API.
+pub fn initialize_router() -> Router<AppState> {
+    Router::new().route("/v1/initialize", post(initialize))
 }
 
 // --- Handlers ---

@@ -71,6 +71,8 @@ fn config_from_env() -> ManagerConfig {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
+    let base_url = std::env::var("BASE_URL").ok();
+
     ManagerConfig {
         port,
         db_path,
@@ -79,6 +81,7 @@ fn config_from_env() -> ManagerConfig {
         heartbeat_interval_secs,
         otlp_endpoint,
         dev_mode,
+        base_url,
     }
 }
 
