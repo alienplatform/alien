@@ -29,7 +29,6 @@ module "azure" {
 
   providers = {
     azurerm.management = azurerm.management
-    azurerm.target     = azurerm.target
   }
 
   management_subscription_id = var.azure_management_subscription_id

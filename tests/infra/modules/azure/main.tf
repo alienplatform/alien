@@ -3,7 +3,7 @@ terraform {
     azurerm = {
       source                = "hashicorp/azurerm"
       version               = "~> 3.0"
-      configuration_aliases = [azurerm.management, azurerm.target]
+      configuration_aliases = [azurerm.management]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
@@ -75,28 +75,7 @@ resource "azurerm_role_assignment" "manager_acr_push" {
   principal_id         = data.azurerm_client_config.management.object_id
 }
 
-# ── Target: Service principal (via separate subscription) ─────────────────────
-
 data "azurerm_client_config" "management" {
   provider = azurerm.management
-}
-
-data "azurerm_client_config" "target" {
-  provider = azurerm.target
-}
-
-# Grant target SP access to Container Registry in management subscription
-resource "azurerm_role_assignment" "target_acr_pull" {
-  provider             = azurerm.management
-  scope                = azurerm_container_registry.test.id
-  role_definition_name = "AcrPull"
-  principal_id         = data.azurerm_client_config.target.object_id
-}
-
-resource "azurerm_role_assignment" "target_containerapp" {
-  provider             = azurerm.management
-  scope                = azurerm_container_app_environment.test.id
-  role_definition_name = "Contributor"
-  principal_id         = data.azurerm_client_config.target.object_id
 }
 

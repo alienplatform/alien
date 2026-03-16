@@ -43,12 +43,3 @@ provider "azurerm" {
   client_secret   = var.azure_management_client_secret
   features {}
 }
-
-provider "azurerm" {
-  alias           = "target"
-  subscription_id = var.azure_target_subscription_id
-  tenant_id       = var.azure_target_tenant_id
-  client_id       = var.azure_target_client_id
-  client_secret   = var.azure_target_client_secret
-  features {}
-}
