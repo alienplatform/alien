@@ -104,16 +104,19 @@ impl AlienManagerBuilder {
         let config = Arc::new(self.config);
 
         // --- SQLite database (shared by all default stores) ---
+        let db_path = config
+            .db_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "alien-manager.db".to_string());
         let db = Arc::new(
-            crate::stores::sqlite::SqliteDatabase::new(
-                config.db_path.to_str().unwrap_or("alien-manager.db"),
-            )
-            .await
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to initialize database: {}", e),
-                })
-            })?,
+            crate::stores::sqlite::SqliteDatabase::new(&db_path)
+                .await
+                .map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Failed to initialize database: {}", e),
+                    })
+                })?,
         );
 
         // --- Stores ---
@@ -137,8 +140,12 @@ impl AlienManagerBuilder {
             .credential_resolver
             .unwrap_or_else(|| {
                 if config.dev_mode {
+                    let state_dir = config
+                        .state_dir
+                        .clone()
+                        .unwrap_or_else(|| std::path::PathBuf::from(".alien-manager"));
                     Arc::new(crate::providers::composite_credentials::CompositeCredentialResolver::new(
-                        config.state_dir.clone(),
+                        state_dir,
                     ))
                 } else {
                     Arc::new(crate::providers::environment_credentials::EnvironmentCredentialResolver::new())
@@ -178,8 +185,13 @@ impl AlienManagerBuilder {
         let server_bindings = if let Some(bindings) = self.server_bindings {
             Arc::new(bindings)
         } else {
-            let kv_path = config.state_dir.join("commands_kv");
-            let storage_path = config.state_dir.join("commands_storage");
+            let state_dir = config
+                .state_dir
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| std::path::PathBuf::from(".alien-manager"));
+            let kv_path = state_dir.join("commands_kv");
+            let storage_path = state_dir.join("commands_storage");
 
             let command_kv: Arc<dyn alien_bindings::traits::Kv> =
                 Arc::new(LocalKv::new(kv_path).await.map_err(|e| {
@@ -276,7 +288,7 @@ impl AlienManagerBuilder {
         info!(
             port = config.port,
             dev_mode = config.dev_mode,
-            db_path = %config.db_path.display(),
+            db_path = %config.db_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
             "AlienManager built"
         );
 
@@ -290,6 +302,82 @@ impl AlienManagerBuilder {
             server_bindings,
             dev_status_tx: self.dev_status_tx,
             log_buffer,
+        })
+    }
+
+    /// Build the server with explicitly-provided providers (no SQLite defaults).
+    ///
+    /// All providers and `server_bindings` must be set before calling this method.
+    /// This is the entry point for embedding alien-manager in another process (e.g.
+    /// alien-platform-manager) that manages its own storage layer.
+    #[cfg(not(feature = "sqlite"))]
+    pub async fn build(self) -> crate::error::Result<crate::server::AlienManager> {
+        use crate::error::ErrorData;
+        use alien_error::AlienError;
+        use alien_commands::server::CommandServer;
+        use tracing::info;
+
+        macro_rules! require_provider {
+            ($field:expr, $name:literal) => {
+                $field.ok_or_else(|| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!(
+                            "{} must be provided when building without sqlite defaults",
+                            $name
+                        ),
+                    })
+                })?
+            };
+        }
+
+        let config = std::sync::Arc::new(self.config);
+
+        let deployment_store  = require_provider!(self.deployment_store,  "deployment_store");
+        let release_store     = require_provider!(self.release_store,     "release_store");
+        let token_store       = require_provider!(self.token_store,       "token_store");
+        let credential_resolver = require_provider!(self.credential_resolver, "credential_resolver");
+        let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
+        let auth_validator    = require_provider!(self.auth_validator,    "auth_validator");
+        let server_bindings   = std::sync::Arc::new(
+            require_provider!(self.server_bindings, "server_bindings")
+        );
+
+        let command_server = std::sync::Arc::new(CommandServer::new(
+            server_bindings.command_kv.clone(),
+            server_bindings.command_storage.clone(),
+            server_bindings.command_dispatcher.clone(),
+            server_bindings.command_registry.clone(),
+            config.commands_base_url(),
+        ));
+
+        let app_state = crate::routes::AppState {
+            deployment_store: deployment_store.clone(),
+            release_store: release_store.clone(),
+            token_store: token_store.clone(),
+            auth_validator: auth_validator.clone(),
+            telemetry_backend: telemetry_backend.clone(),
+            credential_resolver: credential_resolver.clone(),
+            command_server,
+            config: config.clone(),
+        };
+
+        let mut router = crate::routes::create_router(app_state.clone());
+        if let Some(extra) = self.extra_routes {
+            router = router.merge(extra.with_state(app_state));
+        }
+
+        info!(port = config.port, "AlienManager built (no sqlite defaults)");
+
+        Ok(crate::server::AlienManager {
+            config,
+            router,
+            deployment_store,
+            release_store,
+            credential_resolver,
+            telemetry_backend,
+            server_bindings,
+            dev_status_tx: self.dev_status_tx,
+            log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         })
     }
 }

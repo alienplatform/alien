@@ -231,7 +231,12 @@ impl DeploymentLoop {
             .platform
         {
             alien_core::Platform::Local => {
-                let local_state_dir = self.config.state_dir.join(&deployment_id);
+                let state_dir = self.config.state_dir.as_ref().ok_or_else(|| {
+                    AlienError::new(GenericError {
+                        message: "state_dir is required for Local platform deployments but was not configured".to_string(),
+                    })
+                })?;
+                let local_state_dir = state_dir.join(&deployment_id);
                 let local_bindings = LocalBindingsProvider::new(&local_state_dir).map_err(|e| {
                     AlienError::new(GenericError {
                         message: format!(

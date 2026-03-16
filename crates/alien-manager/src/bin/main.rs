@@ -43,13 +43,17 @@ fn config_from_env() -> ManagerConfig {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
-    let db_path = std::env::var("ALIEN_DB_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("alien-manager.db"));
+    let db_path = Some(
+        std::env::var("ALIEN_DB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("alien-manager.db")),
+    );
 
-    let state_dir = std::env::var("ALIEN_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".alien-manager"));
+    let state_dir = Some(
+        std::env::var("ALIEN_STATE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(".alien-manager")),
+    );
 
     let deployment_interval_secs = std::env::var("ALIEN_DEPLOYMENT_INTERVAL")
         .ok()

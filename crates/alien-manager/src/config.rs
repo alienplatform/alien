@@ -5,10 +5,11 @@ use std::path::PathBuf;
 pub struct ManagerConfig {
     /// HTTP server port.
     pub port: u16,
-    /// Path to SQLite database file.
-    pub db_path: PathBuf,
+    /// Path to SQLite database file. Required when using the default sqlite providers.
+    pub db_path: Option<PathBuf>,
     /// Directory for local state (KV, storage, etc.).
-    pub state_dir: PathBuf,
+    /// Required when using default sqlite providers or the `Local` deployment platform.
+    pub state_dir: Option<PathBuf>,
     /// Deployment loop interval in seconds.
     pub deployment_interval_secs: u64,
     /// Heartbeat interval in seconds.
@@ -34,8 +35,8 @@ impl Default for ManagerConfig {
     fn default() -> Self {
         Self {
             port: 8080,
-            db_path: PathBuf::from("alien-manager.db"),
-            state_dir: PathBuf::from(".alien-manager"),
+            db_path: Some(PathBuf::from("alien-manager.db")),
+            state_dir: Some(PathBuf::from(".alien-manager")),
             deployment_interval_secs: 10,
             heartbeat_interval_secs: 60,
             otlp_endpoint: None,
