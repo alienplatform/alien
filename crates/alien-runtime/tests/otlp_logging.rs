@@ -8,10 +8,10 @@ use uuid::Uuid;
 
 static TRACING_INIT: Once = Once::new();
 
-fn load_test_env() {
-    // Load .env.test from the workspace root
+fn load_test_env() -> bool {
+    // Load .env.test from the workspace root (optional — file may not exist in CI)
     let root = workspace_root::get_workspace_root();
-    dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
+    dotenvy::from_path(root.join(".env.test")).is_ok()
 }
 
 /// Test OTLP logging integration with Axiom.
@@ -20,7 +20,10 @@ fn load_test_env() {
 /// because it modifies global tracing state and environment variables.
 #[tokio::test]
 async fn test_otlp_logging_to_axiom() {
-    load_test_env();
+    if !load_test_env() {
+        println!("Skipping OTLP test: .env.test not found");
+        return;
+    }
 
     // Skip this test if OTLP environment is not configured
     let axiom_endpoint = match env::var("AXIOM_OTLP_ENDPOINT") {
@@ -276,7 +279,10 @@ async fn test_zz_otlp_configuration() {
 /// because it modifies global tracing state and environment variables.
 #[tokio::test]
 async fn test_alien_agent_id_otlp_integration() {
-    load_test_env();
+    if !load_test_env() {
+        println!("Skipping ALIEN_AGENT_ID OTLP test: .env.test not found");
+        return;
+    }
 
     // Skip this test if OTLP environment is not configured
     let axiom_endpoint = match env::var("AXIOM_OTLP_ENDPOINT") {
