@@ -73,6 +73,9 @@ jobs:
       - name: Rust fast tests (non-cloud)
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          AXIOM_OTLP_ENDPOINT: ${{ secrets.AXIOM_OTLP_ENDPOINT }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
         run: |
           depot cargo nextest run --workspace \
             --exclude alien-aws-clients \

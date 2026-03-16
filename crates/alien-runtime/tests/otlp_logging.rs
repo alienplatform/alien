@@ -8,10 +8,11 @@ use uuid::Uuid;
 
 static TRACING_INIT: Once = Once::new();
 
-fn load_test_env() -> bool {
-    // Load .env.test from the workspace root (optional — file may not exist in CI)
+fn load_test_env() {
+    // Load .env.test from the workspace root if it exists (local dev).
+    // In CI, Axiom credentials come from GitHub secrets passed as env vars.
     let root = workspace_root::get_workspace_root();
-    dotenvy::from_path(root.join(".env.test")).is_ok()
+    let _ = dotenvy::from_path(root.join(".env.test"));
 }
 
 /// Test OTLP logging integration with Axiom.
@@ -20,10 +21,7 @@ fn load_test_env() -> bool {
 /// because it modifies global tracing state and environment variables.
 #[tokio::test]
 async fn test_otlp_logging_to_axiom() {
-    if !load_test_env() {
-        println!("Skipping OTLP test: .env.test not found");
-        return;
-    }
+    load_test_env();
 
     // Skip this test if OTLP environment is not configured
     let axiom_endpoint = match env::var("AXIOM_OTLP_ENDPOINT") {
@@ -273,22 +271,19 @@ async fn test_zz_otlp_configuration() {
     env::remove_var("OTEL_SERVICE_VERSION");
 }
 
-/// Test that alien.agent_id attribute is included when ALIEN_AGENT_ID env var is set.
+/// Test that alien.deployment_id attribute is included when ALIEN_DEPLOYMENT_ID env var is set.
 ///
 /// Note: This test is configured to run serially via nextest (see .config/nextest.toml)
 /// because it modifies global tracing state and environment variables.
 #[tokio::test]
-async fn test_alien_agent_id_otlp_integration() {
-    if !load_test_env() {
-        println!("Skipping ALIEN_AGENT_ID OTLP test: .env.test not found");
-        return;
-    }
+async fn test_alien_deployment_id_otlp_integration() {
+    load_test_env();
 
     // Skip this test if OTLP environment is not configured
     let axiom_endpoint = match env::var("AXIOM_OTLP_ENDPOINT") {
         Ok(endpoint) => endpoint,
         Err(_) => {
-            println!("Skipping ALIEN_AGENT_ID OTLP test: AXIOM_OTLP_ENDPOINT not set");
+            println!("Skipping ALIEN_DEPLOYMENT_ID OTLP test: AXIOM_OTLP_ENDPOINT not set");
             return;
         }
     };
@@ -296,14 +291,14 @@ async fn test_alien_agent_id_otlp_integration() {
     let axiom_token = env::var("AXIOM_TOKEN").expect("AXIOM_TOKEN must be set for OTLP test");
     let axiom_dataset = env::var("AXIOM_DATASET").expect("AXIOM_DATASET must be set for OTLP test");
 
-    println!("🚀 Starting ALIEN_AGENT_ID OTLP logging test");
+    println!("🚀 Starting ALIEN_DEPLOYMENT_ID OTLP logging test");
 
     // Create unique identifier for this test
     let test_id = Uuid::new_v4().simple();
-    let agent_id = format!("test-agent-{}", test_id);
-    let expected_message = format!("AGENT_ID_TEST_MESSAGE_{}", test_id);
+    let deployment_id = format!("test-deployment-{}", test_id);
+    let expected_message = format!("DEPLOYMENT_ID_TEST_MESSAGE_{}", test_id);
 
-    println!("🆔 Test Agent ID: {}", agent_id);
+    println!("🆔 Test Deployment ID: {}", deployment_id);
     println!("💬 Expected message: {}", expected_message);
 
     // Set up OTLP environment variables with agent ID
@@ -316,19 +311,19 @@ async fn test_alien_agent_id_otlp_integration() {
         ),
     );
     env::set_var("OTEL_SERVICE_NAME", "alien-runtime-test-agent");
-    env::set_var("ALIEN_AGENT_ID", &agent_id);
+    env::set_var("ALIEN_DEPLOYMENT_ID", &deployment_id);
 
     // Initialize tracing with OTLP (uses call_once to ensure only first test initializes)
     TRACING_INIT.call_once(|| {
         init_tracing().expect("Failed to initialize tracing with OTLP");
     });
 
-    // Log a test message that should include the agent_id attribute
+    // Log a test message that should include the deployment_id attribute
     info!(
         test_id = %test_id,
-        agent_id = %agent_id,
+        deployment_id = %deployment_id,
         message = %expected_message,
-        "Testing alien.agent_id resource attribute"
+        "Testing alien.deployment_id resource attribute"
     );
 
     println!("✅ Test message logged with agent ID");
@@ -343,12 +338,12 @@ async fn test_alien_agent_id_otlp_integration() {
     env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
     env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
     env::remove_var("OTEL_SERVICE_NAME");
-    env::remove_var("ALIEN_AGENT_ID");
+    env::remove_var("ALIEN_DEPLOYMENT_ID");
 
     println!("🧹 Environment cleaned up");
     println!(
-        "📝 NOTE: Check your Axiom dataset for logs with resource.alien.agent_id = '{}'",
-        agent_id
+        "📝 NOTE: Check your Axiom dataset for logs with resource.alien.deployment_id = '{}'",
+        deployment_id
     );
 }
 
