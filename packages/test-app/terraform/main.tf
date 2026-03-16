@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     test-app = {
-      source  = "b949d1f86353.ngrok.app/aliendotdev/test-app"
+      source  = "b949d1f86353.ngrok.app/alienplatform/test-app"
       version = "~> 1.0"
     }
   }

@@ -21,17 +21,17 @@ fn load_test_env() {
     std::env::set_var("ALIEN_SKIP_DEPENDENCY_INSTALL", "1");
 }
 
-// Get the path to the @aliendotdev/bindings package in the workspace.
+// Get the path to the @alienplatform/bindings package in the workspace.
 fn get_bindings_package_path() -> StdPathBuf {
     let root: StdPathBuf = workspace_root::get_workspace_root();
     root.join("packages/bindings")
 }
 
-// Install @aliendotdev/bindings into the project's node_modules by copying the pre-built dist.
+// Install @alienplatform/bindings into the project's node_modules by copying the pre-built dist.
 // This avoids issues with workspace: protocol dependencies when using file: protocol.
 async fn install_bindings_package(project_dir: &Path) {
     let bindings_src = get_bindings_package_path();
-    let bindings_dest = project_dir.join("node_modules/@aliendotdev/bindings");
+    let bindings_dest = project_dir.join("node_modules/@alienplatform/bindings");
 
     // Create the destination directory
     fs::create_dir_all(&bindings_dest)
@@ -164,7 +164,7 @@ async fn create_test_typescript_project(base_dir: &Path, project_name: &str) -> 
         .await
         .expect("Failed to write index.js");
 
-    // Install @aliendotdev/bindings (required by bootstrap wrapper)
+    // Install @alienplatform/bindings (required by bootstrap wrapper)
     install_bindings_package(&project_dir).await;
 
     project_dir
@@ -253,7 +253,7 @@ async fn create_test_typescript_workspace(
         .await
         .expect("Failed to write index.js");
 
-    // Install @aliendotdev/bindings (required by bootstrap wrapper)
+    // Install @alienplatform/bindings (required by bootstrap wrapper)
     install_bindings_package(&member_dir).await;
 
     (temp_dir, workspace_dir, member_dir)
@@ -606,7 +606,7 @@ async fn test_real_npm_init_project() {
     .await
     .expect("Failed to create index.js");
 
-    // Install @aliendotdev/bindings (required by bootstrap wrapper)
+    // Install @alienplatform/bindings (required by bootstrap wrapper)
     install_bindings_package(&project_dir).await;
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");
@@ -748,7 +748,7 @@ async fn test_real_pnpm_init_project() {
     .await
     .expect("Failed to create index.js");
 
-    // Install @aliendotdev/bindings (required by bootstrap wrapper)
+    // Install @alienplatform/bindings (required by bootstrap wrapper)
     install_bindings_package(&project_dir).await;
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");
@@ -903,7 +903,7 @@ async fn test_real_bun_init_project() {
     .await
     .expect("Failed to update index.ts");
 
-    // Install @aliendotdev/bindings (required by bootstrap wrapper)
+    // Install @alienplatform/bindings (required by bootstrap wrapper)
     install_bindings_package(&project_dir).await;
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");

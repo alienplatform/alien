@@ -111,11 +111,11 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
 fn ensure_test_app_deps(workspace_root: &std::path::Path, test_app_src: &std::path::Path) {
     let root_bindings = workspace_root
         .join("node_modules")
-        .join("@aliendotdev")
+        .join("@alienplatform")
         .join("bindings");
     let app_bindings = test_app_src
         .join("node_modules")
-        .join("@aliendotdev")
+        .join("@alienplatform")
         .join("bindings");
 
     if root_bindings.exists() || app_bindings.exists() {

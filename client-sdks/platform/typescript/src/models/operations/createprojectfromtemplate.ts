@@ -373,7 +373,7 @@ export type CreateProjectFromTemplateGithubSetup = {
 }
 
 export const SourceRepository = {
-  AliendotdevAlien: "alienplatform/alien",
+  alienplatformAlien: "alienplatform/alien",
 } as const
 export type SourceRepository = ClosedEnum<typeof SourceRepository>
 
