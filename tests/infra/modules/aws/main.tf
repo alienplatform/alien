@@ -1,8 +1,7 @@
 terraform {
   required_providers {
-    aws    = { source = "hashicorp/aws",      version = "~> 5.0" }
-    docker = { source = "kreuzwerker/docker", version = "~> 3.0" }
-    random = { source = "hashicorp/random",   version = "~> 3.0" }
+    aws    = { source = "hashicorp/aws",    version = "~> 5.0" }
+    random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
 
@@ -57,11 +56,6 @@ resource "aws_ecr_repository" "lambda_test" {
   force_delete         = true
 }
 
-data "aws_ecr_authorization_token" "management" {
-  provider    = aws.management
-  registry_id = aws_ecr_repository.lambda_test.registry_id
-}
-
 # ── Management: Lambda execution role ────────────────────────────────────────
 
 resource "aws_iam_role" "lambda_execution" {
@@ -112,22 +106,3 @@ data "aws_caller_identity" "target" {
   provider = aws.target
 }
 
-# ── Docker: build and push Lambda test image ─────────────────────────────────
-
-resource "docker_registry_image" "lambda_test" {
-  name          = "${aws_ecr_repository.lambda_test.repository_url}:latest"
-  keep_remotely = true
-
-  build {
-    context  = "${path.root}/images/lambda"
-    platform = "linux/arm64"
-
-    auth_config {
-      host_name = "${aws_ecr_repository.lambda_test.registry_id}.dkr.ecr.${var.management_region}.amazonaws.com"
-      user_name = "AWS"
-      password  = data.aws_ecr_authorization_token.management.password
-    }
-  }
-
-  depends_on = [aws_ecr_repository.lambda_test]
-}

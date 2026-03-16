@@ -1,8 +1,7 @@
 terraform {
   required_providers {
-    azurerm = { source = "hashicorp/azurerm",  version = "~> 3.0" }
-    docker  = { source = "kreuzwerker/docker", version = "~> 3.0" }
-    random  = { source = "hashicorp/random",   version = "~> 3.0" }
+    azurerm = { source = "hashicorp/azurerm", version = "~> 3.0" }
+    random  = { source = "hashicorp/random",  version = "~> 3.0" }
   }
 }
 
@@ -97,22 +96,3 @@ resource "azurerm_role_assignment" "target_containerapp" {
   principal_id         = data.azurerm_client_config.target.object_id
 }
 
-# ── Docker: build and push http-server image ──────────────────────────────────
-
-resource "docker_registry_image" "http_server" {
-  name          = "${azurerm_container_registry.test.login_server}/http-server:latest"
-  keep_remotely = true
-
-  build {
-    context  = "${path.root}/images/http-server"
-    platform = "linux/amd64"
-
-    auth_config {
-      host_name = azurerm_container_registry.test.login_server
-      user_name = azurerm_container_registry.test.admin_username
-      password  = azurerm_container_registry.test.admin_password
-    }
-  }
-
-  depends_on = [azurerm_container_registry.test]
-}

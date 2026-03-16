@@ -1,8 +1,7 @@
 terraform {
   required_providers {
-    google = { source = "hashicorp/google",   version = "~> 5.0" }
-    docker = { source = "kreuzwerker/docker", version = "~> 3.0" }
-    random = { source = "hashicorp/random",   version = "~> 3.0" }
+    google = { source = "hashicorp/google", version = "~> 5.0" }
+    random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
 
@@ -116,31 +115,8 @@ resource "google_project_iam_member" "target_iam_sa_user" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
-# ── Docker: build and push http-server image ──────────────────────────────────
-
 locals {
   registry_host    = "${var.management_region}-docker.pkg.dev"
   image_repository = "${local.registry_host}/${var.management_project_id}/alien-test/http-server"
   manager_key_json = base64decode(google_service_account_key.manager.private_key)
-}
-
-resource "docker_registry_image" "http_server" {
-  name          = "${local.image_repository}:latest"
-  keep_remotely = true
-
-  build {
-    context  = "${path.root}/images/http-server"
-    platform = "linux/amd64"
-
-    auth_config {
-      host_name = local.registry_host
-      user_name = "_json_key"
-      password  = local.manager_key_json
-    }
-  }
-
-  depends_on = [
-    google_artifact_registry_repository.test,
-    google_project_iam_member.manager_artifact_registry,
-  ]
 }
