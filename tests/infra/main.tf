@@ -4,7 +4,6 @@ module "aws" {
   providers = {
     aws.management = aws.management
     aws.target     = aws.target
-    docker         = docker
   }
 
   management_region = var.aws_management_region
@@ -17,7 +16,6 @@ module "gcp" {
   providers = {
     google.management = google.management
     google.target     = google.target
-    docker            = docker
   }
 
   management_project_id = var.google_management_project_id
@@ -32,7 +30,6 @@ module "azure" {
   providers = {
     azurerm.management = azurerm.management
     azurerm.target     = azurerm.target
-    docker             = docker
   }
 
   management_subscription_id = var.azure_management_subscription_id
