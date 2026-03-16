@@ -10,6 +10,11 @@ permissions:
   contents: read
   id-token: write
 
+# Prevent concurrent terraform applies on the same workspace
+concurrency:
+  group: terraform-test-infra
+  cancel-in-progress: false
+
 jobs:
   # Setup and build run in parallel -- build doesn't need .env.test.
   # Test jobs wait for both, then fan out across the matrix.

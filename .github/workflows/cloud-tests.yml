@@ -36,6 +36,11 @@ permissions:
   contents: read
   id-token: write
 
+# Prevent concurrent terraform applies on the same workspace
+concurrency:
+  group: terraform-test-infra
+  cancel-in-progress: false
+
 jobs:
   # Setup: provision infra (no-op if unchanged, ~2-3 min) and generate .env.test.
   # Uploads .env.test as an artifact for the parallel test jobs, and to
