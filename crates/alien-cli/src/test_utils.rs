@@ -23,28 +23,10 @@ static SHARED_NODE_MODULES: OnceCell<PathBuf> = OnceCell::const_new();
 pub async fn shared_node_modules_path() -> &'static PathBuf {
     SHARED_NODE_MODULES
         .get_or_init(|| async {
-            let workspace_root = get_workspace_root();
-            let core_path = workspace_root.join("packages/core");
-
-            // Build packages/core if dist/ doesn't exist yet
-            if !core_path.join("dist").exists() {
-                tokio::process::Command::new("pnpm")
-                    .args(["--filter", "@alienplatform/core", "build"])
-                    .current_dir(&workspace_root)
-                    .output()
-                    .await
-                    .expect("Failed to build @alienplatform/core");
-            }
-
-            // Create a minimal node_modules with a direct symlink to packages/core.
-            // We leak the TempDir so it lives for the whole test process.
             let temp_dir = TempDir::new().unwrap();
             let temp_path = temp_dir.path().to_path_buf();
-            let scope_dir = temp_path.join("node_modules/@alienplatform");
-            fs::create_dir_all(&scope_dir).unwrap();
-            std::os::unix::fs::symlink(&core_path, scope_dir.join("core")).unwrap();
+            setup_node_modules(&temp_path);
             Box::leak(Box::new(temp_dir));
-
             temp_path.join("node_modules")
         })
         .await
@@ -231,6 +213,26 @@ pub fn create_json_config_content() -> String {
     serde_json::to_string_pretty(&stack).unwrap()
 }
 
+/// Build `packages/core` if needed and create `node_modules/@alienplatform/core`
+/// as a direct symlink to it in `dir`. This avoids `bun install` which fails
+/// for `workspace:^` devDependencies outside the monorepo.
+pub fn setup_node_modules(dir: &std::path::Path) {
+    let workspace_root = get_workspace_root();
+    let core_path = workspace_root.join("packages/core");
+
+    if !core_path.join("dist").exists() {
+        std::process::Command::new("pnpm")
+            .args(["--filter", "@alienplatform/core", "build"])
+            .current_dir(&workspace_root)
+            .output()
+            .expect("Failed to build @alienplatform/core");
+    }
+
+    let scope_dir = dir.join("node_modules/@alienplatform");
+    fs::create_dir_all(&scope_dir).unwrap();
+    std::os::unix::fs::symlink(&core_path, scope_dir.join("core")).unwrap();
+}
+
 /// Helper to create a temporary Alien app directory
 pub fn create_temp_alien_app(config_content: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
@@ -243,9 +245,8 @@ pub fn create_temp_alien_app(config_content: &str) -> TempDir {
     // Create alien.config.ts
     fs::write(temp_path.join("alien.config.ts"), config_content).unwrap();
 
-    // Note: Dependencies are not automatically installed for test helpers.
-    // Tests that need dependencies should install them explicitly using
-    // alien_build::dependencies::install_dependencies() if needed.
+    // Set up node_modules so bun can resolve @alienplatform/core
+    setup_node_modules(temp_path);
 
     temp_dir
 }
