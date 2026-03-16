@@ -40,6 +40,15 @@ jobs:
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
+      - name: Remove Docker registry image resources from state
+        working-directory: tests/infra
+        run: |
+          terraform state rm module.aws.docker_registry_image.lambda_test 2>&1 || true
+          terraform state rm module.gcp.docker_registry_image.http_server 2>&1 || true
+          terraform state rm module.azure.docker_registry_image.http_server 2>&1 || true
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
       - name: Terraform apply
         working-directory: tests/infra
         run: terraform apply -auto-approve
