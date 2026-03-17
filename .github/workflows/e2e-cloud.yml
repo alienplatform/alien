@@ -239,7 +239,7 @@ jobs:
           - aws
           - gcp
           - azure
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
