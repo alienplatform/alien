@@ -5,6 +5,7 @@ on:
   merge_group:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,8 +13,8 @@ permissions:
 
 jobs:
   fast:
-    runs-on: depot-ubuntu-24.04-arm-8
-    timeout-minutes: 60
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -29,6 +30,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -51,6 +55,19 @@ jobs:
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: depot cargo install cargo-zigbuild --locked
+
+      - name: Add musl targets
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-musl
 
       - name: Configure git credentials for cargo
         run: |
@@ -87,3 +104,22 @@ jobs:
             --exclude endpoint-agent \
             --exclude alien-test-server \
             --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda)'
+
+      - name: Build alien CLI
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: depot cargo build -p alien-cli --bin alien
+
+      - name: Build TypeScript packages
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm build
+
+      - name: Run examples
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm test:examples
+
+      - name: Run local e2e tests
+        run: pnpm test:e2e:local
