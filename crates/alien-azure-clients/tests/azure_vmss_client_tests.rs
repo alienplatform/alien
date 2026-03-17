@@ -921,7 +921,7 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         managed_by: None,
         managed_by_extended: vec![],
         extended_location: None,
-        zones: vec![],
+        zones: vec!["2".to_string()],
         system_data: None,
     };
 

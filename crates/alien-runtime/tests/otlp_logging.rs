@@ -46,8 +46,10 @@ async fn test_otlp_logging_to_axiom() {
     println!("🆔 Test ID: {}", test_id);
     println!("💬 Expected message: {}", expected_message);
 
-    // Set up OTLP environment variables
-    env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &axiom_endpoint);
+    // AXIOM_OTLP_ENDPOINT is the full logs URL (e.g. https://api.axiom.co/v1/logs).
+    // Use OTEL_EXPORTER_OTLP_LOGS_ENDPOINT (signal-specific, used as-is by the SDK)
+    // instead of OTEL_EXPORTER_OTLP_ENDPOINT (base URL, SDK appends /v1/logs).
+    env::set_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", &axiom_endpoint);
     env::set_var(
         "OTEL_EXPORTER_OTLP_HEADERS",
         format!(
@@ -301,8 +303,8 @@ async fn test_alien_deployment_id_otlp_integration() {
     println!("🆔 Test Deployment ID: {}", deployment_id);
     println!("💬 Expected message: {}", expected_message);
 
-    // Set up OTLP environment variables with deployment ID
-    env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &axiom_endpoint);
+    // AXIOM_OTLP_ENDPOINT is the full logs URL; use signal-specific env var
+    env::set_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", &axiom_endpoint);
     env::set_var(
         "OTEL_EXPORTER_OTLP_HEADERS",
         format!(
@@ -335,7 +337,7 @@ async fn test_alien_deployment_id_otlp_integration() {
     println!("✅ OTLP logs flushed successfully");
 
     // Cleanup
-    env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+    env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
     env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
     env::remove_var("OTEL_SERVICE_NAME");
     env::remove_var("ALIEN_DEPLOYMENT_ID");

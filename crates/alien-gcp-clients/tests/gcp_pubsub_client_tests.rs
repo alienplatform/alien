@@ -552,12 +552,24 @@ async fn test_iam_policy_operations(ctx: &PubSubTestContext) {
 
     info!("📋 Initial topic IAM policy: {:?}", initial_topic_policy);
 
+    // Use the service account email (org policy blocks allUsers)
+    let test_member = {
+        let gcp_credentials_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
+        let sa_value: serde_json::Value = serde_json::from_str(&gcp_credentials_json).unwrap();
+        let email = sa_value
+            .get("client_email")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .expect("client_email must be in service account JSON");
+        format!("serviceAccount:{}", email)
+    };
+
     // Add a binding to the topic policy
     let mut bindings = initial_topic_policy.bindings.clone();
     bindings.push(
         Binding::builder()
             .role("roles/pubsub.viewer".to_string())
-            .members(vec!["allUsers".to_string()])
+            .members(vec![test_member])
             .build(),
     );
 

@@ -524,6 +524,10 @@ async fn test_end_to_end_log_operations(ctx: &mut CloudWatchLogsTestContext) {
                                 info!("Next sequence token: {}", next_token);
                             }
 
+                            // CloudWatch Logs has eventual consistency; wait before reading
+                            info!("⏳ Waiting for CloudWatch Logs eventual consistency...");
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
                             // Step 4: Get log events
                             let get_request = GetLogEventsRequest::builder()
                                 .log_group_name(log_group_name.clone())
