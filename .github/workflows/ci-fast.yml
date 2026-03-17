@@ -41,11 +41,9 @@ jobs:
 
       - name: Setup Depot
         uses: depot/setup-action@v1
-        with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
 
-      - name: Install sccache
-        uses: taiki-e/install-action@sccache
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Setup cargo-nextest
         uses: taiki-e/install-action@nextest
