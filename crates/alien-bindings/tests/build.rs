@@ -233,6 +233,8 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             .expect("AWS_MANAGEMENT_SECRET_ACCESS_KEY must be set in .env.test");
         let account_id = std::env::var("AWS_MANAGEMENT_ACCOUNT_ID")
             .expect("AWS_MANAGEMENT_ACCOUNT_ID must be set in .env.test");
+        let codebuild_image = std::env::var("ALIEN_TEST_AWS_CODEBUILD_IMAGE")
+            .unwrap_or_else(|_| "ghcr.io/alienplatform/alien-builder:latest".to_string());
 
         let aws_config = AwsClientConfig {
             account_id: account_id.clone(),
@@ -317,7 +319,7 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             .environment(
                 ProjectEnvironment::builder()
                     .r#type("LINUX_CONTAINER".to_string())
-                    .image("ghcr.io/alienplatform/alien-builder:latest".to_string())
+                    .image(codebuild_image)
                     .image_pull_credentials_type("SERVICE_ROLE".to_string())
                     .compute_type("BUILD_GENERAL1_SMALL".to_string())
                     .build(),

@@ -150,6 +150,16 @@ impl CloudbuildBuild {
         // Restore any original $$ sequences
         Ok(out.replace(SENTINEL_PREFIX, "$$"))
     }
+
+    /// Escapes shell dollar references so Cloud Build template parsing does not treat
+    /// shell variables (for example, `$TMP_BUILD_SCRIPT`) as substitutions.
+    fn escape_for_cloudbuild_template(script: &str) -> String {
+        // Preserve existing escaped $$ sequences to avoid over-escaping user intent.
+        const SENTINEL_PREFIX: &str = "__DOUBLE_DOLLAR_SENTINEL__";
+        let with_sentinel = script.replace("$$", SENTINEL_PREFIX);
+        let escaped = with_sentinel.replace('$', "$$");
+        escaped.replace(SENTINEL_PREFIX, "$$")
+    }
 }
 
 #[async_trait]
@@ -176,8 +186,13 @@ impl Build for CloudbuildBuild {
         let escaped_script =
             Self::escape_env_refs(&config.script, &merged_environment, &self.binding_name)?;
 
-        // Create build step that runs the unified wrapper script
-        let wrapper_script = create_build_wrapper_script(&escaped_script, monitoring.as_ref());
+        // Create build step that runs the unified wrapper script.
+        // Cloud Build parses `$FOO` as substitutions at request-time, so escape the entire
+        // script after generation to protect wrapper-local shell variables as well.
+        let wrapper_script = Self::escape_for_cloudbuild_template(&create_build_wrapper_script(
+            &escaped_script,
+            monitoring.as_ref(),
+        ));
 
         let build_step = BuildStep::builder()
             .name(config.image)
@@ -342,6 +357,24 @@ mod tests {
         let expected = r#"echo "$$VAR $VARIABLE""#;
 
         let result = CloudbuildBuild::escape_env_refs(script, &env, "test-binding").unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_escape_for_cloudbuild_template_escapes_wrapper_vars() {
+        let script = r#"echo "$TMP_BUILD_SCRIPT" && echo ${PIPESTATUS[0]}"#;
+        let expected = r#"echo "$$TMP_BUILD_SCRIPT" && echo $${PIPESTATUS[0]}"#;
+
+        let result = CloudbuildBuild::escape_for_cloudbuild_template(script);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_escape_for_cloudbuild_template_preserves_existing_double_dollar() {
+        let script = r#"echo "$$CUSTOM_VAR $TMP_BUILD_SCRIPT""#;
+        let expected = r#"echo "$$CUSTOM_VAR $$TMP_BUILD_SCRIPT""#;
+
+        let result = CloudbuildBuild::escape_for_cloudbuild_template(script);
         assert_eq!(result, expected);
     }
 

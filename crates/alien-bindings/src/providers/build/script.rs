@@ -54,11 +54,12 @@ pub(crate) fn create_build_wrapper_script(
 
         format!(
             r#"
-# Execute the build script and capture output to both stdout and log file
+# Execute the build script and capture output to a log file
 set +e  # Temporarily disable exit on error to capture exit code
-"$TMP_BUILD_SCRIPT" 2>&1 | tee "$TMP_BUILD_LOG"
-BUILD_EXIT_CODE=${{PIPESTATUS[0]}}
+"$TMP_BUILD_SCRIPT" > "$TMP_BUILD_LOG" 2>&1
+BUILD_EXIT_CODE=$?
 set -e  # Re-enable exit on error
+cat "$TMP_BUILD_LOG"
 echo "BUILD_COMPLETED_EOF_MARKER" | tee -a "$TMP_BUILD_LOG"
 
 # Send captured logs to the OTLP monitoring endpoint.
@@ -114,10 +115,10 @@ exit $BUILD_EXIT_CODE
 
     format!(
         r#"#!/bin/bash
-set -euo pipefail
+set -eu
 
-TMP_BUILD_SCRIPT="$(mktemp /tmp/alien-build-script.XXXXXX.sh)"
-TMP_BUILD_LOG="$(mktemp /tmp/alien-build-log.XXXXXX.log)"
+TMP_BUILD_SCRIPT="$(mktemp /tmp/alien-build-script.XXXXXX)"
+TMP_BUILD_LOG="$(mktemp /tmp/alien-build-log.XXXXXX)"
 cleanup() {{
   rm -f "$TMP_BUILD_SCRIPT" "$TMP_BUILD_LOG"
 }}
@@ -171,8 +172,8 @@ mod tests {
             "echo hi",
             Some(&monitoring_config("https://example.com", true, true)),
         );
-        assert!(script.contains("set -euo pipefail"));
-        assert!(script.contains("BUILD_EXIT_CODE=${PIPESTATUS[0]}"));
+        assert!(script.contains("set -eu"));
+        assert!(script.contains("BUILD_EXIT_CODE=$?"));
     }
 
     #[test]

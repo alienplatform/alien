@@ -53,7 +53,7 @@ thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # Container registry (unix-only: uses symlinks and OCI registry server)
-container-registry = { workspace = true }
+container-registry = { workspace = true, features = ["test-support"] }
 # Secret type used by container-registry auth
 sec = { workspace = true }
 
