@@ -19,11 +19,13 @@ path = "src/storybook/main.rs"
 required-features = ["storybook"]
 
 [features]
-default = ["storybook"]
+default = ["storybook", "otlp"]
 storybook = ["dep:color-eyre"]
+otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
 
 [dependencies]
 alien-core = { workspace = true }
+alien-runtime = { workspace = true, optional = true }
 alien-infra = { workspace = true, features = ["all-platforms", "local"] }
 alien-build = { workspace = true }
 alien-error = { workspace = true }

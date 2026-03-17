@@ -715,8 +715,8 @@ async fn run_dev_server_only(
 
     let config = alien_manager::ManagerConfig {
         port,
-        db_path,
-        state_dir: state_dir.clone(),
+        db_path: Some(db_path),
+        state_dir: Some(state_dir.clone()),
         dev_mode: true,
         ..Default::default()
     };
