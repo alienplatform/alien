@@ -97,7 +97,7 @@ jobs:
           aws ecr get-login-password --region "${{ steps.registries.outputs.ecr_region }}" \
             | docker login --username AWS --password-stdin "${{ steps.registries.outputs.ecr_registry }}"
           # GCP Artifact Registry (alien-test-manager SA key from terraform state)
-          terraform output -raw gcp_management_sa_key \
+          terraform output -raw management_gcp_service_account_key \
             | docker login -u _json_key --password-stdin \
                 "https://${{ steps.registries.outputs.gcr_registry }}"
           # Azure ACR (management SP has AcrPush)
