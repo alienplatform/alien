@@ -192,6 +192,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure git credentials for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
       - name: Download .env.test
         uses: actions/download-artifact@v4
         with:
