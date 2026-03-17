@@ -43,6 +43,12 @@ resource "aws_iam_user_policy_attachment" "manager_lambda" {
   policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
 }
 
+resource "aws_iam_user_policy_attachment" "manager_acm" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCertificateManagerFullAccess"
+}
+
 # ── Management: S3 bucket ─────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "test" {

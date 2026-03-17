@@ -180,13 +180,13 @@ jobs:
       matrix:
         include:
           - name: aws-clients
-            test_cmd: depot cargo test -p alien-aws-clients --tests
+            test_cmd: depot cargo nextest run -p alien-aws-clients
           - name: gcp-clients
-            test_cmd: depot cargo test -p alien-gcp-clients --tests --features gcp
+            test_cmd: depot cargo nextest run -p alien-gcp-clients --features gcp
           - name: azure-clients
-            test_cmd: depot cargo test -p alien-azure-clients --tests
+            test_cmd: depot cargo nextest run -p alien-azure-clients
           - name: bindings
-            test_cmd: depot cargo test -p alien-bindings --tests
+            test_cmd: depot cargo nextest run -p alien-bindings
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     steps:
@@ -211,6 +211,9 @@ jobs:
 
       - name: Install sccache
         uses: taiki-e/install-action@sccache
+
+      - name: Install nextest
+        uses: taiki-e/install-action@cargo-nextest
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
