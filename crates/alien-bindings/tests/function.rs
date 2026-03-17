@@ -300,27 +300,38 @@ impl AsyncTestContext for AwsProviderTestContext {
 
         info!("✅ Created function URL: {}", url_response.function_url);
 
-        // Add resource-based policy so the function URL (AuthType=NONE) is publicly
-        // invocable.  Ignore ResourceConflict (policy already exists from a prior run)
-        // but panic on any other error so permission failures are caught immediately.
-        let permission_request = AddPermissionRequest::builder()
+        // Public Function URLs require two resource-based policy statements:
+        // 1. lambda:InvokeFunctionUrl with FunctionUrlAuthType=NONE
+        // 2. lambda:InvokeFunction (the actual invoke permission)
+        // Without both, unauthenticated HTTP requests return 403.
+        let url_permission = AddPermissionRequest::builder()
             .statement_id("AllowFunctionUrlInvoke".to_string())
             .action("lambda:InvokeFunctionUrl".to_string())
             .principal("*".to_string())
             .function_url_auth_type("NONE".to_string())
             .build();
 
-        match lambda_client
-            .add_permission(&function_name, permission_request)
-            .await
-        {
-            Ok(_) => {
-                info!("✅ Added public invocation permission for function URL");
+        let invoke_permission = AddPermissionRequest::builder()
+            .statement_id("AllowPublicInvoke".to_string())
+            .action("lambda:InvokeFunction".to_string())
+            .principal("*".to_string())
+            .function_url_auth_type("NONE".to_string())
+            .build();
+
+        for perm in [url_permission, invoke_permission] {
+            let sid = perm.statement_id.clone();
+            match lambda_client
+                .add_permission(&function_name, perm)
+                .await
+            {
+                Ok(_) => {
+                    info!("✅ Added permission: {}", sid);
+                }
+                Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
+                    info!("ℹ️ Permission {} already exists, continuing", sid);
+                }
+                Err(e) => panic!("Failed to add permission {}: {:?}", sid, e),
             }
-            Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
-                info!("ℹ️ Function URL permission already exists, continuing");
-            }
-            Err(e) => panic!("Failed to add function URL permission: {:?}", e),
         }
 
         // Verify the resource-based policy was applied
@@ -334,8 +345,8 @@ impl AsyncTestContext for AwsProviderTestContext {
             }
         }
 
-        // IAM resource-based policy propagation can take 10-60 seconds.
-        tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+        // IAM resource-based policy propagation can take up to ~2 minutes on AWS.
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
         let binding = FunctionBinding::lambda(function_name.clone(), region.clone());
 

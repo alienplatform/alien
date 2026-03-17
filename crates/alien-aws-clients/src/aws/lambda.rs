@@ -959,7 +959,12 @@ pub struct AddPermissionRequest {
     pub statement_id: String,
     pub action: String,
     pub principal: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub function_url_auth_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_arn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_account: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -816,25 +816,27 @@ async fn test_end_to_end_function_execution(ctx: &mut LambdaTestContext) {
             Ok(function_url) => {
                 info!("✅ Function URL created: {}", function_url);
 
-                // Step 4: Add permission for public access to the function URL
-                info!("🔐 Adding permission for public access...");
-                let permission_request = AddPermissionRequest::builder()
+                // Step 4: Add permissions for public access to the function URL.
+                // Public Function URLs require both InvokeFunctionUrl and InvokeFunction.
+                info!("🔐 Adding permissions for public access...");
+                let url_perm = AddPermissionRequest::builder()
                     .statement_id("AllowFunctionUrlInvoke".to_string())
                     .action("lambda:InvokeFunctionUrl".to_string())
                     .principal("*".to_string())
                     .function_url_auth_type("NONE".to_string())
                     .build();
+                let invoke_perm = AddPermissionRequest::builder()
+                    .statement_id("AllowPublicInvoke".to_string())
+                    .action("lambda:InvokeFunction".to_string())
+                    .principal("*".to_string())
+                    .function_url_auth_type("NONE".to_string())
+                    .build();
 
-                match ctx
-                    .client
-                    .add_permission(&function_name, permission_request)
-                    .await
-                {
-                    Ok(_) => {
-                        info!("✅ Permission added successfully");
-                    }
-                    Err(e) => {
-                        warn!("Failed to add permission (may still work): {:?}", e);
+                for perm in [url_perm, invoke_perm] {
+                    let sid = perm.statement_id.clone();
+                    match ctx.client.add_permission(&function_name, perm).await {
+                        Ok(_) => info!("✅ Permission {} added", sid),
+                        Err(e) => warn!("Failed to add permission {} (may still work): {:?}", sid, e),
                     }
                 }
 

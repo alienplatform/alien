@@ -2419,18 +2419,39 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
         .and_then(|mi| mi.instance.as_ref())
     {
         let sp_instance_name = instance_url.split('/').last().unwrap_or("unknown");
-        let serial_output = ctx
-            .client
-            .get_serial_port_output(ctx.zone.clone(), sp_instance_name.to_string())
-            .await
-            .expect("Failed to get serial port output");
 
+        // Retry because the instance may not be ready immediately after creation.
+        let mut serial_output = None;
+        for attempt in 1..=12 {
+            match ctx
+                .client
+                .get_serial_port_output(ctx.zone.clone(), sp_instance_name.to_string())
+                .await
+            {
+                Ok(output) => {
+                    serial_output = Some(output);
+                    break;
+                }
+                Err(e) => {
+                    let msg = format!("{:?}", e);
+                    if msg.contains("resourceNotReady") || msg.contains("not ready") {
+                        println!(
+                            "  Instance not ready for serial port (attempt {}/12), waiting 10s...",
+                            attempt
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    } else {
+                        panic!("Failed to get serial port output: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        let serial_output = serial_output.expect("Instance never became ready for serial port output after 120s");
         println!(
             "  Serial port output length: {} bytes",
             serial_output.contents.as_deref().unwrap_or("").len()
         );
-        // The instance may not have produced much output yet, but the API call must succeed
-        // and return a valid (possibly empty) SerialPortOutput.
         assert!(
             serial_output.contents.is_some(),
             "Serial port output should have a contents field"
