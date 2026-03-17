@@ -701,7 +701,24 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
                     }),
                 }),
                 eviction_policy: None,
-                extension_profile: None,
+                extension_profile: Some(VirtualMachineScaleSetExtensionProfile {
+                    extensions: vec![VirtualMachineScaleSetExtension {
+                        name: Some("HealthExtension".to_string()),
+                        properties: Some(VirtualMachineScaleSetExtensionProperties {
+                            publisher: Some("Microsoft.ManagedServices".to_string()),
+                            type_: Some("ApplicationHealthLinux".to_string()),
+                            type_handler_version: Some("1.0".to_string()),
+                            auto_upgrade_minor_version: Some(true),
+                            settings: Some(serde_json::json!({
+                                "protocol": "tcp",
+                                "port": 22
+                            })),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }],
+                    extensions_time_budget: None,
+                }),
                 hardware_profile: None,
                 license_type: None,
                 priority: None,
@@ -1023,36 +1040,14 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         .client
         .get_vmss(&ctx.resource_group_name, &vmss_name)
         .await?;
+    // The health extension was already added during initial VMSS creation, so it's
+    // applied to all instances. We only need to switch the upgrade policy to Rolling.
     if let Some(ref mut props) = vmss_for_rolling.properties {
         props.upgrade_policy = Some(UpgradePolicy {
             mode: Some(UpgradeMode::Rolling),
             rolling_upgrade_policy: None,
             automatic_os_upgrade_policy: None,
         });
-        // Include the health extension so Azure accepts the Rolling upgrade model update.
-        // Without it Azure returns 400: "Rolling Upgrade mode is not supported … because
-        // a health probe or health extension was not provided."
-        if let Some(ref mut vm_profile) = props.virtual_machine_profile {
-            vm_profile.extension_profile = Some(VirtualMachineScaleSetExtensionProfile {
-                extensions: vec![VirtualMachineScaleSetExtension {
-                    name: Some("HealthExtension".to_string()),
-                    properties: Some(VirtualMachineScaleSetExtensionProperties {
-                        publisher: Some("Microsoft.ManagedServices".to_string()),
-                        type_: Some("ApplicationHealthLinux".to_string()),
-                        type_handler_version: Some("1.0".to_string()),
-                        auto_upgrade_minor_version: Some(true),
-                        settings: Some(serde_json::json!({
-                            "protocol": "tcp",
-                            "port": 22
-                        })),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                extensions_time_budget: None,
-            });
-        }
-        // Clear provisioning_state so Azure doesn't reject the update
         props.provisioning_state = None;
     }
 

@@ -316,9 +316,8 @@ impl AsyncTestContext for AwsProviderTestContext {
         {
             Ok(_) => {
                 info!("✅ Added public invocation permission for function URL");
-                // Allow a few seconds for the resource-based policy to propagate
-                // before any test tries to invoke the function URL.
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                // IAM resource-based policy propagation can take 10-30 seconds.
+                tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
             }
             Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
                 info!("ℹ️ Function URL permission already exists, continuing");
@@ -1339,44 +1338,59 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
         function_url
     );
 
-    // Make direct HTTP request to the function URL
+    // Make direct HTTP request to the function URL with retry for IAM propagation
     let client = reqwest::Client::new();
     let request_url = format!("{}/", function_url.trim_end_matches('/'));
 
-    let response = client
-        .get(&request_url)
-        .header("User-Agent", "alien-function-test/1.0")
-        .timeout(Duration::from_secs(60))
-        .send()
-        .await
-        .expect(&format!(
-            "[{}] HTTP request to {} should succeed",
-            provider_name, request_url
-        ));
+    let mut last_status = None;
+    let max_retries = 5;
+    for attempt in 1..=max_retries {
+        let response = client
+            .get(&request_url)
+            .header("User-Agent", "alien-function-test/1.0")
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .expect(&format!(
+                "[{}] HTTP request to {} should succeed",
+                provider_name, request_url
+            ));
 
-    let status = response.status();
-    info!(
-        "[{}] HTTP request to {} returned status: {}",
-        provider_name, request_url, status
-    );
+        let status = response.status();
+        info!(
+            "[{}] HTTP request attempt {}/{} to {} returned status: {}",
+            provider_name, attempt, max_retries, request_url, status
+        );
 
-    // Accept 2xx and 3xx status codes as success
-    assert!(
-        status.is_success() || status.is_redirection(),
-        "[{}] HTTP request failed with status: {}",
+        if status.is_success() || status.is_redirection() {
+            let body = response.text().await.expect(&format!(
+                "[{}] Should be able to read response body",
+                provider_name
+            ));
+            info!(
+                "[{}] Response body length: {} bytes",
+                provider_name,
+                body.len()
+            );
+            info!("[{}] Function HTTP access test completed", provider_name);
+            return;
+        }
+
+        last_status = Some(status);
+        if attempt < max_retries {
+            let wait = Duration::from_secs(5 * attempt as u64);
+            info!(
+                "[{}] Got {}, waiting {:?} for IAM propagation before retry...",
+                provider_name, status, wait
+            );
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    panic!(
+        "[{}] HTTP request failed after {} retries with status: {}",
         provider_name,
-        status
+        max_retries,
+        last_status.unwrap()
     );
-
-    let body = response.text().await.expect(&format!(
-        "[{}] Should be able to read response body",
-        provider_name
-    ));
-    info!(
-        "[{}] Response body length: {} bytes",
-        provider_name,
-        body.len()
-    );
-
-    info!("[{}] Function HTTP access test completed", provider_name);
 }

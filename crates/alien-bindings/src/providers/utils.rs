@@ -66,8 +66,12 @@ pub(crate) fn create_build_wrapper_script(
     monitoring_config: Option<&MonitoringConfig>,
 ) -> String {
     let monitoring_setup = if let Some(config) = monitoring_config {
-        // Build the full OTLP URL from the endpoint field.
-        let url = config.endpoint.trim_end_matches('/').to_string();
+        // Build the full OTLP URL from endpoint + logs_uri.
+        let url = format!(
+            "{}{}",
+            config.endpoint.trim_end_matches('/'),
+            config.logs_uri
+        );
 
         // Build Python `req.add_header(...)` lines for each configured header.
         // serde_json::to_string produces properly escaped JSON string literals.

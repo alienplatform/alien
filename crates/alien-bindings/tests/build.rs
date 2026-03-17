@@ -942,8 +942,14 @@ async fn test_build_with_monitoring_to_axiom(#[case] ctx: impl BuildTestContext)
 
     // Get Axiom configuration from environment
     println!("[{}] 📋 Setting up Axiom configuration...", provider_name);
-    let axiom_endpoint =
+    let axiom_otlp_endpoint =
         std::env::var("AXIOM_OTLP_ENDPOINT").expect("AXIOM_OTLP_ENDPOINT must be set in .env.test");
+    // AXIOM_OTLP_ENDPOINT is the full URL (e.g. https://api.axiom.co/v1/logs).
+    // MonitoringConfig.endpoint is the base URL; logs_uri provides the path.
+    let axiom_endpoint = axiom_otlp_endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/v1/logs")
+        .to_string();
     let axiom_token = std::env::var("AXIOM_TOKEN").expect("AXIOM_TOKEN must be set in .env.test");
     let axiom_dataset =
         std::env::var("AXIOM_DATASET").expect("AXIOM_DATASET must be set in .env.test");
@@ -1032,25 +1038,20 @@ async fn test_build_with_monitoring_to_axiom(#[case] ctx: impl BuildTestContext)
     );
     let build_end_time = chrono::Utc::now();
 
-    // Wait a bit for logs to be ingested into Axiom
+    // Wait for logs to be ingested into Axiom (ingestion can take 15-30s)
     println!(
-        "[{}] ⏰ Waiting 15 seconds for logs to be ingested into Axiom...",
+        "[{}] ⏰ Waiting 30 seconds for logs to be ingested into Axiom...",
         provider_name
     );
-    tokio::time::sleep(Duration::from_secs(15)).await;
+    tokio::time::sleep(Duration::from_secs(30)).await;
     println!("[{}] ⏰ Finished waiting for log ingestion", provider_name);
 
     // Query logs from Axiom using APL
-    println!("[{}] 📖 Querying logs from Axiom...", provider_name);
     let http_client = reqwest::Client::new();
-
-    // Create APL query to search for our test message within the build timeframe
     let apl_query = format!(
         "['{}'] | where body contains '{}' | limit 100",
         axiom_dataset, expected_message
     );
-
-    // Format timestamps for Axiom API (RFC3339)
     let start_time = build_start_time.to_rfc3339();
     let end_time = build_end_time.to_rfc3339();
 
@@ -1066,128 +1067,130 @@ async fn test_build_with_monitoring_to_axiom(#[case] ctx: impl BuildTestContext)
         "endTime": end_time
     });
 
-    let response = http_client
-        .post("https://api.axiom.co/v1/datasets/_apl?format=tabular")
-        .header("Authorization", format!("Bearer {}", axiom_token))
-        .header("Content-Type", "application/json")
-        .json(&query_payload)
-        .send()
-        .await
-        .unwrap_or_else(|e| panic!("[{}] Failed to send Axiom query: {:?}", provider_name, e));
-
-    let status = response.status();
-    if !status.is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        panic!(
-            "[{}] Axiom query failed with status {}: {}",
-            provider_name, status, error_text
+    // Retry the Axiom query - ingestion latency can vary
+    let max_query_attempts = 3;
+    let mut last_messages: Vec<String> = Vec::new();
+    for query_attempt in 1..=max_query_attempts {
+        println!(
+            "[{}] 📖 Querying logs from Axiom (attempt {}/{})...",
+            provider_name, query_attempt, max_query_attempts
         );
-    }
 
-    let query_result: serde_json::Value = response.json().await.unwrap_or_else(|e| {
-        panic!(
-            "[{}] Failed to parse Axiom response: {:?}",
-            provider_name, e
-        )
-    });
+        let response = http_client
+            .post("https://api.axiom.co/v1/datasets/_apl?format=tabular")
+            .header("Authorization", format!("Bearer {}", axiom_token))
+            .header("Content-Type", "application/json")
+            .json(&query_payload)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("[{}] Failed to send Axiom query: {:?}", provider_name, e));
 
-    println!(
-        "[{}] ✅ Successfully retrieved query response from Axiom",
-        provider_name
-    );
-
-    // Verify our test message is in the logs
-    println!("[{}] 🔍 Analyzing Axiom query response...", provider_name);
-
-    let tables = query_result
-        .get("tables")
-        .and_then(|t| t.as_array())
-        .unwrap_or_else(|| panic!("[{}] No tables found in Axiom response", provider_name));
-
-    if tables.is_empty() {
-        panic!("[{}] No data tables found in Axiom response", provider_name);
-    }
-
-    let table = &tables[0];
-    let columns = table
-        .get("columns")
-        .and_then(|c| c.as_array())
-        .unwrap_or_else(|| panic!("[{}] No columns found in Axiom table", provider_name));
-
-    // Find the message field in the table structure
-    let fields = table
-        .get("fields")
-        .and_then(|f| f.as_array())
-        .unwrap_or_else(|| panic!("[{}] No fields found in Axiom table", provider_name));
-
-    let message_field_index = fields.iter().position(|field| {
-        field
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|name| {
-                name.contains("message") || name.contains("@message") || name.contains("body")
-            })
-            .unwrap_or(false)
-    });
-
-    if let Some(msg_index) = message_field_index {
-        if let Some(message_column) = columns.get(msg_index).and_then(|c| c.as_array()) {
-            let messages: Vec<String> = message_column
-                .iter()
-                .filter_map(|msg| msg.as_str().map(|s| s.to_string()))
-                .collect();
-
-            println!(
-                "[{}] 📊 Retrieved {} log entries",
-                provider_name,
-                messages.len()
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            panic!(
+                "[{}] Axiom query failed with status {}: {}",
+                provider_name, status, error_text
             );
+        }
 
-            // Print first few messages for debugging
-            println!("[{}] 📝 First few log entries:", provider_name);
-            for (i, message) in messages.iter().take(5).enumerate() {
-                println!("[{}]   Entry {}: {}", provider_name, i, message);
+        let query_result: serde_json::Value = response.json().await.unwrap_or_else(|e| {
+            panic!(
+                "[{}] Failed to parse Axiom response: {:?}",
+                provider_name, e
+            )
+        });
+
+        println!(
+            "[{}] ✅ Successfully retrieved query response from Axiom",
+            provider_name
+        );
+
+        let tables = query_result
+            .get("tables")
+            .and_then(|t| t.as_array());
+
+        let found = if let Some(tables) = tables {
+            if let Some(table) = tables.first() {
+                let columns = table.get("columns").and_then(|c| c.as_array());
+                let fields = table.get("fields").and_then(|f| f.as_array());
+
+                if let (Some(columns), Some(fields)) = (columns, fields) {
+                    let message_field_index = fields.iter().position(|field| {
+                        field
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|name| {
+                                name.contains("message")
+                                    || name.contains("@message")
+                                    || name.contains("body")
+                            })
+                            .unwrap_or(false)
+                    });
+
+                    if let Some(msg_index) = message_field_index {
+                        if let Some(message_column) =
+                            columns.get(msg_index).and_then(|c| c.as_array())
+                        {
+                            last_messages = message_column
+                                .iter()
+                                .filter_map(|msg| msg.as_str().map(|s| s.to_string()))
+                                .collect();
+                            println!(
+                                "[{}] 📊 Retrieved {} log entries",
+                                provider_name,
+                                last_messages.len()
+                            );
+                            last_messages
+                                .iter()
+                                .any(|msg| msg.contains(&expected_message))
+                        } else {
+                            false
+                        }
+                    } else {
+                        println!(
+                            "[{}] ⚠️ No message/body field in response. Fields: {:?}",
+                            provider_name, fields
+                        );
+                        println!(
+                            "[{}] 📋 Full query result: {:?}",
+                            provider_name, query_result
+                        );
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
             }
+        } else {
+            false
+        };
 
-            let found_message = messages.iter().any(|msg| msg.contains(&expected_message));
-            println!(
-                "[{}] 🔍 Looking for message containing: '{}'",
-                provider_name, expected_message
-            );
-            println!("[{}] 🔍 Message found: {}", provider_name, found_message);
-
-            assert!(
-                found_message,
-                "[{}] Expected to find test message '{}' in Axiom logs, but it was not found. Available messages: {:?}",
-                provider_name, expected_message, messages
-            );
+        if found {
             println!(
                 "[{}] ✅ Successfully found test message in Axiom logs",
                 provider_name
             );
-        } else {
-            panic!(
-                "[{}] Could not extract message column data from Axiom response",
+            break;
+        }
+
+        if query_attempt < max_query_attempts {
+            println!(
+                "[{}] ⏳ Message not found yet, waiting 15s before retry...",
                 provider_name
             );
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        } else {
+            panic!(
+                "[{}] Expected to find test message '{}' in Axiom logs after {} attempts. Available messages: {:?}",
+                provider_name, expected_message, max_query_attempts, last_messages
+            );
         }
-    } else {
-        println!(
-            "[{}] ❌ No message field found in Axiom response",
-            provider_name
-        );
-        println!("[{}] 📋 Available fields: {:?}", provider_name, fields);
-        println!(
-            "[{}] 📋 Full query result: {:?}",
-            provider_name, query_result
-        );
-        panic!(
-            "[{}] No message field found in Axiom response",
-            provider_name
-        );
     }
 
     println!(

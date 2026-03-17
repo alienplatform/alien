@@ -2496,7 +2496,7 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
         .await
         .expect("Failed to attach disk");
 
-    ctx.wait_for_zone_operation(&ctx.zone, attach_op.name.as_ref().unwrap(), 180)
+    ctx.wait_for_zone_operation(&ctx.zone, attach_op.name.as_ref().unwrap(), 300)
         .await
         .expect("Disk attach operation timed out");
     println!("✅ Disk attached to instance {}", instance_name);
@@ -2507,7 +2507,7 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
         .await
         .expect("Failed to detach disk");
 
-    ctx.wait_for_zone_operation(&ctx.zone, detach_op.name.as_ref().unwrap(), 180)
+    ctx.wait_for_zone_operation(&ctx.zone, detach_op.name.as_ref().unwrap(), 300)
         .await
         .expect("Disk detach operation timed out");
     println!("✅ Disk detached from instance {}", instance_name);
