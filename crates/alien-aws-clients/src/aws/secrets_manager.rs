@@ -90,7 +90,7 @@ impl SecretsManagerClient {
                 self.config.region
             ))
             .header("X-Amz-Target", target)
-            .content_type_kms_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 

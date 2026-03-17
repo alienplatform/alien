@@ -209,7 +209,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.CreateLogGroup")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -244,7 +244,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.DeleteLogGroup")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -271,7 +271,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.CreateLogStream")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -307,7 +307,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.DeleteLogStream")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -334,7 +334,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.PutLogEvents")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -366,7 +366,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .request(Method::POST, &self.get_base_url())
             .host(&format!("logs.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", "Logs_20140328.GetLogEvents")
-            .content_type_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 

@@ -101,7 +101,7 @@ impl AcmClient {
             .request(Method::POST, &url)
             .host(&format!("acm.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", format!("CertificateManager.{}", target))
-            .content_type_kms_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -126,7 +126,7 @@ impl AcmClient {
             .request(Method::POST, &url)
             .host(&format!("acm.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", format!("CertificateManager.{}", target))
-            .content_type_kms_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 

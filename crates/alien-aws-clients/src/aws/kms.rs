@@ -77,7 +77,7 @@ impl KmsClient {
             .request(Method::POST, &url)
             .host(&format!("kms.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", format!("TrentService.{}", target))
-            .content_type_kms_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 
@@ -102,7 +102,7 @@ impl KmsClient {
             .request(Method::POST, &url)
             .host(&format!("kms.{}.amazonaws.com", self.config.region))
             .header("X-Amz-Target", format!("TrentService.{}", target))
-            .content_type_kms_json()
+            .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
 

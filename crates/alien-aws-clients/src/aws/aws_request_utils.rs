@@ -257,8 +257,9 @@ pub trait AwsRequestBuilderExt {
     /// `x-amz-content-sha256` header – required for binary payloads like Lambda invocations.
     fn content_sha256_bytes(self, body: &[u8]) -> Self;
 
-    /// Set `Content-Type: application/x-amz-json-1.1` for KMS requests.
-    fn content_type_kms_json(self) -> Self;
+    /// Set `Content-Type: application/x-amz-json-1.1` for AWS JSON RPC services
+    /// (KMS, CloudWatch Logs, Secrets Manager, ACM, etc.).
+    fn content_type_amz_json(self) -> Self;
 }
 
 impl AwsRequestBuilderExt for reqwest::RequestBuilder {
@@ -270,7 +271,7 @@ impl AwsRequestBuilderExt for reqwest::RequestBuilder {
         self.header("content-type", "application/json")
     }
 
-    fn content_type_kms_json(self) -> Self {
+    fn content_type_amz_json(self) -> Self {
         self.header("content-type", "application/x-amz-json-1.1")
     }
 

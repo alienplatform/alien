@@ -601,10 +601,9 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         "!"
     );
 
-    // Standard_B2s is a small x64 burstable SKU with quota in eastus
-    // restrictions.  The B-series _ps_ / _pls_ variants are ARM64-only and cannot run
-    // x64 Ubuntu images, hence the explicit override here.
-    let vmss_sku = env::var("AZURE_VMSS_TEST_SKU").unwrap_or_else(|_| "Standard_B2s".to_string());
+    // Standard_D2s_v3 is a common x64 SKU with quota in eastus (standardDSv3Family).
+    // It is zone-restricted in zones 1/3, so we pin the VMSS to zone 2.
+    let vmss_sku = env::var("AZURE_VMSS_TEST_SKU").unwrap_or_else(|_| "Standard_D2s_v3".to_string());
 
     let vmss = VirtualMachineScaleSet {
         location: ctx.location.clone(),
@@ -751,7 +750,7 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         type_: None,
         etag: None,
         extended_location: None,
-        zones: vec![],
+        zones: vec!["2".to_string()],
         system_data: None,
     };
 
