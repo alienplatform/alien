@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description How telemetry (logs, metrics, traces) is handled.

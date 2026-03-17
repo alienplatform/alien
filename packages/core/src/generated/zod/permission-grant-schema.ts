@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Grant permissions for a specific cloud platform
  */
 export const PermissionGrantSchema = z.object({
-    "actions": z.array(z.string()).describe("AWS IAM actions (only for AWS)").optional().nullable(),
-"dataActions": z.array(z.string()).describe("Azure actions (only for Azure)").optional().nullable(),
-"permissions": z.array(z.string()).describe("GCP permissions (only for GCP)").optional().nullable()
+    "actions": z.array(z.string()).describe("AWS IAM actions (only for AWS)").nullish(),
+"dataActions": z.array(z.string()).describe("Azure actions (only for Azure)").nullish(),
+"permissions": z.array(z.string()).describe("GCP permissions (only for GCP)").nullish()
     }).describe("Grant permissions for a specific cloud platform")
 
 export type PermissionGrant = z.infer<typeof PermissionGrantSchema>

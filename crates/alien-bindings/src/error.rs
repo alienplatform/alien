@@ -574,7 +574,7 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// Remote access to agent resources failed.
+    /// Remote access to deployment resources failed.
     #[error(
         code = "REMOTE_ACCESS_FAILED",
         message = "Remote access failed during operation: {operation}",

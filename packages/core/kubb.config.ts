@@ -18,6 +18,7 @@ export default defineConfig({
     pluginZod({
       inferred: true,
       version: "4",
+      importPath: "zod",
       transformers: {
         name: (name, type) => {
           if (type === "function") {

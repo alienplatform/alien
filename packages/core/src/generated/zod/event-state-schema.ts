@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AlienErrorSchema } from "./alien-error-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents the state of an event
  */
 export const EventStateSchema = z.union([z.object({
     "failed": z.object({
-    get error(){
+    get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               }
     }).describe("Event failed with an error")

@@ -3,20 +3,20 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Defines what triggers a function execution
  */
 export const FunctionTriggerSchema = z.union([z.object({
-    get queue(){
+    get "queue"(){
                 return ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")
               },
 "type": z.enum(["queue"])
     }), z.object({
     "events": z.array(z.string()).describe("Events to trigger on (e.g., [\"created\", \"deleted\"])"),
-get storage(){
+get "storage"(){
                 return ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")
               },
 "type": z.enum(["storage"])

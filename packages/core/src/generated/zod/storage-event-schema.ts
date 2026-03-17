@@ -3,30 +3,30 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { StorageEventTypeSchema } from "./storage-event-type-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents an event triggered by an action in an object storage service.\n\nThis struct provides a generic representation for events from services like\nAWS S3, Google Cloud Storage (GCS), and Azure Blob Storage.
  */
 export const StorageEventSchema = z.object({
     "bucketName": z.string().describe("The name of the bucket or container where the event occurred."),
-"contentType": z.string().describe("Optional content type (MIME type) of the object.").optional().nullable(),
-"copySource": z.string().describe("Optional information about the source object for copy events.").optional().nullable(),
-"currentTier": z.string().describe("Optional current storage tier for TierChanged or Restored events.").optional().nullable(),
-"etag": z.string().describe("Optional ETag or hash of the object content.").optional().nullable(),
-get eventType(){
+"contentType": z.string().describe("Optional content type (MIME type) of the object.").nullish(),
+"copySource": z.string().describe("Optional information about the source object for copy events.").nullish(),
+"currentTier": z.string().describe("Optional current storage tier for TierChanged or Restored events.").nullish(),
+"etag": z.string().describe("Optional ETag or hash of the object content.").nullish(),
+get "eventType"(){
                 return StorageEventTypeSchema.describe("Represents the type of storage event that occurred.")
               },
-"metadata": z.object({
+"metadata": z.optional(z.object({
     
-    }).catchall(z.string()).describe("Optional metadata associated with the object.").optional(),
+    }).catchall(z.string()).describe("Optional metadata associated with the object.")),
 "objectKey": z.string().describe("The key or path of the object involved in the event."),
-"previousTier": z.string().describe("Optional previous storage tier for TierChanged or Restored events.").optional().nullable(),
-"region": z.string().describe("Optional region where the event originated.").optional().nullable(),
-"size": z.int().min(0).describe("Optional size of the object in bytes.").optional().nullable(),
-"timestamp": z.string().datetime().describe("The timestamp when the event occurred."),
-"versionId": z.string().describe("Optional version or sequencer identifier for the event or object state.").optional().nullable()
+"previousTier": z.string().describe("Optional previous storage tier for TierChanged or Restored events.").nullish(),
+"region": z.string().describe("Optional region where the event originated.").nullish(),
+"size": z.int().min(0).describe("Optional size of the object in bytes.").nullish(),
+"timestamp": z.iso.datetime().describe("The timestamp when the event occurred."),
+"versionId": z.string().describe("Optional version or sequencer identifier for the event or object state.").nullish()
     }).describe("Represents an event triggered by an action in an object storage service.\n\nThis struct provides a generic representation for events from services like\nAWS S3, Google Cloud Storage (GCS), and Azure Blob Storage.")
 
 export type StorageEvent = z.infer<typeof StorageEventSchema>

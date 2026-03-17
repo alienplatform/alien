@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { CustomDomainConfigSchema } from "./custom-domain-config-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.
@@ -12,7 +12,7 @@ import { z } from "zod/v4";
 export const DomainSettingsSchema = z.object({
     "customDomains": z.object({
     
-    }).catchall(CustomDomainConfigSchema.describe("Custom domain configuration for a single resource.")).describe("Custom domain configuration per resource ID.").optional().nullable()
+    }).catchall(z.lazy(() => CustomDomainConfigSchema).describe("Custom domain configuration for a single resource.")).describe("Custom domain configuration per resource ID.").nullish()
     }).describe("Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.")
 
 export type DomainSettings = z.infer<typeof DomainSettingsSchema>

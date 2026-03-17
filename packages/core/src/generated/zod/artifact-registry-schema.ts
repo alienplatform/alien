@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents an artifact registry for storing container images and other build artifacts.\nThis is a high-level wrapper resource that provides a cloud-agnostic interface over\nAWS ECR, GCP Artifact Registry, and Azure Container Registry.\n\n# Platform Mapping\n- **AWS**: Implicitly exists as the AWS account and region\n- **GCP**: Explicitly configured per project and location (Artifact Registry API enabled)\n- **Azure**: Explicitly provisioned Azure Container Registry instance\n\nThe actual repository management and permissions are handled through the bindings API.

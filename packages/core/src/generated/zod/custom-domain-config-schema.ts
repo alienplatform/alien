@@ -3,14 +3,14 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { CustomCertificateConfigSchema } from "./custom-certificate-config-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Custom domain configuration for a single resource.
  */
 export const CustomDomainConfigSchema = z.object({
-    get certificate(){
+    get "certificate"(){
                 return CustomCertificateConfigSchema.describe("Platform-specific certificate references for custom domains.")
               },
 "domain": z.string().describe("Fully qualified domain name to use.")

@@ -3,20 +3,20 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BodySpecSchema } from "./body-spec-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Command response from deployment
  */
 export const CommandResponseSchema = z.union([z.object({
-    get response(){
+    get "response"(){
                 return BodySpecSchema.describe("Body specification supporting inline and storage modes")
               },
 "status": z.enum(["success"])
     }), z.object({
     "code": z.string().describe("Error code"),
-"details": z.string().describe("Optional additional details").optional().nullable(),
+"details": z.string().describe("Optional additional details").nullish(),
 "message": z.string().describe("Error message"),
 "status": z.enum(["error"])
     })]).describe("Command response from deployment")

@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.

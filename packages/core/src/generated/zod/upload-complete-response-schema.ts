@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { CommandStateSchema } from "./command-state-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Response to upload completion
  */
 export const UploadCompleteResponseSchema = z.object({
     "commandId": z.string().describe("Command identifier"),
-get state(){
+get "state"(){
                 return CommandStateSchema.describe("Command states in the ARC protocol lifecycle")
               }
     }).describe("Response to upload completion")

@@ -127,7 +127,7 @@ pub struct AzureEnvironmentInfo {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LocalEnvironmentInfo {
-    /// Hostname of the machine running the agent
+    /// Hostname of the machine running the deployment
     pub hostname: String,
     /// Operating system (e.g., "linux", "macos", "windows")
     pub os: String,
@@ -257,7 +257,7 @@ pub struct ResourceDomainInfo {
 pub struct DomainMetadata {
     /// Base domain for auto-generated domains (e.g., "vpc.direct").
     pub base_domain: String,
-    /// Agent public subdomain (e.g., "k8f2j3").
+    /// Deployment public subdomain (e.g., "k8f2j3").
     pub public_subdomain: String,
     /// Hosted zone ID for DNS records.
     pub hosted_zone_id: String,
@@ -353,7 +353,7 @@ pub struct EnvironmentVariablesSnapshot {
 pub struct ArtifactRegistryConfig {
     /// Manager base URL for fetching credentials and accessing the registry
     pub manager_url: String,
-    /// Optional authentication token (JWT) for agent manager API access
+    /// Optional authentication token (JWT) for manager API access
     /// When present, must be included in Authorization header as "Bearer {token}"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
@@ -361,7 +361,7 @@ pub struct ArtifactRegistryConfig {
 
 /// OTLP log export configuration for a deployment.
 ///
-/// When set, all compute workloads (containers and horizond VM agents) export
+/// When set, all compute workloads (containers and horizond VM workers) export
 /// their logs to the given endpoint via OTLP/HTTP.
 ///
 /// The `logs_auth_header` is stored as plain text in DeploymentConfig because
@@ -374,7 +374,7 @@ pub struct ArtifactRegistryConfig {
 #[serde(rename_all = "camelCase")]
 pub struct OtlpConfig {
     /// Full OTLP logs endpoint URL.
-    /// Example: "https://<agent-manager-host>/v1/logs"
+    /// Example: "https://<manager-host>/v1/logs"
     pub logs_endpoint: String,
     /// Auth header value in "key=value,..." format used for container OTLP env var injection.
     ///
@@ -382,7 +382,7 @@ pub struct OtlpConfig {
     /// into all containers. It must be plain (not a vault secret) because alien-runtime
     /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
     ///
-    /// horizond VM agents do NOT use this field directly. The ContainerCluster infra
+    /// horizond VM workers do NOT use this field directly. The ContainerCluster infra
     /// controller writes the same value to the cloud vault (GCP: Secret Manager,
     /// AWS: Secrets Manager, Azure: Key Vault) and the startup script fetches it at
     /// boot via IAM — the same pattern as the machine token.
@@ -413,7 +413,7 @@ pub struct OtlpConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonClusterConfig {
-    /// Cluster ID (deterministic: workspace/project/agent/resourceid)
+    /// Cluster ID (deterministic: workspace/project/deployment/resourceid)
     pub cluster_id: String,
 
     /// Management token for API access (hm_...)
@@ -490,7 +490,7 @@ pub struct DeploymentConfig {
     #[serde(default)]
     pub stack_settings: StackSettings,
     /// Platform service account/role that will manage the infrastructure remotely.
-    /// Derived from Agent Manager's ServiceAccount, not user-specified.
+    /// Derived from Manager's ServiceAccount, not user-specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
     /// Environment variables snapshot
@@ -502,7 +502,7 @@ pub struct DeploymentConfig {
     pub allow_frozen_changes: bool,
     /// Artifact registry configuration for pulling container images.
     /// Required for Local platform, optional for cloud platforms.
-    /// When present, the agent will fetch credentials from the agent manager
+    /// When present, the deployment will fetch credentials from the manager
     /// before pulling images, enabling centralized registry access control.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_registry: Option<ArtifactRegistryConfig>,

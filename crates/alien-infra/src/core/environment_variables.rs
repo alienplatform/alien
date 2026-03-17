@@ -24,12 +24,12 @@ impl EnvironmentVariableBuilder {
     }
 
     /// Add standard Alien environment variables that should be available to all resources.
-    /// This includes ALIEN_AGENT_TYPE which indicates the current platform, plus platform-specific
+    /// This includes ALIEN_DEPLOYMENT_TYPE which indicates the current platform, plus platform-specific
     /// identifiers like AWS_ACCOUNT_ID, AWS_REGION, GCP_PROJECT_ID, AZURE_TENANT_ID, etc.
     pub fn add_standard_alien_env_vars(mut self, ctx: &ResourceControllerContext<'_>) -> Self {
-        // Add the current platform as ALIEN_AGENT_TYPE
+        // Add the current platform as ALIEN_DEPLOYMENT_TYPE
         self.env_vars
-            .insert("ALIEN_AGENT_TYPE".to_string(), ctx.platform.to_string());
+            .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), ctx.platform.to_string());
 
         // Add platform-specific environment variables
         match ctx.platform {

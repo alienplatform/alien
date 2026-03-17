@@ -3,6 +3,7 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
@@ -11,50 +12,49 @@ import { HealthCheckSchema } from "./health-check-schema.js";
 import { PersistentStorageSchema } from "./persistent-storage-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceSpecSchema } from "./resource-spec-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Container resource for running long-running container workloads.\n\nA Container defines a deployable unit that runs on a ContainerCluster.\nHorizon handles scheduling replicas across machines, autoscaling based on\nvarious metrics, and service discovery.\n\n## Example\n\n```rust\nuse alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, ContainerPort, ExposeProtocol};\n\nlet container = Container::new(\"api\".to_string())\n    .cluster(\"compute\".to_string())\n    .code(ContainerCode::Image {\n        image: \"myapp:latest\".to_string(),\n    })\n    .cpu(ResourceSpec { min: \"0.5\".to_string(), desired: \"1\".to_string() })\n    .memory(ResourceSpec { min: \"512Mi\".to_string(), desired: \"1Gi\".to_string() })\n    .port(8080)\n    .expose_port(8080, ExposeProtocol::Http)\n    .autoscaling(ContainerAutoscaling {\n        min: 2,\n        desired: 3,\n        max: 10,\n        target_cpu_percent: Some(70.0),\n        target_memory_percent: None,\n        target_http_in_flight_per_replica: Some(100),\n        max_http_p95_latency_ms: None,\n    })\n    .permissions(\"container-execution\".to_string())\n    .build();\n```
  */
 export const ContainerSchema = z.object({
-    get autoscaling(){
+    get "autoscaling"(){
                 return z.union([ContainerAutoscalingSchema, z.null()]).optional()
               },
-"cluster": z.string().describe("ContainerCluster resource ID that this container runs on.\nIf None, will be auto-assigned by ContainerClusterMutation at deployment time.").optional().nullable(),
-get code(){
+"cluster": z.string().describe("ContainerCluster resource ID that this container runs on.\nIf None, will be auto-assigned by ContainerClusterMutation at deployment time.").nullish(),
+get "code"(){
                 return ContainerCodeSchema.describe("Specifies the source of the container's executable code.")
               },
-"command": z.array(z.string()).describe("Command to override image default").optional().nullable(),
-get cpu(){
+"command": z.array(z.string()).describe("Command to override image default").nullish(),
+get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
               },
-"environment": z.object({
+"environment": z.optional(z.object({
     
-    }).catchall(z.string()).describe("Environment variables").optional(),
-"ephemeralStorage": z.string().describe("Ephemeral storage requirement (e.g., \"10Gi\")").optional().nullable(),
-get gpu(){
+    }).catchall(z.string()).describe("Environment variables")),
+"ephemeralStorage": z.string().describe("Ephemeral storage requirement (e.g., \"10Gi\")").nullish(),
+get "gpu"(){
                 return z.union([ContainerGpuSpecSchema, z.null()]).optional()
               },
-get healthCheck(){
+get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
-get links(){
+get "links"(){
                 return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Resource links (dependencies)")
               },
-get memory(){
+get "memory"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
               },
 "permissions": z.string().describe("Permission profile name"),
-get persistentStorage(){
+get "persistentStorage"(){
                 return z.union([PersistentStorageSchema, z.null()]).optional()
               },
-"pool": z.string().describe("Capacity group to run on (must exist in the cluster)\nIf not specified, containers are scheduled to any available group.").optional().nullable(),
-get ports(){
+"pool": z.string().describe("Capacity group to run on (must exist in the cluster)\nIf not specified, containers are scheduled to any available group.").nullish(),
+get "ports"(){
                 return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Container ports to expose (at least one required)")
               },
-"replicas": z.int().min(0).describe("Fixed replica count (for stateful containers or stateless without autoscaling)").optional().nullable(),
-"stateful": z.boolean().describe("Whether container is stateful (gets stable ordinals, optional persistent volumes)").optional()
+"replicas": z.int().min(0).describe("Fixed replica count (for stateful containers or stateless without autoscaling)").nullish(),
+"stateful": z.optional(z.boolean().describe("Whether container is stateful (gets stable ordinals, optional persistent volumes)"))
     }).describe("Container resource for running long-running container workloads.\n\nA Container defines a deployable unit that runs on a ContainerCluster.\nHorizon handles scheduling replicas across machines, autoscaling based on\nvarious metrics, and service discovery.\n\n## Example\n\n```rust\nuse alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, ContainerPort, ExposeProtocol};\n\nlet container = Container::new(\"api\".to_string())\n    .cluster(\"compute\".to_string())\n    .code(ContainerCode::Image {\n        image: \"myapp:latest\".to_string(),\n    })\n    .cpu(ResourceSpec { min: \"0.5\".to_string(), desired: \"1\".to_string() })\n    .memory(ResourceSpec { min: \"512Mi\".to_string(), desired: \"1Gi\".to_string() })\n    .port(8080)\n    .expose_port(8080, ExposeProtocol::Http)\n    .autoscaling(ContainerAutoscaling {\n        min: 2,\n        desired: 3,\n        max: 10,\n        target_cpu_percent: Some(70.0),\n        target_memory_percent: None,\n        target_http_in_flight_per_replica: Some(100),\n        max_http_p95_latency_ms: None,\n    })\n    .permissions(\"container-execution\".to_string())\n    .build();\n```")
 
 export type Container = z.infer<typeof ContainerSchema>

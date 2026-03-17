@@ -3,38 +3,38 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AlienEventSchema } from "./alien-event-schema.js";
 import { EventStateSchema } from "./event-state-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents a change to an event
  */
 export const EventChangeSchema = z.union([z.object({
-    "createdAt": z.string().datetime().describe("Timestamp when the event was created"),
-get event(){
+    "createdAt": z.iso.datetime().describe("Timestamp when the event was created"),
+get "event"(){
                 return AlienEventSchema.describe("Represents all possible events in the Alien system")
               },
 "id": z.string().describe("Unique identifier for the event"),
-"parentId": z.string().describe("Parent event ID if this is a child event").optional().nullable(),
-get state(){
+"parentId": z.string().describe("Parent event ID if this is a child event").nullish(),
+get "state"(){
                 return EventStateSchema.describe("Represents the state of an event")
               },
 "type": z.enum(["created"])
     }), z.object({
-    get event(){
+    get "event"(){
                 return AlienEventSchema.describe("Represents all possible events in the Alien system")
               },
 "id": z.string().describe("Unique identifier for the event"),
 "type": z.enum(["updated"]),
-"updatedAt": z.string().datetime().describe("Timestamp when the event was updated")
+"updatedAt": z.iso.datetime().describe("Timestamp when the event was updated")
     }), z.object({
     "id": z.string().describe("Unique identifier for the event"),
-get newState(){
+get "newState"(){
                 return EventStateSchema.describe("Represents the state of an event")
               },
 "type": z.enum(["stateChanged"]),
-"updatedAt": z.string().datetime().describe("Timestamp when the state changed")
+"updatedAt": z.iso.datetime().describe("Timestamp when the state changed")
     })]).describe("Represents a change to an event")
 
 export type EventChange = z.infer<typeof EventChangeSchema>

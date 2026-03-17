@@ -3,25 +3,25 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { GcpConditionSchema } from "./gcp-condition-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Generic binding configuration for permissions
  */
 export const BindingConfigurationGcpBindingSpecSchema = z.object({
-    "resource": z.object({
-    get condition(){
+    "resource": z.optional(z.object({
+    get "condition"(){
                 return z.union([GcpConditionSchema, z.null()]).optional()
               },
 "scope": z.string().describe("Scope (project/resource level)")
-    }).describe("GCP-specific binding specification").optional(),
-"stack": z.object({
-    get condition(){
+    }).describe("GCP-specific binding specification")),
+"stack": z.optional(z.object({
+    get "condition"(){
                 return z.union([GcpConditionSchema, z.null()]).optional()
               },
 "scope": z.string().describe("Scope (project/resource level)")
-    }).describe("GCP-specific binding specification").optional()
+    }).describe("GCP-specific binding specification"))
     }).describe("Generic binding configuration for permissions")
 
 export type BindingConfigurationGcpBindingSpec = z.infer<typeof BindingConfigurationGcpBindingSpecSchema>

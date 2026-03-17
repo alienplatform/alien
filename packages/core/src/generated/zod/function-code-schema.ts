@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ToolchainConfigSchema } from "./toolchain-config-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Specifies the source of the function\'s executable code.\nThis can be a pre-built container image or source code that the system will build.
@@ -14,7 +14,7 @@ export const FunctionCodeSchema = z.union([z.object({
 "type": z.enum(["image"])
     }), z.object({
     "src": z.string().describe("The source directory to build from"),
-get toolchain(){
+get "toolchain"(){
                 return ToolchainConfigSchema.describe("Configuration for different programming language toolchains.\nEach toolchain provides type-safe build configuration and auto-detection capabilities.")
               },
 "type": z.enum(["source"])

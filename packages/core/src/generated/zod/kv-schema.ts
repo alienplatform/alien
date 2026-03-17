@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents a key-value storage resource that provides a minimal, platform-agnostic API\ncompatible across DynamoDB, Firestore, Redis, and Azure Table Storage.

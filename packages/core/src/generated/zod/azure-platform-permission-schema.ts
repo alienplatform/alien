@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BindingConfigurationAzureBindingSpecSchema } from "./binding-configuration-azure-binding-spec-schema.js";
 import { PermissionGrantSchema } from "./permission-grant-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Azure-specific platform permission configuration
  */
 export const AzurePlatformPermissionSchema = z.object({
-    get binding(){
+    get "binding"(){
                 return BindingConfigurationAzureBindingSpecSchema.describe("Generic binding configuration for permissions")
               },
-get grant(){
+get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")
               }
     }).describe("Azure-specific platform permission configuration")

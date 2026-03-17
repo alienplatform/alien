@@ -3,17 +3,17 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { HttpMethodSchema } from "./http-method-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Configuration for HTTP-based readiness probe.\nThis probe is executed after function provisioning/update to verify the function is ready to serve traffic.\nOnly works with functions that have Public ingress.
  */
 export const ReadinessProbeSchema = z.object({
-    get method(){
+    get "method"(){
                 return HttpMethodSchema.describe("HTTP method for readiness probe requests.").optional()
               },
-"path": z.string().describe("Path to request for the probe (e.g., \"/health\", \"/ready\").\nDefault: \"/\"").optional()
+"path": z.optional(z.string().describe("Path to request for the probe (e.g., \"/health\", \"/ready\").\nDefault: \"/\""))
     }).describe("Configuration for HTTP-based readiness probe.\nThis probe is executed after function provisioning/update to verify the function is ready to serve traffic.\nOnly works with functions that have Public ingress.")
 
 export type ReadinessProbe = z.infer<typeof ReadinessProbeSchema>

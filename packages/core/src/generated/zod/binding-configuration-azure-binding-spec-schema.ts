@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Generic binding configuration for permissions
  */
 export const BindingConfigurationAzureBindingSpecSchema = z.object({
-    "resource": z.object({
+    "resource": z.optional(z.object({
     "scope": z.string().describe("Scope (subscription/resource group/resource level)")
-    }).describe("Azure-specific binding specification").optional(),
-"stack": z.object({
+    }).describe("Azure-specific binding specification")),
+"stack": z.optional(z.object({
     "scope": z.string().describe("Scope (subscription/resource group/resource level)")
-    }).describe("Azure-specific binding specification").optional()
+    }).describe("Azure-specific binding specification"))
     }).describe("Generic binding configuration for permissions")
 
 export type BindingConfigurationAzureBindingSpec = z.infer<typeof BindingConfigurationAzureBindingSpecSchema>

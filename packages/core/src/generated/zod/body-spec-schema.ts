@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PresignedRequestSchema } from "./presigned-request-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Body specification supporting inline and storage modes
@@ -14,11 +14,11 @@ export const BodySpecSchema = z.union([z.object({
 "mode": z.enum(["inline"])
     }), z.object({
     "mode": z.enum(["storage"]),
-"size": z.int().min(0).describe("Size of the body in bytes").optional().nullable(),
-get storageGetRequest(){
+"size": z.int().min(0).describe("Size of the body in bytes").nullish(),
+get "storageGetRequest"(){
                 return z.union([PresignedRequestSchema, z.null()]).optional()
               },
-"storagePutUsed": z.boolean().describe("Indicates storage upload was used for response submission").optional().nullable()
+"storagePutUsed": z.boolean().describe("Indicates storage upload was used for response submission").nullish()
     })]).describe("Body specification supporting inline and storage modes")
 
 export type BodySpec = z.infer<typeof BodySpecSchema>

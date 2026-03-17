@@ -3,34 +3,34 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
 import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\nagent is deployed and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Agent Manager\'s ServiceAccount).
  */
 export const StackSettingsSchema = z.object({
-    get deploymentModel(){
+    get "deploymentModel"(){
                 return DeploymentModelSchema.describe("Deployment model: how updates are delivered to the remote environment.").optional()
               },
-get domains(){
+get "domains"(){
                 return z.union([DomainSettingsSchema, z.null()]).optional()
               },
-get heartbeats(){
+get "heartbeats"(){
                 return HeartbeatsModeSchema.describe("How heartbeat health checks are handled.").optional()
               },
-get network(){
+get "network"(){
                 return z.union([NetworkSettingsSchema, z.null()]).optional()
               },
-get telemetry(){
+get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()
               },
-get updates(){
+get "updates"(){
                 return UpdatesModeSchema.describe("How updates are delivered to the agent.").optional()
               }
     }).describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\nagent is deployed and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Agent Manager's ServiceAccount).")

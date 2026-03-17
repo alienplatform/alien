@@ -3,19 +3,19 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.
  */
 export const AlienErrorSchema = z.object({
     "code": z.string().max(128).describe("A unique identifier for the type of error.\n\nThis should be a short, machine-readable string that can be used\nby clients to programmatically handle different error types.\nExamples: \"NOT_FOUND\", \"VALIDATION_ERROR\", \"TIMEOUT\""),
-"context": z.any().optional(),
-"httpStatusCode": z.int().min(100).max(599).describe("HTTP status code for this error.\n\nUsed when converting the error to an HTTP response. If None, falls back to\nthe error type's default status code or 500.").optional().nullable(),
+"context": z.optional(z.any().describe("Additional diagnostic information about the error context.\n\nThis optional field can contain structured data providing more details\nabout the error, such as validation errors, request parameters that\ncaused the issue, or other relevant context information.")),
+"httpStatusCode": z.int().min(100).max(599).describe("HTTP status code for this error.\n\nUsed when converting the error to an HTTP response. If None, falls back to\nthe error type's default status code or 500.").nullish(),
 "internal": z.boolean().describe("Indicates if this is an internal error that should not be exposed to users.\n\nWhen `true`, this error contains sensitive information or implementation\ndetails that should not be shown to end-users. Such errors should be\nlogged for debugging but replaced with generic error messages in responses."),
 "message": z.string().max(16384).describe("Human-readable error message.\n\nThis message should be clear and actionable for developers or end-users,\nproviding context about what went wrong and potentially how to fix it."),
 "retryable": z.boolean().default(false).describe("Indicates whether the operation that caused the error should be retried.\n\nWhen `true`, the error is transient and the operation might succeed\nif attempted again. When `false`, retrying the same operation is\nunlikely to succeed without changes."),
-"source": z.any().optional()
+"source": z.optional(z.any().describe("The underlying error that caused this error, creating an error chain.\n\nThis allows for proper error propagation and debugging by maintaining\nthe full context of how an error occurred through multiple layers\nof an application."))
     }).describe("Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.")
 
 export type AlienError = z.infer<typeof AlienErrorSchema>

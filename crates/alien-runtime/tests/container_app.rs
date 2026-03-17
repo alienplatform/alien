@@ -181,7 +181,7 @@ impl AsyncTestContext for ContainerAppTestContext {
             "ALIEN_SKIP_WAIT_UNTIL_EXTENSION".to_string(),
             "1".to_string(),
         );
-        env_vars.insert("ALIEN_AGENT_TYPE".to_string(), "azure".to_string());
+        env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         env_vars.insert("ALIEN_BINDINGS_MODE".to_string(), "grpc".to_string());
         env_vars.insert(
             "RUST_LOG".to_string(),

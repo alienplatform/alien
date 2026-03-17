@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Resource that can hold any resource type in the Alien system. All resources share common \'type\' and \'id\' fields with additional type-specific properties.
  */
 export const BaseResourceSchema = z.object({
     "id": z.string().describe("The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."),
-get type(){
+get "type"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }
     }).catchall(z.any()).describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")

@@ -35,7 +35,8 @@ pub use grpc::control_service::ControlGrpcServer;
 #[cfg(feature = "grpc")]
 pub use grpc::GrpcServerHandles;
 
-/// Gets the current platform from the ALIEN_AGENT_TYPE environment variable.
+/// Gets the current platform from the ALIEN_DEPLOYMENT_TYPE environment variable.
+/// Falls back to ALIEN_AGENT_TYPE for backward compatibility.
 /// This is used by the runtime to determine which platform-specific implementations to use.
 pub fn get_current_platform() -> Result<Platform> {
     let env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -43,19 +44,22 @@ pub fn get_current_platform() -> Result<Platform> {
 }
 
 /// Gets the platform from a HashMap of environment variables.
-/// This is useful when you have environment variables from a source other than std::env.
+/// Tries ALIEN_DEPLOYMENT_TYPE first, then ALIEN_AGENT_TYPE for backward compatibility.
 pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) -> Result<Platform> {
-    let agent_type = env.get("ALIEN_AGENT_TYPE").ok_or_else(|| {
-        AlienError::new(ErrorData::EnvironmentVariableMissing {
-            variable_name: "ALIEN_AGENT_TYPE".to_string(),
-        })
-    })?;
+    let deployment_type = env
+        .get("ALIEN_DEPLOYMENT_TYPE")
+        .or_else(|| env.get("ALIEN_AGENT_TYPE"))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::EnvironmentVariableMissing {
+                variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            })
+        })?;
 
-    agent_type.parse().map_err(|_| {
+    deployment_type.parse().map_err(|_| {
         AlienError::new(ErrorData::InvalidEnvironmentVariable {
-            variable_name: "ALIEN_AGENT_TYPE".to_string(),
-            value: agent_type.clone(),
-            reason: "Cannot parse the ALIEN_AGENT_TYPE environment variable".to_string(),
+            variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            value: deployment_type.clone(),
+            reason: "Cannot parse the ALIEN_DEPLOYMENT_TYPE environment variable".to_string(),
         })
     })
 }

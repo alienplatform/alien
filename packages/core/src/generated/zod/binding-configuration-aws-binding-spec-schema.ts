@@ -3,28 +3,28 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Generic binding configuration for permissions
  */
 export const BindingConfigurationAwsBindingSpecSchema = z.object({
-    "resource": z.object({
+    "resource": z.optional(z.object({
     "condition": z.object({
     
     }).catchall(z.object({
     
-    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").optional().nullable(),
+    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
-    }).describe("AWS-specific binding specification").optional(),
-"stack": z.object({
+    }).describe("AWS-specific binding specification")),
+"stack": z.optional(z.object({
     "condition": z.object({
     
     }).catchall(z.object({
     
-    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").optional().nullable(),
+    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
-    }).describe("AWS-specific binding specification").optional()
+    }).describe("AWS-specific binding specification"))
     }).describe("Generic binding configuration for permissions")
 
 export type BindingConfigurationAwsBindingSpec = z.infer<typeof BindingConfigurationAwsBindingSpecSchema>

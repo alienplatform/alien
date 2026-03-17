@@ -3,23 +3,23 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AwsPlatformPermissionSchema } from "./aws-platform-permission-schema.js";
 import { AzurePlatformPermissionSchema } from "./azure-platform-permission-schema.js";
 import { GcpPlatformPermissionSchema } from "./gcp-platform-permission-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Platform-specific permission configurations
  */
 export const PlatformPermissionsSchema = z.object({
-    get aws(){
-                return z.array(AwsPlatformPermissionSchema.describe("AWS-specific platform permission configuration")).describe("AWS permission configurations").optional().nullable()
+    get "aws"(){
+                return z.array(AwsPlatformPermissionSchema.describe("AWS-specific platform permission configuration")).describe("AWS permission configurations").nullish()
               },
-get azure(){
-                return z.array(AzurePlatformPermissionSchema.describe("Azure-specific platform permission configuration")).describe("Azure permission configurations").optional().nullable()
+get "azure"(){
+                return z.array(AzurePlatformPermissionSchema.describe("Azure-specific platform permission configuration")).describe("Azure permission configurations").nullish()
               },
-get gcp(){
-                return z.array(GcpPlatformPermissionSchema.describe("GCP-specific platform permission configuration")).describe("GCP permission configurations").optional().nullable()
+get "gcp"(){
+                return z.array(GcpPlatformPermissionSchema.describe("GCP-specific platform permission configuration")).describe("GCP permission configurations").nullish()
               }
     }).describe("Platform-specific permission configurations")
 

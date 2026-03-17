@@ -3,22 +3,22 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ComputeTypeSchema } from "./compute-type-schema.js";
 import { MonitoringConfigSchema } from "./monitoring-config-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Configuration for starting a build.
  */
 export const BuildConfigSchema = z.object({
-    get computeType(){
+    get "computeType"(){
                 return ComputeTypeSchema.describe("Compute type for build resources.").optional()
               },
-"environment": z.object({
+"environment": z.optional(z.object({
     
-    }).catchall(z.string()).describe("Key-value pairs to set as environment variables for the build.").optional(),
+    }).catchall(z.string()).describe("Key-value pairs to set as environment variables for the build.")),
 "image": z.string().describe("Base container image to use for the build environment."),
-get monitoring(){
+get "monitoring"(){
                 return z.union([MonitoringConfigSchema, z.null()]).optional()
               },
 "script": z.string().describe("Bash script to execute for the build."),

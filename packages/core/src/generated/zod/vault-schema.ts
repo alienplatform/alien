@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for functions and services.

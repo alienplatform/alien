@@ -78,7 +78,7 @@ The naming convention: `ALIEN_{RESOURCE_ID_UPPERCASE}_BINDING`
 The compute resource is created with these environment variables:
 
 ```
-ALIEN_AGENT_TYPE=aws
+ALIEN_DEPLOYMENT_TYPE=aws
 ALIEN_DATA_STORAGE_BINDING={"service":"s3","bucketName":"myapp-data-storage-abc123"}
 ```
 
@@ -158,7 +158,7 @@ Example configurations:
 **Standalone process with AWS**:
 ```bash
 ALIEN_BINDINGS_MODE=direct
-ALIEN_AGENT_TYPE=aws
+ALIEN_DEPLOYMENT_TYPE=aws
 ALIEN_DATA_BINDING='{"service":"s3","bucketName":"my-bucket"}'
 AWS_ACCOUNT_ID=123456789
 AWS_REGION=us-east-1
@@ -170,11 +170,11 @@ AWS_SECRET_ACCESS_KEY=...
 ```bash
 ALIEN_BINDINGS_MODE=grpc
 ALIEN_BINDINGS_GRPC_ADDRESS=127.0.0.1:50051
-ALIEN_AGENT_TYPE=aws
+ALIEN_DEPLOYMENT_TYPE=aws
 # Bindings provided by alien-runtime via gRPC
 ```
 
-The mode is independent of the platform. You can use `ALIEN_BINDINGS_MODE=direct` with any `ALIEN_AGENT_TYPE` (aws, gcp, azure, local) as long as the appropriate credentials are available in environment variables.
+The mode is independent of the platform. You can use `ALIEN_BINDINGS_MODE=direct` with any `ALIEN_DEPLOYMENT_TYPE` (aws, gcp, azure, local) as long as the appropriate credentials are available in environment variables.
 
 ---
 
@@ -339,7 +339,7 @@ let env_vars = EnvironmentVariableBuilder::new(&function.environment)
 Result: environment variables like:
 
 ```
-ALIEN_AGENT_TYPE=aws
+ALIEN_DEPLOYMENT_TYPE=aws
 ALIEN_DATA_STORAGE_BINDING={"service":"s3","bucketName":"my-app-data-storage-abc123"}
 ALIEN_CACHE_BINDING={"service":"dynamodb","tableName":"my-app-cache-xyz789","region":"us-west-2"}
 ```
@@ -415,7 +415,7 @@ Remote bindings enable this:
 
 ```rust
 // In your backend (runs in your cloud, not the customer's)
-let provider = BindingsProvider::for_remote_agent(agent_id, token, None).await?;
+let provider = BindingsProvider::for_remote_deployment(deployment_id, token, None).await?;
 let storage = provider.load_storage("customer-data").await?;
 
 // Read/write to the customer's bucket - works regardless of which cloud it's in
@@ -438,10 +438,10 @@ vault.set_secret("API_KEY", "secret-value").await?;
 
 Used by: `alien-deployment` (syncing secrets during deploy), control plane backends.
 
-**Pattern 2: Remote Access** - You have an agent ID and API token, but no credentials yet.
+**Pattern 2: Remote Access** - You have a deployment ID and API token, but no credentials yet.
 
 ```rust
-let provider = BindingsProvider::for_remote_agent(agent_id, token, None).await?;
+let provider = BindingsProvider::for_remote_deployment(deployment_id, token, None).await?;
 let storage = provider.load_storage("data").await?;
 storage.put(&"key".into(), data).await?;
 ```
@@ -450,15 +450,15 @@ Used by: developer backends (BYOB).
 
 ### Remote Access Flow
 
-When you call `for_remote_agent(agent_id, token)`:
+When you call `for_remote_deployment(deployment_id, token)`:
 
-1. **Get agent info** from the control plane API (`GET /agents/{id}`)
-   - Returns: `stackState`, `platform`, `agentManagerId`
+1. **Get deployment info** from the control plane API (`GET /deployments/{id}`)
+   - Returns: `stackState`, `platform`, `managerId`
 
 2. **Get credential resolver URL** from the control plane API
    - Returns: `url`
 
-3. **Resolve credentials** from the credential resolver (`POST {url}/resolve-credentials`)
+3. **Resolve credentials** from the credential resolver (`POST {url}/v1/deployment/resolve-credentials`)
    - Sends: `platform`, `stackState`
    - Returns: `clientConfig` (cloud credentials, e.g. temporary AWS token)
 

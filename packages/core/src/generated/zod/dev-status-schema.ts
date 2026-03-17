@@ -3,10 +3,10 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AgentStatusSchema } from "./agent-status-schema.js";
 import { AlienErrorSchema } from "./alien-error-schema.js";
 import { DevStatusStateSchema } from "./dev-status-state-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Overall status of the dev server
@@ -14,9 +14,9 @@ import { z } from "zod/v4";
 export const DevStatusSchema = z.object({
     "agents": z.object({
     
-    }).catchall(AgentStatusSchema.describe("Status of a single agent in the dev server")).describe("Agents being managed by this dev server (keyed by agent name)"),
+    }).catchall(z.lazy(() => AgentStatusSchema).describe("Status of a single agent in the dev server")).describe("Agents being managed by this dev server (keyed by agent name)"),
 "apiUrl": z.string().describe("Dev server API URL (e.g., http://localhost:9090)"),
-get error(){
+get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
 "lastUpdated": z.string().describe("ISO 8601 timestamp of last status update"),
@@ -25,7 +25,7 @@ get error(){
 "stackId": z.string().describe("Stack ID (always \"dev\" for dev server)"),
 "startedAt": z.string().describe("ISO 8601 timestamp when dev server started"),
 "stateDir": z.string().describe("Path to state directory"),
-get status(){
+get "status"(){
                 return DevStatusStateSchema.describe("Overall dev server status")
               }
     }).describe("Overall status of the dev server")

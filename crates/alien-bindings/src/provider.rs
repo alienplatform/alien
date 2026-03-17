@@ -36,10 +36,10 @@ impl BindingsProvider {
 
     /// Creates a BindingsProvider from environment variables (for runtime use).
     ///
-    /// This parses the platform from ALIEN_AGENT_TYPE, loads ClientConfig from environment,
+    /// This parses the platform from ALIEN_DEPLOYMENT_TYPE, loads ClientConfig from environment,
     /// and extracts all ALIEN_*_BINDING environment variables.
     pub async fn from_env(env: HashMap<String, String>) -> Result<Self> {
-        // 1. Parse platform from ALIEN_AGENT_TYPE
+        // 1. Parse platform from ALIEN_DEPLOYMENT_TYPE
         let platform = crate::get_platform_from_env(&env)?;
 
         // 2. Load ClientConfig from environment
@@ -107,25 +107,25 @@ impl BindingsProvider {
         Self::new(client_config, bindings)
     }
 
-    /// Pattern 2: Creates a BindingsProvider for remote agent access.
+    /// Pattern 2: Creates a BindingsProvider for remote deployment access.
     ///
-    /// Fetches credentials remotely using agent ID and auth token, then creates the provider.
+    /// Fetches credentials remotely using deployment ID and auth token, then creates the provider.
     ///
-    /// **When to use:** You have an agent ID and auth token, but no credentials yet.
+    /// **When to use:** You have a deployment ID and auth token, but no credentials yet.
     ///
     /// **Example use cases:**
     /// - CLI commands (e.g., `alien secrets set`)
-    /// - External applications connecting to agent
+    /// - External applications connecting to deployment
     /// - Local development tools
     ///
     /// **What it does internally:**
-    /// 1. GET /api/agents/{id} - Returns agent info (stackState, platform, agentManagerId)
-    /// 2. GET /api/agent-managers/{agentManagerId} - Returns agent manager URL
-    /// 3. POST {managerUrl}/v1/agent/resolve-credentials - Resolves credentials
+    /// 1. GET /api/deployments/{id} - Returns deployment info (stackState, platform, managerId)
+    /// 2. GET /api/managers/{managerId} - Returns manager URL
+    /// 3. POST {managerUrl}/v1/deployment/resolve-credentials - Resolves credentials
     /// 4. Creates BindingsProvider using from_stack_state()
     #[cfg(feature = "platform-sdk")]
-    pub async fn for_remote_agent(
-        agent_id: &str,
+    pub async fn for_remote_deployment(
+        deployment_id: &str,
         _token: &str,
         api_base_url: Option<&str>,
     ) -> Result<Self> {
@@ -134,47 +134,47 @@ impl BindingsProvider {
         // Create SDK client
         let sdk_client = alien_platform_api::Client::new(base_url);
 
-        // 1. Get agent info
-        let agent_response = sdk_client
-            .get_agent()
-            .id(agent_id)
+        // 1. Get deployment info
+        let deployment_response = sdk_client
+            .get_deployment()
+            .id(deployment_id)
             .send()
             .await
             .into_alien_error()
             .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch agent from Platform API".to_string(),
+                operation: "fetch deployment from Platform API".to_string(),
             })?
             .into_inner();
 
-        // 2. Get agent manager URL
-        let agent_manager_id = agent_response.agent_manager_id.ok_or_else(|| {
+        // 2. Get manager URL
+        let manager_id = deployment_response.manager_id.ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "fetch agent manager from Platform API".to_string(),
+                operation: "fetch manager from Platform API".to_string(),
             })
         })?;
 
-        let agent_manager_response = sdk_client
-            .get_agent_manager()
-            .id(&agent_manager_id.to_string())
+        let manager_response = sdk_client
+            .get_manager()
+            .id(&manager_id.to_string())
             .send()
             .await
             .into_alien_error()
             .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch agent manager from Platform API".to_string(),
+                operation: "fetch manager from Platform API".to_string(),
             })?
             .into_inner();
 
         // 3. Convert SDK stack state to alien-core StackState
-        let stack_state = agent_response.stack_state.as_ref().ok_or_else(|| {
+        let stack_state = deployment_response.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "Agent has no stack state (not deployed yet)".to_string(),
+                operation: "Deployment has no stack state (not deployed yet)".to_string(),
             })
         })?;
 
         let alien_stack_state = conversions::convert_stack_state(stack_state)?;
 
         // 4. Resolve client config from manager
-        let manager_url = agent_manager_response.url.ok_or_else(|| {
+        let manager_url = manager_response.url.ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
                 operation: "fetch manager URL from Platform API".to_string(),
             })
@@ -183,18 +183,18 @@ impl BindingsProvider {
         let http_client = reqwest::Client::new();
         let client_config = http_client
             .post(format!(
-                "{}/v1/agent/resolve-credentials",
+                "{}/v1/deployment/resolve-credentials",
                 manager_url
             ))
             .json(&serde_json::json!({
-                "platform": agent_response.platform,
+                "platform": deployment_response.platform,
                 "stackState": stack_state,
             }))
             .send()
             .await
             .into_alien_error()
             .context(ErrorData::RemoteAccessFailed {
-                operation: "resolve credentials from agent-manager".to_string(),
+                operation: "resolve credentials from manager".to_string(),
             })?
             .json::<ResolveCredentialsResponse>()
             .await

@@ -3,9 +3,9 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PushProgressSchema } from "./push-progress-schema.js";
 import { StackStateSchema } from "./stack-state-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents all possible events in the Alien system
@@ -26,7 +26,7 @@ export const AlienEventSchema = z.union([z.object({
 "type": z.enum(["DownloadingAlienRuntime"]),
 "url": z.string().describe("URL being downloaded from")
     }), z.object({
-    "relatedResources": z.array(z.string()).describe("All resource names sharing this build (for deduped container groups)").optional(),
+    "relatedResources": z.optional(z.array(z.string()).describe("All resource names sharing this build (for deduped container groups)")),
 "resourceName": z.string().describe("Name of the resource being built"),
 "resourceType": z.string().describe("Type of the resource: \"function\", \"container\", \"worker\""),
 "type": z.enum(["BuildingResource"])
@@ -35,7 +35,7 @@ export const AlienEventSchema = z.union([z.object({
 "type": z.enum(["BuildingImage"])
     }), z.object({
     "image": z.string().describe("Name of the image being pushed"),
-get progress(){
+get "progress"(){
                 return z.union([PushProgressSchema, z.null()]).optional()
               },
 "type": z.enum(["PushingImage"])
@@ -52,13 +52,13 @@ get progress(){
 "type": z.enum(["CreatingRelease"])
     }), z.object({
     "language": z.string().describe("Language being compiled (rust, typescript, etc.)"),
-"progress": z.string().describe("Current progress/status line from the build output").optional().nullable(),
+"progress": z.string().describe("Current progress/status line from the build output").nullish(),
 "type": z.enum(["CompilingCode"])
     }), z.object({
-    get nextState(){
+    get "nextState"(){
                 return StackStateSchema.describe("Represents the collective state of all resources in a stack, including platform and pending actions.")
               },
-"suggestedDelayMs": z.int().min(0).describe("An suggested duration to wait before executing the next step.").optional().nullable(),
+"suggestedDelayMs": z.int().min(0).describe("An suggested duration to wait before executing the next step.").nullish(),
 "type": z.enum(["StackStep"])
     }), z.object({
     "type": z.enum(["GeneratingCloudFormationTemplate"])

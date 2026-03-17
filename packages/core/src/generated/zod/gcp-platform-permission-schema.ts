@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BindingConfigurationGcpBindingSpecSchema } from "./binding-configuration-gcp-binding-spec-schema.js";
 import { PermissionGrantSchema } from "./permission-grant-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description GCP-specific platform permission configuration
  */
 export const GcpPlatformPermissionSchema = z.object({
-    get binding(){
+    get "binding"(){
                 return BindingConfigurationGcpBindingSpecSchema.describe("Generic binding configuration for permissions")
               },
-get grant(){
+get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")
               }
     }).describe("GCP-specific platform permission configuration")

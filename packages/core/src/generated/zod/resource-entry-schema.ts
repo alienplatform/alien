@@ -3,22 +3,22 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BaseResourceSchema } from "./base-resource-schema.js";
 import { ResourceLifecycleSchema } from "./resource-lifecycle-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
-import { z } from "zod/v4";
 
 export const ResourceEntrySchema = z.object({
-    get config(){
+    get "config"(){
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
               },
-get dependencies(){
+get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Additional dependencies for this resource beyond those defined in the resource itself.\nThe total dependencies are: resource.get_dependencies() + this list")
               },
-get lifecycle(){
+get "lifecycle"(){
                 return ResourceLifecycleSchema.describe("Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.")
               },
-"remoteAccess": z.boolean().describe("Enable remote bindings for this resource (BYOB use case).\nWhen true, binding params are synced to StackState's `remote_binding_params`.\nDefault: false (prevents sensitive data in synced state).").optional()
+"remoteAccess": z.optional(z.boolean().describe("Enable remote bindings for this resource (BYOB use case).\nWhen true, binding params are synced to StackState's `remote_binding_params`.\nDefault: false (prevents sensitive data in synced state)."))
     })
 
 export type ResourceEntry = z.infer<typeof ResourceEntrySchema>

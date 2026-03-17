@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PlatformPermissionsSchema } from "./platform-permissions-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description A permission set that can be applied across different cloud platforms
@@ -12,7 +12,7 @@ import { z } from "zod/v4";
 export const PermissionSetSchema = z.object({
     "description": z.string().describe("Human-readable description of what this permission set allows"),
 "id": z.string().describe("Unique identifier for the permission set (e.g., \"storage/data-read\")"),
-get platforms(){
+get "platforms"(){
                 return PlatformPermissionsSchema.describe("Platform-specific permission configurations")
               }
     }).describe("A permission set that can be applied across different cloud platforms")

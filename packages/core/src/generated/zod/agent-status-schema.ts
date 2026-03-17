@@ -3,25 +3,25 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AlienErrorSchema } from "./alien-error-schema.js";
 import { DeploymentStatusSchema } from "./deployment-status-schema.js";
 import { DevResourceInfoSchema } from "./dev-resource-info-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Status of a single agent in the dev server
  */
 export const AgentStatusSchema = z.object({
     "createdAt": z.string().describe("ISO 8601 timestamp when agent was created"),
-get error(){
+get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
 "id": z.string().describe("Agent ID (e.g., ag_xyz123)"),
 "name": z.string().describe("Agent name (from --agent-name flag)"),
 "resources": z.object({
     
-    }).catchall(DevResourceInfoSchema.describe("Information about a deployed resource")).describe("Resources deployed by this agent (keyed by resource name)"),
-get status(){
+    }).catchall(z.lazy(() => DevResourceInfoSchema).describe("Information about a deployed resource")).describe("Resources deployed by this agent (keyed by resource name)"),
+get "status"(){
                 return DeploymentStatusSchema.describe("Deployment status in the deployment lifecycle")
               }
     }).describe("Status of a single agent in the dev server")

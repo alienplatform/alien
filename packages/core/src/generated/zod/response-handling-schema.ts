@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PresignedRequestSchema } from "./presigned-request-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Response handling configuration for deployments
  */
 export const ResponseHandlingSchema = z.object({
     "maxInlineBytes": z.int().min(0).describe("Maximum response body size that can be submitted inline"),
-get storageUploadRequest(){
+get "storageUploadRequest"(){
                 return PresignedRequestSchema.describe("A presigned request that can be serialized, stored, and executed later.\nHides implementation details for different storage backends.")
               },
 "submitResponseUrl": z.string().describe("URL where deployments submit responses")

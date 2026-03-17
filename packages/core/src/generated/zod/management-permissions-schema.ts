@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PermissionProfileSchema } from "./permission-profile-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Management permissions configuration for stack management access
  */
 export const ManagementPermissionsSchema = z.union([z.object({
-    get extend(){
+    get "extend"(){
                 return PermissionProfileSchema.describe("Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource")
               }
     }), z.object({
-    get override(){
+    get "override"(){
                 return PermissionProfileSchema.describe("Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource")
               }
     }), z.enum(["auto"])]).describe("Management permissions configuration for stack management access")

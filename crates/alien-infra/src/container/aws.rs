@@ -787,7 +787,7 @@ impl AwsContainerController {
         //   added by inject_environment_variables() during Provisioning phase
         //
         // Then layer on:
-        // - Standard Alien vars (ALIEN_AGENT_TYPE, platform IDs)
+        // - Standard Alien vars (ALIEN_DEPLOYMENT_TYPE, platform IDs)
         // - ALIEN_TRANSPORT=passthrough (containers own their HTTP port; Horizon manages networking)
         // - Linked resources (bindings)
         let env_vars = EnvironmentVariableBuilder::new(&config.environment)

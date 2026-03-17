@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Autoscaling configuration for stateless containers.
@@ -11,11 +11,11 @@ import { z } from "zod/v4";
 export const ContainerAutoscalingSchema = z.object({
     "desired": z.int().min(0).describe("Initial desired replicas at container creation"),
 "max": z.int().min(0).describe("Maximum replicas under load"),
-"maxHttpP95LatencyMs": z.number().describe("Maximum acceptable p95 HTTP latency in milliseconds").optional().nullable(),
+"maxHttpP95LatencyMs": z.number().describe("Maximum acceptable p95 HTTP latency in milliseconds").nullish(),
 "min": z.int().min(0).describe("Minimum replicas (always running)"),
-"targetCpuPercent": z.number().describe("Target CPU utilization percentage for scaling (default: 70%)").optional().nullable(),
-"targetHttpInFlightPerReplica": z.int().min(0).describe("Target in-flight HTTP requests per replica").optional().nullable(),
-"targetMemoryPercent": z.number().describe("Target memory utilization percentage for scaling (default: 80%)").optional().nullable()
+"targetCpuPercent": z.number().describe("Target CPU utilization percentage for scaling (default: 70%)").nullish(),
+"targetHttpInFlightPerReplica": z.int().min(0).describe("Target in-flight HTTP requests per replica").nullish(),
+"targetMemoryPercent": z.number().describe("Target memory utilization percentage for scaling (default: 80%)").nullish()
     }).describe("Autoscaling configuration for stateless containers.")
 
 export type ContainerAutoscaling = z.infer<typeof ContainerAutoscalingSchema>

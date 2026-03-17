@@ -3,14 +3,14 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { LeaseInfoSchema } from "./lease-info-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Response to lease acquisition
  */
 export const LeaseResponseSchema = z.object({
-    get leases(){
+    get "leases"(){
                 return z.array(LeaseInfoSchema.describe("Lease information")).describe("Acquired leases (empty array if none available)")
               }
     }).describe("Response to lease acquisition")

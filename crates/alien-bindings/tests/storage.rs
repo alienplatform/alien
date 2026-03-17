@@ -60,7 +60,7 @@ impl AsyncTestContext for LocalProviderTestContext {
         let mut env_map: HashMap<String, String> = env::vars().collect();
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "local".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
         let provider = Arc::new(
             BindingsProvider::from_env(env_map)
@@ -120,7 +120,7 @@ impl AsyncTestContext for GrpcProviderTestContext {
             bindings::binding_env_var_name(GRPC_BINDING_NAME),
             server_binding_json,
         );
-        server_provider_env_map.insert("ALIEN_AGENT_TYPE".to_string(), "local".to_string());
+        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
         let local_provider_for_server = Arc::new(
             BindingsProvider::from_env(server_provider_env_map)
@@ -158,7 +158,7 @@ impl AsyncTestContext for GrpcProviderTestContext {
             "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
             server_addr_str.clone(),
         );
-        service_provider_env_map.insert("ALIEN_AGENT_TYPE".to_string(), "grpc".to_string());
+        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
 
         let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
             .expect("Failed to load bindings provider");
@@ -229,7 +229,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             "AWS_ACCOUNT_ID".to_string(),
             env::var("AWS_MANAGEMENT_ACCOUNT_ID").unwrap(),
         );
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "aws".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "aws".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 
@@ -286,7 +286,7 @@ impl AsyncTestContext for GcpProviderTestContext {
             service_account_key_json,
         );
         env_map.insert("GCP_REGION".to_string(), gcp_region);
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "gcp".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 
@@ -352,7 +352,7 @@ impl AsyncTestContext for AzureProviderTestContext {
             "AZURE_SUBSCRIPTION_ID".to_string(),
             env::var("AZURE_MANAGEMENT_SUBSCRIPTION_ID").unwrap(),
         );
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "azure".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 
@@ -408,7 +408,7 @@ impl AsyncTestContext for KubernetesProviderTestContext {
         let mut env_map: HashMap<String, String> = env::vars().collect(); // Start with process env
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "kubernetes".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "kubernetes".to_string());
 
         let provider = BindingsProvider::from_env(env_map)
             .await

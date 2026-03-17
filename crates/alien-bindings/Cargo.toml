@@ -19,7 +19,7 @@ local = ["object_store/fs", "dep:container-registry", "dep:oci-client", "dep:sec
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tokio-stream", "dep:tonic-reflection", "dep:async-stream"]
 openapi = ["dep:utoipa"]
-platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_agent)
+platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_deployment)
 
 [dependencies]
 async-trait = { workspace = true }

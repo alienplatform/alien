@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { EnvelopeSchema } from "./envelope-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Lease information
@@ -12,10 +12,10 @@ import { z } from "zod/v4";
 export const LeaseInfoSchema = z.object({
     "attempt": z.int().min(0).describe("Attempt number"),
 "commandId": z.string().describe("Command identifier"),
-get envelope(){
+get "envelope"(){
                 return EnvelopeSchema.describe("ARC envelope sent to deployments")
               },
-"leaseExpiresAt": z.string().datetime().describe("When lease expires"),
+"leaseExpiresAt": z.iso.datetime().describe("When lease expires"),
 "leaseId": z.string().describe("Unique lease identifier")
     }).describe("Lease information")
 

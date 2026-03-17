@@ -325,7 +325,7 @@ spec:
       - name: function
         image: public.ecr.aws/acme/acme-monitoring:v1.2.3
         env:
-        - name: ALIEN_AGENT_TYPE
+        - name: ALIEN_DEPLOYMENT_TYPE
           value: kubernetes
         # External bindings injected as env vars
         - name: ALIEN_DATA_STORAGE_BINDING

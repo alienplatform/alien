@@ -3,13 +3,13 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Information about a deployed resource
  */
 export const DevResourceInfoSchema = z.object({
-    "resourceType": z.string().describe("Resource type (\"function\" | \"container\")").optional().nullable(),
+    "resourceType": z.string().describe("Resource type (\"function\" | \"container\")").nullish(),
 "url": z.string().describe("Resource URL (e.g., http://localhost:8080)")
     }).describe("Information about a deployed resource")
 

@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.
  */
 export const ResourceRefSchema = z.object({
     "id": z.string(),
-get type(){
+get "type"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }
     }).describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")

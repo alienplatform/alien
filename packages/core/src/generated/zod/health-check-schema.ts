@@ -3,17 +3,17 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description HTTP health check configuration.
  */
 export const HealthCheckSchema = z.object({
-    "failureThreshold": z.int().min(0).describe("Number of consecutive failures before marking replica unhealthy").optional(),
-"method": z.string().describe("HTTP method to use for health check").optional(),
-"path": z.string().describe("HTTP endpoint path to check (e.g., \"/health\", \"/ready\")").optional(),
-"port": z.int().min(0).describe("Port to check (defaults to container port if not specified)").optional().nullable(),
-"timeoutSeconds": z.int().min(0).describe("Request timeout in seconds (1-5)").optional()
+    "failureThreshold": z.optional(z.int().min(0).describe("Number of consecutive failures before marking replica unhealthy")),
+"method": z.optional(z.string().describe("HTTP method to use for health check")),
+"path": z.optional(z.string().describe("HTTP endpoint path to check (e.g., \"/health\", \"/ready\")")),
+"port": z.int().min(0).describe("Port to check (defaults to container port if not specified)").nullish(),
+"timeoutSeconds": z.optional(z.int().min(0).describe("Request timeout in seconds (1-5)"))
     }).describe("HTTP health check configuration.")
 
 export type HealthCheck = z.infer<typeof HealthCheckSchema>

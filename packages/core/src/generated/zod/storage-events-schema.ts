@@ -3,12 +3,12 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { StorageEventSchema } from "./storage-event-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description A wrapper type for a list of storage events.
  */
-export const StorageEventsSchema = z.array(StorageEventSchema.describe("Represents an event triggered by an action in an object storage service.\n\nThis struct provides a generic representation for events from services like\nAWS S3, Google Cloud Storage (GCS), and Azure Blob Storage.")).describe("A wrapper type for a list of storage events.")
+export const StorageEventsSchema = z.array(z.lazy(() => StorageEventSchema).describe("Represents an event triggered by an action in an object storage service.\n\nThis struct provides a generic representation for events from services like\nAWS S3, Google Cloud Storage (GCS), and Azure Blob Storage.")).describe("A wrapper type for a list of storage events.")
 
 export type StorageEvents = z.infer<typeof StorageEventsSchema>

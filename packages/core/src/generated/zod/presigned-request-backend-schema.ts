@@ -3,8 +3,8 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { LocalOperationSchema } from "./local-operation-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Storage backend representation for different presigned request types
@@ -18,7 +18,7 @@ export const PresignedRequestBackendSchema = z.union([z.object({
 "url": z.string()
     }), z.object({
     "filePath": z.string(),
-get operation(){
+get "operation"(){
                 return LocalOperationSchema.describe("Local filesystem operations")
               },
 "type": z.enum(["local"])

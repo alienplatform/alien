@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PresignedRequestSchema } from "./presigned-request-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Storage upload information
  */
 export const StorageUploadSchema = z.object({
-    "expiresAt": z.string().datetime().describe("Expiration time for upload URL"),
-get putRequest(){
+    "expiresAt": z.iso.datetime().describe("Expiration time for upload URL"),
+get "putRequest"(){
                 return PresignedRequestSchema.describe("A presigned request that can be serialized, stored, and executed later.\nHides implementation details for different storage backends.")
               }
     }).describe("Storage upload information")

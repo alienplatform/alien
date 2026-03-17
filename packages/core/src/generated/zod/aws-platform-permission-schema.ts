@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BindingConfigurationAwsBindingSpecSchema } from "./binding-configuration-aws-binding-spec-schema.js";
 import { PermissionGrantSchema } from "./permission-grant-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description AWS-specific platform permission configuration
  */
 export const AwsPlatformPermissionSchema = z.object({
-    get binding(){
+    get "binding"(){
                 return BindingConfigurationAwsBindingSpecSchema.describe("Generic binding configuration for permissions")
               },
-get grant(){
+get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")
               }
     }).describe("AWS-specific platform permission configuration")

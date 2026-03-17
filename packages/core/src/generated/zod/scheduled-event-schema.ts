@@ -3,13 +3,13 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents a scheduled event trigger, typically from a cron job or timer.\n\nThis struct aims to provide a common representation for scheduled events\nacross different providers like AWS CloudWatch Events, Google Cloud Scheduler,\nand Azure Timer Triggers.
  */
 export const ScheduledEventSchema = z.object({
-    "timestamp": z.string().datetime().describe("The timestamp when the event was scheduled or triggered.")
+    "timestamp": z.iso.datetime().describe("The timestamp when the event was scheduled or triggered.")
     }).describe("Represents a scheduled event trigger, typically from a cron job or timer.\n\nThis struct aims to provide a common representation for scheduled events\nacross different providers like AWS CloudWatch Events, Google Cloud Scheduler,\nand Azure Timer Triggers.")
 
 export type ScheduledEvent = z.infer<typeof ScheduledEventSchema>

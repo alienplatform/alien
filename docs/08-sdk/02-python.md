@@ -103,7 +103,7 @@ ctx = await AlienContext.from_env()
 bucket = ctx.storage("my-bucket")
 
 # Remote bindings (access resources from outside the runtime)
-remote_ctx = await AlienContext.for_remote_agent(agent_id, token)
+remote_ctx = await AlienContext.for_remote_deployment(deployment_id, token)
 customer_bucket = remote_ctx.storage("customer-data")
 await customer_bucket.put("report.json", report_data)
 ```

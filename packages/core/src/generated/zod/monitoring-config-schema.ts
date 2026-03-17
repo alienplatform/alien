@@ -3,19 +3,19 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Configuration for monitoring and observability.
  */
 export const MonitoringConfigSchema = z.object({
     "endpoint": z.string().describe("The monitoring endpoint URL (e.g., \"https://otel-collector.example.com:4318\")"),
-"headers": z.object({
+"headers": z.optional(z.object({
     
-    }).catchall(z.string()).describe("Optional HTTP headers to include in requests to the monitoring endpoint").optional(),
-"logsUri": z.string().describe("Optional URI path for logs (defaults to \"/v1/logs\")").optional(),
-"tlsEnabled": z.boolean().describe("Whether to enable TLS/HTTPS (defaults to true)").optional(),
-"tlsVerify": z.boolean().describe("Whether to verify TLS certificates (defaults to true)").optional()
+    }).catchall(z.string()).describe("Optional HTTP headers to include in requests to the monitoring endpoint")),
+"logsUri": z.optional(z.string().describe("Optional URI path for logs (defaults to \"/v1/logs\")")),
+"tlsEnabled": z.optional(z.boolean().describe("Whether to enable TLS/HTTPS (defaults to true)")),
+"tlsVerify": z.optional(z.boolean().describe("Whether to verify TLS certificates (defaults to true)"))
     }).describe("Configuration for monitoring and observability.")
 
 export type MonitoringConfig = z.infer<typeof MonitoringConfigSchema>

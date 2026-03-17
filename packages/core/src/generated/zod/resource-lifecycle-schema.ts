@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Describes the lifecycle of a resource within a stack, determining how it\'s managed and deployed.

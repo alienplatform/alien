@@ -3,19 +3,19 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AwsManagementConfigSchema } from "./aws-management-config-schema.js";
 import { AzureManagementConfigSchema } from "./azure-management-config-schema.js";
 import { GcpManagementConfigSchema } from "./gcp-management-config-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it\'s derived from the Agent Manager\'s ServiceAccount.
  */
-export const ManagementConfigSchema = z.union([AwsManagementConfigSchema.and(z.object({
+export const ManagementConfigSchema = z.union([z.lazy(() => AwsManagementConfigSchema).and(z.object({
     "platform": z.enum(["aws"])
-    })), GcpManagementConfigSchema.and(z.object({
+    })), z.lazy(() => GcpManagementConfigSchema).and(z.object({
     "platform": z.enum(["gcp"])
-    })), AzureManagementConfigSchema.and(z.object({
+    })), z.lazy(() => AzureManagementConfigSchema).and(z.object({
     "platform": z.enum(["azure"])
     })), z.object({
     "platform": z.enum(["kubernetes"])

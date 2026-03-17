@@ -3,18 +3,18 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BodySpecSchema } from "./body-spec-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Request to create a new ARC command
  */
 export const CreateCommandRequestSchema = z.object({
     "command": z.string().describe("Command name (e.g., \"generate-report\", \"sync-data\")"),
-"deadline": z.string().datetime().describe("Optional deadline for command completion").optional().nullable(),
+"deadline": z.iso.datetime().describe("Optional deadline for command completion").nullish(),
 "deploymentId": z.string().describe("Target deployment identifier"),
-"idempotencyKey": z.string().describe("Optional idempotency key").optional().nullable(),
-get params(){
+"idempotencyKey": z.string().describe("Optional idempotency key").nullish(),
+get "params"(){
                 return BodySpecSchema.describe("Body specification supporting inline and storage modes")
               }
     }).describe("Request to create a new ARC command")

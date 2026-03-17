@@ -3,12 +3,12 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PermissionSetSchema } from "./permission-set-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Reference to a permission set - either by name or inline definition
  */
-export const PermissionSetReferenceSchema = z.union([PermissionSetSchema, z.string()]).describe("Reference to a permission set - either by name or inline definition")
+export const PermissionSetReferenceSchema = z.union([z.lazy(() => PermissionSetSchema), z.string()]).describe("Reference to a permission set - either by name or inline definition")
 
 export type PermissionSetReference = z.infer<typeof PermissionSetReferenceSchema>

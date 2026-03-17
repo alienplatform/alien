@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Configuration for different programming language toolchains.\nEach toolchain provides type-safe build configuration and auto-detection capabilities.
@@ -12,14 +12,14 @@ export const ToolchainConfigSchema = z.union([z.object({
     "binaryName": z.string().describe("Name of the binary to build and run"),
 "type": z.enum(["rust"])
     }), z.object({
-    "binaryName": z.string().describe("Name of the compiled binary (defaults to package.json name if not specified)").optional().nullable(),
+    "binaryName": z.string().describe("Name of the compiled binary (defaults to package.json name if not specified)").nullish(),
 "type": z.enum(["typescript"])
     }), z.object({
     "buildArgs": z.object({
     
-    }).catchall(z.string()).describe("Build arguments for docker build").optional().nullable(),
-"dockerfile": z.string().describe("Dockerfile path relative to src (default: \"Dockerfile\")").optional().nullable(),
-"target": z.string().describe("Multi-stage build target").optional().nullable(),
+    }).catchall(z.string()).describe("Build arguments for docker build").nullish(),
+"dockerfile": z.string().describe("Dockerfile path relative to src (default: \"Dockerfile\")").nullish(),
+"target": z.string().describe("Multi-stage build target").nullish(),
 "type": z.enum(["docker"])
     })]).describe("Configuration for different programming language toolchains.\nEach toolchain provides type-safe build configuration and auto-detection capabilities.")
 

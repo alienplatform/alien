@@ -3,19 +3,19 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PresignedOperationSchema } from "./presigned-operation-schema.js";
 import { PresignedRequestBackendSchema } from "./presigned-request-backend-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description A presigned request that can be serialized, stored, and executed later.\nHides implementation details for different storage backends.
  */
 export const PresignedRequestSchema = z.object({
-    get backend(){
+    get "backend"(){
                 return PresignedRequestBackendSchema.describe("Storage backend representation for different presigned request types")
               },
-"expiration": z.string().datetime().describe("When this presigned request expires"),
-get operation(){
+"expiration": z.iso.datetime().describe("When this presigned request expires"),
+get "operation"(){
                 return PresignedOperationSchema.describe("The type of operation a presigned request performs")
               },
 "path": z.string().describe("The path this request operates on")

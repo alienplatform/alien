@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents cross-account management access configuration for a stack deployed\non AWS, GCP, or Azure platforms. This resource sets up the necessary IAM/RBAC\nconfiguration to allow another cloud account to manage the stack.\n\nMaps to:\n- AWS: Cross-account IAM role with management permissions\n- GCP: Service account with management permissions and impersonation rights\n- Azure: Lighthouse registration definition and assignment\n\nThis resource is automatically created for AWS, GCP, and Azure platforms\nwhen the stack needs to be managed by another account. The management account\nand identity information comes from the platform configuration.

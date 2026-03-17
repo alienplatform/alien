@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Request for acquiring leases
  */
 export const LeaseRequestSchema = z.object({
     "deploymentId": z.string().describe("Deployment identifier"),
-"leaseSeconds": z.int().min(0).describe("Lease duration in seconds").optional(),
-"maxLeases": z.int().min(0).describe("Maximum number of leases to acquire").optional()
+"leaseSeconds": z.optional(z.int().min(0).describe("Lease duration in seconds")),
+"maxLeases": z.optional(z.int().min(0).describe("Maximum number of leases to acquire"))
     }).describe("Request for acquiring leases")
 
 export type LeaseRequest = z.infer<typeof LeaseRequestSchema>

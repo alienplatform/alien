@@ -3,9 +3,9 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { CommandResponseSchema } from "./command-response-schema.js";
 import { CommandStateSchema } from "./command-state-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Response to status queries
@@ -13,10 +13,10 @@ import { z } from "zod/v4";
 export const CommandStatusResponseSchema = z.object({
     "attempt": z.int().min(0).describe("Current attempt number"),
 "commandId": z.string().describe("Command identifier"),
-get response(){
+get "response"(){
                 return z.union([CommandResponseSchema, z.null()]).optional()
               },
-get state(){
+get "state"(){
                 return CommandStateSchema.describe("Command states in the ARC protocol lifecycle")
               }
     }).describe("Response to status queries")

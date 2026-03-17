@@ -3,14 +3,14 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common \'type\' field with additional type-specific output properties.
  */
 export const BaseResourceOutputsSchema = z.object({
-    get type(){
+    get "type"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }
     }).catchall(z.any()).describe("Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.")

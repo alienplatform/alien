@@ -364,7 +364,7 @@ impl AsyncTestContext for LambdaTestContext {
             // The application to run
             .arg(test_app_path.to_str().unwrap())
             // Environment variables for local bindings
-            .env("ALIEN_AGENT_TYPE", "local")
+            .env("ALIEN_DEPLOYMENT_TYPE", "local")
             .env("ALIEN_LOCAL_STATE_DIRECTORY", &temp_dir_path)
             .env("ALIEN_TEST_STORAGE_BINDING", storage_binding.to_string())
             .env("ALIEN_TEST_ALIEN_KV_BINDING", kv_binding.to_string())
@@ -822,7 +822,7 @@ async fn test_lambda_arc_small_params_small_response(
     let params_bytes = serde_json::to_vec(&params)?;
 
     let request = CreateCommandRequest {
-        deployment_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-deployment".to_string(),
         command: "arc-test-small".to_string(),
         params: BodySpec::inline(&params_bytes),
         deadline: None,
@@ -886,7 +886,7 @@ async fn test_lambda_arc_small_params_large_response(
     let params_bytes = serde_json::to_vec(&params)?;
 
     let request = CreateCommandRequest {
-        deployment_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-deployment".to_string(),
         command: "arc-test-large".to_string(), // Uses large response handler
         params: BodySpec::inline(&params_bytes),
         deadline: None,
@@ -974,7 +974,7 @@ async fn test_lambda_arc_large_params_small_response(
     );
 
     let request = CreateCommandRequest {
-        deployment_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-deployment".to_string(),
         command: "arc-test-small".to_string(), // Small response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
@@ -1066,7 +1066,7 @@ async fn test_lambda_arc_large_params_large_response(
     );
 
     let request = CreateCommandRequest {
-        deployment_id: "lambda-test-agent".to_string(),
+        deployment_id: "lambda-test-deployment".to_string(),
         command: "arc-test-large".to_string(), // Large response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,

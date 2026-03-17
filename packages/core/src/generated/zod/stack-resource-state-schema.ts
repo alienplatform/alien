@@ -3,42 +3,42 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { AlienErrorSchema } from "./alien-error-schema.js";
 import { BaseResourceOutputsSchema } from "./base-resource-outputs-schema.js";
 import { BaseResourceSchema } from "./base-resource-schema.js";
 import { ResourceLifecycleSchema } from "./resource-lifecycle-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceStatusSchema } from "./resource-status-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents the state of a single resource within the stack for a specific platform.
  */
 export const StackResourceStateSchema = z.object({
-    "_internal": z.any().optional(),
-get config(){
+    "_internal": z.optional(z.any().describe("The platform-specific resource controller that manages this resource's lifecycle.\nThis is None when the resource status is Pending.\nStored as JSON to make the struct serializable and movable to alien-core.")),
+get "config"(){
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
               },
-get dependencies(){
+get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
               },
-get error(){
+get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
-"isExternallyProvisioned": z.boolean().describe("True if the resource was provisioned by an external system (e.g., CloudFormation).\nDefaults to false, indicating dynamic provisioning by the executor.").optional(),
-"lastFailedState": z.any().optional(),
-get lifecycle(){
+"isExternallyProvisioned": z.optional(z.boolean().describe("True if the resource was provisioned by an external system (e.g., CloudFormation).\nDefaults to false, indicating dynamic provisioning by the executor.")),
+"lastFailedState": z.optional(z.any().describe("Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core.")),
+get "lifecycle"(){
                 return z.union([ResourceLifecycleSchema, z.null()]).optional()
               },
-get outputs(){
+get "outputs"(){
                 return z.union([BaseResourceOutputsSchema, z.null()]).optional()
               },
-get previousConfig(){
+get "previousConfig"(){
                 return z.union([BaseResourceSchema, z.null()]).optional()
               },
-"remoteBindingParams": z.any().optional(),
-"retryAttempt": z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.").optional(),
-get status(){
+"remoteBindingParams": z.optional(z.any().describe("Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params().")),
+"retryAttempt": z.optional(z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.")),
+get "status"(){
                 return ResourceStatusSchema.describe("Represents the high-level status of a resource during its lifecycle.")
               },
 "type": z.string().describe("The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).")

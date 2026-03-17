@@ -3,19 +3,19 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { LifecycleRuleSchema } from "./lifecycle-rule-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents an object storage bucket.
  */
 export const StorageSchema = z.object({
     "id": z.string().describe("Name of the the storage bucket.\nFor names with dots, each dot-separated label must be ≤ 63 characters."),
-get lifecycleRules(){
+get "lifecycleRules"(){
                 return z.array(LifecycleRuleSchema.describe("Defines a rule for managing the lifecycle of objects within a storage bucket.")).describe("List of rules for automatic object management (e.g., expiration).\nDefault: `[]` (empty list)").optional()
               },
-"publicRead": z.boolean().describe("Allows public read access to objects without authentication.\nDefault: `false`").optional(),
-"versioning": z.boolean().describe("Enables object versioning.\nDefault: `false`").optional()
+"publicRead": z.optional(z.boolean().describe("Allows public read access to objects without authentication.\nDefault: `false`")),
+"versioning": z.optional(z.boolean().describe("Enables object versioning.\nDefault: `false`"))
     }).describe("Represents an object storage bucket.")
 
 export type Storage = z.infer<typeof StorageSchema>

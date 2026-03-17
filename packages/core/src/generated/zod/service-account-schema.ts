@@ -3,15 +3,15 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PermissionSetSchema } from "./permission-set-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Represents a non-human identity that can be assumed by compute services\nsuch as Lambda, Cloud Run, ECS, Container Apps, etc.\n\nMaps to:\n- AWS: IAM Role\n- GCP: Service Account\n- Azure: User-assigned Managed Identity\n\nThe ServiceAccount is automatically created from permission profiles in the stack\nand contains the resolved permission sets for both stack-level and resource-scoped access.
  */
 export const ServiceAccountSchema = z.object({
     "id": z.string().describe("Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
-get stackPermissionSets(){
+get "stackPermissionSets"(){
                 return z.array(PermissionSetSchema.describe("A permission set that can be applied across different cloud platforms")).describe("Stack-level permission sets that apply to all resources in the stack.\nThese are derived from the \"*\" scope in the permission profile.\nResource-scoped permissions are handled by individual resource controllers.")
               }
     }).describe("Represents a non-human identity that can be assumed by compute services\nsuch as Lambda, Cloud Run, ECS, Container Apps, etc.\n\nMaps to:\n- AWS: IAM Role\n- GCP: Service Account\n- Azure: User-assigned Managed Identity\n\nThe ServiceAccount is automatically created from permission profiles in the stack\nand contains the resolved permission sets for both stack-level and resource-scoped access.")

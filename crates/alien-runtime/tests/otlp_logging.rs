@@ -301,7 +301,7 @@ async fn test_alien_deployment_id_otlp_integration() {
     println!("🆔 Test Deployment ID: {}", deployment_id);
     println!("💬 Expected message: {}", expected_message);
 
-    // Set up OTLP environment variables with agent ID
+    // Set up OTLP environment variables with deployment ID
     env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &axiom_endpoint);
     env::set_var(
         "OTEL_EXPORTER_OTLP_HEADERS",
@@ -310,7 +310,7 @@ async fn test_alien_deployment_id_otlp_integration() {
             axiom_token, axiom_dataset
         ),
     );
-    env::set_var("OTEL_SERVICE_NAME", "alien-runtime-test-agent");
+    env::set_var("OTEL_SERVICE_NAME", "alien-runtime-test-deployment");
     env::set_var("ALIEN_DEPLOYMENT_ID", &deployment_id);
 
     // Initialize tracing with OTLP (uses call_once to ensure only first test initializes)
@@ -326,7 +326,7 @@ async fn test_alien_deployment_id_otlp_integration() {
         "Testing alien.deployment_id resource attribute"
     );
 
-    println!("✅ Test message logged with agent ID");
+    println!("✅ Test message logged with deployment ID");
 
     // Flush logs to ensure they are sent
     let flush_result = flush_otlp_logs().await;

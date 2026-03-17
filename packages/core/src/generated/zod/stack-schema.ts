@@ -3,21 +3,21 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { ResourceEntrySchema } from "./resource-entry-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description A bag of resources, unaware of any cloud.
  */
 export const StackSchema = z.object({
     "id": z.string().describe("Unique identifier for the stack"),
-get permissions(){
+get "permissions"(){
                 return PermissionsConfigSchema.describe("Combined permissions configuration that contains both profiles and management").optional()
               },
 "resources": z.object({
     
-    }).catchall(ResourceEntrySchema).describe("Map of resource IDs to their configurations and lifecycle settings")
+    }).catchall(z.lazy(() => ResourceEntrySchema)).describe("Map of resource IDs to their configurations and lifecycle settings")
     }).describe("A bag of resources, unaware of any cloud.")
 
 export type Stack = z.infer<typeof StackSchema>

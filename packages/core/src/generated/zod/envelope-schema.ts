@@ -3,9 +3,9 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { BodySpecSchema } from "./body-spec-schema.js";
 import { ResponseHandlingSchema } from "./response-handling-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description ARC envelope sent to deployments
@@ -14,13 +14,13 @@ export const EnvelopeSchema = z.object({
     "attempt": z.int().min(0).describe("Attempt number (starts at 1)"),
 "command": z.string().describe("Command name (e.g., \"generate-report\", \"sync-data\")"),
 "commandId": z.string().describe("Unique command identifier"),
-"deadline": z.string().datetime().describe("Command deadline").optional().nullable(),
+"deadline": z.iso.datetime().describe("Command deadline").nullish(),
 "deploymentId": z.string().describe("Target deployment identifier"),
-get params(){
+get "params"(){
                 return BodySpecSchema.describe("Body specification supporting inline and storage modes")
               },
 "protocol": z.string().describe("Protocol version identifier"),
-get responseHandling(){
+get "responseHandling"(){
                 return ResponseHandlingSchema.describe("Response handling configuration for deployments")
               }
     }).describe("ARC envelope sent to deployments")

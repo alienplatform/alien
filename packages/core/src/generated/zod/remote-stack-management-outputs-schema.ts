@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Resource outputs for RemoteStackManagement.\nDifferent platforms will provide different outputs based on their implementation.

@@ -41,5 +41,11 @@ packages/core/openapi.json
 # Rust compiler crash dumps
 rustc-ice-*.txt
 
+# Terraform local state and downloaded providers
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
 # Editor config
 .cursor

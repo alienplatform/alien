@@ -3,16 +3,16 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Status of a single container replica.
  */
 export const ReplicaStatusSchema = z.object({
-    "containerIp": z.string().describe("Container IP address (for service discovery)").optional().nullable(),
+    "containerIp": z.string().describe("Container IP address (for service discovery)").nullish(),
 "healthy": z.boolean().describe("Whether the replica is healthy"),
-"machineId": z.string().describe("Machine ID the replica is running on").optional().nullable(),
-"ordinal": z.int().min(0).describe("Ordinal (for stateful containers)").optional().nullable(),
+"machineId": z.string().describe("Machine ID the replica is running on").nullish(),
+"ordinal": z.int().min(0).describe("Ordinal (for stateful containers)").nullish(),
 "replicaId": z.string().describe("Replica ID (e.g., \"api-0\", \"api-1\")")
     }).describe("Status of a single container replica.")
 

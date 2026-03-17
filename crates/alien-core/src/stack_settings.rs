@@ -48,7 +48,7 @@ pub struct AzureManagementConfig {
 /// Management configuration for different cloud platforms.
 ///
 /// Platform-derived configuration for cross-account/cross-tenant access.
-/// This is NOT user-specified - it's derived from the Agent Manager's ServiceAccount.
+/// This is NOT user-specified - it's derived from the Manager's ServiceAccount.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", tag = "platform")]
@@ -171,7 +171,7 @@ fn default_availability_zones() -> u8 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum DeploymentModel {
-    /// Agent Manager pushes updates via cross-account access.
+    /// Manager pushes updates via cross-account access.
     /// Available for AWS, GCP, Azure only.
     #[default]
     Push,
@@ -180,7 +180,7 @@ pub enum DeploymentModel {
     Pull,
 }
 
-/// How updates are delivered to the agent.
+/// How updates are delivered to the deployment.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -297,10 +297,10 @@ pub struct AzureCustomCertificateConfig {
 ///
 /// These settings are provided by the customer via CloudFormation parameters,
 /// Terraform attributes, CLI flags, or Helm values. They customize how the
-/// agent is deployed and what capabilities are enabled.
+/// deployment runs and what capabilities are enabled.
 ///
 /// **Key distinction**: StackSettings is user-customizable, while ManagementConfig
-/// is platform-derived (from the Agent Manager's ServiceAccount).
+/// is platform-derived (from the Manager's ServiceAccount).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -318,7 +318,7 @@ pub struct StackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domains: Option<DomainSettings>,
 
-    /// Deployment model: push (Agent Manager) or pull (Operator).
+    /// Deployment model: push (Manager) or pull (Operator).
     /// Default: Push for cloud platforms.
     /// Kubernetes and Local platforms only support Pull.
     #[serde(default, skip_serializing_if = "is_default_deployment_model")]

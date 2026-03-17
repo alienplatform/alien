@@ -3,9 +3,9 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { CommandStateSchema } from "./command-state-schema.js";
 import { StorageUploadSchema } from "./storage-upload-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Response to command creation
@@ -14,10 +14,10 @@ export const CreateCommandResponseSchema = z.object({
     "commandId": z.string().describe("Unique command identifier"),
 "inlineAllowedUpTo": z.int().min(0).describe("Maximum inline body size allowed"),
 "next": z.string().describe("Next action for client: \"upload\" | \"poll\""),
-get state(){
+get "state"(){
                 return CommandStateSchema.describe("Command states in the ARC protocol lifecycle")
               },
-get storageUpload(){
+get "storageUpload"(){
                 return z.union([StorageUploadSchema, z.null()]).optional()
               }
     }).describe("Response to command creation")

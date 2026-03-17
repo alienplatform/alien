@@ -3,14 +3,14 @@
 * Do not edit manually.
 */
 
+import * as z from "zod";
 import { ExposeProtocolSchema } from "./expose-protocol-schema.js";
-import { z } from "zod/v4";
 
 /**
  * @description Container port configuration.
  */
 export const ContainerPortSchema = z.object({
-    get expose(){
+    get "expose"(){
                 return z.union([ExposeProtocolSchema, z.null()]).optional()
               },
 "port": z.int().min(0).describe("Port number")

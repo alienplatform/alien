@@ -3,7 +3,7 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).

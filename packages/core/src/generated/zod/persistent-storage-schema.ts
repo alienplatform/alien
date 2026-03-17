@@ -3,17 +3,17 @@
 * Do not edit manually.
 */
 
-import { z } from "zod/v4";
+import * as z from "zod";
 
 /**
  * @description Persistent storage configuration for stateful containers.
  */
 export const PersistentStorageSchema = z.object({
-    "iops": z.int().min(0).describe("IOPS (for storage types that support it)").optional().nullable(),
+    "iops": z.int().min(0).describe("IOPS (for storage types that support it)").nullish(),
 "mountPath": z.string().describe("Mount path inside the container"),
 "size": z.string().describe("Storage size (e.g., \"100Gi\", \"500Gi\")"),
-"storageType": z.string().describe("Storage type (e.g., \"gp3\", \"io2\" for AWS, \"pd-ssd\" for GCP)").optional().nullable(),
-"throughput": z.int().min(0).describe("Throughput in MiB/s (for storage types that support it)").optional().nullable()
+"storageType": z.string().describe("Storage type (e.g., \"gp3\", \"io2\" for AWS, \"pd-ssd\" for GCP)").nullish(),
+"throughput": z.int().min(0).describe("Throughput in MiB/s (for storage types that support it)").nullish()
     }).describe("Persistent storage configuration for stateful containers.")
 
 export type PersistentStorage = z.infer<typeof PersistentStorageSchema>
