@@ -100,9 +100,10 @@ BUILD_EXIT_CODE=$?
 set -e  # Re-enable exit on error
 echo "BUILD_COMPLETED_EOF_MARKER" | tee -a /tmp/build_output.log
 
-# Send captured logs to the OTLP monitoring endpoint using Python3.
-# Python3 is available in all standard build environments (CodeBuild, Cloud Build, etc.)
-# and requires no additional installation.  Failures are non-fatal.
+# Send captured logs to the OTLP monitoring endpoint.
+# The subshell + || ensures this is truly non-fatal: even if python3 is missing
+# or crashes, the build exit code is preserved.
+(
 python3 - << 'PYEOF'
 import json, time, sys
 try:
@@ -122,6 +123,7 @@ try:
 except Exception as e:
     print("Warning: monitoring log send failed (non-fatal):", e, file=sys.stderr)
 PYEOF
+) || echo "Warning: log forwarding failed (non-fatal, exit code $?)" >&2
 
 # Clean up
 rm -f /tmp/build_output.log

@@ -276,17 +276,20 @@ async fn test_create_bucket_already_exists(ctx: &mut S3TestContext) {
         create_first_result.err()
     );
 
-    // Attempt to create the same bucket again
+    // Attempt to create the same bucket again.
+    // S3 returns 200 OK if the caller owns the bucket and it's in the same region,
+    // or BucketAlreadyOwnedByYou (which we map to RemoteResourceConflict).
     let create_second_result = ctx.client.create_bucket(&bucket_name).await;
     assert!(
-        matches!(
-            create_second_result,
-            Err(Error {
-                error: Some(ErrorData::RemoteResourceConflict { .. }),
-                ..
-            })
-        ),
-        "Expected RemoteResourceConflict, got {:?}",
+        create_second_result.is_ok()
+            || matches!(
+                &create_second_result,
+                Err(Error {
+                    error: Some(ErrorData::RemoteResourceConflict { .. }),
+                    ..
+                })
+            ),
+        "Expected Ok or RemoteResourceConflict, got {:?}",
         create_second_result
     );
 }

@@ -1136,6 +1136,36 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         }
     }
 
+    // Wait for any in-progress rolling upgrade to finish before cleanup.
+    // Switching to Rolling mode auto-triggers an upgrade; we can't delete until it completes.
+    info!("⏳ Waiting for rolling upgrade to complete before cleanup...");
+    for _ in 0..30 {
+        match ctx
+            .client
+            .get_vmss_rolling_upgrade_latest(&ctx.resource_group_name, &vmss_name)
+            .await
+        {
+            Ok(status) => {
+                let code = status
+                    .properties
+                    .as_ref()
+                    .and_then(|p| p.running_status.as_ref())
+                    .and_then(|s| s.code.as_deref())
+                    .unwrap_or("unknown");
+                if code == "Completed" || code == "Cancelled" {
+                    info!("  Rolling upgrade finished with status: {}", code);
+                    break;
+                }
+                info!("  Rolling upgrade status: {} — waiting 10s...", code);
+                sleep(Duration::from_secs(10)).await;
+            }
+            Err(_) => {
+                info!("  No active rolling upgrade (or API error) — proceeding");
+                break;
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Step 7: Delete the VMSS
     // -------------------------------------------------------------------------

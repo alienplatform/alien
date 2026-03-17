@@ -316,14 +316,26 @@ impl AsyncTestContext for AwsProviderTestContext {
         {
             Ok(_) => {
                 info!("✅ Added public invocation permission for function URL");
-                // IAM resource-based policy propagation can take 10-30 seconds.
-                tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
             }
             Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
                 info!("ℹ️ Function URL permission already exists, continuing");
             }
             Err(e) => panic!("Failed to add function URL permission: {:?}", e),
         }
+
+        // Verify the resource-based policy was applied
+        match lambda_client.get_policy(&function_name, None).await {
+            Ok(policy) => {
+                let policy_str = policy.policy.unwrap_or_default();
+                info!("📋 Lambda resource policy: {}", policy_str);
+            }
+            Err(e) => {
+                warn!("⚠️ Could not retrieve Lambda policy: {:?}", e);
+            }
+        }
+
+        // IAM resource-based policy propagation can take 10-60 seconds.
+        tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
 
         let binding = FunctionBinding::lambda(function_name.clone(), region.clone());
 
@@ -1343,7 +1355,8 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
     let request_url = format!("{}/", function_url.trim_end_matches('/'));
 
     let mut last_status = None;
-    let max_retries = 5;
+    let mut last_body = String::new();
+    let max_retries = 8;
     for attempt in 1..=max_retries {
         let response = client
             .get(&request_url)
@@ -1357,16 +1370,14 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
             ));
 
         let status = response.status();
+        let body = response.text().await.unwrap_or_default();
         info!(
-            "[{}] HTTP request attempt {}/{} to {} returned status: {}",
-            provider_name, attempt, max_retries, request_url, status
+            "[{}] HTTP request attempt {}/{} to {} returned status: {} body: {}",
+            provider_name, attempt, max_retries, request_url, status,
+            &body[..body.len().min(200)]
         );
 
         if status.is_success() || status.is_redirection() {
-            let body = response.text().await.expect(&format!(
-                "[{}] Should be able to read response body",
-                provider_name
-            ));
             info!(
                 "[{}] Response body length: {} bytes",
                 provider_name,
@@ -1377,10 +1388,11 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
         }
 
         last_status = Some(status);
+        last_body = body;
         if attempt < max_retries {
-            let wait = Duration::from_secs(5 * attempt as u64);
+            let wait = Duration::from_secs(10);
             info!(
-                "[{}] Got {}, waiting {:?} for IAM propagation before retry...",
+                "[{}] Got {}, waiting {:?} for propagation before retry...",
                 provider_name, status, wait
             );
             tokio::time::sleep(wait).await;
@@ -1388,9 +1400,10 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
     }
 
     panic!(
-        "[{}] HTTP request failed after {} retries with status: {}",
+        "[{}] HTTP request failed after {} retries with status: {} body: {}",
         provider_name,
         max_retries,
-        last_status.unwrap()
+        last_status.unwrap(),
+        last_body
     );
 }

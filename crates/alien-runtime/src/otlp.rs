@@ -86,9 +86,17 @@ pub fn init_otlp_logging(
         }
     };
 
-    // Build OTLP Log exporter over HTTP with protobuf
+    // Build OTLP Log exporter over HTTP with protobuf.
+    // ExportConfig.endpoint is a base URL; the SDK appends /v1/logs.
+    // Strip any existing signal path to avoid duplication (e.g. from
+    // OTEL_EXPORTER_OTLP_LOGS_ENDPOINT which is a full URL).
+    let base_endpoint = config
+        .endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/v1/logs")
+        .to_string();
     let export_config = ExportConfig {
-        endpoint: Some(config.endpoint.clone()),
+        endpoint: Some(base_endpoint),
         protocol: Protocol::HttpBinary,
         ..Default::default()
     };
