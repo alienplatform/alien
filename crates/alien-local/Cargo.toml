@@ -25,16 +25,10 @@ sled = { workspace = true }
 # Object storage
 object_store = { workspace = true, features = ["http"] }
 
-# Container registry
-container-registry = { workspace = true }
-
 # Docker client
 bollard = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
-
-# Secret type for container registry
-sec = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
@@ -56,6 +50,12 @@ urlencoding = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# Container registry (unix-only: uses symlinks and OCI registry server)
+container-registry = { workspace = true }
+# Secret type used by container-registry auth
+sec = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -61,6 +61,7 @@ mod storage_manager;
 mod vault_manager;
 
 pub use artifact_registry_manager::LocalArtifactRegistryManager;
+
 pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
 };
