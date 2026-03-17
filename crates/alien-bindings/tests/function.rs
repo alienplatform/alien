@@ -315,7 +315,6 @@ impl AsyncTestContext for AwsProviderTestContext {
             .statement_id("AllowPublicInvoke".to_string())
             .action("lambda:InvokeFunction".to_string())
             .principal("*".to_string())
-            .function_url_auth_type("NONE".to_string())
             .build();
 
         for perm in [url_permission, invoke_permission] {
