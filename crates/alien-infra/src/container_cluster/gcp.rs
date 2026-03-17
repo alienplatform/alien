@@ -2517,6 +2517,14 @@ impl GcpContainerClusterController {
                 &mig_state.zone,
                 self.instance_templates.get(group_id),
             ) {
+                let mig = compute_client
+                    .get_instance_group_manager(zone.clone(), mig_name.clone())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to get MIG {} during rolling update", mig_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+
                 let instances = compute_client
                     .list_managed_instances(zone.clone(), mig_name.clone())
                     .await
@@ -2526,23 +2534,56 @@ impl GcpContainerClusterController {
                     })?;
 
                 let template_suffix = format!("/{}", template_state.template_name);
-                let all_on_new = instances.managed_instances.iter().all(|inst| {
-                    let no_action = matches!(
-                        inst.current_action,
-                        None | Some(ManagedInstanceCurrentAction::None)
-                    );
-                    let on_new = inst
-                        .version
-                        .as_ref()
-                        .and_then(|v| v.instance_template.as_deref())
-                        .map(|t| t.ends_with(&template_suffix))
-                        .unwrap_or(false);
-                    no_action && on_new
-                });
+                let target_size = mig
+                    .target_size
+                    .unwrap_or(mig_state.desired_size as i32)
+                    .max(0) as usize;
+                let is_stable = mig
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.is_stable)
+                    .unwrap_or(false);
+                let version_reached = mig
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.version_target.as_ref())
+                    .and_then(|target| target.is_reached)
+                    .unwrap_or(false);
+                let updated_instances = instances
+                    .managed_instances
+                    .iter()
+                    .filter(|inst| {
+                        let running = inst.instance_status == Some(ManagedInstanceStatus::Running);
+                        let no_action = matches!(
+                            inst.current_action,
+                            None | Some(ManagedInstanceCurrentAction::None)
+                        );
+                        let on_new = inst
+                            .version
+                            .as_ref()
+                            .and_then(|v| v.instance_template.as_deref())
+                            .map(|t| t.ends_with(&template_suffix))
+                            .unwrap_or(false);
+                        running && no_action && on_new
+                    })
+                    .count();
+                let current_instances = instances.managed_instances.len();
+                let rollout_complete = is_stable
+                    && version_reached
+                    && current_instances == target_size
+                    && updated_instances == target_size;
 
-                if !all_on_new {
+                if !rollout_complete {
                     all_updated = false;
-                    debug!(mig_name = %mig_name, "Rolling update still in progress");
+                    debug!(
+                        mig_name = %mig_name,
+                        target_size,
+                        current_instances,
+                        updated_instances,
+                        is_stable,
+                        version_reached,
+                        "Rolling update still in progress"
+                    );
                 }
             }
         }
@@ -3569,6 +3610,25 @@ mod tests {
         compute
             .expect_patch_instance_group_manager()
             .returning(|_, _, _| Ok(Operation::default()));
+
+        // Rolling update: MIG-level convergence has completed
+        compute
+            .expect_get_instance_group_manager()
+            .returning(|_, _| {
+                Ok(InstanceGroupManager {
+                    target_size: Some(1),
+                    status: Some(alien_gcp_clients::gcp::compute::InstanceGroupManagerStatus {
+                        is_stable: Some(true),
+                        stateful: None,
+                        version_target: Some(
+                            alien_gcp_clients::gcp::compute::InstanceGroupManagerStatusVersionTarget {
+                                is_reached: Some(true),
+                            },
+                        ),
+                    }),
+                    ..Default::default()
+                })
+            });
 
         // Rolling update: poll instances — return all on new template with no pending action
         let ct_read = captured_template.clone();

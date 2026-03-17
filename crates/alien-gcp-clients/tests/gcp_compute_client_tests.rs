@@ -11,8 +11,9 @@ use alien_gcp_clients::compute::{
     FirewallAllowed, FirewallDirection, FixedOrPercent, ForwardingRule, ForwardingRuleProtocol,
     HealthCheck, HealthCheckType, HttpHealthCheck, InstanceGroupManager,
     InstanceGroupManagerUpdatePolicy, InstanceProperties, InstanceTemplate, LoadBalancingScheme,
-    MinimalAction, NatIpAllocateOption, Network, NetworkEndpointGroup, NetworkEndpointType,
-    NetworkInterface, NetworkRoutingConfig, Router, RouterNat, RoutingMode, ServiceAccount,
+    ManagedInstance, ManagedInstanceCurrentAction, ManagedInstanceStatus, MinimalAction,
+    NatIpAllocateOption, Network, NetworkEndpointGroup, NetworkEndpointType, NetworkInterface,
+    NetworkRoutingConfig, Router, RouterNat, RoutingMode, ServiceAccount,
     SourceSubnetworkIpRangesToNat, SslCertificate, SslCertificateSelfManaged, Subnetwork,
     TargetHttpProxy, TargetHttpsProxy, UpdatePolicyType, UrlMap,
 };
@@ -871,6 +872,130 @@ impl ComputeTestContext {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
+        }
+    }
+
+    async fn wait_for_stable_managed_instance(
+        &self,
+        zone: &str,
+        igm_name: &str,
+        expected_template_name: &str,
+        timeout_seconds: u64,
+    ) -> std::result::Result<ManagedInstance, Box<dyn std::error::Error>> {
+        let start_time = std::time::Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
+
+        loop {
+            if start_time.elapsed() > timeout_duration {
+                return Err(format!(
+                    "Timeout waiting for IGM {}/{} to reach a stable managed instance on template {}",
+                    zone, igm_name, expected_template_name
+                )
+                .into());
+            }
+
+            let igm = match self
+                .client
+                .get_instance_group_manager(zone.to_string(), igm_name.to_string())
+                .await
+            {
+                Ok(igm) => igm,
+                Err(e) => {
+                    warn!(
+                        "Error checking instance group manager {}/{} status: {:?}",
+                        zone, igm_name, e
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            let managed_instances = match self
+                .client
+                .list_managed_instances(zone.to_string(), igm_name.to_string())
+                .await
+            {
+                Ok(instances) => instances,
+                Err(e) => {
+                    warn!(
+                        "Error listing managed instances for {}/{}: {:?}",
+                        zone, igm_name, e
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            let is_stable = igm
+                .status
+                .as_ref()
+                .and_then(|status| status.is_stable)
+                .unwrap_or(false);
+            let version_reached = igm
+                .status
+                .as_ref()
+                .and_then(|status| status.version_target.as_ref())
+                .and_then(|target| target.is_reached)
+                .unwrap_or(false);
+
+            if is_stable && version_reached {
+                if let Some(instance) =
+                    managed_instances.managed_instances.iter().find(|instance| {
+                        matches!(instance.instance_status, Some(ManagedInstanceStatus::Running))
+                            && matches!(
+                                instance.current_action,
+                                Some(ManagedInstanceCurrentAction::None)
+                            )
+                            && instance
+                                .version
+                                .as_ref()
+                                .and_then(|version| version.instance_template.as_deref())
+                                .is_some_and(|template| template.contains(expected_template_name))
+                    })
+                {
+                    let instance_name = instance
+                        .instance
+                        .as_deref()
+                        .and_then(|url| url.split('/').last())
+                        .unwrap_or("unknown");
+                    info!(
+                        "✅ IGM {}/{} is stable with managed instance {} on template {}",
+                        zone, igm_name, instance_name, expected_template_name
+                    );
+                    return Ok(instance.clone());
+                }
+            }
+
+            let instance_summaries: Vec<String> = managed_instances
+                .managed_instances
+                .iter()
+                .map(|instance| {
+                    let instance_name = instance
+                        .instance
+                        .as_deref()
+                        .and_then(|url| url.split('/').last())
+                        .unwrap_or("unknown");
+                    let template = instance
+                        .version
+                        .as_ref()
+                        .and_then(|version| version.instance_template.as_deref())
+                        .unwrap_or("unknown-template");
+                    format!(
+                        "{} status={:?} action={:?} template={}",
+                        instance_name, instance.instance_status, instance.current_action, template
+                    )
+                })
+                .collect();
+
+            info!(
+                "⏳ Waiting for IGM {}/{} to stabilize after rolling update (stable={}, version_reached={}, instances=[{}])",
+                zone,
+                igm_name,
+                is_stable,
+                version_reached,
+                instance_summaries.join("; ")
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
     }
 
@@ -2382,6 +2507,11 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
         template_v2_name
     );
 
+    let stable_managed_instance = ctx
+        .wait_for_stable_managed_instance(&ctx.zone, &igm_name, &template_v2_name, 300)
+        .await
+        .expect("Managed instance group never converged on the patched template");
+
     // =========================================================================
     // Step 4: List Managed Instances
     // =========================================================================
@@ -2413,69 +2543,64 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
     // =========================================================================
     println!("\n📦 Step 4.1: Reading serial port output from first instance");
 
-    if let Some(instance_url) = managed_instances
-        .managed_instances
-        .first()
-        .and_then(|mi| mi.instance.as_ref())
-    {
-        let sp_instance_name = instance_url.split('/').last().unwrap_or("unknown");
+    let stable_instance_url = stable_managed_instance
+        .instance
+        .as_ref()
+        .expect("Stable managed instance should have an instance URL");
+    let stable_instance_name = stable_instance_url
+        .split('/')
+        .last()
+        .unwrap_or("unknown")
+        .to_string();
 
-        // Retry because the instance may not be ready immediately after creation.
-        let mut serial_output = None;
-        for attempt in 1..=12 {
-            match ctx
-                .client
-                .get_serial_port_output(ctx.zone.clone(), sp_instance_name.to_string())
-                .await
-            {
-                Ok(output) => {
-                    serial_output = Some(output);
-                    break;
-                }
-                Err(e) => {
-                    let msg = format!("{:?}", e);
-                    if msg.contains("resourceNotReady") || msg.contains("not ready") {
-                        println!(
-                            "  Instance not ready for serial port (attempt {}/12), waiting 10s...",
-                            attempt
-                        );
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    } else {
-                        panic!("Failed to get serial port output: {:?}", e);
-                    }
+    // Retry because the instance may not be ready immediately after creation or replacement.
+    let mut serial_output = None;
+    for attempt in 1..=12 {
+        match ctx
+            .client
+            .get_serial_port_output(ctx.zone.clone(), stable_instance_name.clone())
+            .await
+        {
+            Ok(output) => {
+                serial_output = Some(output);
+                break;
+            }
+            Err(e) => {
+                let msg = format!("{:?}", e);
+                if msg.contains("resourceNotReady") || msg.contains("not ready") {
+                    println!(
+                        "  Instance not ready for serial port (attempt {}/12), waiting 10s...",
+                        attempt
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                } else {
+                    panic!("Failed to get serial port output: {:?}", e);
                 }
             }
         }
-
-        let serial_output = serial_output.expect("Instance never became ready for serial port output after 120s");
-        println!(
-            "  Serial port output length: {} bytes",
-            serial_output.contents.as_deref().unwrap_or("").len()
-        );
-        assert!(
-            serial_output.contents.is_some(),
-            "Serial port output should have a contents field"
-        );
-        println!("✅ Serial port output retrieved successfully");
-    } else {
-        println!("⚠️  No instances available to read serial port from (skipping)");
     }
+
+    let serial_output =
+        serial_output.expect("Instance never became ready for serial port output after 120s");
+    println!(
+        "  Serial port output length: {} bytes",
+        serial_output.contents.as_deref().unwrap_or("").len()
+    );
+    assert!(
+        serial_output.contents.is_some(),
+        "Serial port output should have a contents field"
+    );
+    println!(
+        "✅ Serial port output retrieved successfully from {}",
+        stable_instance_name
+    );
 
     // =========================================================================
     // Step 4.5: Attach and detach a persistent disk to a managed instance
     // =========================================================================
     println!("\n📦 Step 4.5: Attaching and detaching a disk to a managed instance");
 
-    let instance_url = managed_instances
-        .managed_instances
-        .first()
-        .and_then(|mi| mi.instance.as_ref())
-        .expect("Expected at least one managed instance");
-    let instance_name = instance_url
-        .split('/')
-        .last()
-        .unwrap_or("unknown")
-        .to_string();
+    let instance_name = stable_instance_name.clone();
 
     let disk_name = ctx.generate_unique_name("attach-disk");
     let device_name = format!("dev-{}", &disk_name[..8.min(disk_name.len())]);
@@ -2519,7 +2644,7 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
 
     ctx.wait_for_zone_operation(&ctx.zone, attach_op.name.as_ref().unwrap(), 300)
         .await
-        .expect("Disk attach operation timed out");
+        .expect("Disk attach operation failed or timed out");
     println!("✅ Disk attached to instance {}", instance_name);
 
     let detach_op = ctx
@@ -2530,7 +2655,7 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
 
     ctx.wait_for_zone_operation(&ctx.zone, detach_op.name.as_ref().unwrap(), 300)
         .await
-        .expect("Disk detach operation timed out");
+        .expect("Disk detach operation failed or timed out");
     println!("✅ Disk detached from instance {}", instance_name);
 
     let delete_disk_op = ctx
@@ -2540,7 +2665,7 @@ async fn test_comprehensive_instance_management_lifecycle(ctx: &mut ComputeTestC
         .expect("Failed to delete attached disk");
     ctx.wait_for_zone_operation(&ctx.zone, delete_disk_op.name.as_ref().unwrap(), 120)
         .await
-        .expect("Disk deletion timed out");
+        .expect("Disk deletion failed or timed out");
     ctx.untrack_disk(&ctx.zone, &disk_name);
     println!("✅ Attached disk deleted");
 

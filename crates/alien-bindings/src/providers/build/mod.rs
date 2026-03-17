@@ -1,4 +1,5 @@
 //! Build service implementations
+pub(crate) mod script;
 
 #[cfg(feature = "azure")]
 pub mod aca;

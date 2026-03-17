@@ -1,6 +1,6 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
-    providers::utils::create_build_wrapper_script,
+    providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
 use alien_core::{
