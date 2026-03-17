@@ -69,7 +69,7 @@ impl AsyncTestContext for LocalProviderArtifactRegistryTestContext {
         let temp_dir = tempfile::tempdir()
             .expect("Failed to create temp dir for local artifact registry test");
 
-        #[cfg(feature = "local")]
+        #[cfg(all(feature = "local", unix))]
         {
             // Start a container registry for testing
             use container_registry::auth;
@@ -137,6 +137,10 @@ impl AsyncTestContext for LocalProviderArtifactRegistryTestContext {
                 _registry_handle: registry_handle,
             }
         }
+        #[cfg(all(feature = "local", not(unix)))]
+        {
+            panic!("Local artifact registry tests require Unix because container-registry uses symlinks");
+        }
         #[cfg(not(feature = "local"))]
         {
             panic!("Local feature is required for LocalProviderArtifactRegistryTestContext");
@@ -176,7 +180,7 @@ impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
         let temp_data_dir =
             tempfile::tempdir().expect("Failed to create temp dir for gRPC server test");
 
-        #[cfg(feature = "local")]
+        #[cfg(all(feature = "local", unix))]
         {
             // Start a container registry for the gRPC server
             use container_registry::auth;
@@ -279,6 +283,10 @@ impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
                 _temp_data_dir: temp_data_dir,
                 _registry_handle: registry_handle,
             }
+        }
+        #[cfg(all(feature = "local", not(unix)))]
+        {
+            panic!("Local artifact registry tests require Unix because container-registry uses symlinks");
         }
         #[cfg(not(feature = "local"))]
         {
