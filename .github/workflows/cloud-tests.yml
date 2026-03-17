@@ -157,6 +157,7 @@ jobs:
           name: env-test
           path: .env.test
           retention-days: 1
+          include-hidden-files: true
 
       - name: Install 1Password CLI
         uses: 1password/install-cli-action@v1
