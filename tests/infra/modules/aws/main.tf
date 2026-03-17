@@ -43,6 +43,12 @@ resource "aws_iam_user_policy_attachment" "manager_lambda" {
   policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
 }
 
+resource "aws_iam_user_policy_attachment" "manager_ec2" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+}
+
 resource "aws_iam_user_policy_attachment" "manager_acm" {
   provider   = aws.management
   user       = aws_iam_user.manager.name
@@ -53,6 +59,30 @@ resource "aws_iam_user_policy_attachment" "manager_cloudformation" {
   provider   = aws.management
   user       = aws_iam_user.manager.name
   policy_arn = "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess"
+}
+
+resource "aws_iam_user_policy_attachment" "manager_autoscaling" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
+}
+
+resource "aws_iam_user_policy_attachment" "manager_apigateway" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonAPIGatewayAdministrator"
+}
+
+resource "aws_iam_user_policy_attachment" "manager_iam" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
+}
+
+resource "aws_iam_user_policy_attachment" "manager_codebuild" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess"
 }
 
 # ── Management: S3 bucket ─────────────────────────────────────────────────────

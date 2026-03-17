@@ -601,10 +601,12 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         "!"
     );
 
+    let vmss_sku = env::var("AZURE_VMSS_TEST_SKU").unwrap_or_else(|_| "Standard_B2ps_v2".to_string());
+
     let vmss = VirtualMachineScaleSet {
         location: ctx.location.clone(),
         sku: Some(Sku {
-            name: Some("Standard_B1s".to_string()),
+            name: Some(vmss_sku),
             capacity: Some(1),
             tier: Some("Standard".to_string()),
         }),

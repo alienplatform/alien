@@ -23,6 +23,7 @@ resource "google_project_service" "management_apis" {
     "run.googleapis.com",
     "iam.googleapis.com",
     "cloudbuild.googleapis.com",
+    "compute.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -33,6 +34,7 @@ resource "google_project_service" "target_apis" {
   for_each = toset([
     "run.googleapis.com",
     "iam.googleapis.com",
+    "compute.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -85,6 +87,13 @@ resource "google_project_iam_member" "manager_cloudbuild" {
   provider = google.management
   project  = var.management_project_id
   role     = "roles/cloudbuild.builds.editor"
+  member   = "serviceAccount:${google_service_account.manager.email}"
+}
+
+resource "google_project_iam_member" "manager_compute" {
+  provider = google.management
+  project  = var.management_project_id
+  role     = "roles/compute.admin"
   member   = "serviceAccount:${google_service_account.manager.email}"
 }
 
