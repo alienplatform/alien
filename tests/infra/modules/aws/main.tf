@@ -14,6 +14,7 @@ resource "random_id" "suffix" {
 }
 
 # ── Management: IAM user ──────────────────────────────────────────────────────
+# Dedicated test account — AdministratorAccess is safe here.
 
 resource "aws_iam_user" "manager" {
   provider = aws.management
@@ -25,64 +26,10 @@ resource "aws_iam_access_key" "manager" {
   user     = aws_iam_user.manager.name
 }
 
-resource "aws_iam_user_policy_attachment" "manager_ecr" {
+resource "aws_iam_user_policy_attachment" "manager_admin" {
   provider   = aws.management
   user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_s3" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_lambda" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_ec2" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_acm" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSCertificateManagerFullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_cloudformation" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_autoscaling" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_apigateway" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonAPIGatewayAdministrator"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_iam" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
-}
-
-resource "aws_iam_user_policy_attachment" "manager_codebuild" {
-  provider   = aws.management
-  user       = aws_iam_user.manager.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess"
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 # ── Management: S3 bucket ─────────────────────────────────────────────────────
@@ -131,6 +78,7 @@ resource "aws_iam_role_policy_attachment" "lambda_sqs" {
 }
 
 # ── Target: IAM user ──────────────────────────────────────────────────────────
+# Dedicated test account — AdministratorAccess is safe here.
 
 resource "aws_iam_user" "target" {
   provider = aws.target
@@ -142,13 +90,12 @@ resource "aws_iam_access_key" "target" {
   user     = aws_iam_user.target.name
 }
 
-resource "aws_iam_user_policy_attachment" "target_lambda" {
+resource "aws_iam_user_policy_attachment" "target_admin" {
   provider   = aws.target
   user       = aws_iam_user.target.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 data "aws_caller_identity" "target" {
   provider = aws.target
 }
-

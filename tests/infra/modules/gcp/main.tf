@@ -24,6 +24,11 @@ resource "google_project_service" "management_apis" {
     "iam.googleapis.com",
     "cloudbuild.googleapis.com",
     "compute.googleapis.com",
+    "secretmanager.googleapis.com",
+    "pubsub.googleapis.com",
+    "firestore.googleapis.com",
+    "serviceusage.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -41,6 +46,7 @@ resource "google_project_service" "target_apis" {
 }
 
 # ── Management: Service account + key ─────────────────────────────────────────
+# Dedicated test project — roles/owner is safe here.
 
 resource "google_service_account" "manager" {
   provider     = google.management
@@ -53,47 +59,10 @@ resource "google_service_account_key" "manager" {
   service_account_id = google_service_account.manager.name
 }
 
-resource "google_project_iam_member" "manager_storage" {
+resource "google_project_iam_member" "manager_owner" {
   provider = google.management
   project  = var.management_project_id
-  role     = "roles/storage.admin"
-  member   = "serviceAccount:${google_service_account.manager.email}"
-}
-
-resource "google_project_iam_member" "manager_artifact_registry" {
-  provider = google.management
-  project  = var.management_project_id
-  role     = "roles/artifactregistry.admin"
-  member   = "serviceAccount:${google_service_account.manager.email}"
-}
-
-resource "google_project_iam_member" "manager_run" {
-  provider = google.management
-  project  = var.management_project_id
-  role     = "roles/run.admin"
-  member   = "serviceAccount:${google_service_account.manager.email}"
-}
-
-# Cloud Run deploys revisions using the project's default Compute Engine SA.
-# The manager SA needs iam.serviceAccountUser on the project to act as it.
-resource "google_project_iam_member" "manager_iam_sa_user" {
-  provider = google.management
-  project  = var.management_project_id
-  role     = "roles/iam.serviceAccountUser"
-  member   = "serviceAccount:${google_service_account.manager.email}"
-}
-
-resource "google_project_iam_member" "manager_cloudbuild" {
-  provider = google.management
-  project  = var.management_project_id
-  role     = "roles/cloudbuild.builds.editor"
-  member   = "serviceAccount:${google_service_account.manager.email}"
-}
-
-resource "google_project_iam_member" "manager_compute" {
-  provider = google.management
-  project  = var.management_project_id
-  role     = "roles/compute.admin"
+  role     = "roles/owner"
   member   = "serviceAccount:${google_service_account.manager.email}"
 }
 
@@ -119,6 +88,7 @@ resource "google_artifact_registry_repository" "test" {
 }
 
 # ── Target: Service account + key ─────────────────────────────────────────────
+# Dedicated test project — roles/owner is safe here.
 
 resource "google_service_account" "target" {
   provider     = google.target
@@ -131,17 +101,10 @@ resource "google_service_account_key" "target" {
   service_account_id = google_service_account.target.name
 }
 
-resource "google_project_iam_member" "target_run" {
+resource "google_project_iam_member" "target_owner" {
   provider = google.target
   project  = var.target_project_id
-  role     = "roles/run.admin"
-  member   = "serviceAccount:${google_service_account.target.email}"
-}
-
-resource "google_project_iam_member" "target_iam_sa_user" {
-  provider = google.target
-  project  = var.target_project_id
-  role     = "roles/iam.serviceAccountUser"
+  role     = "roles/owner"
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
