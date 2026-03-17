@@ -3,8 +3,10 @@ use alien_azure_clients::disks::{AzureManagedDisksClient, ManagedDisksApi};
 use alien_azure_clients::long_running_operation::LongRunningOperationClient;
 use alien_azure_clients::models::compute_rp::{
     ApiEntityReference, BootDiagnostics, DiagnosticsProfile, ImageReference, Sku, UpgradeMode,
-    UpgradePolicy, VirtualMachineScaleSet, VirtualMachineScaleSetIpConfiguration,
-    VirtualMachineScaleSetIpConfigurationProperties, VirtualMachineScaleSetNetworkConfiguration,
+    UpgradePolicy, VirtualMachineScaleSet, VirtualMachineScaleSetExtension,
+    VirtualMachineScaleSetExtensionProfile, VirtualMachineScaleSetExtensionProperties,
+    VirtualMachineScaleSetIpConfiguration, VirtualMachineScaleSetIpConfigurationProperties,
+    VirtualMachineScaleSetNetworkConfiguration,
     VirtualMachineScaleSetNetworkConfigurationProperties, VirtualMachineScaleSetNetworkProfile,
     VirtualMachineScaleSetOsProfile, VirtualMachineScaleSetProperties,
     VirtualMachineScaleSetStorageProfile, VirtualMachineScaleSetVmProfile,
@@ -1009,7 +1011,10 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
     // -------------------------------------------------------------------------
     info!("🔄 Step 6.5/9: Testing rolling upgrade APIs (start + get_latest)");
 
-    // Update the VMSS to use Rolling upgrade policy so the rolling upgrade API accepts it.
+    // Update the VMSS to use Rolling upgrade policy.
+    // Azure requires a health extension (or health probe) to be present in the model
+    // when switching to Rolling upgrade mode — it validates the request body, not just
+    // the current live state of the VMSS.
     let mut vmss_for_rolling = ctx
         .client
         .get_vmss(&ctx.resource_group_name, &vmss_name)
@@ -1017,9 +1022,32 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
     if let Some(ref mut props) = vmss_for_rolling.properties {
         props.upgrade_policy = Some(UpgradePolicy {
             mode: Some(UpgradeMode::Rolling),
-            rolling_upgrade_policy: None, // No specific batch parameters — use defaults
+            rolling_upgrade_policy: None,
             automatic_os_upgrade_policy: None,
         });
+        // Include the health extension so Azure accepts the Rolling upgrade model update.
+        // Without it Azure returns 400: "Rolling Upgrade mode is not supported … because
+        // a health probe or health extension was not provided."
+        if let Some(ref mut vm_profile) = props.virtual_machine_profile {
+            vm_profile.extension_profile = Some(VirtualMachineScaleSetExtensionProfile {
+                extensions: vec![VirtualMachineScaleSetExtension {
+                    name: Some("HealthExtension".to_string()),
+                    properties: Some(VirtualMachineScaleSetExtensionProperties {
+                        publisher: Some("Microsoft.ManagedServices".to_string()),
+                        type_: Some("ApplicationHealthLinux".to_string()),
+                        type_handler_version: Some("1.0".to_string()),
+                        auto_upgrade_minor_version: Some(true),
+                        settings: Some(serde_json::json!({
+                            "protocol": "tcp",
+                            "port": 22
+                        })),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                extensions_time_budget: None,
+            });
+        }
         // Clear provisioning_state so Azure doesn't reject the update
         props.provisioning_state = None;
     }

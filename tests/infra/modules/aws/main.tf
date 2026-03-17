@@ -49,6 +49,12 @@ resource "aws_iam_user_policy_attachment" "manager_acm" {
   policy_arn = "arn:aws:iam::aws:policy/AWSCertificateManagerFullAccess"
 }
 
+resource "aws_iam_user_policy_attachment" "manager_cloudformation" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess"
+}
+
 # ── Management: S3 bucket ─────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "test" {

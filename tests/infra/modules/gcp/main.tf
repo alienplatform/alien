@@ -72,6 +72,22 @@ resource "google_project_iam_member" "manager_run" {
   member   = "serviceAccount:${google_service_account.manager.email}"
 }
 
+# Cloud Run deploys revisions using the project's default Compute Engine SA.
+# The manager SA needs iam.serviceAccountUser on the project to act as it.
+resource "google_project_iam_member" "manager_iam_sa_user" {
+  provider = google.management
+  project  = var.management_project_id
+  role     = "roles/iam.serviceAccountUser"
+  member   = "serviceAccount:${google_service_account.manager.email}"
+}
+
+resource "google_project_iam_member" "manager_cloudbuild" {
+  provider = google.management
+  project  = var.management_project_id
+  role     = "roles/cloudbuild.builds.editor"
+  member   = "serviceAccount:${google_service_account.manager.email}"
+}
+
 # ── Management: GCS bucket ────────────────────────────────────────────────────
 
 resource "google_storage_bucket" "test" {

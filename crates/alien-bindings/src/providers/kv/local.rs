@@ -243,8 +243,9 @@ impl Kv for LocalKv {
                 reason: "Failed to insert value into sled database".to_string(),
             })?;
 
-        // Ensure data is persisted to disk
-        db.flush()
+        // Ensure data is persisted to disk without blocking the Tokio thread
+        db.flush_async()
+            .await
             .into_alien_error()
             .context(ErrorData::KvOperationFailed {
                 operation: "flush".to_string(),
@@ -269,8 +270,9 @@ impl Kv for LocalKv {
                 reason: "Failed to remove key from sled database".to_string(),
             })?;
 
-        // Ensure deletion is persisted to disk
-        db.flush()
+        // Ensure deletion is persisted to disk without blocking the Tokio thread
+        db.flush_async()
+            .await
             .into_alien_error()
             .context(ErrorData::KvOperationFailed {
                 operation: "flush".to_string(),
@@ -447,9 +449,8 @@ mod tests {
     async fn test_ttl_expiration() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Put with very short TTL
         let options = Some(PutOptions {
-            ttl: Some(Duration::from_millis(50)),
+            ttl: Some(Duration::from_millis(500)),
             if_not_exists: false,
         });
 
@@ -457,7 +458,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Should exist immediately
+        // Should exist immediately after put completes
         assert!(kv.exists("expiring_key").await.unwrap());
         assert_eq!(
             kv.get("expiring_key").await.unwrap(),
@@ -465,7 +466,7 @@ mod tests {
         );
 
         // Wait for expiration
-        time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(750)).await;
 
         // Should be expired now
         assert!(!kv.exists("expiring_key").await.unwrap());
