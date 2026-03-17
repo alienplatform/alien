@@ -1146,9 +1146,11 @@ async fn test_bucket_with_complex_configuration(ctx: &mut GcsTestContext) {
         .iam_configuration(
             IamConfiguration::builder()
                 .uniform_bucket_level_access(
-                    UniformBucketLevelAccess::builder().enabled(false).build(),
+                    // Org policy (constraints/storage.uniformBucketLevelAccess) enforces
+                    // uniform bucket-level access on all buckets in this project.
+                    UniformBucketLevelAccess::builder().enabled(true).build(),
                 )
-                .public_access_prevention("inherited".to_string())
+                .public_access_prevention("enforced".to_string())
                 .build(),
         )
         .labels(labels.clone())
@@ -1173,7 +1175,7 @@ async fn test_bucket_with_complex_configuration(ctx: &mut GcsTestContext) {
     assert_eq!(created_bucket.storage_class.as_ref().unwrap(), "STANDARD");
     assert!(created_bucket.versioning.as_ref().unwrap().enabled);
     assert!(
-        !created_bucket
+        created_bucket
             .iam_configuration
             .as_ref()
             .unwrap()

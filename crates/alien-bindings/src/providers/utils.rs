@@ -53,33 +53,40 @@ pub(crate) fn relativize_path(
 }
 
 /// Creates a build wrapper script that writes the user's script to a file and executes it.
-/// Optionally includes Fluent Bit monitoring if a monitoring config is provided.
+/// Optionally includes monitoring if a monitoring config is provided.
 ///
 /// This function creates a unified script that:
 /// 1. Writes the user's script to /tmp/build_script.sh
-/// 2. Executes the script from the file
-/// 3. If monitoring is enabled: installs Fluent Bit, captures logs, and sends to OpenTelemetry endpoint
+/// 2. Executes the script from the file, capturing stdout+stderr
+/// 3. If monitoring is enabled: sends captured logs to the OTLP endpoint via Python3
+///    (Python3 is universally available in standard build environments; no external tools needed)
 /// 4. Cleans up temporary files
 pub(crate) fn create_build_wrapper_script(
     user_script: &str,
     monitoring_config: Option<&MonitoringConfig>,
 ) -> String {
     let monitoring_setup = if let Some(config) = monitoring_config {
-        // Extract host from endpoint URL (e.g., "https://logs.us-east-1.amazonaws.com" -> "logs.us-east-1.amazonaws.com")
-        let endpoint_host = config
-            .endpoint
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .split('/')
-            .next()
-            .unwrap_or(&config.endpoint);
+        // Build the full OTLP URL from the endpoint field.
+        let url = config.endpoint.trim_end_matches('/').to_string();
 
-        // Build headers for the configuration
-        let mut header_lines = String::new();
-        for (key, value) in &config.headers {
-            header_lines.push_str(&format!("    Header       {} {}\n", key, value));
-        }
+        // Build Python `req.add_header(...)` lines for each configured header.
+        // serde_json::to_string produces properly escaped JSON string literals.
+        let header_lines: String = config
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "        req.add_header({}, {})\n",
+                    serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k)),
+                    serde_json::to_string(v).unwrap_or_else(|_| format!("\"{}\"", v)),
+                )
+            })
+            .collect();
 
+        // The Python script is embedded inline via `python3 -c`. We use Python's
+        // triple-quoted strings so the log lines don't need any extra escaping.
+        // The script is deliberately defensive: any failure in log forwarding is
+        // non-fatal (printed to stderr) so the build exit code is always preserved.
         format!(
             r#"
 # Execute the build script and capture output to both stdout and log file
@@ -89,38 +96,28 @@ BUILD_EXIT_CODE=$?
 set -e  # Re-enable exit on error
 echo "BUILD_COMPLETED_EOF_MARKER" | tee -a /tmp/build_output.log
 
-# Create Fluent Bit configuration for one-shot log processing
-cat > /tmp/fluent-bit.conf << 'EOF'
-[SERVICE]
-    Flush        1
-    Log_Level    info
-    scheduler.cap    60
-    scheduler.base   5
-
-[INPUT]
-    Name         tail
-    Path         /tmp/build_output.log
-    Tag          build.script
-    Read_from_Head true
-    Exit_On_Eof  true
-
-[OUTPUT]
-    Name         opentelemetry
-    Match        *
-    Host         {}
-    Port         {}
-    Logs_uri     {}
-    Tls          {}
-    Tls.verify   {}
-    Retry_Limit  no_retries
-{}EOF
-
-# Start Fluent Bit and let it process the log file
-fluent-bit -c /tmp/fluent-bit.conf &
-FLUENT_BIT_PID=$!
-
-# Wait for Fluent Bit to process the logs and exit
-wait $FLUENT_BIT_PID 2>/dev/null || true
+# Send captured logs to the OTLP monitoring endpoint using Python3.
+# Python3 is available in all standard build environments (CodeBuild, Cloud Build, etc.)
+# and requires no additional installation.  Failures are non-fatal.
+python3 - << 'PYEOF'
+import json, time, sys
+try:
+    import urllib.request
+    with open('/tmp/build_output.log') as f:
+        lines = [l.rstrip('\n') for l in f if l.strip()]
+    if lines:
+        records = [
+            {{"timeUnixNano": str(int(time.time() * 1e9)), "body": {{"stringValue": l}}, "severityText": "INFO"}}
+            for l in lines
+        ]
+        payload = json.dumps({{"resourceLogs": [{{"resource": {{}}, "scopeLogs": [{{"scope": {{}}, "logRecords": records}}]}}]}}).encode()
+        req = urllib.request.Request("{url}", data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+{header_lines}        with urllib.request.urlopen(req, timeout=30) as r:
+            print("Monitoring logs sent, status:", r.status)
+except Exception as e:
+    print("Warning: monitoring log send failed (non-fatal):", e, file=sys.stderr)
+PYEOF
 
 # Clean up
 rm -f /tmp/build_output.log
@@ -128,12 +125,8 @@ rm -f /tmp/build_output.log
 # Exit with the build script's exit code
 exit $BUILD_EXIT_CODE
 "#,
-            endpoint_host,
-            if config.tls_enabled { "443" } else { "80" },
-            config.logs_uri,
-            if config.tls_enabled { "On" } else { "Off" },
-            if config.tls_verify { "On" } else { "Off" },
-            header_lines
+            url = url,
+            header_lines = header_lines,
         )
     } else {
         // No monitoring, just execute the script directly

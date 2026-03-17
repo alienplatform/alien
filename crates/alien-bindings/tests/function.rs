@@ -101,7 +101,7 @@ impl AsyncTestContext for GrpcProviderTestContext {
             bindings::binding_env_var_name(GRPC_BINDING_NAME),
             server_binding_json,
         );
-        server_provider_env_map.insert("ALIEN_AGENT_TYPE".to_string(), "local".to_string());
+        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
         let local_provider_for_server = Arc::new(
             BindingsProvider::from_env(server_provider_env_map)
@@ -139,7 +139,7 @@ impl AsyncTestContext for GrpcProviderTestContext {
             "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
             server_addr_str.clone(),
         );
-        service_provider_env_map.insert("ALIEN_AGENT_TYPE".to_string(), "grpc".to_string());
+        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
 
         let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
             .expect("Failed to load bindings provider");
@@ -300,7 +300,9 @@ impl AsyncTestContext for AwsProviderTestContext {
 
         info!("✅ Created function URL: {}", url_response.function_url);
 
-        // Add permission for public access
+        // Add resource-based policy so the function URL (AuthType=NONE) is publicly
+        // invocable.  Ignore ResourceConflict (policy already exists from a prior run)
+        // but panic on any other error so permission failures are caught immediately.
         let permission_request = AddPermissionRequest::builder()
             .statement_id("AllowFunctionUrlInvoke".to_string())
             .action("lambda:InvokeFunctionUrl".to_string())
@@ -308,9 +310,21 @@ impl AsyncTestContext for AwsProviderTestContext {
             .function_url_auth_type("NONE".to_string())
             .build();
 
-        let _ = lambda_client
+        match lambda_client
             .add_permission(&function_name, permission_request)
-            .await;
+            .await
+        {
+            Ok(_) => {
+                info!("✅ Added public invocation permission for function URL");
+                // Allow a few seconds for the resource-based policy to propagate
+                // before any test tries to invoke the function URL.
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+            Err(e) if matches!(e.error, Some(ErrorData::RemoteResourceConflict { .. })) => {
+                info!("ℹ️ Function URL permission already exists, continuing");
+            }
+            Err(e) => panic!("Failed to add function URL permission: {:?}", e),
+        }
 
         let binding = FunctionBinding::lambda(function_name.clone(), region.clone());
 
@@ -319,7 +333,7 @@ impl AsyncTestContext for AwsProviderTestContext {
         env_map.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
         env_map.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
         env_map.insert("AWS_ACCOUNT_ID".to_string(), account_id);
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "aws".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "aws".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 
@@ -542,7 +556,7 @@ impl AsyncTestContext for GcpProviderTestContext {
             gcp_credentials_json,
         );
         env_map.insert("GCP_REGION".to_string(), gcp_region.clone());
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "gcp".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 
@@ -1044,7 +1058,7 @@ impl AsyncTestContext for AzureProviderTestContext {
         env_map.insert("AZURE_CLIENT_ID".to_string(), azure_client_id);
         env_map.insert("AZURE_CLIENT_SECRET".to_string(), azure_client_secret);
         env_map.insert("AZURE_SUBSCRIPTION_ID".to_string(), subscription_id);
-        env_map.insert("ALIEN_AGENT_TYPE".to_string(), "azure".to_string());
+        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "azure".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
 

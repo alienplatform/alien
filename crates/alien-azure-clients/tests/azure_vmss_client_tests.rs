@@ -601,7 +601,10 @@ async fn test_comprehensive_vmss_lifecycle(ctx: &mut VmssTestContext) -> Result<
         "!"
     );
 
-    let vmss_sku = env::var("AZURE_VMSS_TEST_SKU").unwrap_or_else(|_| "Standard_B2ps_v2".to_string());
+    // Standard_DC2s_v3 is a small x64 Intel SKU available in eastus with no capacity
+    // restrictions.  The B-series _ps_ / _pls_ variants are ARM64-only and cannot run
+    // x64 Ubuntu images, hence the explicit override here.
+    let vmss_sku = env::var("AZURE_VMSS_TEST_SKU").unwrap_or_else(|_| "Standard_DC2s_v3".to_string());
 
     let vmss = VirtualMachineScaleSet {
         location: ctx.location.clone(),
