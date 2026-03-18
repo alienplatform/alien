@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -74,7 +68,7 @@ pub mod error {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AccessLevel {
@@ -98,9 +92,7 @@ impl ::std::fmt::Display for AccessLevel {
 }
 impl ::std::str::FromStr for AccessLevel {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "read" => Ok(Self::Read),
@@ -111,9 +103,7 @@ impl ::std::str::FromStr for AccessLevel {
 }
 impl ::std::convert::TryFrom<&str> for AccessLevel {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -396,7 +386,7 @@ impl ::std::default::Default for ApiErrorBase {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum Architecture {
@@ -419,9 +409,7 @@ impl ::std::fmt::Display for Architecture {
 }
 impl ::std::str::FromStr for Architecture {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "x64" => Ok(Self::X64),
             "arm64" => Ok(Self::Arm64),
@@ -431,9 +419,7 @@ impl ::std::str::FromStr for Architecture {
 }
 impl ::std::convert::TryFrom<&str> for Architecture {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -532,7 +518,7 @@ impl ::std::default::Default for AvailabilityPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AvailabilityPolicyDiskDelay {
@@ -554,9 +540,7 @@ impl ::std::fmt::Display for AvailabilityPolicyDiskDelay {
 }
 impl ::std::str::FromStr for AvailabilityPolicyDiskDelay {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "automaticreattach" => Ok(Self::AutomaticReattach),
@@ -566,9 +550,7 @@ impl ::std::str::FromStr for AvailabilityPolicyDiskDelay {
 }
 impl ::std::convert::TryFrom<&str> for AvailabilityPolicyDiskDelay {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -621,7 +603,9 @@ impl ::std::convert::From<&CloudError> for CloudError {
 }
 impl ::std::default::Default for CloudError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Indicates the error details if the background copy of a resource created via the CopyStart operation fails.
@@ -696,7 +680,7 @@ impl ::std::convert::From<&CopyCompletionError> for CopyCompletionError {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CopyCompletionErrorReason {
@@ -716,9 +700,7 @@ impl ::std::fmt::Display for CopyCompletionErrorReason {
 }
 impl ::std::str::FromStr for CopyCompletionErrorReason {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "copysourcenotfound" => Ok(Self::CopySourceNotFound),
             _ => Err("invalid value".into()),
@@ -727,9 +709,7 @@ impl ::std::str::FromStr for CopyCompletionErrorReason {
 }
 impl ::std::convert::TryFrom<&str> for CopyCompletionErrorReason {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -883,9 +863,7 @@ pub struct CreationData {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioned_bandwidth_copy_speed: ::std::option::Option<
-        ProvisionedBandwidthCopyOption,
-    >,
+    pub provisioned_bandwidth_copy_speed: ::std::option::Option<ProvisionedBandwidthCopyOption>,
     ///If createOption is ImportSecure, this is the URI of a blob to be imported into VM guest state.
     #[serde(
         rename = "securityDataUri",
@@ -989,7 +967,7 @@ impl ::std::convert::From<&CreationData> for CreationData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DataAccessAuthMode {
@@ -1011,9 +989,7 @@ impl ::std::fmt::Display for DataAccessAuthMode {
 }
 impl ::std::str::FromStr for DataAccessAuthMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "azureactivedirectory" => Ok(Self::AzureActiveDirectory),
             "none" => Ok(Self::None),
@@ -1023,9 +999,7 @@ impl ::std::str::FromStr for DataAccessAuthMode {
 }
 impl ::std::convert::TryFrom<&str> for DataAccessAuthMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1417,7 +1391,9 @@ impl ::std::convert::From<&DiskAccessUpdate> for DiskAccessUpdate {
 }
 impl ::std::default::Default for DiskAccessUpdate {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }
 ///This enumerates the possible sources of a disk's creation.
@@ -1515,7 +1491,7 @@ impl ::std::default::Default for DiskAccessUpdate {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskCreateOption {
@@ -1555,9 +1531,7 @@ impl ::std::fmt::Display for DiskCreateOption {
 }
 impl ::std::str::FromStr for DiskCreateOption {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "empty" => Ok(Self::Empty),
             "attach" => Ok(Self::Attach),
@@ -1576,9 +1550,7 @@ impl ::std::str::FromStr for DiskCreateOption {
 }
 impl ::std::convert::TryFrom<&str> for DiskCreateOption {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1729,7 +1701,7 @@ impl ::std::convert::From<&DiskEncryptionSet> for DiskEncryptionSet {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskEncryptionSetIdentityType {
@@ -1749,18 +1721,14 @@ impl ::std::fmt::Display for DiskEncryptionSetIdentityType {
         match *self {
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned, UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned, UserAssigned"),
             Self::None => f.write_str("None"),
         }
     }
 }
 impl ::std::str::FromStr for DiskEncryptionSetIdentityType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "systemassigned" => Ok(Self::SystemAssigned),
             "userassigned" => Ok(Self::UserAssigned),
@@ -1772,9 +1740,7 @@ impl ::std::str::FromStr for DiskEncryptionSetIdentityType {
 }
 impl ::std::convert::TryFrom<&str> for DiskEncryptionSetIdentityType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1887,7 +1853,7 @@ impl ::std::convert::From<&DiskEncryptionSetList> for DiskEncryptionSetList {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskEncryptionSetType {
@@ -1903,9 +1869,7 @@ impl ::std::convert::From<&Self> for DiskEncryptionSetType {
 impl ::std::fmt::Display for DiskEncryptionSetType {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::EncryptionAtRestWithCustomerKey => {
-                f.write_str("EncryptionAtRestWithCustomerKey")
-            }
+            Self::EncryptionAtRestWithCustomerKey => f.write_str("EncryptionAtRestWithCustomerKey"),
             Self::EncryptionAtRestWithPlatformAndCustomerKeys => {
                 f.write_str("EncryptionAtRestWithPlatformAndCustomerKeys")
             }
@@ -1917,13 +1881,9 @@ impl ::std::fmt::Display for DiskEncryptionSetType {
 }
 impl ::std::str::FromStr for DiskEncryptionSetType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
-            "encryptionatrestwithcustomerkey" => {
-                Ok(Self::EncryptionAtRestWithCustomerKey)
-            }
+            "encryptionatrestwithcustomerkey" => Ok(Self::EncryptionAtRestWithCustomerKey),
             "encryptionatrestwithplatformandcustomerkeys" => {
                 Ok(Self::EncryptionAtRestWithPlatformAndCustomerKeys)
             }
@@ -1936,9 +1896,7 @@ impl ::std::str::FromStr for DiskEncryptionSetType {
 }
 impl ::std::convert::TryFrom<&str> for DiskEncryptionSetType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2081,7 +2039,8 @@ pub struct DiskEncryptionSetUpdateProperties {
     pub rotation_to_latest_key_version_enabled: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&DiskEncryptionSetUpdateProperties>
-for DiskEncryptionSetUpdateProperties {
+    for DiskEncryptionSetUpdateProperties
+{
     fn from(value: &DiskEncryptionSetUpdateProperties) -> Self {
         value.clone()
     }
@@ -2414,9 +2373,7 @@ pub struct DiskProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub encryption_settings_collection: ::std::option::Option<
-        EncryptionSettingsCollection,
-    >,
+    pub encryption_settings_collection: ::std::option::Option<EncryptionSettingsCollection>,
     #[serde(
         rename = "hyperVGeneration",
         default,
@@ -3089,7 +3046,7 @@ impl ::std::default::Default for DiskSecurityProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskSecurityTypes {
@@ -3121,17 +3078,13 @@ impl ::std::fmt::Display for DiskSecurityTypes {
             Self::ConfidentialVmDiskEncryptedWithCustomerKey => {
                 f.write_str("ConfidentialVM_DiskEncryptedWithCustomerKey")
             }
-            Self::ConfidentialVmNonPersistedTpm => {
-                f.write_str("ConfidentialVM_NonPersistedTPM")
-            }
+            Self::ConfidentialVmNonPersistedTpm => f.write_str("ConfidentialVM_NonPersistedTPM"),
         }
     }
 }
 impl ::std::str::FromStr for DiskSecurityTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "trustedlaunch" => Ok(Self::TrustedLaunch),
             "confidentialvm_vmgueststateonlyencryptedwithplatformkey" => {
@@ -3150,9 +3103,7 @@ impl ::std::str::FromStr for DiskSecurityTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskSecurityTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3299,7 +3250,7 @@ impl ::std::default::Default for DiskSku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskState {
@@ -3335,9 +3286,7 @@ impl ::std::fmt::Display for DiskState {
 }
 impl ::std::str::FromStr for DiskState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unattached" => Ok(Self::Unattached),
             "attached" => Ok(Self::Attached),
@@ -3353,9 +3302,7 @@ impl ::std::str::FromStr for DiskState {
 }
 impl ::std::convert::TryFrom<&str> for DiskState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3446,7 +3393,7 @@ impl ::std::convert::TryFrom<::std::string::String> for DiskState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskStorageAccountTypes {
@@ -3485,9 +3432,7 @@ impl ::std::fmt::Display for DiskStorageAccountTypes {
 }
 impl ::std::str::FromStr for DiskStorageAccountTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard_lrs" => Ok(Self::StandardLrs),
             "premium_lrs" => Ok(Self::PremiumLrs),
@@ -3502,9 +3447,7 @@ impl ::std::str::FromStr for DiskStorageAccountTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskStorageAccountTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3763,9 +3706,7 @@ pub struct DiskUpdateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub encryption_settings_collection: ::std::option::Option<
-        EncryptionSettingsCollection,
-    >,
+    pub encryption_settings_collection: ::std::option::Option<EncryptionSettingsCollection>,
     ///The maximum number of VMs that can attach to the disk at the same time. Value greater than one indicates a disk that can be mounted on multiple VMs at the same time.
     #[serde(
         rename = "maxShares",
@@ -3988,10 +3929,8 @@ pub struct EncryptionSetIdentity {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub user_assigned_identities: ::std::collections::HashMap<
-        ::std::string::String,
-        UserAssignedIdentitiesValue,
-    >,
+    pub user_assigned_identities:
+        ::std::collections::HashMap<::std::string::String, UserAssignedIdentitiesValue>,
 }
 impl ::std::convert::From<&EncryptionSetIdentity> for EncryptionSetIdentity {
     fn from(value: &EncryptionSetIdentity) -> Self {
@@ -4196,8 +4135,7 @@ pub struct EncryptionSettingsCollection {
     )]
     pub encryption_settings_version: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&EncryptionSettingsCollection>
-for EncryptionSettingsCollection {
+impl ::std::convert::From<&EncryptionSettingsCollection> for EncryptionSettingsCollection {
     fn from(value: &EncryptionSettingsCollection) -> Self {
         value.clone()
     }
@@ -4298,7 +4236,7 @@ impl ::std::default::Default for EncryptionSettingsElement {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum EncryptionType {
@@ -4314,12 +4252,8 @@ impl ::std::convert::From<&Self> for EncryptionType {
 impl ::std::fmt::Display for EncryptionType {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::EncryptionAtRestWithPlatformKey => {
-                f.write_str("EncryptionAtRestWithPlatformKey")
-            }
-            Self::EncryptionAtRestWithCustomerKey => {
-                f.write_str("EncryptionAtRestWithCustomerKey")
-            }
+            Self::EncryptionAtRestWithPlatformKey => f.write_str("EncryptionAtRestWithPlatformKey"),
+            Self::EncryptionAtRestWithCustomerKey => f.write_str("EncryptionAtRestWithCustomerKey"),
             Self::EncryptionAtRestWithPlatformAndCustomerKeys => {
                 f.write_str("EncryptionAtRestWithPlatformAndCustomerKeys")
             }
@@ -4328,16 +4262,10 @@ impl ::std::fmt::Display for EncryptionType {
 }
 impl ::std::str::FromStr for EncryptionType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
-            "encryptionatrestwithplatformkey" => {
-                Ok(Self::EncryptionAtRestWithPlatformKey)
-            }
-            "encryptionatrestwithcustomerkey" => {
-                Ok(Self::EncryptionAtRestWithCustomerKey)
-            }
+            "encryptionatrestwithplatformkey" => Ok(Self::EncryptionAtRestWithPlatformKey),
+            "encryptionatrestwithcustomerkey" => Ok(Self::EncryptionAtRestWithCustomerKey),
             "encryptionatrestwithplatformandcustomerkeys" => {
                 Ok(Self::EncryptionAtRestWithPlatformAndCustomerKeys)
             }
@@ -4347,9 +4275,7 @@ impl ::std::str::FromStr for EncryptionType {
 }
 impl ::std::convert::TryFrom<&str> for EncryptionType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4447,7 +4373,7 @@ impl ::std::default::Default for ExtendedLocation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExtendedLocationType {
@@ -4467,9 +4393,7 @@ impl ::std::fmt::Display for ExtendedLocationType {
 }
 impl ::std::str::FromStr for ExtendedLocationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "edgezone" => Ok(Self::EdgeZone),
             _ => Err("invalid value".into()),
@@ -4478,9 +4402,7 @@ impl ::std::str::FromStr for ExtendedLocationType {
 }
 impl ::std::convert::TryFrom<&str> for ExtendedLocationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4541,7 +4463,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ExtendedLocationType {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum FileFormat {
@@ -4565,9 +4487,7 @@ impl ::std::fmt::Display for FileFormat {
 }
 impl ::std::str::FromStr for FileFormat {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "vhd" => Ok(Self::Vhd),
             "vhdx" => Ok(Self::Vhdx),
@@ -4577,9 +4497,7 @@ impl ::std::str::FromStr for FileFormat {
 }
 impl ::std::convert::TryFrom<&str> for FileFormat {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4697,7 +4615,7 @@ impl ::std::convert::From<&GrantAccessData> for GrantAccessData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum HyperVGeneration {
@@ -4719,9 +4637,7 @@ impl ::std::fmt::Display for HyperVGeneration {
 }
 impl ::std::str::FromStr for HyperVGeneration {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "v1" => Ok(Self::V1),
             "v2" => Ok(Self::V2),
@@ -4731,9 +4647,7 @@ impl ::std::str::FromStr for HyperVGeneration {
 }
 impl ::std::convert::TryFrom<&str> for HyperVGeneration {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5044,7 +4958,7 @@ impl ::std::convert::From<&KeyVaultAndSecretReference> for KeyVaultAndSecretRefe
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkAccessPolicy {
@@ -5068,9 +4982,7 @@ impl ::std::fmt::Display for NetworkAccessPolicy {
 }
 impl ::std::str::FromStr for NetworkAccessPolicy {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "allowall" => Ok(Self::AllowAll),
             "allowprivate" => Ok(Self::AllowPrivate),
@@ -5081,9 +4993,7 @@ impl ::std::str::FromStr for NetworkAccessPolicy {
 }
 impl ::std::convert::TryFrom<&str> for NetworkAccessPolicy {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5132,7 +5042,7 @@ impl ::std::convert::TryFrom<::std::string::String> for NetworkAccessPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperatingSystemTypes {
@@ -5154,9 +5064,7 @@ impl ::std::fmt::Display for OperatingSystemTypes {
 }
 impl ::std::str::FromStr for OperatingSystemTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "windows" => Ok(Self::Windows),
             "linux" => Ok(Self::Linux),
@@ -5166,9 +5074,7 @@ impl ::std::str::FromStr for OperatingSystemTypes {
 }
 impl ::std::convert::TryFrom<&str> for OperatingSystemTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5223,7 +5129,9 @@ impl ::std::convert::From<&PrivateEndpoint> for PrivateEndpoint {
 }
 impl ::std::default::Default for PrivateEndpoint {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///The Private Endpoint Connection resource.
@@ -5343,7 +5251,8 @@ pub struct PrivateEndpointConnectionListResult {
     pub value: ::std::vec::Vec<PrivateEndpointConnection>,
 }
 impl ::std::convert::From<&PrivateEndpointConnectionListResult>
-for PrivateEndpointConnectionListResult {
+    for PrivateEndpointConnectionListResult
+{
     fn from(value: &PrivateEndpointConnectionListResult) -> Self {
         value.clone()
     }
@@ -5390,12 +5299,11 @@ pub struct PrivateEndpointConnectionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        PrivateEndpointConnectionProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<PrivateEndpointConnectionProvisioningState>,
 }
 impl ::std::convert::From<&PrivateEndpointConnectionProperties>
-for PrivateEndpointConnectionProperties {
+    for PrivateEndpointConnectionProperties
+{
     fn from(value: &PrivateEndpointConnectionProperties) -> Self {
         value.clone()
     }
@@ -5449,7 +5357,7 @@ for PrivateEndpointConnectionProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateEndpointConnectionProvisioningState {
@@ -5475,9 +5383,7 @@ impl ::std::fmt::Display for PrivateEndpointConnectionProvisioningState {
 }
 impl ::std::str::FromStr for PrivateEndpointConnectionProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "creating" => Ok(Self::Creating),
@@ -5489,14 +5395,13 @@ impl ::std::str::FromStr for PrivateEndpointConnectionProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for PrivateEndpointConnectionProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateEndpointConnectionProvisioningState {
+    for PrivateEndpointConnectionProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5504,8 +5409,7 @@ for PrivateEndpointConnectionProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for PrivateEndpointConnectionProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for PrivateEndpointConnectionProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5557,7 +5461,7 @@ for PrivateEndpointConnectionProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateEndpointServiceConnectionStatus {
@@ -5581,9 +5485,7 @@ impl ::std::fmt::Display for PrivateEndpointServiceConnectionStatus {
 }
 impl ::std::str::FromStr for PrivateEndpointServiceConnectionStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "pending" => Ok(Self::Pending),
             "approved" => Ok(Self::Approved),
@@ -5594,14 +5496,11 @@ impl ::std::str::FromStr for PrivateEndpointServiceConnectionStatus {
 }
 impl ::std::convert::TryFrom<&str> for PrivateEndpointServiceConnectionStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateEndpointServiceConnectionStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for PrivateEndpointServiceConnectionStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5609,8 +5508,7 @@ for PrivateEndpointServiceConnectionStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for PrivateEndpointServiceConnectionStatus {
+impl ::std::convert::TryFrom<::std::string::String> for PrivateEndpointServiceConnectionStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5725,15 +5623,16 @@ pub struct PrivateLinkResourceListResult {
     )]
     pub value: ::std::vec::Vec<PrivateLinkResource>,
 }
-impl ::std::convert::From<&PrivateLinkResourceListResult>
-for PrivateLinkResourceListResult {
+impl ::std::convert::From<&PrivateLinkResourceListResult> for PrivateLinkResourceListResult {
     fn from(value: &PrivateLinkResourceListResult) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for PrivateLinkResourceListResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///Properties of a private link resource.
@@ -5796,8 +5695,7 @@ pub struct PrivateLinkResourceProperties {
     )]
     pub required_zone_names: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&PrivateLinkResourceProperties>
-for PrivateLinkResourceProperties {
+impl ::std::convert::From<&PrivateLinkResourceProperties> for PrivateLinkResourceProperties {
     fn from(value: &PrivateLinkResourceProperties) -> Self {
         value.clone()
     }
@@ -5860,7 +5758,8 @@ pub struct PrivateLinkServiceConnectionState {
     pub status: ::std::option::Option<PrivateEndpointServiceConnectionStatus>,
 }
 impl ::std::convert::From<&PrivateLinkServiceConnectionState>
-for PrivateLinkServiceConnectionState {
+    for PrivateLinkServiceConnectionState
+{
     fn from(value: &PrivateLinkServiceConnectionState) -> Self {
         value.clone()
     }
@@ -5953,7 +5852,7 @@ impl ::std::default::Default for PropertyUpdatesInProgress {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ProvisionedBandwidthCopyOption {
@@ -5975,9 +5874,7 @@ impl ::std::fmt::Display for ProvisionedBandwidthCopyOption {
 }
 impl ::std::str::FromStr for ProvisionedBandwidthCopyOption {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "enhanced" => Ok(Self::Enhanced),
@@ -5987,9 +5884,7 @@ impl ::std::str::FromStr for ProvisionedBandwidthCopyOption {
 }
 impl ::std::convert::TryFrom<&str> for ProvisionedBandwidthCopyOption {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6091,7 +5986,7 @@ impl ::std::convert::From<Resource> for ProxyResource {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicNetworkAccess {
@@ -6113,9 +6008,7 @@ impl ::std::fmt::Display for PublicNetworkAccess {
 }
 impl ::std::str::FromStr for PublicNetworkAccess {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -6125,9 +6018,7 @@ impl ::std::str::FromStr for PublicNetworkAccess {
 }
 impl ::std::convert::TryFrom<&str> for PublicNetworkAccess {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6308,7 +6199,9 @@ impl ::std::convert::From<&ShareInfoElement> for ShareInfoElement {
 }
 impl ::std::default::Default for ShareInfoElement {
     fn default() -> Self {
-        Self { vm_uri: Default::default() }
+        Self {
+            vm_uri: Default::default(),
+        }
     }
 }
 ///Snapshot resource.
@@ -6475,7 +6368,7 @@ impl ::std::convert::From<&Snapshot> for Snapshot {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SnapshotAccessState {
@@ -6503,9 +6396,7 @@ impl ::std::fmt::Display for SnapshotAccessState {
 }
 impl ::std::str::FromStr for SnapshotAccessState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "pending" => Ok(Self::Pending),
@@ -6518,9 +6409,7 @@ impl ::std::str::FromStr for SnapshotAccessState {
 }
 impl ::std::convert::TryFrom<&str> for SnapshotAccessState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6760,9 +6649,7 @@ pub struct SnapshotProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub encryption_settings_collection: ::std::option::Option<
-        EncryptionSettingsCollection,
-    >,
+    pub encryption_settings_collection: ::std::option::Option<EncryptionSettingsCollection>,
     #[serde(
         rename = "hyperVGeneration",
         default,
@@ -6969,7 +6856,7 @@ impl ::std::default::Default for SnapshotSku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SnapshotStorageAccountTypes {
@@ -6996,9 +6883,7 @@ impl ::std::fmt::Display for SnapshotStorageAccountTypes {
 }
 impl ::std::str::FromStr for SnapshotStorageAccountTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard_lrs" => Ok(Self::StandardLrs),
             "premium_lrs" => Ok(Self::PremiumLrs),
@@ -7009,9 +6894,7 @@ impl ::std::str::FromStr for SnapshotStorageAccountTypes {
 }
 impl ::std::convert::TryFrom<&str> for SnapshotStorageAccountTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7180,9 +7063,7 @@ pub struct SnapshotUpdateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub encryption_settings_collection: ::std::option::Option<
-        EncryptionSettingsCollection,
-    >,
+    pub encryption_settings_collection: ::std::option::Option<EncryptionSettingsCollection>,
     #[serde(
         rename = "networkAccessPolicy",
         default,
@@ -7283,7 +7164,9 @@ impl ::std::convert::From<&SourceVault> for SourceVault {
 }
 impl ::std::default::Default for SourceVault {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///List of supported capabilities persisted on the disk resource for VM use.
@@ -7401,7 +7284,7 @@ impl ::std::default::Default for SupportedCapabilities {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SupportedSecurityOption {
@@ -7426,9 +7309,7 @@ impl ::std::fmt::Display for SupportedSecurityOption {
 }
 impl ::std::str::FromStr for SupportedSecurityOption {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "trustedlaunchsupported" => Ok(Self::TrustedLaunchSupported),
             "trustedlaunchandconfidentialvmsupported" => {
@@ -7440,9 +7321,7 @@ impl ::std::str::FromStr for SupportedSecurityOption {
 }
 impl ::std::convert::TryFrom<&str> for SupportedSecurityOption {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7619,7 +7498,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -7645,9 +7524,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -7659,9 +7536,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7712,7 +7587,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -7738,9 +7613,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -7752,9 +7625,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }

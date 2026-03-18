@@ -319,10 +319,7 @@ impl AsyncTestContext for AwsProviderTestContext {
 
         for perm in [url_permission, invoke_permission] {
             let sid = perm.statement_id.clone();
-            match lambda_client
-                .add_permission(&function_name, perm)
-                .await
-            {
+            match lambda_client.add_permission(&function_name, perm).await {
                 Ok(_) => {
                     info!("✅ Added permission: {}", sid);
                 }
@@ -1383,7 +1380,11 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
         let body = response.text().await.unwrap_or_default();
         info!(
             "[{}] HTTP request attempt {}/{} to {} returned status: {} body: {}",
-            provider_name, attempt, max_retries, request_url, status,
+            provider_name,
+            attempt,
+            max_retries,
+            request_url,
+            status,
             &body[..body.len().min(200)]
         );
 

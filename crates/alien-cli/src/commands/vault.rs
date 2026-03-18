@@ -9,8 +9,8 @@ use crate::{
 };
 use alien_bindings::providers::vault::LocalVault;
 use alien_bindings::traits::Vault as VaultTrait;
-use alien_platform_api::SdkResultExt;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -90,7 +90,10 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
 
     let current_dir = get_current_dir()?;
     let state_dir = current_dir.join(&args.state_dir);
-    let vault_path = state_dir.join("deployments").join(&deployment_id).join("vault");
+    let vault_path = state_dir
+        .join("deployments")
+        .join(&deployment_id)
+        .join("vault");
 
     // Ensure vault directory exists
     std::fs::create_dir_all(&vault_path)
@@ -139,15 +142,15 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
 async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<String> {
     let sdk = alien_platform_api::Client::new(&format!("http://localhost:{}", port));
 
-    let response =
-        sdk.list_deployments()
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "Failed to list deployments from dev server".to_string(),
-                url: None,
-            })?;
+    let response = sdk
+        .list_deployments()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list deployments from dev server".to_string(),
+            url: None,
+        })?;
 
     let deployments = response.into_inner();
     let deployment = deployments

@@ -225,7 +225,8 @@ impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
                 alien_core::bindings::binding_env_var_name(GRPC_BINDING_NAME),
                 server_binding_json,
             );
-            server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
+            server_provider_env_map
+                .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
             let local_provider_for_server = Arc::new(
                 BindingsProvider::from_env(server_provider_env_map)
@@ -262,7 +263,8 @@ impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
                 "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
                 server_addr_str.clone(),
             );
-            service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
+            service_provider_env_map
+                .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
 
             let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
                 .expect("Failed to load bindings provider");
@@ -554,7 +556,10 @@ impl AsyncTestContext for KubernetesProviderArtifactRegistryTestContext {
             ),
             "default".to_string(),
         );
-        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "kubernetes".to_string());
+        env_map.insert(
+            "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            "kubernetes".to_string(),
+        );
 
         let provider = BindingsProvider::from_env(env_map)
             .await

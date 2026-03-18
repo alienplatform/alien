@@ -3125,11 +3125,7 @@ mod tests {
         });
 
         let mut cluster = test_cluster();
-        cluster
-            .template_inputs
-            .as_mut()
-            .unwrap()
-            .horizon_api_url = horizon_server.base_url();
+        cluster.template_inputs.as_mut().unwrap().horizon_api_url = horizon_server.base_url();
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(cluster)

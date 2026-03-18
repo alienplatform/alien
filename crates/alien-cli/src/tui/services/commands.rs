@@ -33,10 +33,8 @@ impl CommandsService {
                         // Extract deployment name if present
                         // Note: SDK types don't have deployment_group_id or deployment_group yet
                         // They will be added when SDK is regenerated from updated OpenAPI spec
-                        let deployment_name = cmd
-                            .deployment
-                            .as_ref()
-                            .map(|d| d.name.as_str().to_string());
+                        let deployment_name =
+                            cmd.deployment.as_ref().map(|d| d.name.as_str().to_string());
 
                         CommandItem {
                             id: cmd.id.to_string(),

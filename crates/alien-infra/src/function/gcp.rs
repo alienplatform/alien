@@ -3016,7 +3016,11 @@ mod tests {
         function: &Function,
         function_name: &str,
         for_deletion: bool,
-    ) -> (Arc<MockPlatformServiceProvider>, Option<MockServer>, Option<DomainMetadata>) {
+    ) -> (
+        Arc<MockPlatformServiceProvider>,
+        Option<MockServer>,
+        Option<DomainMetadata>,
+    ) {
         let has_public_access = function.ingress == Ingress::Public;
         let needs_readiness_probe = has_public_access && function.readiness_probe.is_some();
 
@@ -3420,7 +3424,8 @@ mod tests {
         });
 
         let compute_mock = create_ssl_compute_mock_for_creation_and_deletion();
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), Some(compute_mock));
+        let mock_provider =
+            setup_mock_service_provider(Arc::new(mock_cloudrun), Some(compute_mock));
         let domain_metadata = create_test_domain_metadata(&function.id);
 
         let mut executor = SingleControllerExecutor::builder()

@@ -39,7 +39,9 @@ impl TelemetryBackend for OtlpForwardingBackend {
             .send()
             .await
             .into_alien_error()
-            .context(GenericError { message: "Failed to forward telemetry signal to OTLP backend".to_string() })?;
+            .context(GenericError {
+                message: "Failed to forward telemetry signal to OTLP backend".to_string(),
+            })?;
 
         Ok(())
     }

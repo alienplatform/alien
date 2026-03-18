@@ -190,9 +190,8 @@ mod tests {
     #[test]
     fn test_validate_commands_polling() {
         // Missing URL and deployment_id
-        let cli =
-            Cli::try_parse_from(["alien-runtime", "--commands-polling-enabled", "--", "app"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["alien-runtime", "--commands-polling-enabled", "--", "app"])
+            .unwrap();
         assert!(cli.validate().is_err());
 
         // Missing deployment_id

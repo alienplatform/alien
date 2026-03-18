@@ -281,10 +281,10 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
     use alien_core::NetworkSettings;
     use alien_core::{
-        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling,
-        DnsRecordStatus, DomainMetadata, EnvironmentVariable, EnvironmentVariableType,
-        EnvironmentVariablesSnapshot, HealthCheck, HorizonClusterConfig, HorizonConfig, Network,
-        ResourceDomainInfo, ResourceSpec,
+        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling, DnsRecordStatus,
+        DomainMetadata, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+        HealthCheck, HorizonClusterConfig, HorizonConfig, Network, ResourceDomainInfo,
+        ResourceSpec,
     };
     use alien_gcp_clients::gcp::compute::MockComputeApi;
     use alien_gcp_clients::gcp::compute::{

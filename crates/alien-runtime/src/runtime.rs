@@ -33,8 +33,8 @@ use crate::{
     error::{ErrorData, Result},
     otlp::{flush_otlp_logs, shutdown_otlp_logs},
     transports::{
-        commands_polling::CommandsPolling, cloudrun::CloudRunTransport, containerapp::ContainerAppTransport,
-        local::LocalTransport,
+        cloudrun::CloudRunTransport, commands_polling::CommandsPolling,
+        containerapp::ContainerAppTransport, local::LocalTransport,
     },
 };
 

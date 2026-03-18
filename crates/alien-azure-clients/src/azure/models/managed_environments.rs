@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -322,8 +316,7 @@ pub struct CertificateKeyVaultProperties {
     )]
     pub key_vault_url: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&CertificateKeyVaultProperties>
-for CertificateKeyVaultProperties {
+impl ::std::convert::From<&CertificateKeyVaultProperties> for CertificateKeyVaultProperties {
     fn from(value: &CertificateKeyVaultProperties) -> Self {
         value.clone()
     }
@@ -373,7 +366,9 @@ impl ::std::convert::From<&CertificatePatch> for CertificatePatch {
 }
 impl ::std::default::Default for CertificatePatch {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }
 ///Certificate resource specific properties
@@ -476,9 +471,7 @@ pub struct CertificateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub certificate_key_vault_properties: ::std::option::Option<
-        CertificateKeyVaultProperties,
-    >,
+    pub certificate_key_vault_properties: ::std::option::Option<CertificateKeyVaultProperties>,
     ///Certificate expiration date.
     #[serde(
         rename = "expirationDate",
@@ -516,9 +509,7 @@ pub struct CertificateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        CertificatePropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<CertificatePropertiesProvisioningState>,
     ///Public key hash.
     #[serde(
         rename = "publicKeyHash",
@@ -621,7 +612,7 @@ impl ::std::default::Default for CertificateProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CertificatePropertiesProvisioningState {
@@ -649,9 +640,7 @@ impl ::std::fmt::Display for CertificatePropertiesProvisioningState {
 }
 impl ::std::str::FromStr for CertificatePropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
@@ -664,14 +653,11 @@ impl ::std::str::FromStr for CertificatePropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for CertificatePropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CertificatePropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for CertificatePropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -679,8 +665,7 @@ for CertificatePropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CertificatePropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for CertificatePropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -727,8 +712,7 @@ pub struct CheckNameAvailabilityRequest {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&CheckNameAvailabilityRequest>
-for CheckNameAvailabilityRequest {
+impl ::std::convert::From<&CheckNameAvailabilityRequest> for CheckNameAvailabilityRequest {
     fn from(value: &CheckNameAvailabilityRequest) -> Self {
         value.clone()
     }
@@ -799,8 +783,7 @@ pub struct CheckNameAvailabilityResponse {
     )]
     pub reason: ::std::option::Option<CheckNameAvailabilityResponseReason>,
 }
-impl ::std::convert::From<&CheckNameAvailabilityResponse>
-for CheckNameAvailabilityResponse {
+impl ::std::convert::From<&CheckNameAvailabilityResponse> for CheckNameAvailabilityResponse {
     fn from(value: &CheckNameAvailabilityResponse) -> Self {
         value.clone()
     }
@@ -843,7 +826,7 @@ impl ::std::default::Default for CheckNameAvailabilityResponse {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CheckNameAvailabilityResponseReason {
@@ -865,9 +848,7 @@ impl ::std::fmt::Display for CheckNameAvailabilityResponseReason {
 }
 impl ::std::str::FromStr for CheckNameAvailabilityResponseReason {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "invalid" => Ok(Self::Invalid),
             "alreadyexists" => Ok(Self::AlreadyExists),
@@ -877,14 +858,11 @@ impl ::std::str::FromStr for CheckNameAvailabilityResponseReason {
 }
 impl ::std::convert::TryFrom<&str> for CheckNameAvailabilityResponseReason {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CheckNameAvailabilityResponseReason {
+impl ::std::convert::TryFrom<&::std::string::String> for CheckNameAvailabilityResponseReason {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -892,8 +870,7 @@ for CheckNameAvailabilityResponseReason {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CheckNameAvailabilityResponseReason {
+impl ::std::convert::TryFrom<::std::string::String> for CheckNameAvailabilityResponseReason {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -964,9 +941,7 @@ pub struct CustomDomainConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub certificate_key_vault_properties: ::std::option::Option<
-        CertificateKeyVaultProperties,
-    >,
+    pub certificate_key_vault_properties: ::std::option::Option<CertificateKeyVaultProperties>,
     ///Certificate password
     #[serde(
         rename = "certificatePassword",
@@ -1167,7 +1142,9 @@ impl ::std::convert::From<&DefaultErrorResponse> for DefaultErrorResponse {
 }
 impl ::std::default::Default for DefaultErrorResponse {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Error model.
@@ -1341,7 +1318,8 @@ pub struct DefaultErrorResponseErrorDetailsItem {
     pub target: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&DefaultErrorResponseErrorDetailsItem>
-for DefaultErrorResponseErrorDetailsItem {
+    for DefaultErrorResponseErrorDetailsItem
+{
     fn from(value: &DefaultErrorResponseErrorDetailsItem) -> Self {
         value.clone()
     }
@@ -1485,8 +1463,7 @@ pub struct EnvironmentAuthTokenProperties {
     )]
     pub token: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&EnvironmentAuthTokenProperties>
-for EnvironmentAuthTokenProperties {
+impl ::std::convert::From<&EnvironmentAuthTokenProperties> for EnvironmentAuthTokenProperties {
     fn from(value: &EnvironmentAuthTokenProperties) -> Self {
         value.clone()
     }
@@ -1758,8 +1735,7 @@ pub struct ManagedCertificateCollection {
     ///Collection of resources.
     pub value: ::std::vec::Vec<ManagedCertificate>,
 }
-impl ::std::convert::From<&ManagedCertificateCollection>
-for ManagedCertificateCollection {
+impl ::std::convert::From<&ManagedCertificateCollection> for ManagedCertificateCollection {
     fn from(value: &ManagedCertificateCollection) -> Self {
         value.clone()
     }
@@ -1801,7 +1777,9 @@ impl ::std::convert::From<&ManagedCertificatePatch> for ManagedCertificatePatch 
 }
 impl ::std::default::Default for ManagedCertificatePatch {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }
 ///Certificate resource specific properties
@@ -1869,9 +1847,8 @@ pub struct ManagedCertificateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub domain_control_validation: ::std::option::Option<
-        ManagedCertificatePropertiesDomainControlValidation,
-    >,
+    pub domain_control_validation:
+        ::std::option::Option<ManagedCertificatePropertiesDomainControlValidation>,
     ///Any error occurred during the certificate provision.
     #[serde(
         default,
@@ -1886,9 +1863,7 @@ pub struct ManagedCertificateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        ManagedCertificatePropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<ManagedCertificatePropertiesProvisioningState>,
     ///Subject name of the certificate.
     #[serde(
         rename = "subjectName",
@@ -1906,8 +1881,7 @@ pub struct ManagedCertificateProperties {
     )]
     pub validation_token: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ManagedCertificateProperties>
-for ManagedCertificateProperties {
+impl ::std::convert::From<&ManagedCertificateProperties> for ManagedCertificateProperties {
     fn from(value: &ManagedCertificateProperties) -> Self {
         value.clone()
     }
@@ -1953,7 +1927,7 @@ impl ::std::default::Default for ManagedCertificateProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedCertificatePropertiesDomainControlValidation {
@@ -1964,8 +1938,7 @@ pub enum ManagedCertificatePropertiesDomainControlValidation {
     #[serde(rename = "TXT")]
     Txt,
 }
-impl ::std::convert::From<&Self>
-for ManagedCertificatePropertiesDomainControlValidation {
+impl ::std::convert::From<&Self> for ManagedCertificatePropertiesDomainControlValidation {
     fn from(value: &ManagedCertificatePropertiesDomainControlValidation) -> Self {
         value.clone()
     }
@@ -1981,9 +1954,7 @@ impl ::std::fmt::Display for ManagedCertificatePropertiesDomainControlValidation
 }
 impl ::std::str::FromStr for ManagedCertificatePropertiesDomainControlValidation {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "cname" => Ok(Self::Cname),
             "http" => Ok(Self::Http),
@@ -1992,17 +1963,15 @@ impl ::std::str::FromStr for ManagedCertificatePropertiesDomainControlValidation
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for ManagedCertificatePropertiesDomainControlValidation {
+impl ::std::convert::TryFrom<&str> for ManagedCertificatePropertiesDomainControlValidation {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ManagedCertificatePropertiesDomainControlValidation {
+    for ManagedCertificatePropertiesDomainControlValidation
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2011,7 +1980,8 @@ for ManagedCertificatePropertiesDomainControlValidation {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ManagedCertificatePropertiesDomainControlValidation {
+    for ManagedCertificatePropertiesDomainControlValidation
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2052,7 +2022,7 @@ for ManagedCertificatePropertiesDomainControlValidation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedCertificatePropertiesProvisioningState {
@@ -2080,9 +2050,7 @@ impl ::std::fmt::Display for ManagedCertificatePropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ManagedCertificatePropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
@@ -2095,14 +2063,13 @@ impl ::std::str::FromStr for ManagedCertificatePropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ManagedCertificatePropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ManagedCertificatePropertiesProvisioningState {
+    for ManagedCertificatePropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2111,7 +2078,8 @@ for ManagedCertificatePropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ManagedCertificatePropertiesProvisioningState {
+    for ManagedCertificatePropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2548,18 +2516,15 @@ pub struct ManagedEnvironmentProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub peer_authentication: ::std::option::Option<
-        ManagedEnvironmentPropertiesPeerAuthentication,
-    >,
+    pub peer_authentication: ::std::option::Option<ManagedEnvironmentPropertiesPeerAuthentication>,
     #[serde(
         rename = "peerTrafficConfiguration",
         default,
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub peer_traffic_configuration: ::std::option::Option<
-        ManagedEnvironmentPropertiesPeerTrafficConfiguration,
-    >,
+    pub peer_traffic_configuration:
+        ::std::option::Option<ManagedEnvironmentPropertiesPeerTrafficConfiguration>,
     ///Provisioning state of the Environment.
     #[serde(
         rename = "provisioningState",
@@ -2567,9 +2532,7 @@ pub struct ManagedEnvironmentProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        ManagedEnvironmentPropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<ManagedEnvironmentPropertiesProvisioningState>,
     ///Static IP of the Environment
     #[serde(
         rename = "staticIp",
@@ -2602,8 +2565,7 @@ pub struct ManagedEnvironmentProperties {
     )]
     pub zone_redundant: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&ManagedEnvironmentProperties>
-for ManagedEnvironmentProperties {
+impl ::std::convert::From<&ManagedEnvironmentProperties> for ManagedEnvironmentProperties {
     fn from(value: &ManagedEnvironmentProperties) -> Self {
         value.clone()
     }
@@ -2657,14 +2619,17 @@ pub struct ManagedEnvironmentPropertiesPeerAuthentication {
     pub mtls: ::std::option::Option<Mtls>,
 }
 impl ::std::convert::From<&ManagedEnvironmentPropertiesPeerAuthentication>
-for ManagedEnvironmentPropertiesPeerAuthentication {
+    for ManagedEnvironmentPropertiesPeerAuthentication
+{
     fn from(value: &ManagedEnvironmentPropertiesPeerAuthentication) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for ManagedEnvironmentPropertiesPeerAuthentication {
     fn default() -> Self {
-        Self { mtls: Default::default() }
+        Self {
+            mtls: Default::default(),
+        }
     }
 }
 ///Peer traffic settings for the Managed Environment
@@ -2697,12 +2662,12 @@ pub struct ManagedEnvironmentPropertiesPeerTrafficConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub encryption: ::std::option::Option<
-        ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption,
-    >,
+    pub encryption:
+        ::std::option::Option<ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption>,
 }
 impl ::std::convert::From<&ManagedEnvironmentPropertiesPeerTrafficConfiguration>
-for ManagedEnvironmentPropertiesPeerTrafficConfiguration {
+    for ManagedEnvironmentPropertiesPeerTrafficConfiguration
+{
     fn from(value: &ManagedEnvironmentPropertiesPeerTrafficConfiguration) -> Self {
         value.clone()
     }
@@ -2741,17 +2706,14 @@ pub struct ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption {
     )]
     pub enabled: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<
-    &ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption,
-> for ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption {
-    fn from(
-        value: &ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption,
-    ) -> Self {
+impl ::std::convert::From<&ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption>
+    for ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption
+{
+    fn from(value: &ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption {
+impl ::std::default::Default for ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption {
     fn default() -> Self {
         Self {
             enabled: Default::default(),
@@ -2796,7 +2758,7 @@ for ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedEnvironmentPropertiesProvisioningState {
@@ -2824,12 +2786,8 @@ impl ::std::fmt::Display for ManagedEnvironmentPropertiesProvisioningState {
             Self::Canceled => f.write_str("Canceled"),
             Self::Waiting => f.write_str("Waiting"),
             Self::InitializationInProgress => f.write_str("InitializationInProgress"),
-            Self::InfrastructureSetupInProgress => {
-                f.write_str("InfrastructureSetupInProgress")
-            }
-            Self::InfrastructureSetupComplete => {
-                f.write_str("InfrastructureSetupComplete")
-            }
+            Self::InfrastructureSetupInProgress => f.write_str("InfrastructureSetupInProgress"),
+            Self::InfrastructureSetupComplete => f.write_str("InfrastructureSetupComplete"),
             Self::ScheduledForDelete => f.write_str("ScheduledForDelete"),
             Self::UpgradeRequested => f.write_str("UpgradeRequested"),
             Self::UpgradeFailed => f.write_str("UpgradeFailed"),
@@ -2838,9 +2796,7 @@ impl ::std::fmt::Display for ManagedEnvironmentPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ManagedEnvironmentPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
@@ -2858,14 +2814,13 @@ impl ::std::str::FromStr for ManagedEnvironmentPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ManagedEnvironmentPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ManagedEnvironmentPropertiesProvisioningState {
+    for ManagedEnvironmentPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2874,7 +2829,8 @@ for ManagedEnvironmentPropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ManagedEnvironmentPropertiesProvisioningState {
+    for ManagedEnvironmentPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2923,8 +2879,7 @@ pub struct ManagedEnvironmentsCollection {
     ///Collection of resources.
     pub value: ::std::vec::Vec<ManagedEnvironment>,
 }
-impl ::std::convert::From<&ManagedEnvironmentsCollection>
-for ManagedEnvironmentsCollection {
+impl ::std::convert::From<&ManagedEnvironmentsCollection> for ManagedEnvironmentsCollection {
     fn from(value: &ManagedEnvironmentsCollection) -> Self {
         value.clone()
     }
@@ -3027,7 +2982,7 @@ impl ::std::convert::From<&ManagedServiceIdentity> for ManagedServiceIdentity {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedServiceIdentityType {
@@ -3048,17 +3003,13 @@ impl ::std::fmt::Display for ManagedServiceIdentityType {
             Self::None => f.write_str("None"),
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned,UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned,UserAssigned"),
         }
     }
 }
 impl ::std::str::FromStr for ManagedServiceIdentityType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "systemassigned" => Ok(Self::SystemAssigned),
@@ -3070,9 +3021,7 @@ impl ::std::str::FromStr for ManagedServiceIdentityType {
 }
 impl ::std::convert::TryFrom<&str> for ManagedServiceIdentityType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3410,7 +3359,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -3436,9 +3385,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -3450,9 +3397,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3503,7 +3448,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -3529,9 +3474,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -3543,9 +3486,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3674,18 +3615,14 @@ pub struct UserAssignedIdentities(
     pub ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
 );
 impl ::std::ops::Deref for UserAssignedIdentities {
-    type Target = ::std::collections::HashMap<
-        ::std::string::String,
-        UserAssignedIdentity,
-    >;
-    fn deref(
-        &self,
-    ) -> &::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
+    type Target = ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>;
+    fn deref(&self) -> &::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
         &self.0
     }
 }
 impl ::std::convert::From<UserAssignedIdentities>
-for ::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
+    for ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>
+{
     fn from(value: UserAssignedIdentities) -> Self {
         value.0
     }
@@ -3695,9 +3632,9 @@ impl ::std::convert::From<&UserAssignedIdentities> for UserAssignedIdentities {
         value.clone()
     }
 }
-impl ::std::convert::From<
-    ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
-> for UserAssignedIdentities {
+impl ::std::convert::From<::std::collections::HashMap<::std::string::String, UserAssignedIdentity>>
+    for UserAssignedIdentities
+{
     fn from(
         value: ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
     ) -> Self {
@@ -3944,15 +3881,7 @@ impl ::std::convert::From<&WorkloadProfile> for WorkloadProfile {
 /// ```
 /// </details>
 #[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
-    Clone,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd
+    ::serde::Deserialize, ::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd,
 )]
 #[serde(transparent)]
 pub struct WorkloadProfileName(pub ::std::string::String);
@@ -4122,8 +4051,7 @@ pub struct WorkloadProfileStatesCollection {
     ///Collection of resources.
     pub value: ::std::vec::Vec<WorkloadProfileStates>,
 }
-impl ::std::convert::From<&WorkloadProfileStatesCollection>
-for WorkloadProfileStatesCollection {
+impl ::std::convert::From<&WorkloadProfileStatesCollection> for WorkloadProfileStatesCollection {
     fn from(value: &WorkloadProfileStatesCollection) -> Self {
         value.clone()
     }
@@ -4183,8 +4111,7 @@ pub struct WorkloadProfileStatesProperties {
     )]
     pub minimum_count: ::std::option::Option<i32>,
 }
-impl ::std::convert::From<&WorkloadProfileStatesProperties>
-for WorkloadProfileStatesProperties {
+impl ::std::convert::From<&WorkloadProfileStatesProperties> for WorkloadProfileStatesProperties {
     fn from(value: &WorkloadProfileStatesProperties) -> Self {
         value.clone()
     }
@@ -4210,15 +4137,7 @@ impl ::std::default::Default for WorkloadProfileStatesProperties {
 /// ```
 /// </details>
 #[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
-    Clone,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd
+    ::serde::Deserialize, ::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd,
 )]
 #[serde(transparent)]
 pub struct WorkloadProfileType(pub ::std::string::String);

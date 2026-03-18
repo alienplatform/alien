@@ -194,10 +194,7 @@ impl ArtifactRegistry for LocalArtifactRegistry {
             .await
             .into_alien_error()
             .context(ErrorData::Other {
-                message: format!(
-                    "Failed to push config blob for repository '{}'",
-                    repo_name
-                ),
+                message: format!("Failed to push config blob for repository '{}'", repo_name),
             })?;
 
         client

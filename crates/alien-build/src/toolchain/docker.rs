@@ -382,7 +382,9 @@ CMD ["cat", "hello.txt"]
 
         // Verify OCI tarball was created
         let target = BinaryTarget::linux_container_target();
-        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let tarball_path = build_dir
+            .path()
+            .join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(
             tarball_path.exists(),
             "OCI tarball should exist at {}",
@@ -451,7 +453,9 @@ RUN echo "Version: $VERSION" > version.txt
             .expect("Docker toolchain build with args should succeed");
 
         let target = BinaryTarget::linux_container_target();
-        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let tarball_path = build_dir
+            .path()
+            .join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(tarball_path.exists(), "OCI tarball should exist");
 
         // Verify the image is valid
@@ -537,7 +541,9 @@ WORKDIR /app
             .expect("Should build with custom Dockerfile name");
 
         let target = BinaryTarget::linux_container_target();
-        let tarball_path = build_dir.path().join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let tarball_path = build_dir
+            .path()
+            .join(format!("{}.oci.tar", target.runtime_platform_id()));
         assert!(tarball_path.exists(), "OCI tarball should exist");
     }
 }

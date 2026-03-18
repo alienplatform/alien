@@ -29,6 +29,8 @@ use uuid::Uuid;
 
 const TEST_REGION: &str = "us-central1";
 const TEST_ZONE: &str = "us-central1-a";
+const NETWORK_DELETE_TIMEOUT_SECONDS: u64 = 300;
+const NETWORK_DELETE_RETRY_INTERVAL_SECONDS: u64 = 10;
 
 struct ComputeTestContext {
     client: ComputeClient,
@@ -242,6 +244,79 @@ impl AsyncTestContext for ComputeTestContext {
 }
 
 impl ComputeTestContext {
+    fn is_resource_not_ready_error(err: &Error) -> bool {
+        let msg = format!("{:?}", err).to_lowercase();
+        msg.contains("resourcenotready") || msg.contains("not ready")
+    }
+
+    async fn delete_network_with_retry(
+        &self,
+        network_name: &str,
+        timeout_seconds: u64,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let start_time = std::time::Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
+        let mut attempt = 0u64;
+
+        loop {
+            if start_time.elapsed() > timeout_duration {
+                return Err(format!(
+                    "Timed out deleting network {} after {}s",
+                    network_name, timeout_seconds
+                )
+                .into());
+            }
+
+            attempt += 1;
+            info!(
+                "🧹 Attempting network deletion (attempt {}): {}",
+                attempt, network_name
+            );
+
+            match self.client.delete_network(network_name.to_string()).await {
+                Ok(operation) => {
+                    let op_name = operation.name.as_deref().ok_or_else(|| {
+                        format!("Delete network {} returned no operation name", network_name)
+                    })?;
+
+                    let remaining = timeout_duration
+                        .saturating_sub(start_time.elapsed())
+                        .as_secs()
+                        .max(1);
+
+                    match self.wait_for_global_operation(op_name, remaining).await {
+                        Ok(()) => return Ok(()),
+                        Err(e) => {
+                            warn!(
+                                "Network delete operation for {} did not complete yet: {}",
+                                network_name, e
+                            );
+                        }
+                    }
+                }
+                Err(e) => match &e.error {
+                    Some(ErrorData::RemoteResourceNotFound { .. }) => return Ok(()),
+                    _ if Self::is_resource_not_ready_error(&e) => {
+                        info!(
+                            "Network {} is not ready for deletion yet (attempt {}), retrying...",
+                            network_name, attempt
+                        );
+                    }
+                    _ => {
+                        return Err(
+                            format!("Failed to delete network {}: {:?}", network_name, e).into(),
+                        )
+                    }
+                },
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                NETWORK_DELETE_RETRY_INTERVAL_SECONDS,
+            ))
+            .await;
+        }
+    }
+
     // --- Tracking methods ---
 
     fn track_network(&self, network_name: &str) {
@@ -499,19 +574,14 @@ impl ComputeTestContext {
 
     async fn cleanup_network(&self, network_name: &str) {
         info!("🧹 Cleaning up network: {}", network_name);
-        match self.client.delete_network(network_name.to_string()).await {
-            Ok(operation) => {
-                if let Some(op_name) = &operation.name {
-                    let _ = self.wait_for_global_operation(op_name, 120).await;
-                }
+        match self
+            .delete_network_with_retry(network_name, NETWORK_DELETE_TIMEOUT_SECONDS)
+            .await
+        {
+            Ok(()) => {
                 info!("✅ Network {} deleted", network_name);
             }
-            Err(e) => match &e.error {
-                Some(ErrorData::RemoteResourceNotFound { .. }) => {
-                    info!("🔍 Network {} was already deleted", network_name);
-                }
-                _ => warn!("Failed to delete network {}: {:?}", network_name, e),
-            },
+            Err(e) => warn!("Failed to delete network {}: {:?}", network_name, e),
         }
     }
 
@@ -751,14 +821,6 @@ impl ComputeTestContext {
         let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
 
         loop {
-            if start_time.elapsed() > timeout_duration {
-                return Err(format!(
-                    "Timeout waiting for global operation {} to complete",
-                    op_name
-                )
-                .into());
-            }
-
             match self.client.get_global_operation(op_name.clone()).await {
                 Ok(operation) => {
                     if operation.is_done() {
@@ -772,10 +834,26 @@ impl ComputeTestContext {
                         info!("✅ Global operation {} completed!", op_name);
                         return Ok(());
                     }
+
+                    if start_time.elapsed() > timeout_duration {
+                        return Err(format!(
+                            "Timeout waiting for global operation {} to complete",
+                            op_name
+                        )
+                        .into());
+                    }
+
                     info!("⏳ Global operation {} still running...", op_name);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
                 Err(e) => {
+                    if start_time.elapsed() > timeout_duration {
+                        return Err(format!(
+                            "Timeout waiting for global operation {} to complete (last error: {:?})",
+                            op_name, e
+                        )
+                        .into());
+                    }
                     warn!("Error checking global operation status: {:?}", e);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
@@ -941,16 +1019,17 @@ impl ComputeTestContext {
             if is_stable && version_reached {
                 if let Some(instance) =
                     managed_instances.managed_instances.iter().find(|instance| {
-                        matches!(instance.instance_status, Some(ManagedInstanceStatus::Running))
-                            && matches!(
-                                instance.current_action,
-                                Some(ManagedInstanceCurrentAction::None)
-                            )
-                            && instance
-                                .version
-                                .as_ref()
-                                .and_then(|version| version.instance_template.as_deref())
-                                .is_some_and(|template| template.contains(expected_template_name))
+                        matches!(
+                            instance.instance_status,
+                            Some(ManagedInstanceStatus::Running)
+                        ) && matches!(
+                            instance.current_action,
+                            Some(ManagedInstanceCurrentAction::None)
+                        ) && instance
+                            .version
+                            .as_ref()
+                            .and_then(|version| version.instance_template.as_deref())
+                            .is_some_and(|template| template.contains(expected_template_name))
                     })
                 {
                     let instance_name = instance
@@ -1402,15 +1481,9 @@ async fn test_comprehensive_vpc_lifecycle(ctx: &mut ComputeTestContext) {
 
     // Delete network
     println!("  Deleting network...");
-    let delete_network_op = ctx
-        .client
-        .delete_network(network_name.clone())
+    ctx.delete_network_with_retry(&network_name, NETWORK_DELETE_TIMEOUT_SECONDS)
         .await
         .expect("Failed to delete network");
-
-    ctx.wait_for_global_operation(delete_network_op.name.as_ref().unwrap(), 120)
-        .await
-        .expect("Network deletion operation timed out");
     ctx.untrack_network(&network_name);
     println!("  ✅ Network deleted");
 
@@ -1578,15 +1651,9 @@ async fn test_wait_global_operation(ctx: &mut ComputeTestContext) {
     println!("✅ wait_global_operation completed successfully");
 
     // Clean up
-    let delete_op = ctx
-        .client
-        .delete_network(network_name.clone())
+    ctx.delete_network_with_retry(&network_name, NETWORK_DELETE_TIMEOUT_SECONDS)
         .await
         .expect("Failed to delete network");
-
-    ctx.wait_for_global_operation(delete_op.name.as_ref().unwrap(), 120)
-        .await
-        .expect("Network deletion timed out");
     ctx.untrack_network(&network_name);
 }
 
@@ -2127,14 +2194,9 @@ async fn test_comprehensive_load_balancing_lifecycle(ctx: &mut ComputeTestContex
     println!("  ✅ Subnetwork deleted");
 
     // Delete network
-    let delete_network_op = ctx
-        .client
-        .delete_network(network_name.clone())
+    ctx.delete_network_with_retry(&network_name, NETWORK_DELETE_TIMEOUT_SECONDS)
         .await
         .expect("Failed to delete network");
-    ctx.wait_for_global_operation(delete_network_op.name.as_ref().unwrap(), 120)
-        .await
-        .expect("Network deletion timed out");
     ctx.untrack_network(&network_name);
     println!("  ✅ Network deleted");
 

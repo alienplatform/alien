@@ -19,7 +19,7 @@ pub use runtime::{
 
 // Re-export config types
 pub use config::{
-    AppLogLine, CommandsPollingConfig, Cli, LambdaMode, LogExporter, RuntimeConfig, TransportType,
+    AppLogLine, Cli, CommandsPollingConfig, LambdaMode, LogExporter, RuntimeConfig, TransportType,
 };
 
 // Re-export event parsing modules

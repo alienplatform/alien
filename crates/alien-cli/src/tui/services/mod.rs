@@ -3,19 +3,19 @@
 //! Services handle all external calls (SDK, API).
 //! They transform API responses into state types that views can render.
 
-pub mod managers;
 pub mod commands;
 pub mod deployment_groups;
 pub mod deployments;
 pub mod logs;
+pub mod managers;
 pub mod packages;
 pub mod releases;
 
-pub use managers::{ManagersService, DeepstoreCredentials};
 pub use commands::CommandsService;
 pub use deployment_groups::DeploymentGroupsService;
 pub use deployments::DeploymentsService;
 pub use logs::LogsService;
+pub use managers::{DeepstoreCredentials, ManagersService};
 pub use packages::PackagesService;
 pub use releases::ReleasesService;
 

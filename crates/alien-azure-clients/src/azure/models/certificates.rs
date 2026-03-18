@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -274,7 +268,9 @@ impl ::std::convert::From<&BackupCertificateResult> for BackupCertificateResult 
 }
 impl ::std::default::Default for BackupCertificateResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///The certificate management attributes.
@@ -875,8 +871,7 @@ pub struct CertificateIssuerSetParameters {
     ///The issuer provider.
     pub provider: ::std::string::String,
 }
-impl ::std::convert::From<&CertificateIssuerSetParameters>
-for CertificateIssuerSetParameters {
+impl ::std::convert::From<&CertificateIssuerSetParameters> for CertificateIssuerSetParameters {
     fn from(value: &CertificateIssuerSetParameters) -> Self {
         value.clone()
     }
@@ -936,7 +931,8 @@ pub struct CertificateIssuerUpdateParameters {
     pub provider: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&CertificateIssuerUpdateParameters>
-for CertificateIssuerUpdateParameters {
+    for CertificateIssuerUpdateParameters
+{
     fn from(value: &CertificateIssuerUpdateParameters) -> Self {
         value.clone()
     }
@@ -1315,7 +1311,8 @@ pub struct CertificateOperationUpdateParameter {
     pub cancellation_requested: bool,
 }
 impl ::std::convert::From<&CertificateOperationUpdateParameter>
-for CertificateOperationUpdateParameter {
+    for CertificateOperationUpdateParameter
+{
     fn from(value: &CertificateOperationUpdateParameter) -> Self {
         value.clone()
     }
@@ -1467,7 +1464,7 @@ impl ::std::default::Default for CertificatePolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CertificatePolicyAction {
@@ -1489,9 +1486,7 @@ impl ::std::fmt::Display for CertificatePolicyAction {
 }
 impl ::std::str::FromStr for CertificatePolicyAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "emailcontacts" => Ok(Self::EmailContacts),
             "autorenew" => Ok(Self::AutoRenew),
@@ -1501,9 +1496,7 @@ impl ::std::str::FromStr for CertificatePolicyAction {
 }
 impl ::std::convert::TryFrom<&str> for CertificatePolicyAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1550,8 +1543,7 @@ pub struct CertificateRestoreParameters {
     ///The backup blob associated with a certificate bundle.
     pub value: ::std::string::String,
 }
-impl ::std::convert::From<&CertificateRestoreParameters>
-for CertificateRestoreParameters {
+impl ::std::convert::From<&CertificateRestoreParameters> for CertificateRestoreParameters {
     fn from(value: &CertificateRestoreParameters) -> Self {
         value.clone()
     }
@@ -2101,8 +2093,7 @@ pub struct DeletedCertificateListResult {
     )]
     pub value: ::std::vec::Vec<DeletedCertificateItem>,
 }
-impl ::std::convert::From<&DeletedCertificateListResult>
-for DeletedCertificateListResult {
+impl ::std::convert::From<&DeletedCertificateListResult> for DeletedCertificateListResult {
     fn from(value: &DeletedCertificateListResult) -> Self {
         value.clone()
     }
@@ -2186,7 +2177,7 @@ impl ::std::default::Default for DeletedCertificateListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DeletionRecoveryLevel {
@@ -2216,9 +2207,7 @@ impl ::std::fmt::Display for DeletionRecoveryLevel {
             Self::RecoverableProtectedSubscription => {
                 f.write_str("Recoverable+ProtectedSubscription")
             }
-            Self::CustomizedRecoverablePurgeable => {
-                f.write_str("CustomizedRecoverable+Purgeable")
-            }
+            Self::CustomizedRecoverablePurgeable => f.write_str("CustomizedRecoverable+Purgeable"),
             Self::CustomizedRecoverable => f.write_str("CustomizedRecoverable"),
             Self::CustomizedRecoverableProtectedSubscription => {
                 f.write_str("CustomizedRecoverable+ProtectedSubscription")
@@ -2228,16 +2217,12 @@ impl ::std::fmt::Display for DeletionRecoveryLevel {
 }
 impl ::std::str::FromStr for DeletionRecoveryLevel {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "purgeable" => Ok(Self::Purgeable),
             "recoverable+purgeable" => Ok(Self::RecoverablePurgeable),
             "recoverable" => Ok(Self::Recoverable),
-            "recoverable+protectedsubscription" => {
-                Ok(Self::RecoverableProtectedSubscription)
-            }
+            "recoverable+protectedsubscription" => Ok(Self::RecoverableProtectedSubscription),
             "customizedrecoverable+purgeable" => Ok(Self::CustomizedRecoverablePurgeable),
             "customizedrecoverable" => Ok(Self::CustomizedRecoverable),
             "customizedrecoverable+protectedsubscription" => {
@@ -2249,9 +2234,7 @@ impl ::std::str::FromStr for DeletionRecoveryLevel {
 }
 impl ::std::convert::TryFrom<&str> for DeletionRecoveryLevel {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2703,7 +2686,7 @@ impl ::std::default::Default for IssuerParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum JsonWebKeyCurveName {
@@ -2733,9 +2716,7 @@ impl ::std::fmt::Display for JsonWebKeyCurveName {
 }
 impl ::std::str::FromStr for JsonWebKeyCurveName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "p-256" => Ok(Self::P256),
             "p-384" => Ok(Self::P384),
@@ -2747,9 +2728,7 @@ impl ::std::str::FromStr for JsonWebKeyCurveName {
 }
 impl ::std::convert::TryFrom<&str> for JsonWebKeyCurveName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2834,7 +2813,7 @@ impl ::std::convert::TryFrom<::std::string::String> for JsonWebKeyCurveName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum JsonWebKeyType {
@@ -2870,9 +2849,7 @@ impl ::std::fmt::Display for JsonWebKeyType {
 }
 impl ::std::str::FromStr for JsonWebKeyType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ec" => Ok(Self::Ec),
             "ec-hsm" => Ok(Self::EcHsm),
@@ -2886,9 +2863,7 @@ impl ::std::str::FromStr for JsonWebKeyType {
 }
 impl ::std::convert::TryFrom<&str> for JsonWebKeyType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3077,7 +3052,7 @@ impl ::std::default::Default for KeyProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum KeyUsageType {
@@ -3122,9 +3097,7 @@ impl ::std::fmt::Display for KeyUsageType {
 }
 impl ::std::str::FromStr for KeyUsageType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "digitalsignature" => Ok(Self::DigitalSignature),
             "nonrepudiation" => Ok(Self::NonRepudiation),
@@ -3141,9 +3114,7 @@ impl ::std::str::FromStr for KeyUsageType {
 }
 impl ::std::convert::TryFrom<&str> for KeyUsageType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3195,7 +3166,9 @@ impl ::std::convert::From<&KeyVaultError> for KeyVaultError {
 }
 impl ::std::default::Default for KeyVaultError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Action and its trigger that will be performed by Key Vault over the lifetime of a certificate.
@@ -3328,14 +3301,17 @@ pub struct PendingCertificateSigningRequestResult {
     pub value: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PendingCertificateSigningRequestResult>
-for PendingCertificateSigningRequestResult {
+    for PendingCertificateSigningRequestResult
+{
     fn from(value: &PendingCertificateSigningRequestResult) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for PendingCertificateSigningRequestResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///Properties of the key backing a certificate.

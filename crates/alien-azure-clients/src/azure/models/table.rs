@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -62,7 +56,9 @@ impl ::std::convert::From<&CloudError> for CloudError {
 }
 impl ::std::default::Default for CloudError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///An error response from the Storage service.
@@ -269,7 +265,7 @@ impl ::std::convert::From<&CorsRule> for CorsRule {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CorsRuleAllowedMethodsItem {
@@ -317,9 +313,7 @@ impl ::std::fmt::Display for CorsRuleAllowedMethodsItem {
 }
 impl ::std::str::FromStr for CorsRuleAllowedMethodsItem {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "delete" => Ok(Self::Delete),
             "get" => Ok(Self::Get),
@@ -337,9 +331,7 @@ impl ::std::str::FromStr for CorsRuleAllowedMethodsItem {
 }
 impl ::std::convert::TryFrom<&str> for CorsRuleAllowedMethodsItem {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -493,7 +485,9 @@ impl ::std::convert::From<&ListTableServices> for ListTableServices {
 }
 impl ::std::default::Default for ListTableServices {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///Common fields that are returned in the response for all Azure Resource Manager resources
@@ -839,15 +833,16 @@ pub struct TableServicePropertiesProperties {
     )]
     pub cors: ::std::option::Option<CorsRules>,
 }
-impl ::std::convert::From<&TableServicePropertiesProperties>
-for TableServicePropertiesProperties {
+impl ::std::convert::From<&TableServicePropertiesProperties> for TableServicePropertiesProperties {
     fn from(value: &TableServicePropertiesProperties) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for TableServicePropertiesProperties {
     fn default() -> Self {
-        Self { cors: Default::default() }
+        Self {
+            cors: Default::default(),
+        }
     }
 }
 ///Object to set Table Access Policy.

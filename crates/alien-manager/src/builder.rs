@@ -260,7 +260,8 @@ impl AlienManagerBuilder {
         };
 
         // --- Router ---
-        let mut router = crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
+        let mut router =
+            crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }
@@ -323,8 +324,8 @@ impl AlienManagerBuilder {
     #[cfg(not(feature = "sqlite"))]
     pub async fn build(self) -> crate::error::Result<crate::server::AlienManager> {
         use crate::error::ErrorData;
-        use alien_error::AlienError;
         use alien_commands::server::CommandServer;
+        use alien_error::AlienError;
         use tracing::info;
 
         macro_rules! require_provider {
@@ -342,15 +343,15 @@ impl AlienManagerBuilder {
 
         let config = std::sync::Arc::new(self.config);
 
-        let deployment_store  = require_provider!(self.deployment_store,  "deployment_store");
-        let release_store     = require_provider!(self.release_store,     "release_store");
-        let token_store       = require_provider!(self.token_store,       "token_store");
-        let credential_resolver = require_provider!(self.credential_resolver, "credential_resolver");
+        let deployment_store = require_provider!(self.deployment_store, "deployment_store");
+        let release_store = require_provider!(self.release_store, "release_store");
+        let token_store = require_provider!(self.token_store, "token_store");
+        let credential_resolver =
+            require_provider!(self.credential_resolver, "credential_resolver");
         let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
-        let auth_validator    = require_provider!(self.auth_validator,    "auth_validator");
-        let server_bindings   = std::sync::Arc::new(
-            require_provider!(self.server_bindings, "server_bindings")
-        );
+        let auth_validator = require_provider!(self.auth_validator, "auth_validator");
+        let server_bindings =
+            std::sync::Arc::new(require_provider!(self.server_bindings, "server_bindings"));
 
         let command_server = std::sync::Arc::new(CommandServer::new(
             server_bindings.command_kv.clone(),
@@ -371,12 +372,16 @@ impl AlienManagerBuilder {
             config: config.clone(),
         };
 
-        let mut router = crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
+        let mut router =
+            crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }
 
-        info!(port = config.port, "AlienManager built (no sqlite defaults)");
+        info!(
+            port = config.port,
+            "AlienManager built (no sqlite defaults)"
+        );
 
         Ok(crate::server::AlienManager {
             config,

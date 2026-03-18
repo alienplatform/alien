@@ -836,7 +836,9 @@ async fn test_end_to_end_function_execution(ctx: &mut LambdaTestContext) {
                     let sid = perm.statement_id.clone();
                     match ctx.client.add_permission(&function_name, perm).await {
                         Ok(_) => info!("✅ Permission {} added", sid),
-                        Err(e) => warn!("Failed to add permission {} (may still work): {:?}", sid, e),
+                        Err(e) => {
+                            warn!("Failed to add permission {} (may still work): {:?}", sid, e)
+                        }
                     }
                 }
 

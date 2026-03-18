@@ -28,8 +28,10 @@ impl EnvironmentVariableBuilder {
     /// identifiers like AWS_ACCOUNT_ID, AWS_REGION, GCP_PROJECT_ID, AZURE_TENANT_ID, etc.
     pub fn add_standard_alien_env_vars(mut self, ctx: &ResourceControllerContext<'_>) -> Self {
         // Add the current platform as ALIEN_DEPLOYMENT_TYPE
-        self.env_vars
-            .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), ctx.platform.to_string());
+        self.env_vars.insert(
+            "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            ctx.platform.to_string(),
+        );
 
         // Add platform-specific environment variables
         match ctx.platform {

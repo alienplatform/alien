@@ -1,8 +1,8 @@
 use crate::auth::{load_workspace, save_workspace};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use alien_platform_api::SdkResultExt;
 use alien_error::{Context, IntoAlienError};
+use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use ratatui::{prelude::*, widgets::Paragraph, TerminalOptions, Viewport};
 use std::io::IsTerminal;

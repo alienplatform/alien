@@ -6,14 +6,14 @@ use crate::project_link::ensure_project_linked;
 use crate::tui::{ErrorPrinter, ReleaseResult, ReleaseUiComponent, ReleaseUiEvent, ReleaseUiProps};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
+use alien_core::{alien_event, AlienEvent, EventChange, EventHandler, EventState};
+use alien_core::{Platform, Stack};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     CreateReleaseRequest, CreateReleaseRequestProject, CreateReleaseRequestRootDirectory,
     CreateReleaseWorkspace, GitMetadata, StackByPlatform,
 };
 use alien_platform_api::SdkResultExt;
-use alien_core::{alien_event, AlienEvent, EventChange, EventHandler, EventState};
-use alien_core::{Platform, Stack};
-use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};

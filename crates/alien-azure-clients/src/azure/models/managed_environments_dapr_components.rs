@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -585,7 +579,9 @@ impl ::std::convert::From<&DefaultErrorResponse> for DefaultErrorResponse {
 }
 impl ::std::default::Default for DefaultErrorResponse {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Error model.
@@ -759,7 +755,8 @@ pub struct DefaultErrorResponseErrorDetailsItem {
     pub target: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&DefaultErrorResponseErrorDetailsItem>
-for DefaultErrorResponseErrorDetailsItem {
+    for DefaultErrorResponseErrorDetailsItem
+{
     fn from(value: &DefaultErrorResponseErrorDetailsItem) -> Self {
         value.clone()
     }
@@ -1133,7 +1130,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -1159,9 +1156,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -1173,9 +1168,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1226,7 +1219,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -1252,9 +1245,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -1266,9 +1257,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }

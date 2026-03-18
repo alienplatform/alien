@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -62,7 +56,9 @@ impl ::std::convert::From<&CloudError> for CloudError {
 }
 impl ::std::default::Default for CloudError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///An error response from the service.
@@ -514,7 +510,9 @@ impl ::std::convert::From<&NatGatewaySku> for NatGatewaySku {
 }
 impl ::std::default::Default for NatGatewaySku {
     fn default() -> Self {
-        Self { name: Default::default() }
+        Self {
+            name: Default::default(),
+        }
     }
 }
 ///Name of Nat Gateway SKU.
@@ -546,7 +544,7 @@ impl ::std::default::Default for NatGatewaySku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NatGatewaySkuName {
@@ -568,9 +566,7 @@ impl ::std::fmt::Display for NatGatewaySkuName {
 }
 impl ::std::str::FromStr for NatGatewaySkuName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard" => Ok(Self::Standard),
             "standardv2" => Ok(Self::StandardV2),
@@ -580,9 +576,7 @@ impl ::std::str::FromStr for NatGatewaySkuName {
 }
 impl ::std::convert::TryFrom<&str> for NatGatewaySkuName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -634,7 +628,7 @@ impl ::std::convert::TryFrom<::std::string::String> for NatGatewaySkuName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ProvisioningState {
@@ -660,9 +654,7 @@ impl ::std::fmt::Display for ProvisioningState {
 }
 impl ::std::str::FromStr for ProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "updating" => Ok(Self::Updating),
@@ -674,9 +666,7 @@ impl ::std::str::FromStr for ProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -823,7 +813,9 @@ impl ::std::convert::From<&SubResource> for SubResource {
 }
 impl ::std::default::Default for SubResource {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///Tags object for patch operations.
@@ -862,6 +854,8 @@ impl ::std::convert::From<&TagsObject> for TagsObject {
 }
 impl ::std::default::Default for TagsObject {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }

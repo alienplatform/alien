@@ -4,12 +4,12 @@
 //! and managing deployment registration with the platform.
 
 use crate::error::{ErrorData, Result};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::SdkResultExt;
 use alien_platform_api::{
     types::{Subject, SubjectScope},
     Client as SdkClient,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
 use dirs::config_dir;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},

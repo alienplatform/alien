@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -161,7 +155,9 @@ impl ::std::convert::From<&BackupSecretResult> for BackupSecretResult {
 }
 impl ::std::default::Default for BackupSecretResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///A Deleted Secret consisting of its previous id, attributes and its tags, as well as information on when it will be purged.
@@ -583,7 +579,7 @@ impl ::std::default::Default for DeletedSecretListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DeletionRecoveryLevel {
@@ -613,9 +609,7 @@ impl ::std::fmt::Display for DeletionRecoveryLevel {
             Self::RecoverableProtectedSubscription => {
                 f.write_str("Recoverable+ProtectedSubscription")
             }
-            Self::CustomizedRecoverablePurgeable => {
-                f.write_str("CustomizedRecoverable+Purgeable")
-            }
+            Self::CustomizedRecoverablePurgeable => f.write_str("CustomizedRecoverable+Purgeable"),
             Self::CustomizedRecoverable => f.write_str("CustomizedRecoverable"),
             Self::CustomizedRecoverableProtectedSubscription => {
                 f.write_str("CustomizedRecoverable+ProtectedSubscription")
@@ -625,16 +619,12 @@ impl ::std::fmt::Display for DeletionRecoveryLevel {
 }
 impl ::std::str::FromStr for DeletionRecoveryLevel {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "purgeable" => Ok(Self::Purgeable),
             "recoverable+purgeable" => Ok(Self::RecoverablePurgeable),
             "recoverable" => Ok(Self::Recoverable),
-            "recoverable+protectedsubscription" => {
-                Ok(Self::RecoverableProtectedSubscription)
-            }
+            "recoverable+protectedsubscription" => Ok(Self::RecoverableProtectedSubscription),
             "customizedrecoverable+purgeable" => Ok(Self::CustomizedRecoverablePurgeable),
             "customizedrecoverable" => Ok(Self::CustomizedRecoverable),
             "customizedrecoverable+protectedsubscription" => {
@@ -646,9 +636,7 @@ impl ::std::str::FromStr for DeletionRecoveryLevel {
 }
 impl ::std::convert::TryFrom<&str> for DeletionRecoveryLevel {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -814,7 +802,9 @@ impl ::std::convert::From<&KeyVaultError> for KeyVaultError {
 }
 impl ::std::default::Default for KeyVaultError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///The secret management attributes.

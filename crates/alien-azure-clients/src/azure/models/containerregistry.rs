@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -73,7 +67,9 @@ impl ::std::convert::From<&ActivationProperties> for ActivationProperties {
 }
 impl ::std::default::Default for ActivationProperties {
     fn default() -> Self {
-        Self { status: Default::default() }
+        Self {
+            status: Default::default(),
+        }
     }
 }
 ///The activation status of the connected registry.
@@ -106,7 +102,7 @@ impl ::std::default::Default for ActivationProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ActivationPropertiesStatus {
@@ -128,9 +124,7 @@ impl ::std::fmt::Display for ActivationPropertiesStatus {
 }
 impl ::std::str::FromStr for ActivationPropertiesStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "active" => Ok(Self::Active),
             "inactive" => Ok(Self::Inactive),
@@ -140,9 +134,7 @@ impl ::std::str::FromStr for ActivationPropertiesStatus {
 }
 impl ::std::convert::TryFrom<&str> for ActivationPropertiesStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -249,7 +241,9 @@ impl ::std::convert::From<&Actor> for Actor {
 }
 impl ::std::default::Default for Actor {
     fn default() -> Self {
-        Self { name: Default::default() }
+        Self {
+            name: Default::default(),
+        }
     }
 }
 ///Authentication credential stored for an upstream.
@@ -363,7 +357,7 @@ impl ::std::default::Default for AuthCredential {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AuthCredentialName {
@@ -383,9 +377,7 @@ impl ::std::fmt::Display for AuthCredentialName {
 }
 impl ::std::str::FromStr for AuthCredentialName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "credential1" => Ok(Self::Credential1),
             _ => Err("invalid value".into()),
@@ -394,9 +386,7 @@ impl ::std::str::FromStr for AuthCredentialName {
 }
 impl ::std::convert::TryFrom<&str> for AuthCredentialName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -451,8 +441,7 @@ pub struct AzureAdAuthenticationAsArmPolicy {
     )]
     pub status: AzureAdAuthenticationAsArmPolicyStatus,
 }
-impl ::std::convert::From<&AzureAdAuthenticationAsArmPolicy>
-for AzureAdAuthenticationAsArmPolicy {
+impl ::std::convert::From<&AzureAdAuthenticationAsArmPolicy> for AzureAdAuthenticationAsArmPolicy {
     fn from(value: &AzureAdAuthenticationAsArmPolicy) -> Self {
         value.clone()
     }
@@ -494,7 +483,7 @@ impl ::std::default::Default for AzureAdAuthenticationAsArmPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AzureAdAuthenticationAsArmPolicyStatus {
@@ -518,9 +507,7 @@ impl ::std::fmt::Display for AzureAdAuthenticationAsArmPolicyStatus {
 }
 impl ::std::str::FromStr for AzureAdAuthenticationAsArmPolicyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -530,14 +517,11 @@ impl ::std::str::FromStr for AzureAdAuthenticationAsArmPolicyStatus {
 }
 impl ::std::convert::TryFrom<&str> for AzureAdAuthenticationAsArmPolicyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for AzureAdAuthenticationAsArmPolicyStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for AzureAdAuthenticationAsArmPolicyStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -545,8 +529,7 @@ for AzureAdAuthenticationAsArmPolicyStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for AzureAdAuthenticationAsArmPolicyStatus {
+impl ::std::convert::TryFrom<::std::string::String> for AzureAdAuthenticationAsArmPolicyStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -716,7 +699,7 @@ pub struct CacheRuleProperties {
     )]
     pub source_repository: ::std::option::Option<::std::string::String>,
     /**Target repository specified in docker pull command.
-Eg: docker pull myregistry.azurecr.io/{targetRepository}:{tag}*/
+    Eg: docker pull myregistry.azurecr.io/{targetRepository}:{tag}*/
     #[serde(
         rename = "targetRepository",
         default,
@@ -775,7 +758,7 @@ impl ::std::default::Default for CacheRuleProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CacheRulePropertiesProvisioningState {
@@ -805,9 +788,7 @@ impl ::std::fmt::Display for CacheRulePropertiesProvisioningState {
 }
 impl ::std::str::FromStr for CacheRulePropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -821,14 +802,11 @@ impl ::std::str::FromStr for CacheRulePropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for CacheRulePropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CacheRulePropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for CacheRulePropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -836,8 +814,7 @@ for CacheRulePropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CacheRulePropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for CacheRulePropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1013,10 +990,7 @@ pub struct CallbackConfig {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub custom_headers: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub custom_headers: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     ///The service URI for the webhook to post notifications.
     #[serde(rename = "serviceUri")]
     pub service_uri: ::std::string::String,
@@ -1292,9 +1266,7 @@ pub struct ConnectedRegistryProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub connection_state: ::std::option::Option<
-        ConnectedRegistryPropertiesConnectionState,
-    >,
+    pub connection_state: ::std::option::Option<ConnectedRegistryPropertiesConnectionState>,
     #[serde(
         rename = "garbageCollection",
         default,
@@ -1341,9 +1313,7 @@ pub struct ConnectedRegistryProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        ConnectedRegistryPropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<ConnectedRegistryPropertiesProvisioningState>,
     ///The list of current statuses of the connected registry.
     #[serde(
         rename = "statusDetails",
@@ -1397,7 +1367,7 @@ impl ::std::convert::From<&ConnectedRegistryProperties> for ConnectedRegistryPro
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ConnectedRegistryPropertiesConnectionState {
@@ -1423,9 +1393,7 @@ impl ::std::fmt::Display for ConnectedRegistryPropertiesConnectionState {
 }
 impl ::std::str::FromStr for ConnectedRegistryPropertiesConnectionState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "online" => Ok(Self::Online),
             "offline" => Ok(Self::Offline),
@@ -1437,14 +1405,13 @@ impl ::std::str::FromStr for ConnectedRegistryPropertiesConnectionState {
 }
 impl ::std::convert::TryFrom<&str> for ConnectedRegistryPropertiesConnectionState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ConnectedRegistryPropertiesConnectionState {
+    for ConnectedRegistryPropertiesConnectionState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1452,8 +1419,7 @@ for ConnectedRegistryPropertiesConnectionState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ConnectedRegistryPropertiesConnectionState {
+impl ::std::convert::TryFrom<::std::string::String> for ConnectedRegistryPropertiesConnectionState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1492,7 +1458,7 @@ for ConnectedRegistryPropertiesConnectionState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ConnectedRegistryPropertiesMode {
@@ -1518,9 +1484,7 @@ impl ::std::fmt::Display for ConnectedRegistryPropertiesMode {
 }
 impl ::std::str::FromStr for ConnectedRegistryPropertiesMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "readwrite" => Ok(Self::ReadWrite),
             "readonly" => Ok(Self::ReadOnly),
@@ -1532,14 +1496,11 @@ impl ::std::str::FromStr for ConnectedRegistryPropertiesMode {
 }
 impl ::std::convert::TryFrom<&str> for ConnectedRegistryPropertiesMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ConnectedRegistryPropertiesMode {
+impl ::std::convert::TryFrom<&::std::string::String> for ConnectedRegistryPropertiesMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1589,7 +1550,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ConnectedRegistryPropert
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ConnectedRegistryPropertiesProvisioningState {
@@ -1619,9 +1580,7 @@ impl ::std::fmt::Display for ConnectedRegistryPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ConnectedRegistryPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -1635,14 +1594,13 @@ impl ::std::str::FromStr for ConnectedRegistryPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ConnectedRegistryPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ConnectedRegistryPropertiesProvisioningState {
+    for ConnectedRegistryPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1651,7 +1609,8 @@ for ConnectedRegistryPropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ConnectedRegistryPropertiesProvisioningState {
+    for ConnectedRegistryPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1685,7 +1644,8 @@ pub struct ConnectedRegistryUpdateParameters {
     pub properties: ::std::option::Option<ConnectedRegistryUpdateProperties>,
 }
 impl ::std::convert::From<&ConnectedRegistryUpdateParameters>
-for ConnectedRegistryUpdateParameters {
+    for ConnectedRegistryUpdateParameters
+{
     fn from(value: &ConnectedRegistryUpdateParameters) -> Self {
         value.clone()
     }
@@ -1773,7 +1733,8 @@ pub struct ConnectedRegistryUpdateProperties {
     pub sync_properties: ::std::option::Option<SyncUpdateProperties>,
 }
 impl ::std::convert::From<&ConnectedRegistryUpdateProperties>
-for ConnectedRegistryUpdateProperties {
+    for ConnectedRegistryUpdateProperties
+{
     fn from(value: &ConnectedRegistryUpdateProperties) -> Self {
         value.clone()
     }
@@ -1891,7 +1852,7 @@ impl ::std::default::Default for CredentialHealth {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CredentialHealthStatus {
@@ -1913,9 +1874,7 @@ impl ::std::fmt::Display for CredentialHealthStatus {
 }
 impl ::std::str::FromStr for CredentialHealthStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "healthy" => Ok(Self::Healthy),
             "unhealthy" => Ok(Self::Unhealthy),
@@ -1925,9 +1884,7 @@ impl ::std::str::FromStr for CredentialHealthStatus {
 }
 impl ::std::convert::TryFrom<&str> for CredentialHealthStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2139,7 +2096,7 @@ impl ::std::default::Default for CredentialSetListResult {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct CredentialSetProperties {
     /**List of authentication credentials stored for an upstream.
-Usually consists of a primary and an optional secondary credential.*/
+    Usually consists of a primary and an optional secondary credential.*/
     #[serde(
         rename = "authCredentials",
         default,
@@ -2170,9 +2127,7 @@ Usually consists of a primary and an optional secondary credential.*/
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        CredentialSetPropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<CredentialSetPropertiesProvisioningState>,
 }
 impl ::std::convert::From<&CredentialSetProperties> for CredentialSetProperties {
     fn from(value: &CredentialSetProperties) -> Self {
@@ -2223,7 +2178,7 @@ impl ::std::default::Default for CredentialSetProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CredentialSetPropertiesProvisioningState {
@@ -2253,9 +2208,7 @@ impl ::std::fmt::Display for CredentialSetPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for CredentialSetPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -2269,14 +2222,11 @@ impl ::std::str::FromStr for CredentialSetPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for CredentialSetPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CredentialSetPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for CredentialSetPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2284,8 +2234,7 @@ for CredentialSetPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CredentialSetPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for CredentialSetPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2327,8 +2276,7 @@ pub struct CredentialSetUpdateParameters {
     )]
     pub properties: ::std::option::Option<CredentialSetUpdateProperties>,
 }
-impl ::std::convert::From<&CredentialSetUpdateParameters>
-for CredentialSetUpdateParameters {
+impl ::std::convert::From<&CredentialSetUpdateParameters> for CredentialSetUpdateParameters {
     fn from(value: &CredentialSetUpdateParameters) -> Self {
         value.clone()
     }
@@ -2367,7 +2315,7 @@ impl ::std::default::Default for CredentialSetUpdateParameters {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct CredentialSetUpdateProperties {
     /**List of authentication credentials stored for an upstream.
-Usually consists of a primary and an optional secondary credential.*/
+    Usually consists of a primary and an optional secondary credential.*/
     #[serde(
         rename = "authCredentials",
         default,
@@ -2376,8 +2324,7 @@ Usually consists of a primary and an optional secondary credential.*/
     )]
     pub auth_credentials: ::std::vec::Vec<AuthCredential>,
 }
-impl ::std::convert::From<&CredentialSetUpdateProperties>
-for CredentialSetUpdateProperties {
+impl ::std::convert::From<&CredentialSetUpdateProperties> for CredentialSetUpdateProperties {
     fn from(value: &CredentialSetUpdateProperties) -> Self {
         value.clone()
     }
@@ -2475,7 +2422,7 @@ impl ::std::default::Default for EncryptionProperty {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum EncryptionPropertyStatus {
@@ -2499,9 +2446,7 @@ impl ::std::fmt::Display for EncryptionPropertyStatus {
 }
 impl ::std::str::FromStr for EncryptionPropertyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -2511,9 +2456,7 @@ impl ::std::str::FromStr for EncryptionPropertyStatus {
 }
 impl ::std::convert::TryFrom<&str> for EncryptionPropertyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2724,7 +2667,9 @@ impl ::std::convert::From<&ErrorResponse> for ErrorResponse {
 }
 impl ::std::default::Default for ErrorResponse {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///The event for a webhook.
@@ -2926,7 +2871,9 @@ impl ::std::convert::From<&EventInfo> for EventInfo {
 }
 impl ::std::default::Default for EventInfo {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///The result of a request to list events for a webhook.
@@ -3033,10 +2980,7 @@ pub struct EventRequestMessage {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub headers: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub headers: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     ///The HTTP method used to send the event request message.
     #[serde(
         default,
@@ -3127,10 +3071,7 @@ pub struct EventResponseMessage {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub headers: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub headers: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     ///The reason phrase of the event response message.
     #[serde(
         rename = "reasonPhrase",
@@ -3248,7 +3189,7 @@ impl ::std::default::Default for ExportPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExportPolicyStatus {
@@ -3272,9 +3213,7 @@ impl ::std::fmt::Display for ExportPolicyStatus {
 }
 impl ::std::str::FromStr for ExportPolicyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -3284,9 +3223,7 @@ impl ::std::str::FromStr for ExportPolicyStatus {
 }
 impl ::std::convert::TryFrom<&str> for ExportPolicyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3420,8 +3357,7 @@ pub struct GenerateCredentialsParameters {
     )]
     pub token_id: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&GenerateCredentialsParameters>
-for GenerateCredentialsParameters {
+impl ::std::convert::From<&GenerateCredentialsParameters> for GenerateCredentialsParameters {
     fn from(value: &GenerateCredentialsParameters) -> Self {
         value.clone()
     }
@@ -3464,7 +3400,7 @@ impl ::std::default::Default for GenerateCredentialsParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum GenerateCredentialsParametersName {
@@ -3488,9 +3424,7 @@ impl ::std::fmt::Display for GenerateCredentialsParametersName {
 }
 impl ::std::str::FromStr for GenerateCredentialsParametersName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "password1" => Ok(Self::Password1),
             "password2" => Ok(Self::Password2),
@@ -3500,14 +3434,11 @@ impl ::std::str::FromStr for GenerateCredentialsParametersName {
 }
 impl ::std::convert::TryFrom<&str> for GenerateCredentialsParametersName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for GenerateCredentialsParametersName {
+impl ::std::convert::TryFrom<&::std::string::String> for GenerateCredentialsParametersName {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -3515,8 +3446,7 @@ for GenerateCredentialsParametersName {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for GenerateCredentialsParametersName {
+impl ::std::convert::TryFrom<::std::string::String> for GenerateCredentialsParametersName {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3649,20 +3579,18 @@ pub struct IdentityProperties {
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
     pub type_: ::std::option::Option<IdentityPropertiesType>,
-    /**The list of user identities associated with the resource. The user identity 
-dictionary key references will be ARM resource ids in the form: 
-'/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/
-    providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}'.*/
+    /**The list of user identities associated with the resource. The user identity
+    dictionary key references will be ARM resource ids in the form:
+    '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/
+        providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}'.*/
     #[serde(
         rename = "userAssignedIdentities",
         default,
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub user_assigned_identities: ::std::collections::HashMap<
-        ::std::string::String,
-        UserIdentityProperties,
-    >,
+    pub user_assigned_identities:
+        ::std::collections::HashMap<::std::string::String, UserIdentityProperties>,
 }
 impl ::std::convert::From<&IdentityProperties> for IdentityProperties {
     fn from(value: &IdentityProperties) -> Self {
@@ -3710,7 +3638,7 @@ impl ::std::default::Default for IdentityProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IdentityPropertiesType {
@@ -3730,18 +3658,14 @@ impl ::std::fmt::Display for IdentityPropertiesType {
         match *self {
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned, UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned, UserAssigned"),
             Self::None => f.write_str("None"),
         }
     }
 }
 impl ::std::str::FromStr for IdentityPropertiesType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "systemassigned" => Ok(Self::SystemAssigned),
             "userassigned" => Ok(Self::UserAssigned),
@@ -3753,9 +3677,7 @@ impl ::std::str::FromStr for IdentityPropertiesType {
 }
 impl ::std::convert::TryFrom<&str> for IdentityPropertiesType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3881,7 +3803,7 @@ impl ::std::convert::From<&ImportImageParameters> for ImportImageParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ImportImageParametersMode {
@@ -3903,9 +3825,7 @@ impl ::std::fmt::Display for ImportImageParametersMode {
 }
 impl ::std::str::FromStr for ImportImageParametersMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "noforce" => Ok(Self::NoForce),
             "force" => Ok(Self::Force),
@@ -3915,9 +3835,7 @@ impl ::std::str::FromStr for ImportImageParametersMode {
 }
 impl ::std::convert::TryFrom<&str> for ImportImageParametersMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3997,9 +3915,9 @@ pub struct ImportSource {
     )]
     pub resource_id: ::std::option::Option<::std::string::String>,
     /**Repository name of the source image.
-Specify an image by repository ('hello-world'). This will use the 'latest' tag.
-Specify an image by tag ('hello-world:latest').
-Specify an image by sha256-based manifest digest ('hello-world@sha256:abc123').*/
+    Specify an image by repository ('hello-world'). This will use the 'latest' tag.
+    Specify an image by tag ('hello-world:latest').
+    Specify an image by sha256-based manifest digest ('hello-world@sha256:abc123').*/
     #[serde(rename = "sourceImage")]
     pub source_image: ::std::string::String,
 }
@@ -4126,7 +4044,7 @@ impl ::std::convert::From<&IpRule> for IpRule {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpRuleAction {
@@ -4146,9 +4064,7 @@ impl ::std::fmt::Display for IpRuleAction {
 }
 impl ::std::str::FromStr for IpRuleAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "allow" => Ok(Self::Allow),
             _ => Err("invalid value".into()),
@@ -4157,9 +4073,7 @@ impl ::std::str::FromStr for IpRuleAction {
 }
 impl ::std::convert::TryFrom<&str> for IpRuleAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4379,7 +4293,7 @@ impl ::std::default::Default for LoggingProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LoggingPropertiesAuditLogStatus {
@@ -4401,9 +4315,7 @@ impl ::std::fmt::Display for LoggingPropertiesAuditLogStatus {
 }
 impl ::std::str::FromStr for LoggingPropertiesAuditLogStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -4413,14 +4325,11 @@ impl ::std::str::FromStr for LoggingPropertiesAuditLogStatus {
 }
 impl ::std::convert::TryFrom<&str> for LoggingPropertiesAuditLogStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for LoggingPropertiesAuditLogStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for LoggingPropertiesAuditLogStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -4474,7 +4383,7 @@ impl ::std::default::Default for LoggingPropertiesAuditLogStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LoggingPropertiesLogLevel {
@@ -4502,9 +4411,7 @@ impl ::std::fmt::Display for LoggingPropertiesLogLevel {
 }
 impl ::std::str::FromStr for LoggingPropertiesLogLevel {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "debug" => Ok(Self::Debug),
             "information" => Ok(Self::Information),
@@ -4517,9 +4424,7 @@ impl ::std::str::FromStr for LoggingPropertiesLogLevel {
 }
 impl ::std::convert::TryFrom<&str> for LoggingPropertiesLogLevel {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4683,7 +4588,7 @@ impl ::std::convert::From<&NetworkRuleSet> for NetworkRuleSet {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkRuleSetDefaultAction {
@@ -4705,9 +4610,7 @@ impl ::std::fmt::Display for NetworkRuleSetDefaultAction {
 }
 impl ::std::str::FromStr for NetworkRuleSetDefaultAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "allow" => Ok(Self::Allow),
             "deny" => Ok(Self::Deny),
@@ -4717,9 +4620,7 @@ impl ::std::str::FromStr for NetworkRuleSetDefaultAction {
 }
 impl ::std::convert::TryFrom<&str> for NetworkRuleSetDefaultAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4784,7 +4685,7 @@ pub struct OperationDefinition {
     )]
     pub display: ::std::option::Option<OperationDisplayDefinition>,
     /**This property indicates if the operation is an action or a data action
-ref: https://docs.microsoft.com/en-us/azure/role-based-access-control/role-definitions#management-and-data-operations*/
+    ref: https://docs.microsoft.com/en-us/azure/role-based-access-control/role-definitions#management-and-data-operations*/
     #[serde(
         rename = "isDataAction",
         default,
@@ -5014,7 +4915,8 @@ pub struct OperationLogSpecificationDefinition {
     pub name: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&OperationLogSpecificationDefinition>
-for OperationLogSpecificationDefinition {
+    for OperationLogSpecificationDefinition
+{
     fn from(value: &OperationLogSpecificationDefinition) -> Self {
         value.clone()
     }
@@ -5115,7 +5017,8 @@ pub struct OperationMetricSpecificationDefinition {
     pub unit: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&OperationMetricSpecificationDefinition>
-for OperationMetricSpecificationDefinition {
+    for OperationMetricSpecificationDefinition
+{
     fn from(value: &OperationMetricSpecificationDefinition) -> Self {
         value.clone()
     }
@@ -5156,12 +5059,9 @@ pub struct OperationPropertiesDefinition {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub service_specification: ::std::option::Option<
-        OperationServiceSpecificationDefinition,
-    >,
+    pub service_specification: ::std::option::Option<OperationServiceSpecificationDefinition>,
 }
-impl ::std::convert::From<&OperationPropertiesDefinition>
-for OperationPropertiesDefinition {
+impl ::std::convert::From<&OperationPropertiesDefinition> for OperationPropertiesDefinition {
     fn from(value: &OperationPropertiesDefinition) -> Self {
         value.clone()
     }
@@ -5226,7 +5126,8 @@ pub struct OperationServiceSpecificationDefinition {
     pub metric_specifications: ::std::vec::Vec<OperationMetricSpecificationDefinition>,
 }
 impl ::std::convert::From<&OperationServiceSpecificationDefinition>
-for OperationServiceSpecificationDefinition {
+    for OperationServiceSpecificationDefinition
+{
     fn from(value: &OperationServiceSpecificationDefinition) -> Self {
         value.clone()
     }
@@ -5367,9 +5268,8 @@ pub struct Policies {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub azure_ad_authentication_as_arm_policy: ::std::option::Option<
-        AzureAdAuthenticationAsArmPolicy,
-    >,
+    pub azure_ad_authentication_as_arm_policy:
+        ::std::option::Option<AzureAdAuthenticationAsArmPolicy>,
     #[serde(
         rename = "exportPolicy",
         default,
@@ -5449,7 +5349,9 @@ impl ::std::convert::From<&PrivateEndpoint> for PrivateEndpoint {
 }
 impl ::std::default::Default for PrivateEndpoint {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///An object that represents a private endpoint connection for a container registry.
@@ -5570,7 +5472,8 @@ pub struct PrivateEndpointConnectionListResult {
     pub value: ::std::vec::Vec<PrivateEndpointConnection>,
 }
 impl ::std::convert::From<&PrivateEndpointConnectionListResult>
-for PrivateEndpointConnectionListResult {
+    for PrivateEndpointConnectionListResult
+{
     fn from(value: &PrivateEndpointConnectionListResult) -> Self {
         value.clone()
     }
@@ -5634,9 +5537,8 @@ pub struct PrivateEndpointConnectionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub private_link_service_connection_state: ::std::option::Option<
-        PrivateLinkServiceConnectionState,
-    >,
+    pub private_link_service_connection_state:
+        ::std::option::Option<PrivateLinkServiceConnectionState>,
     ///The provisioning state of private endpoint connection resource.
     #[serde(
         rename = "provisioningState",
@@ -5644,12 +5546,12 @@ pub struct PrivateEndpointConnectionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        PrivateEndpointConnectionPropertiesProvisioningState,
-    >,
+    pub provisioning_state:
+        ::std::option::Option<PrivateEndpointConnectionPropertiesProvisioningState>,
 }
 impl ::std::convert::From<&PrivateEndpointConnectionProperties>
-for PrivateEndpointConnectionProperties {
+    for PrivateEndpointConnectionProperties
+{
     fn from(value: &PrivateEndpointConnectionProperties) -> Self {
         value.clone()
     }
@@ -5697,7 +5599,7 @@ impl ::std::default::Default for PrivateEndpointConnectionProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateEndpointConnectionPropertiesProvisioningState {
@@ -5708,8 +5610,7 @@ pub enum PrivateEndpointConnectionPropertiesProvisioningState {
     Failed,
     Canceled,
 }
-impl ::std::convert::From<&Self>
-for PrivateEndpointConnectionPropertiesProvisioningState {
+impl ::std::convert::From<&Self> for PrivateEndpointConnectionPropertiesProvisioningState {
     fn from(value: &PrivateEndpointConnectionPropertiesProvisioningState) -> Self {
         value.clone()
     }
@@ -5728,9 +5629,7 @@ impl ::std::fmt::Display for PrivateEndpointConnectionPropertiesProvisioningStat
 }
 impl ::std::str::FromStr for PrivateEndpointConnectionPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -5742,17 +5641,15 @@ impl ::std::str::FromStr for PrivateEndpointConnectionPropertiesProvisioningStat
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for PrivateEndpointConnectionPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&str> for PrivateEndpointConnectionPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateEndpointConnectionPropertiesProvisioningState {
+    for PrivateEndpointConnectionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5761,7 +5658,8 @@ for PrivateEndpointConnectionPropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PrivateEndpointConnectionPropertiesProvisioningState {
+    for PrivateEndpointConnectionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5886,8 +5784,7 @@ pub struct PrivateLinkResourceListResult {
     )]
     pub value: ::std::vec::Vec<PrivateLinkResource>,
 }
-impl ::std::convert::From<&PrivateLinkResourceListResult>
-for PrivateLinkResourceListResult {
+impl ::std::convert::From<&PrivateLinkResourceListResult> for PrivateLinkResourceListResult {
     fn from(value: &PrivateLinkResourceListResult) -> Self {
         value.clone()
     }
@@ -5958,8 +5855,7 @@ pub struct PrivateLinkResourceProperties {
     )]
     pub required_zone_names: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&PrivateLinkResourceProperties>
-for PrivateLinkResourceProperties {
+impl ::std::convert::From<&PrivateLinkResourceProperties> for PrivateLinkResourceProperties {
     fn from(value: &PrivateLinkResourceProperties) -> Self {
         value.clone()
     }
@@ -6025,9 +5921,7 @@ pub struct PrivateLinkServiceConnectionState {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub actions_required: ::std::option::Option<
-        PrivateLinkServiceConnectionStateActionsRequired,
-    >,
+    pub actions_required: ::std::option::Option<PrivateLinkServiceConnectionStateActionsRequired>,
     ///The description for connection status. For example if connection is rejected it can indicate reason for rejection.
     #[serde(
         default,
@@ -6044,7 +5938,8 @@ pub struct PrivateLinkServiceConnectionState {
     pub status: ::std::option::Option<PrivateLinkServiceConnectionStateStatus>,
 }
 impl ::std::convert::From<&PrivateLinkServiceConnectionState>
-for PrivateLinkServiceConnectionState {
+    for PrivateLinkServiceConnectionState
+{
     fn from(value: &PrivateLinkServiceConnectionState) -> Self {
         value.clone()
     }
@@ -6087,7 +5982,7 @@ impl ::std::default::Default for PrivateLinkServiceConnectionState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateLinkServiceConnectionStateActionsRequired {
@@ -6109,9 +6004,7 @@ impl ::std::fmt::Display for PrivateLinkServiceConnectionStateActionsRequired {
 }
 impl ::std::str::FromStr for PrivateLinkServiceConnectionStateActionsRequired {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "recreate" => Ok(Self::Recreate),
@@ -6121,14 +6014,13 @@ impl ::std::str::FromStr for PrivateLinkServiceConnectionStateActionsRequired {
 }
 impl ::std::convert::TryFrom<&str> for PrivateLinkServiceConnectionStateActionsRequired {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateLinkServiceConnectionStateActionsRequired {
+    for PrivateLinkServiceConnectionStateActionsRequired
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -6137,7 +6029,8 @@ for PrivateLinkServiceConnectionStateActionsRequired {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PrivateLinkServiceConnectionStateActionsRequired {
+    for PrivateLinkServiceConnectionStateActionsRequired
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -6176,7 +6069,7 @@ for PrivateLinkServiceConnectionStateActionsRequired {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateLinkServiceConnectionStateStatus {
@@ -6202,9 +6095,7 @@ impl ::std::fmt::Display for PrivateLinkServiceConnectionStateStatus {
 }
 impl ::std::str::FromStr for PrivateLinkServiceConnectionStateStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "approved" => Ok(Self::Approved),
             "pending" => Ok(Self::Pending),
@@ -6216,14 +6107,11 @@ impl ::std::str::FromStr for PrivateLinkServiceConnectionStateStatus {
 }
 impl ::std::convert::TryFrom<&str> for PrivateLinkServiceConnectionStateStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateLinkServiceConnectionStateStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for PrivateLinkServiceConnectionStateStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -6231,8 +6119,7 @@ for PrivateLinkServiceConnectionStateStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for PrivateLinkServiceConnectionStateStatus {
+impl ::std::convert::TryFrom<::std::string::String> for PrivateLinkServiceConnectionStateStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -6395,7 +6282,7 @@ impl ::std::default::Default for QuarantinePolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum QuarantinePolicyStatus {
@@ -6419,9 +6306,7 @@ impl ::std::fmt::Display for QuarantinePolicyStatus {
 }
 impl ::std::str::FromStr for QuarantinePolicyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -6431,9 +6316,7 @@ impl ::std::str::FromStr for QuarantinePolicyStatus {
 }
 impl ::std::convert::TryFrom<&str> for QuarantinePolicyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6491,8 +6374,7 @@ pub struct RegenerateCredentialParameters {
     ///Specifies name of the password which should be regenerated -- password or password2.
     pub name: RegenerateCredentialParametersName,
 }
-impl ::std::convert::From<&RegenerateCredentialParameters>
-for RegenerateCredentialParameters {
+impl ::std::convert::From<&RegenerateCredentialParameters> for RegenerateCredentialParameters {
     fn from(value: &RegenerateCredentialParameters) -> Self {
         value.clone()
     }
@@ -6526,7 +6408,7 @@ for RegenerateCredentialParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegenerateCredentialParametersName {
@@ -6550,9 +6432,7 @@ impl ::std::fmt::Display for RegenerateCredentialParametersName {
 }
 impl ::std::str::FromStr for RegenerateCredentialParametersName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "password" => Ok(Self::Password),
             "password2" => Ok(Self::Password2),
@@ -6562,14 +6442,11 @@ impl ::std::str::FromStr for RegenerateCredentialParametersName {
 }
 impl ::std::convert::TryFrom<&str> for RegenerateCredentialParametersName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for RegenerateCredentialParametersName {
+impl ::std::convert::TryFrom<&::std::string::String> for RegenerateCredentialParametersName {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -6577,8 +6454,7 @@ for RegenerateCredentialParametersName {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RegenerateCredentialParametersName {
+impl ::std::convert::TryFrom<::std::string::String> for RegenerateCredentialParametersName {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -6717,8 +6593,7 @@ pub struct RegistryListCredentialsResult {
     )]
     pub username: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&RegistryListCredentialsResult>
-for RegistryListCredentialsResult {
+impl ::std::convert::From<&RegistryListCredentialsResult> for RegistryListCredentialsResult {
     fn from(value: &RegistryListCredentialsResult) -> Self {
         value.clone()
     }
@@ -6862,25 +6737,22 @@ impl ::std::convert::From<RegistryNameCheckRequestName> for ::std::string::Strin
         value.0
     }
 }
-impl ::std::convert::From<&RegistryNameCheckRequestName>
-for RegistryNameCheckRequestName {
+impl ::std::convert::From<&RegistryNameCheckRequestName> for RegistryNameCheckRequestName {
     fn from(value: &RegistryNameCheckRequestName) -> Self {
         value.clone()
     }
 }
 impl ::std::str::FromStr for RegistryNameCheckRequestName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 50usize {
             return Err("longer than 50 characters".into());
         }
         if value.chars().count() < 5usize {
             return Err("shorter than 5 characters".into());
         }
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
-        { ::regress::Regex::new("^[a-zA-Z0-9]*$").unwrap() });
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
+            ::std::sync::LazyLock::new(|| ::regress::Regex::new("^[a-zA-Z0-9]*$").unwrap());
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^[a-zA-Z0-9]*$\"".into());
         }
@@ -6889,9 +6761,7 @@ impl ::std::str::FromStr for RegistryNameCheckRequestName {
 }
 impl ::std::convert::TryFrom<&str> for RegistryNameCheckRequestName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6951,7 +6821,7 @@ impl<'de> ::serde::Deserialize<'de> for RegistryNameCheckRequestName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryNameCheckRequestType {
@@ -6974,9 +6844,7 @@ impl ::std::fmt::Display for RegistryNameCheckRequestType {
 }
 impl ::std::str::FromStr for RegistryNameCheckRequestType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "microsoft.containerregistry/registries" => {
                 Ok(Self::MicrosoftContainerRegistryRegistries)
@@ -6987,9 +6855,7 @@ impl ::std::str::FromStr for RegistryNameCheckRequestType {
 }
 impl ::std::convert::TryFrom<&str> for RegistryNameCheckRequestType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7161,7 +7027,7 @@ impl ::std::default::Default for RegistryPassword {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPasswordName {
@@ -7185,9 +7051,7 @@ impl ::std::fmt::Display for RegistryPasswordName {
 }
 impl ::std::str::FromStr for RegistryPasswordName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "password" => Ok(Self::Password),
             "password2" => Ok(Self::Password2),
@@ -7197,9 +7061,7 @@ impl ::std::str::FromStr for RegistryPasswordName {
 }
 impl ::std::convert::TryFrom<&str> for RegistryPasswordName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7466,7 +7328,8 @@ impl ::std::default::Default for RegistryProperties {
             data_endpoint_host_names: Default::default(),
             encryption: Default::default(),
             login_server: Default::default(),
-            network_rule_bypass_options: defaults::registry_properties_network_rule_bypass_options(),
+            network_rule_bypass_options: defaults::registry_properties_network_rule_bypass_options(
+            ),
             network_rule_set: Default::default(),
             policies: Default::default(),
             private_endpoint_connections: Default::default(),
@@ -7507,7 +7370,7 @@ impl ::std::default::Default for RegistryProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesNetworkRuleBypassOptions {
@@ -7529,9 +7392,7 @@ impl ::std::fmt::Display for RegistryPropertiesNetworkRuleBypassOptions {
 }
 impl ::std::str::FromStr for RegistryPropertiesNetworkRuleBypassOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "azureservices" => Ok(Self::AzureServices),
             "none" => Ok(Self::None),
@@ -7541,14 +7402,13 @@ impl ::std::str::FromStr for RegistryPropertiesNetworkRuleBypassOptions {
 }
 impl ::std::convert::TryFrom<&str> for RegistryPropertiesNetworkRuleBypassOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesNetworkRuleBypassOptions {
+    for RegistryPropertiesNetworkRuleBypassOptions
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -7556,8 +7416,7 @@ for RegistryPropertiesNetworkRuleBypassOptions {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesNetworkRuleBypassOptions {
+impl ::std::convert::TryFrom<::std::string::String> for RegistryPropertiesNetworkRuleBypassOptions {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7604,7 +7463,7 @@ impl ::std::default::Default for RegistryPropertiesNetworkRuleBypassOptions {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesProvisioningState {
@@ -7634,9 +7493,7 @@ impl ::std::fmt::Display for RegistryPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for RegistryPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -7650,14 +7507,11 @@ impl ::std::str::FromStr for RegistryPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for RegistryPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for RegistryPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -7665,8 +7519,7 @@ for RegistryPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for RegistryPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7704,7 +7557,7 @@ for RegistryPropertiesProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesPublicNetworkAccess {
@@ -7726,9 +7579,7 @@ impl ::std::fmt::Display for RegistryPropertiesPublicNetworkAccess {
 }
 impl ::std::str::FromStr for RegistryPropertiesPublicNetworkAccess {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -7738,14 +7589,11 @@ impl ::std::str::FromStr for RegistryPropertiesPublicNetworkAccess {
 }
 impl ::std::convert::TryFrom<&str> for RegistryPropertiesPublicNetworkAccess {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesPublicNetworkAccess {
+impl ::std::convert::TryFrom<&::std::string::String> for RegistryPropertiesPublicNetworkAccess {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -7753,8 +7601,7 @@ for RegistryPropertiesPublicNetworkAccess {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesPublicNetworkAccess {
+impl ::std::convert::TryFrom<::std::string::String> for RegistryPropertiesPublicNetworkAccess {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7885,12 +7732,12 @@ pub struct RegistryPropertiesUpdateParameters {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub public_network_access: ::std::option::Option<
-        RegistryPropertiesUpdateParametersPublicNetworkAccess,
-    >,
+    pub public_network_access:
+        ::std::option::Option<RegistryPropertiesUpdateParametersPublicNetworkAccess>,
 }
 impl ::std::convert::From<&RegistryPropertiesUpdateParameters>
-for RegistryPropertiesUpdateParameters {
+    for RegistryPropertiesUpdateParameters
+{
     fn from(value: &RegistryPropertiesUpdateParameters) -> Self {
         value.clone()
     }
@@ -7902,7 +7749,8 @@ impl ::std::default::Default for RegistryPropertiesUpdateParameters {
             anonymous_pull_enabled: Default::default(),
             data_endpoint_enabled: Default::default(),
             encryption: Default::default(),
-            network_rule_bypass_options: defaults::registry_properties_update_parameters_network_rule_bypass_options(),
+            network_rule_bypass_options:
+                defaults::registry_properties_update_parameters_network_rule_bypass_options(),
             network_rule_set: Default::default(),
             policies: Default::default(),
             public_network_access: Default::default(),
@@ -7939,15 +7787,14 @@ impl ::std::default::Default for RegistryPropertiesUpdateParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     AzureServices,
     None,
 }
-impl ::std::convert::From<&Self>
-for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+impl ::std::convert::From<&Self> for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     fn from(value: &RegistryPropertiesUpdateParametersNetworkRuleBypassOptions) -> Self {
         value.clone()
     }
@@ -7962,9 +7809,7 @@ impl ::std::fmt::Display for RegistryPropertiesUpdateParametersNetworkRuleBypass
 }
 impl ::std::str::FromStr for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "azureservices" => Ok(Self::AzureServices),
             "none" => Ok(Self::None),
@@ -7972,17 +7817,15 @@ impl ::std::str::FromStr for RegistryPropertiesUpdateParametersNetworkRuleBypass
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+impl ::std::convert::TryFrom<&str> for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+    for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -7991,7 +7834,8 @@ for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+    for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7999,8 +7843,7 @@ for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
         value.parse()
     }
 }
-impl ::std::default::Default
-for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+impl ::std::default::Default for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     fn default() -> Self {
         RegistryPropertiesUpdateParametersNetworkRuleBypassOptions::AzureServices
     }
@@ -8034,15 +7877,14 @@ for RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesUpdateParametersPublicNetworkAccess {
     Enabled,
     Disabled,
 }
-impl ::std::convert::From<&Self>
-for RegistryPropertiesUpdateParametersPublicNetworkAccess {
+impl ::std::convert::From<&Self> for RegistryPropertiesUpdateParametersPublicNetworkAccess {
     fn from(value: &RegistryPropertiesUpdateParametersPublicNetworkAccess) -> Self {
         value.clone()
     }
@@ -8057,9 +7899,7 @@ impl ::std::fmt::Display for RegistryPropertiesUpdateParametersPublicNetworkAcce
 }
 impl ::std::str::FromStr for RegistryPropertiesUpdateParametersPublicNetworkAccess {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -8067,17 +7907,15 @@ impl ::std::str::FromStr for RegistryPropertiesUpdateParametersPublicNetworkAcce
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for RegistryPropertiesUpdateParametersPublicNetworkAccess {
+impl ::std::convert::TryFrom<&str> for RegistryPropertiesUpdateParametersPublicNetworkAccess {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesUpdateParametersPublicNetworkAccess {
+    for RegistryPropertiesUpdateParametersPublicNetworkAccess
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8086,7 +7924,8 @@ for RegistryPropertiesUpdateParametersPublicNetworkAccess {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesUpdateParametersPublicNetworkAccess {
+    for RegistryPropertiesUpdateParametersPublicNetworkAccess
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8124,7 +7963,7 @@ for RegistryPropertiesUpdateParametersPublicNetworkAccess {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryPropertiesZoneRedundancy {
@@ -8146,9 +7985,7 @@ impl ::std::fmt::Display for RegistryPropertiesZoneRedundancy {
 }
 impl ::std::str::FromStr for RegistryPropertiesZoneRedundancy {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -8158,14 +7995,11 @@ impl ::std::str::FromStr for RegistryPropertiesZoneRedundancy {
 }
 impl ::std::convert::TryFrom<&str> for RegistryPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for RegistryPropertiesZoneRedundancy {
+impl ::std::convert::TryFrom<&::std::string::String> for RegistryPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8173,8 +8007,7 @@ for RegistryPropertiesZoneRedundancy {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RegistryPropertiesZoneRedundancy {
+impl ::std::convert::TryFrom<::std::string::String> for RegistryPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8385,7 +8218,9 @@ impl ::std::convert::From<&RegistryUsageListResult> for RegistryUsageListResult 
 }
 impl ::std::default::Default for RegistryUsageListResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///The unit of measurement.
@@ -8417,7 +8252,7 @@ impl ::std::default::Default for RegistryUsageListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistryUsageUnit {
@@ -8439,9 +8274,7 @@ impl ::std::fmt::Display for RegistryUsageUnit {
 }
 impl ::std::str::FromStr for RegistryUsageUnit {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "count" => Ok(Self::Count),
             "bytes" => Ok(Self::Bytes),
@@ -8451,9 +8284,7 @@ impl ::std::str::FromStr for RegistryUsageUnit {
 }
 impl ::std::convert::TryFrom<&str> for RegistryUsageUnit {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8661,9 +8492,7 @@ pub struct ReplicationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        ReplicationPropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<ReplicationPropertiesProvisioningState>,
     ///Specifies whether the replication's regional endpoint is enabled. Requests will not be routed to a replication whose regional endpoint is disabled, however its data will continue to be synced with other replications.
     #[serde(
         rename = "regionEndpointEnabled",
@@ -8734,7 +8563,7 @@ impl ::std::default::Default for ReplicationProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ReplicationPropertiesProvisioningState {
@@ -8764,9 +8593,7 @@ impl ::std::fmt::Display for ReplicationPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ReplicationPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -8780,14 +8607,11 @@ impl ::std::str::FromStr for ReplicationPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ReplicationPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ReplicationPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for ReplicationPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8795,8 +8619,7 @@ for ReplicationPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ReplicationPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for ReplicationPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8834,7 +8657,7 @@ for ReplicationPropertiesProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ReplicationPropertiesZoneRedundancy {
@@ -8856,9 +8679,7 @@ impl ::std::fmt::Display for ReplicationPropertiesZoneRedundancy {
 }
 impl ::std::str::FromStr for ReplicationPropertiesZoneRedundancy {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -8868,14 +8689,11 @@ impl ::std::str::FromStr for ReplicationPropertiesZoneRedundancy {
 }
 impl ::std::convert::TryFrom<&str> for ReplicationPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ReplicationPropertiesZoneRedundancy {
+impl ::std::convert::TryFrom<&::std::string::String> for ReplicationPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8883,8 +8701,7 @@ for ReplicationPropertiesZoneRedundancy {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ReplicationPropertiesZoneRedundancy {
+impl ::std::convert::TryFrom<::std::string::String> for ReplicationPropertiesZoneRedundancy {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8977,7 +8794,8 @@ pub struct ReplicationUpdateParametersProperties {
     pub region_endpoint_enabled: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&ReplicationUpdateParametersProperties>
-for ReplicationUpdateParametersProperties {
+    for ReplicationUpdateParametersProperties
+{
     fn from(value: &ReplicationUpdateParametersProperties) -> Self {
         value.clone()
     }
@@ -9275,7 +9093,7 @@ impl ::std::default::Default for RetentionPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RetentionPolicyStatus {
@@ -9299,9 +9117,7 @@ impl ::std::fmt::Display for RetentionPolicyStatus {
 }
 impl ::std::str::FromStr for RetentionPolicyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -9311,9 +9127,7 @@ impl ::std::str::FromStr for RetentionPolicyStatus {
 }
 impl ::std::convert::TryFrom<&str> for RetentionPolicyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9525,8 +9339,8 @@ impl ::std::default::Default for ScopeMapListResult {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct ScopeMapProperties {
     /**The list of scoped permissions for registry artifacts.
-E.g. repositories/repository-name/content/read,
-repositories/repository-name/metadata/write*/
+    E.g. repositories/repository-name/content/read,
+    repositories/repository-name/metadata/write*/
     pub actions: ::std::vec::Vec<::std::string::String>,
     ///The creation date of scope map.
     #[serde(
@@ -9599,7 +9413,7 @@ impl ::std::convert::From<&ScopeMapProperties> for ScopeMapProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ScopeMapPropertiesProvisioningState {
@@ -9629,9 +9443,7 @@ impl ::std::fmt::Display for ScopeMapPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ScopeMapPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -9645,14 +9457,11 @@ impl ::std::str::FromStr for ScopeMapPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ScopeMapPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ScopeMapPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for ScopeMapPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -9660,8 +9469,7 @@ for ScopeMapPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ScopeMapPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for ScopeMapPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -9696,8 +9504,8 @@ for ScopeMapPropertiesProvisioningState {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct ScopeMapPropertiesUpdateParameters {
     /**The list of scope permissions for registry artifacts.
-E.g. repositories/repository-name/pull, 
-repositories/repository-name/delete*/
+    E.g. repositories/repository-name/pull,
+    repositories/repository-name/delete*/
     #[serde(
         default,
         skip_serializing_if = "::std::vec::Vec::is_empty",
@@ -9713,7 +9521,8 @@ repositories/repository-name/delete*/
     pub description: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ScopeMapPropertiesUpdateParameters>
-for ScopeMapPropertiesUpdateParameters {
+    for ScopeMapPropertiesUpdateParameters
+{
     fn from(value: &ScopeMapPropertiesUpdateParameters) -> Self {
         value.clone()
     }
@@ -9856,7 +9665,7 @@ impl ::std::convert::From<&Sku> for Sku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SkuName {
@@ -9882,9 +9691,7 @@ impl ::std::fmt::Display for SkuName {
 }
 impl ::std::str::FromStr for SkuName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "classic" => Ok(Self::Classic),
             "basic" => Ok(Self::Basic),
@@ -9896,9 +9703,7 @@ impl ::std::str::FromStr for SkuName {
 }
 impl ::std::convert::TryFrom<&str> for SkuName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9950,7 +9755,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SkuName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SkuTier {
@@ -9976,9 +9781,7 @@ impl ::std::fmt::Display for SkuTier {
 }
 impl ::std::str::FromStr for SkuTier {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "classic" => Ok(Self::Classic),
             "basic" => Ok(Self::Basic),
@@ -9990,9 +9793,7 @@ impl ::std::str::FromStr for SkuTier {
 }
 impl ::std::convert::TryFrom<&str> for SkuTier {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10569,7 +10370,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -10595,9 +10396,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -10609,9 +10408,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10662,7 +10459,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -10688,9 +10485,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -10702,9 +10497,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10952,7 +10745,7 @@ impl ::std::default::Default for TlsCertificateProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TlsCertificatePropertiesType {
@@ -10972,9 +10765,7 @@ impl ::std::fmt::Display for TlsCertificatePropertiesType {
 }
 impl ::std::str::FromStr for TlsCertificatePropertiesType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "localdirectory" => Ok(Self::LocalDirectory),
             _ => Err("invalid value".into()),
@@ -10983,9 +10774,7 @@ impl ::std::str::FromStr for TlsCertificatePropertiesType {
 }
 impl ::std::convert::TryFrom<&str> for TlsCertificatePropertiesType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11093,7 +10882,7 @@ impl ::std::default::Default for TlsProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TlsPropertiesStatus {
@@ -11115,9 +10904,7 @@ impl ::std::fmt::Display for TlsPropertiesStatus {
 }
 impl ::std::str::FromStr for TlsPropertiesStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -11127,9 +10914,7 @@ impl ::std::str::FromStr for TlsPropertiesStatus {
 }
 impl ::std::convert::TryFrom<&str> for TlsPropertiesStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11334,7 +11119,7 @@ impl ::std::default::Default for TokenCertificate {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TokenCertificateName {
@@ -11358,9 +11143,7 @@ impl ::std::fmt::Display for TokenCertificateName {
 }
 impl ::std::str::FromStr for TokenCertificateName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "certificate1" => Ok(Self::Certificate1),
             "certificate2" => Ok(Self::Certificate2),
@@ -11370,9 +11153,7 @@ impl ::std::str::FromStr for TokenCertificateName {
 }
 impl ::std::convert::TryFrom<&str> for TokenCertificateName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11618,7 +11399,7 @@ impl ::std::default::Default for TokenPassword {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TokenPasswordName {
@@ -11642,9 +11423,7 @@ impl ::std::fmt::Display for TokenPasswordName {
 }
 impl ::std::str::FromStr for TokenPasswordName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "password1" => Ok(Self::Password1),
             "password2" => Ok(Self::Password2),
@@ -11654,9 +11433,7 @@ impl ::std::str::FromStr for TokenPasswordName {
 }
 impl ::std::convert::TryFrom<&str> for TokenPasswordName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11820,7 +11597,7 @@ impl ::std::default::Default for TokenProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TokenPropertiesProvisioningState {
@@ -11850,9 +11627,7 @@ impl ::std::fmt::Display for TokenPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for TokenPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -11866,14 +11641,11 @@ impl ::std::str::FromStr for TokenPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for TokenPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for TokenPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for TokenPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -11881,8 +11653,7 @@ for TokenPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for TokenPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for TokenPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -11919,7 +11690,7 @@ for TokenPropertiesProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TokenPropertiesStatus {
@@ -11943,9 +11714,7 @@ impl ::std::fmt::Display for TokenPropertiesStatus {
 }
 impl ::std::str::FromStr for TokenPropertiesStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -11955,9 +11724,7 @@ impl ::std::str::FromStr for TokenPropertiesStatus {
 }
 impl ::std::convert::TryFrom<&str> for TokenPropertiesStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12113,7 +11880,7 @@ impl ::std::default::Default for TokenUpdateProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TokenUpdatePropertiesStatus {
@@ -12137,9 +11904,7 @@ impl ::std::fmt::Display for TokenUpdatePropertiesStatus {
 }
 impl ::std::str::FromStr for TokenUpdatePropertiesStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -12149,9 +11914,7 @@ impl ::std::str::FromStr for TokenUpdatePropertiesStatus {
 }
 impl ::std::convert::TryFrom<&str> for TokenUpdatePropertiesStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12268,7 +12031,7 @@ impl ::std::default::Default for TrustPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TrustPolicyStatus {
@@ -12292,9 +12055,7 @@ impl ::std::fmt::Display for TrustPolicyStatus {
 }
 impl ::std::str::FromStr for TrustPolicyStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -12304,9 +12065,7 @@ impl ::std::str::FromStr for TrustPolicyStatus {
 }
 impl ::std::convert::TryFrom<&str> for TrustPolicyStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12360,7 +12119,7 @@ impl ::std::default::Default for TrustPolicyStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TrustPolicyType {
@@ -12380,9 +12139,7 @@ impl ::std::fmt::Display for TrustPolicyType {
 }
 impl ::std::str::FromStr for TrustPolicyType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "notary" => Ok(Self::Notary),
             _ => Err("invalid value".into()),
@@ -12391,9 +12148,7 @@ impl ::std::str::FromStr for TrustPolicyType {
 }
 impl ::std::convert::TryFrom<&str> for TrustPolicyType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12783,7 +12538,7 @@ impl ::std::convert::From<&WebhookProperties> for WebhookProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesActionsItem {
@@ -12816,9 +12571,7 @@ impl ::std::fmt::Display for WebhookPropertiesActionsItem {
 }
 impl ::std::str::FromStr for WebhookPropertiesActionsItem {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "push" => Ok(Self::Push),
             "delete" => Ok(Self::Delete),
@@ -12831,9 +12584,7 @@ impl ::std::str::FromStr for WebhookPropertiesActionsItem {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesActionsItem {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12928,10 +12679,7 @@ pub struct WebhookPropertiesCreateParameters {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub custom_headers: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub custom_headers: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     ///The scope of repositories where the event can be triggered. For example, 'foo:*' means events for all tags under repository 'foo'. 'foo:bar' means events for 'foo:bar' only. 'foo' is equivalent to 'foo:latest'. Empty means all events.
     #[serde(
         default,
@@ -12951,7 +12699,8 @@ pub struct WebhookPropertiesCreateParameters {
     pub status: ::std::option::Option<WebhookPropertiesCreateParametersStatus>,
 }
 impl ::std::convert::From<&WebhookPropertiesCreateParameters>
-for WebhookPropertiesCreateParameters {
+    for WebhookPropertiesCreateParameters
+{
     fn from(value: &WebhookPropertiesCreateParameters) -> Self {
         value.clone()
     }
@@ -12987,7 +12736,7 @@ for WebhookPropertiesCreateParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesCreateParametersActionsItem {
@@ -13020,9 +12769,7 @@ impl ::std::fmt::Display for WebhookPropertiesCreateParametersActionsItem {
 }
 impl ::std::str::FromStr for WebhookPropertiesCreateParametersActionsItem {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "push" => Ok(Self::Push),
             "delete" => Ok(Self::Delete),
@@ -13035,14 +12782,13 @@ impl ::std::str::FromStr for WebhookPropertiesCreateParametersActionsItem {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesCreateParametersActionsItem {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for WebhookPropertiesCreateParametersActionsItem {
+    for WebhookPropertiesCreateParametersActionsItem
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -13051,7 +12797,8 @@ for WebhookPropertiesCreateParametersActionsItem {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for WebhookPropertiesCreateParametersActionsItem {
+    for WebhookPropertiesCreateParametersActionsItem
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -13088,7 +12835,7 @@ for WebhookPropertiesCreateParametersActionsItem {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesCreateParametersStatus {
@@ -13112,9 +12859,7 @@ impl ::std::fmt::Display for WebhookPropertiesCreateParametersStatus {
 }
 impl ::std::str::FromStr for WebhookPropertiesCreateParametersStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -13124,14 +12869,11 @@ impl ::std::str::FromStr for WebhookPropertiesCreateParametersStatus {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesCreateParametersStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for WebhookPropertiesCreateParametersStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for WebhookPropertiesCreateParametersStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -13139,8 +12881,7 @@ for WebhookPropertiesCreateParametersStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for WebhookPropertiesCreateParametersStatus {
+impl ::std::convert::TryFrom<::std::string::String> for WebhookPropertiesCreateParametersStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -13182,7 +12923,7 @@ for WebhookPropertiesCreateParametersStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesProvisioningState {
@@ -13212,9 +12953,7 @@ impl ::std::fmt::Display for WebhookPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for WebhookPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "creating" => Ok(Self::Creating),
             "updating" => Ok(Self::Updating),
@@ -13228,14 +12967,11 @@ impl ::std::str::FromStr for WebhookPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for WebhookPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for WebhookPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -13243,8 +12979,7 @@ for WebhookPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for WebhookPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for WebhookPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -13281,7 +13016,7 @@ for WebhookPropertiesProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesStatus {
@@ -13305,9 +13040,7 @@ impl ::std::fmt::Display for WebhookPropertiesStatus {
 }
 impl ::std::str::FromStr for WebhookPropertiesStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -13317,9 +13050,7 @@ impl ::std::str::FromStr for WebhookPropertiesStatus {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -13415,10 +13146,7 @@ pub struct WebhookPropertiesUpdateParameters {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub custom_headers: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub custom_headers: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     ///The scope of repositories where the event can be triggered. For example, 'foo:*' means events for all tags under repository 'foo'. 'foo:bar' means events for 'foo:bar' only. 'foo' is equivalent to 'foo:latest'. Empty means all events.
     #[serde(
         default,
@@ -13443,7 +13171,8 @@ pub struct WebhookPropertiesUpdateParameters {
     pub status: ::std::option::Option<WebhookPropertiesUpdateParametersStatus>,
 }
 impl ::std::convert::From<&WebhookPropertiesUpdateParameters>
-for WebhookPropertiesUpdateParameters {
+    for WebhookPropertiesUpdateParameters
+{
     fn from(value: &WebhookPropertiesUpdateParameters) -> Self {
         value.clone()
     }
@@ -13490,7 +13219,7 @@ impl ::std::default::Default for WebhookPropertiesUpdateParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesUpdateParametersActionsItem {
@@ -13523,9 +13252,7 @@ impl ::std::fmt::Display for WebhookPropertiesUpdateParametersActionsItem {
 }
 impl ::std::str::FromStr for WebhookPropertiesUpdateParametersActionsItem {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "push" => Ok(Self::Push),
             "delete" => Ok(Self::Delete),
@@ -13538,14 +13265,13 @@ impl ::std::str::FromStr for WebhookPropertiesUpdateParametersActionsItem {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesUpdateParametersActionsItem {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for WebhookPropertiesUpdateParametersActionsItem {
+    for WebhookPropertiesUpdateParametersActionsItem
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -13554,7 +13280,8 @@ for WebhookPropertiesUpdateParametersActionsItem {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for WebhookPropertiesUpdateParametersActionsItem {
+    for WebhookPropertiesUpdateParametersActionsItem
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -13591,7 +13318,7 @@ for WebhookPropertiesUpdateParametersActionsItem {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WebhookPropertiesUpdateParametersStatus {
@@ -13615,9 +13342,7 @@ impl ::std::fmt::Display for WebhookPropertiesUpdateParametersStatus {
 }
 impl ::std::str::FromStr for WebhookPropertiesUpdateParametersStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -13627,14 +13352,11 @@ impl ::std::str::FromStr for WebhookPropertiesUpdateParametersStatus {
 }
 impl ::std::convert::TryFrom<&str> for WebhookPropertiesUpdateParametersStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for WebhookPropertiesUpdateParametersStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for WebhookPropertiesUpdateParametersStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -13642,8 +13364,7 @@ for WebhookPropertiesUpdateParametersStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for WebhookPropertiesUpdateParametersStatus {
+impl ::std::convert::TryFrom<::std::string::String> for WebhookPropertiesUpdateParametersStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -13715,7 +13436,8 @@ pub mod defaults {
     {
         T::try_from(V).unwrap()
     }
-    pub(super) fn azure_ad_authentication_as_arm_policy_status() -> super::AzureAdAuthenticationAsArmPolicyStatus {
+    pub(super) fn azure_ad_authentication_as_arm_policy_status(
+    ) -> super::AzureAdAuthenticationAsArmPolicyStatus {
         super::AzureAdAuthenticationAsArmPolicyStatus::Enabled
     }
     pub(super) fn export_policy_status() -> super::ExportPolicyStatus {
@@ -13736,19 +13458,23 @@ pub mod defaults {
     pub(super) fn quarantine_policy_status() -> super::QuarantinePolicyStatus {
         super::QuarantinePolicyStatus::Disabled
     }
-    pub(super) fn registry_properties_network_rule_bypass_options() -> super::RegistryPropertiesNetworkRuleBypassOptions {
+    pub(super) fn registry_properties_network_rule_bypass_options(
+    ) -> super::RegistryPropertiesNetworkRuleBypassOptions {
         super::RegistryPropertiesNetworkRuleBypassOptions::AzureServices
     }
-    pub(super) fn registry_properties_public_network_access() -> super::RegistryPropertiesPublicNetworkAccess {
+    pub(super) fn registry_properties_public_network_access(
+    ) -> super::RegistryPropertiesPublicNetworkAccess {
         super::RegistryPropertiesPublicNetworkAccess::Enabled
     }
     pub(super) fn registry_properties_zone_redundancy() -> super::RegistryPropertiesZoneRedundancy {
         super::RegistryPropertiesZoneRedundancy::Disabled
     }
-    pub(super) fn registry_properties_update_parameters_network_rule_bypass_options() -> super::RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
+    pub(super) fn registry_properties_update_parameters_network_rule_bypass_options(
+    ) -> super::RegistryPropertiesUpdateParametersNetworkRuleBypassOptions {
         super::RegistryPropertiesUpdateParametersNetworkRuleBypassOptions::AzureServices
     }
-    pub(super) fn replication_properties_zone_redundancy() -> super::ReplicationPropertiesZoneRedundancy {
+    pub(super) fn replication_properties_zone_redundancy(
+    ) -> super::ReplicationPropertiesZoneRedundancy {
         super::ReplicationPropertiesZoneRedundancy::Disabled
     }
     pub(super) fn retention_policy_status() -> super::RetentionPolicyStatus {

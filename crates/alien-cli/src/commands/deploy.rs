@@ -3,10 +3,10 @@ use crate::deployment_tracking::{validate_token, DeploymentToken, DeploymentTrac
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_platform_api::Client as SdkClient;
-use alien_platform_api::SdkResultExt;
 use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::Client as SdkClient;
+use alien_platform_api::SdkResultExt;
 use clap::Parser;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
@@ -570,17 +570,18 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         );
 
         // Apply update to platform using sync API
-        let state_sdk: alien_platform_api::types::SyncReconcileRequestState = serde_json::from_value(
-            serde_json::to_value(&step_result.state)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to serialize deployment state".to_string(),
-                })?,
-        )
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to convert state to SDK type".to_string(),
-        })?;
+        let state_sdk: alien_platform_api::types::SyncReconcileRequestState =
+            serde_json::from_value(
+                serde_json::to_value(&step_result.state)
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to serialize deployment state".to_string(),
+                    })?,
+            )
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to convert state to SDK type".to_string(),
+            })?;
 
         let error_sdk = step_result
             .error

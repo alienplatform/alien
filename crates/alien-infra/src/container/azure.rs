@@ -2126,9 +2126,9 @@ mod tests {
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::NetworkSettings;
     use alien_core::{
-        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling,
-        DnsRecordStatus, DomainMetadata, EnvironmentVariablesSnapshot, HorizonClusterConfig,
-        HorizonConfig, Network, ResourceDomainInfo, ResourceSpec,
+        CapacityGroup, CertificateStatus, ComputeBackend, ContainerAutoscaling, DnsRecordStatus,
+        DomainMetadata, EnvironmentVariablesSnapshot, HorizonClusterConfig, HorizonConfig, Network,
+        ResourceDomainInfo, ResourceSpec,
     };
     use httpmock::MockServer;
     use serde_json::json;
@@ -2518,7 +2518,8 @@ mod tests {
         let server = setup_horizon_server(cluster_id, container_name, 1);
         let (network, load_balancer, disks, lro, key_vault) =
             mock_clients_for_create_delete("203.0.113.10");
-        let mock_provider = setup_mock_provider(network, load_balancer, disks, lro, Some(key_vault));
+        let mock_provider =
+            setup_mock_provider(network, load_balancer, disks, lro, Some(key_vault));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(test_container("compute"))

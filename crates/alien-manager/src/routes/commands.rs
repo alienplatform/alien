@@ -4,9 +4,9 @@
 //! alien-commands' `create_axum_router()` nested under `/v1`.
 //! This module adds the get status endpoint at the server level.
 
+use super::AppState;
 use axum::Router;
 use serde::Serialize;
-use super::AppState;
 
 // --- Response types ---
 

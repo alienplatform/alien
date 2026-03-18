@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -188,7 +182,7 @@ impl ::std::default::Default for AdditionalUnattendContent {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct AllInstancesDown {
     /**Specifies if Scheduled Events should be auto-approved when all instances are down.
-its default value is true*/
+    its default value is true*/
     #[serde(
         rename = "automaticallyApprove",
         default,
@@ -253,7 +247,7 @@ impl ::std::default::Default for AllInstancesDown {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AllocationStrategy {
@@ -277,9 +271,7 @@ impl ::std::fmt::Display for AllocationStrategy {
 }
 impl ::std::str::FromStr for AllocationStrategy {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "lowestprice" => Ok(Self::LowestPrice),
             "capacityoptimized" => Ok(Self::CapacityOptimized),
@@ -290,9 +282,7 @@ impl ::std::str::FromStr for AllocationStrategy {
 }
 impl ::std::convert::TryFrom<&str> for AllocationStrategy {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -406,7 +396,7 @@ impl ::std::default::Default for AlternativeOption {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AlternativeType {
@@ -430,9 +420,7 @@ impl ::std::fmt::Display for AlternativeType {
 }
 impl ::std::str::FromStr for AlternativeType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "offer" => Ok(Self::Offer),
@@ -443,9 +431,7 @@ impl ::std::str::FromStr for AlternativeType {
 }
 impl ::std::convert::TryFrom<&str> for AlternativeType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -499,7 +485,9 @@ impl ::std::convert::From<&ApiEntityReference> for ApiEntityReference {
 }
 impl ::std::default::Default for ApiEntityReference {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///Api error.
@@ -742,7 +730,7 @@ impl ::std::default::Default for ApplicationProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ArchitectureTypes {
@@ -765,9 +753,7 @@ impl ::std::fmt::Display for ArchitectureTypes {
 }
 impl ::std::str::FromStr for ArchitectureTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "x64" => Ok(Self::X64),
             "arm64" => Ok(Self::Arm64),
@@ -777,9 +763,7 @@ impl ::std::str::FromStr for ArchitectureTypes {
 }
 impl ::std::convert::TryFrom<&str> for ArchitectureTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -853,8 +837,7 @@ pub struct AttachDetachDataDisksRequest {
     )]
     pub data_disks_to_detach: ::std::vec::Vec<DataDisksToDetach>,
 }
-impl ::std::convert::From<&AttachDetachDataDisksRequest>
-for AttachDetachDataDisksRequest {
+impl ::std::convert::From<&AttachDetachDataDisksRequest> for AttachDetachDataDisksRequest {
     fn from(value: &AttachDetachDataDisksRequest) -> Self {
         value.clone()
     }
@@ -972,8 +955,7 @@ pub struct AutomaticOsUpgradeProperties {
     #[serde(rename = "automaticOSUpgradeSupported")]
     pub automatic_os_upgrade_supported: bool,
 }
-impl ::std::convert::From<&AutomaticOsUpgradeProperties>
-for AutomaticOsUpgradeProperties {
+impl ::std::convert::From<&AutomaticOsUpgradeProperties> for AutomaticOsUpgradeProperties {
     fn from(value: &AutomaticOsUpgradeProperties) -> Self {
         value.clone()
     }
@@ -1088,8 +1070,7 @@ pub struct AutomaticZoneRebalancingPolicy {
     )]
     pub rebalance_strategy: ::std::option::Option<RebalanceStrategy>,
 }
-impl ::std::convert::From<&AutomaticZoneRebalancingPolicy>
-for AutomaticZoneRebalancingPolicy {
+impl ::std::convert::From<&AutomaticZoneRebalancingPolicy> for AutomaticZoneRebalancingPolicy {
     fn from(value: &AutomaticZoneRebalancingPolicy) -> Self {
         value.clone()
     }
@@ -1324,9 +1305,8 @@ pub struct AvailabilitySetProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub virtual_machine_scale_set_migration_info: ::std::option::Option<
-        VirtualMachineScaleSetMigrationInfo,
-    >,
+    pub virtual_machine_scale_set_migration_info:
+        ::std::option::Option<VirtualMachineScaleSetMigrationInfo>,
     ///A list of references to all virtual machines in the availability set.
     #[serde(
         rename = "virtualMachines",
@@ -1393,7 +1373,7 @@ impl ::std::default::Default for AvailabilitySetProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum AvailabilitySetSkuTypes {
@@ -1415,9 +1395,7 @@ impl ::std::fmt::Display for AvailabilitySetSkuTypes {
 }
 impl ::std::str::FromStr for AvailabilitySetSkuTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "classic" => Ok(Self::Classic),
             "aligned" => Ok(Self::Aligned),
@@ -1427,9 +1405,7 @@ impl ::std::str::FromStr for AvailabilitySetSkuTypes {
 }
 impl ::std::convert::TryFrom<&str> for AvailabilitySetSkuTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1829,7 +1805,7 @@ impl ::std::default::Default for BootDiagnosticsInstanceView {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CachingTypes {
@@ -1853,9 +1829,7 @@ impl ::std::fmt::Display for CachingTypes {
 }
 impl ::std::str::FromStr for CachingTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "readonly" => Ok(Self::ReadOnly),
@@ -1866,9 +1840,7 @@ impl ::std::str::FromStr for CachingTypes {
 }
 impl ::std::convert::TryFrom<&str> for CachingTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2123,7 +2095,8 @@ pub struct CapacityReservationGroupInstanceView {
     pub shared_subscription_ids: ::std::vec::Vec<SubResourceReadOnly>,
 }
 impl ::std::convert::From<&CapacityReservationGroupInstanceView>
-for CapacityReservationGroupInstanceView {
+    for CapacityReservationGroupInstanceView
+{
     fn from(value: &CapacityReservationGroupInstanceView) -> Self {
         value.clone()
     }
@@ -2169,7 +2142,7 @@ impl ::std::default::Default for CapacityReservationGroupInstanceView {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CapacityReservationGroupInstanceViewTypes {
@@ -2190,9 +2163,7 @@ impl ::std::fmt::Display for CapacityReservationGroupInstanceViewTypes {
 }
 impl ::std::str::FromStr for CapacityReservationGroupInstanceViewTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             _ => Err("invalid value".into()),
@@ -2201,14 +2172,11 @@ impl ::std::str::FromStr for CapacityReservationGroupInstanceViewTypes {
 }
 impl ::std::convert::TryFrom<&str> for CapacityReservationGroupInstanceViewTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CapacityReservationGroupInstanceViewTypes {
+impl ::std::convert::TryFrom<&::std::string::String> for CapacityReservationGroupInstanceViewTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2216,8 +2184,7 @@ for CapacityReservationGroupInstanceViewTypes {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CapacityReservationGroupInstanceViewTypes {
+impl ::std::convert::TryFrom<::std::string::String> for CapacityReservationGroupInstanceViewTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2267,7 +2234,8 @@ pub struct CapacityReservationGroupListResult {
     pub value: ::std::vec::Vec<CapacityReservationGroup>,
 }
 impl ::std::convert::From<&CapacityReservationGroupListResult>
-for CapacityReservationGroupListResult {
+    for CapacityReservationGroupListResult
+{
     fn from(value: &CapacityReservationGroupListResult) -> Self {
         value.clone()
     }
@@ -2351,7 +2319,8 @@ pub struct CapacityReservationGroupProperties {
     pub virtual_machines_associated: ::std::vec::Vec<SubResourceReadOnly>,
 }
 impl ::std::convert::From<&CapacityReservationGroupProperties>
-for CapacityReservationGroupProperties {
+    for CapacityReservationGroupProperties
+{
     fn from(value: &CapacityReservationGroupProperties) -> Self {
         value.clone()
     }
@@ -2404,8 +2373,7 @@ pub struct CapacityReservationGroupUpdate {
     )]
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
-impl ::std::convert::From<&CapacityReservationGroupUpdate>
-for CapacityReservationGroupUpdate {
+impl ::std::convert::From<&CapacityReservationGroupUpdate> for CapacityReservationGroupUpdate {
     fn from(value: &CapacityReservationGroupUpdate) -> Self {
         value.clone()
     }
@@ -2459,8 +2427,7 @@ pub struct CapacityReservationInstanceView {
     )]
     pub utilization_info: ::std::option::Option<CapacityReservationUtilization>,
 }
-impl ::std::convert::From<&CapacityReservationInstanceView>
-for CapacityReservationInstanceView {
+impl ::std::convert::From<&CapacityReservationInstanceView> for CapacityReservationInstanceView {
     fn from(value: &CapacityReservationInstanceView) -> Self {
         value.clone()
     }
@@ -2506,7 +2473,7 @@ impl ::std::default::Default for CapacityReservationInstanceView {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CapacityReservationInstanceViewTypes {
@@ -2527,9 +2494,7 @@ impl ::std::fmt::Display for CapacityReservationInstanceViewTypes {
 }
 impl ::std::str::FromStr for CapacityReservationInstanceViewTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             _ => Err("invalid value".into()),
@@ -2538,14 +2503,11 @@ impl ::std::str::FromStr for CapacityReservationInstanceViewTypes {
 }
 impl ::std::convert::TryFrom<&str> for CapacityReservationInstanceViewTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for CapacityReservationInstanceViewTypes {
+impl ::std::convert::TryFrom<&::std::string::String> for CapacityReservationInstanceViewTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2553,8 +2515,7 @@ for CapacityReservationInstanceViewTypes {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for CapacityReservationInstanceViewTypes {
+impl ::std::convert::TryFrom<::std::string::String> for CapacityReservationInstanceViewTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2610,7 +2571,8 @@ pub struct CapacityReservationInstanceViewWithName {
     pub utilization_info: ::std::option::Option<CapacityReservationUtilization>,
 }
 impl ::std::convert::From<&CapacityReservationInstanceViewWithName>
-for CapacityReservationInstanceViewWithName {
+    for CapacityReservationInstanceViewWithName
+{
     fn from(value: &CapacityReservationInstanceViewWithName) -> Self {
         value.clone()
     }
@@ -2665,8 +2627,7 @@ pub struct CapacityReservationListResult {
     ///The list of capacity reservations.
     pub value: ::std::vec::Vec<CapacityReservation>,
 }
-impl ::std::convert::From<&CapacityReservationListResult>
-for CapacityReservationListResult {
+impl ::std::convert::From<&CapacityReservationListResult> for CapacityReservationListResult {
     fn from(value: &CapacityReservationListResult) -> Self {
         value.clone()
     }
@@ -2827,8 +2788,7 @@ pub struct CapacityReservationProperties {
     )]
     pub virtual_machines_associated: ::std::vec::Vec<SubResourceReadOnly>,
 }
-impl ::std::convert::From<&CapacityReservationProperties>
-for CapacityReservationProperties {
+impl ::std::convert::From<&CapacityReservationProperties> for CapacityReservationProperties {
     fn from(value: &CapacityReservationProperties) -> Self {
         value.clone()
     }
@@ -2953,8 +2913,7 @@ pub struct CapacityReservationUtilization {
     )]
     pub virtual_machines_allocated: ::std::vec::Vec<SubResourceReadOnly>,
 }
-impl ::std::convert::From<&CapacityReservationUtilization>
-for CapacityReservationUtilization {
+impl ::std::convert::From<&CapacityReservationUtilization> for CapacityReservationUtilization {
     fn from(value: &CapacityReservationUtilization) -> Self {
         value.clone()
     }
@@ -3000,7 +2959,9 @@ impl ::std::convert::From<&CloudError> for CloudError {
 }
 impl ::std::default::Default for CloudError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///`ComponentNames`
@@ -3029,7 +2990,7 @@ impl ::std::default::Default for CloudError {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ComponentNames {
@@ -3044,17 +3005,13 @@ impl ::std::convert::From<&Self> for ComponentNames {
 impl ::std::fmt::Display for ComponentNames {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::MicrosoftWindowsShellSetup => {
-                f.write_str("Microsoft-Windows-Shell-Setup")
-            }
+            Self::MicrosoftWindowsShellSetup => f.write_str("Microsoft-Windows-Shell-Setup"),
         }
     }
 }
 impl ::std::str::FromStr for ComponentNames {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "microsoft-windows-shell-setup" => Ok(Self::MicrosoftWindowsShellSetup),
             _ => Err("invalid value".into()),
@@ -3063,9 +3020,7 @@ impl ::std::str::FromStr for ComponentNames {
 }
 impl ::std::convert::TryFrom<&str> for ComponentNames {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3129,7 +3084,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ComponentNames {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ConsistencyModeTypes {
@@ -3153,9 +3108,7 @@ impl ::std::fmt::Display for ConsistencyModeTypes {
 }
 impl ::std::str::FromStr for ConsistencyModeTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "crashconsistent" => Ok(Self::CrashConsistent),
             "filesystemconsistent" => Ok(Self::FileSystemConsistent),
@@ -3166,9 +3119,7 @@ impl ::std::str::FromStr for ConsistencyModeTypes {
 }
 impl ::std::convert::TryFrom<&str> for ConsistencyModeTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3217,7 +3168,8 @@ pub struct ConvertToVirtualMachineScaleSetInput {
     pub virtual_machine_scale_set_name: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ConvertToVirtualMachineScaleSetInput>
-for ConvertToVirtualMachineScaleSetInput {
+    for ConvertToVirtualMachineScaleSetInput
+{
     fn from(value: &ConvertToVirtualMachineScaleSetInput) -> Self {
         value.clone()
     }
@@ -3443,7 +3395,9 @@ impl ::std::convert::From<&DataDiskImage> for DataDiskImage {
 }
 impl ::std::default::Default for DataDiskImage {
     fn default() -> Self {
-        Self { lun: Default::default() }
+        Self {
+            lun: Default::default(),
+        }
     }
 }
 ///Describes the data disk to be attached.
@@ -3735,8 +3689,7 @@ pub struct DedicatedHostAvailableCapacity {
     )]
     pub allocatable_v_ms: ::std::vec::Vec<DedicatedHostAllocatableVm>,
 }
-impl ::std::convert::From<&DedicatedHostAvailableCapacity>
-for DedicatedHostAvailableCapacity {
+impl ::std::convert::From<&DedicatedHostAvailableCapacity> for DedicatedHostAvailableCapacity {
     fn from(value: &DedicatedHostAvailableCapacity) -> Self {
         value.clone()
     }
@@ -3867,15 +3820,16 @@ pub struct DedicatedHostGroupInstanceView {
     )]
     pub hosts: ::std::vec::Vec<DedicatedHostInstanceViewWithName>,
 }
-impl ::std::convert::From<&DedicatedHostGroupInstanceView>
-for DedicatedHostGroupInstanceView {
+impl ::std::convert::From<&DedicatedHostGroupInstanceView> for DedicatedHostGroupInstanceView {
     fn from(value: &DedicatedHostGroupInstanceView) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for DedicatedHostGroupInstanceView {
     fn default() -> Self {
-        Self { hosts: Default::default() }
+        Self {
+            hosts: Default::default(),
+        }
     }
 }
 ///The List Dedicated Host Group with resource group response.
@@ -3919,8 +3873,7 @@ pub struct DedicatedHostGroupListResult {
     ///The list of dedicated host groups.
     pub value: ::std::vec::Vec<DedicatedHostGroup>,
 }
-impl ::std::convert::From<&DedicatedHostGroupListResult>
-for DedicatedHostGroupListResult {
+impl ::std::convert::From<&DedicatedHostGroupListResult> for DedicatedHostGroupListResult {
     fn from(value: &DedicatedHostGroupListResult) -> Self {
         value.clone()
     }
@@ -3973,9 +3926,8 @@ pub struct DedicatedHostGroupProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub additional_capabilities: ::std::option::Option<
-        DedicatedHostGroupPropertiesAdditionalCapabilities,
-    >,
+    pub additional_capabilities:
+        ::std::option::Option<DedicatedHostGroupPropertiesAdditionalCapabilities>,
     ///A list of references to all dedicated hosts in the dedicated host group.
     #[serde(
         default,
@@ -4002,8 +3954,7 @@ pub struct DedicatedHostGroupProperties {
     )]
     pub support_automatic_placement: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&DedicatedHostGroupProperties>
-for DedicatedHostGroupProperties {
+impl ::std::convert::From<&DedicatedHostGroupProperties> for DedicatedHostGroupProperties {
     fn from(value: &DedicatedHostGroupProperties) -> Self {
         value.clone()
     }
@@ -4037,7 +3988,8 @@ pub struct DedicatedHostGroupPropertiesAdditionalCapabilities {
     pub ultra_ssd_enabled: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&DedicatedHostGroupPropertiesAdditionalCapabilities>
-for DedicatedHostGroupPropertiesAdditionalCapabilities {
+    for DedicatedHostGroupPropertiesAdditionalCapabilities
+{
     fn from(value: &DedicatedHostGroupPropertiesAdditionalCapabilities) -> Self {
         value.clone()
     }
@@ -4238,7 +4190,8 @@ pub struct DedicatedHostInstanceViewWithName {
     pub statuses: ::std::vec::Vec<InstanceViewStatus>,
 }
 impl ::std::convert::From<&DedicatedHostInstanceViewWithName>
-for DedicatedHostInstanceViewWithName {
+    for DedicatedHostInstanceViewWithName
+{
     fn from(value: &DedicatedHostInstanceViewWithName) -> Self {
         value.clone()
     }
@@ -4283,7 +4236,7 @@ impl ::std::default::Default for DedicatedHostInstanceViewWithName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DedicatedHostLicenseTypes {
@@ -4309,9 +4262,7 @@ impl ::std::fmt::Display for DedicatedHostLicenseTypes {
 }
 impl ::std::str::FromStr for DedicatedHostLicenseTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "windows_server_hybrid" => Ok(Self::WindowsServerHybrid),
@@ -4322,9 +4273,7 @@ impl ::std::str::FromStr for DedicatedHostLicenseTypes {
 }
 impl ::std::convert::TryFrom<&str> for DedicatedHostLicenseTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4694,7 +4643,8 @@ pub struct DefaultVirtualMachineScaleSetInfo {
     pub default_virtual_machine_scale_set: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&DefaultVirtualMachineScaleSetInfo>
-for DefaultVirtualMachineScaleSetInfo {
+    for DefaultVirtualMachineScaleSetInfo
+{
     fn from(value: &DefaultVirtualMachineScaleSetInfo) -> Self {
         value.clone()
     }
@@ -4746,7 +4696,7 @@ impl ::std::default::Default for DefaultVirtualMachineScaleSetInfo {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DeleteOptions {
@@ -4768,9 +4718,7 @@ impl ::std::fmt::Display for DeleteOptions {
 }
 impl ::std::str::FromStr for DeleteOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "delete" => Ok(Self::Delete),
             "detach" => Ok(Self::Detach),
@@ -4780,9 +4728,7 @@ impl ::std::str::FromStr for DeleteOptions {
 }
 impl ::std::convert::TryFrom<&str> for DeleteOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4874,7 +4820,7 @@ impl ::std::default::Default for DiagnosticsProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiffDiskOptions {
@@ -4894,9 +4840,7 @@ impl ::std::fmt::Display for DiffDiskOptions {
 }
 impl ::std::str::FromStr for DiffDiskOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "local" => Ok(Self::Local),
             _ => Err("invalid value".into()),
@@ -4905,9 +4849,7 @@ impl ::std::str::FromStr for DiffDiskOptions {
 }
 impl ::std::convert::TryFrom<&str> for DiffDiskOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4971,7 +4913,7 @@ impl ::std::convert::TryFrom<::std::string::String> for DiffDiskOptions {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiffDiskPlacement {
@@ -4995,9 +4937,7 @@ impl ::std::fmt::Display for DiffDiskPlacement {
 }
 impl ::std::str::FromStr for DiffDiskPlacement {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "cachedisk" => Ok(Self::CacheDisk),
             "resourcedisk" => Ok(Self::ResourceDisk),
@@ -5008,9 +4948,7 @@ impl ::std::str::FromStr for DiffDiskPlacement {
 }
 impl ::std::convert::TryFrom<&str> for DiffDiskPlacement {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5154,7 +5092,7 @@ impl ::std::default::Default for DisallowedConfiguration {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskControllerTypes {
@@ -5178,9 +5116,7 @@ impl ::std::fmt::Display for DiskControllerTypes {
 }
 impl ::std::str::FromStr for DiskControllerTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "scsi" => Ok(Self::Scsi),
             "nvme" => Ok(Self::NvMe),
@@ -5190,9 +5126,7 @@ impl ::std::str::FromStr for DiskControllerTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskControllerTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5266,7 +5200,7 @@ impl ::std::convert::TryFrom<::std::string::String> for DiskControllerTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskCreateOptionTypes {
@@ -5294,9 +5228,7 @@ impl ::std::fmt::Display for DiskCreateOptionTypes {
 }
 impl ::std::str::FromStr for DiskCreateOptionTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "fromimage" => Ok(Self::FromImage),
             "empty" => Ok(Self::Empty),
@@ -5309,9 +5241,7 @@ impl ::std::str::FromStr for DiskCreateOptionTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskCreateOptionTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5370,7 +5300,7 @@ impl ::std::convert::TryFrom<::std::string::String> for DiskCreateOptionTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskDeleteOptionTypes {
@@ -5392,9 +5322,7 @@ impl ::std::fmt::Display for DiskDeleteOptionTypes {
 }
 impl ::std::str::FromStr for DiskDeleteOptionTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "delete" => Ok(Self::Delete),
             "detach" => Ok(Self::Detach),
@@ -5404,9 +5332,7 @@ impl ::std::str::FromStr for DiskDeleteOptionTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskDeleteOptionTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5460,7 +5386,7 @@ impl ::std::convert::TryFrom<::std::string::String> for DiskDeleteOptionTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DiskDetachOptionTypes {
@@ -5480,9 +5406,7 @@ impl ::std::fmt::Display for DiskDetachOptionTypes {
 }
 impl ::std::str::FromStr for DiskDetachOptionTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "forcedetach" => Ok(Self::ForceDetach),
             _ => Err("invalid value".into()),
@@ -5491,9 +5415,7 @@ impl ::std::str::FromStr for DiskDetachOptionTypes {
 }
 impl ::std::convert::TryFrom<&str> for DiskDetachOptionTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5796,8 +5718,7 @@ pub struct DiskRestorePointInstanceView {
     )]
     pub snapshot_access_state: ::std::option::Option<SnapshotAccessState>,
 }
-impl ::std::convert::From<&DiskRestorePointInstanceView>
-for DiskRestorePointInstanceView {
+impl ::std::convert::From<&DiskRestorePointInstanceView> for DiskRestorePointInstanceView {
     fn from(value: &DiskRestorePointInstanceView) -> Self {
         value.clone()
     }
@@ -5850,7 +5771,8 @@ pub struct DiskRestorePointReplicationStatus {
     pub status: ::std::option::Option<InstanceViewStatus>,
 }
 impl ::std::convert::From<&DiskRestorePointReplicationStatus>
-for DiskRestorePointReplicationStatus {
+    for DiskRestorePointReplicationStatus
+{
     fn from(value: &DiskRestorePointReplicationStatus) -> Self {
         value.clone()
     }
@@ -5912,7 +5834,7 @@ impl ::std::default::Default for DiskRestorePointReplicationStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DomainNameLabelScopeTypes {
@@ -5938,9 +5860,7 @@ impl ::std::fmt::Display for DomainNameLabelScopeTypes {
 }
 impl ::std::str::FromStr for DomainNameLabelScopeTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "tenantreuse" => Ok(Self::TenantReuse),
             "subscriptionreuse" => Ok(Self::SubscriptionReuse),
@@ -5952,9 +5872,7 @@ impl ::std::str::FromStr for DomainNameLabelScopeTypes {
 }
 impl ::std::convert::TryFrom<&str> for DomainNameLabelScopeTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6130,7 +6048,7 @@ impl ::std::default::Default for EventGridAndResourceGraph {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExecutionState {
@@ -6162,9 +6080,7 @@ impl ::std::fmt::Display for ExecutionState {
 }
 impl ::std::str::FromStr for ExecutionState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "pending" => Ok(Self::Pending),
@@ -6179,9 +6095,7 @@ impl ::std::str::FromStr for ExecutionState {
 }
 impl ::std::convert::TryFrom<&str> for ExecutionState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6234,7 +6148,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ExecutionState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExpandTypeForListVMs {
@@ -6255,9 +6169,7 @@ impl ::std::fmt::Display for ExpandTypeForListVMs {
 }
 impl ::std::str::FromStr for ExpandTypeForListVMs {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             _ => Err("invalid value".into()),
@@ -6266,9 +6178,7 @@ impl ::std::str::FromStr for ExpandTypeForListVMs {
 }
 impl ::std::convert::TryFrom<&str> for ExpandTypeForListVMs {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6326,7 +6236,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ExpandTypeForListVMs {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExpandTypesForGetCapacityReservationGroups {
@@ -6343,18 +6253,14 @@ impl ::std::convert::From<&Self> for ExpandTypesForGetCapacityReservationGroups 
 impl ::std::fmt::Display for ExpandTypesForGetCapacityReservationGroups {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::VirtualMachineScaleSetVMsRef => {
-                f.write_str("virtualMachineScaleSetVMs/$ref")
-            }
+            Self::VirtualMachineScaleSetVMsRef => f.write_str("virtualMachineScaleSetVMs/$ref"),
             Self::VirtualMachinesRef => f.write_str("virtualMachines/$ref"),
         }
     }
 }
 impl ::std::str::FromStr for ExpandTypesForGetCapacityReservationGroups {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "virtualmachinescalesetvms/$ref" => Ok(Self::VirtualMachineScaleSetVMsRef),
             "virtualmachines/$ref" => Ok(Self::VirtualMachinesRef),
@@ -6364,14 +6270,13 @@ impl ::std::str::FromStr for ExpandTypesForGetCapacityReservationGroups {
 }
 impl ::std::convert::TryFrom<&str> for ExpandTypesForGetCapacityReservationGroups {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ExpandTypesForGetCapacityReservationGroups {
+    for ExpandTypesForGetCapacityReservationGroups
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -6379,8 +6284,7 @@ for ExpandTypesForGetCapacityReservationGroups {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ExpandTypesForGetCapacityReservationGroups {
+impl ::std::convert::TryFrom<::std::string::String> for ExpandTypesForGetCapacityReservationGroups {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -6421,7 +6325,7 @@ for ExpandTypesForGetCapacityReservationGroups {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExpandTypesForGetVmScaleSets {
@@ -6442,9 +6346,7 @@ impl ::std::fmt::Display for ExpandTypesForGetVmScaleSets {
 }
 impl ::std::str::FromStr for ExpandTypesForGetVmScaleSets {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "userdata" => Ok(Self::UserData),
             _ => Err("invalid value".into()),
@@ -6453,9 +6355,7 @@ impl ::std::str::FromStr for ExpandTypesForGetVmScaleSets {
 }
 impl ::std::convert::TryFrom<&str> for ExpandTypesForGetVmScaleSets {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6508,7 +6408,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ExpandTypesForGetVmScale
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExpandTypesForListVMs {
@@ -6529,9 +6429,7 @@ impl ::std::fmt::Display for ExpandTypesForListVMs {
 }
 impl ::std::str::FromStr for ExpandTypesForListVMs {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             _ => Err("invalid value".into()),
@@ -6540,9 +6438,7 @@ impl ::std::str::FromStr for ExpandTypesForListVMs {
 }
 impl ::std::convert::TryFrom<&str> for ExpandTypesForListVMs {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6640,7 +6536,7 @@ impl ::std::default::Default for ExtendedLocation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExtendedLocationType {
@@ -6660,9 +6556,7 @@ impl ::std::fmt::Display for ExtendedLocationType {
 }
 impl ::std::str::FromStr for ExtendedLocationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "edgezone" => Ok(Self::EdgeZone),
             _ => Err("invalid value".into()),
@@ -6671,9 +6565,7 @@ impl ::std::str::FromStr for ExtendedLocationType {
 }
 impl ::std::convert::TryFrom<&str> for ExtendedLocationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6783,7 +6675,7 @@ impl ::std::default::Default for HardwareProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum HighSpeedInterconnectPlacement {
@@ -6805,9 +6697,7 @@ impl ::std::fmt::Display for HighSpeedInterconnectPlacement {
 }
 impl ::std::str::FromStr for HighSpeedInterconnectPlacement {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "trunk" => Ok(Self::Trunk),
@@ -6817,9 +6707,7 @@ impl ::std::str::FromStr for HighSpeedInterconnectPlacement {
 }
 impl ::std::convert::TryFrom<&str> for HighSpeedInterconnectPlacement {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6868,9 +6756,7 @@ pub struct HostEndpointSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub in_vm_access_control_profile_reference_id: ::std::option::Option<
-        ::std::string::String,
-    >,
+    pub in_vm_access_control_profile_reference_id: ::std::option::Option<::std::string::String>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -6930,7 +6816,7 @@ impl ::std::default::Default for HostEndpointSettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum HyperVGeneration {
@@ -6952,9 +6838,7 @@ impl ::std::fmt::Display for HyperVGeneration {
 }
 impl ::std::str::FromStr for HyperVGeneration {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "v1" => Ok(Self::V1),
             "v2" => Ok(Self::V2),
@@ -6964,9 +6848,7 @@ impl ::std::str::FromStr for HyperVGeneration {
 }
 impl ::std::convert::TryFrom<&str> for HyperVGeneration {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7025,7 +6907,7 @@ impl ::std::convert::TryFrom<::std::string::String> for HyperVGeneration {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum HyperVGenerationType {
@@ -7047,9 +6929,7 @@ impl ::std::fmt::Display for HyperVGenerationType {
 }
 impl ::std::str::FromStr for HyperVGenerationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "v1" => Ok(Self::V1),
             "v2" => Ok(Self::V2),
@@ -7059,9 +6939,7 @@ impl ::std::str::FromStr for HyperVGenerationType {
 }
 impl ::std::convert::TryFrom<&str> for HyperVGenerationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7120,7 +6998,7 @@ impl ::std::convert::TryFrom<::std::string::String> for HyperVGenerationType {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum HyperVGenerationTypes {
@@ -7142,9 +7020,7 @@ impl ::std::fmt::Display for HyperVGenerationTypes {
 }
 impl ::std::str::FromStr for HyperVGenerationTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "v1" => Ok(Self::V1),
             "v2" => Ok(Self::V2),
@@ -7154,9 +7030,7 @@ impl ::std::str::FromStr for HyperVGenerationTypes {
 }
 impl ::std::convert::TryFrom<&str> for HyperVGenerationTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7894,7 +7768,7 @@ impl ::std::default::Default for ImageReference {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ImageState {
@@ -7918,9 +7792,7 @@ impl ::std::fmt::Display for ImageState {
 }
 impl ::std::str::FromStr for ImageState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "active" => Ok(Self::Active),
             "scheduledfordeprecation" => Ok(Self::ScheduledForDeprecation),
@@ -7931,9 +7803,7 @@ impl ::std::str::FromStr for ImageState {
 }
 impl ::std::convert::TryFrom<&str> for ImageState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8239,7 +8109,7 @@ impl ::std::default::Default for InstanceViewStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum InstanceViewTypes {
@@ -8266,9 +8136,7 @@ impl ::std::fmt::Display for InstanceViewTypes {
 }
 impl ::std::str::FromStr for InstanceViewTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             "userdata" => Ok(Self::UserData),
@@ -8279,9 +8147,7 @@ impl ::std::str::FromStr for InstanceViewTypes {
 }
 impl ::std::convert::TryFrom<&str> for InstanceViewTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8332,7 +8198,7 @@ impl ::std::convert::TryFrom<::std::string::String> for InstanceViewTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IntervalInMins {
@@ -8358,9 +8224,7 @@ impl ::std::fmt::Display for IntervalInMins {
 }
 impl ::std::str::FromStr for IntervalInMins {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "threemins" => Ok(Self::ThreeMins),
             "fivemins" => Ok(Self::FiveMins),
@@ -8372,9 +8236,7 @@ impl ::std::str::FromStr for IntervalInMins {
 }
 impl ::std::convert::TryFrom<&str> for IntervalInMins {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8433,7 +8295,7 @@ impl ::std::convert::TryFrom<::std::string::String> for IntervalInMins {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpVersion {
@@ -8455,9 +8317,7 @@ impl ::std::fmt::Display for IpVersion {
 }
 impl ::std::str::FromStr for IpVersion {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ipv4" => Ok(Self::IPv4),
             "ipv6" => Ok(Self::IPv6),
@@ -8467,9 +8327,7 @@ impl ::std::str::FromStr for IpVersion {
 }
 impl ::std::convert::TryFrom<&str> for IpVersion {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8528,7 +8386,7 @@ impl ::std::convert::TryFrom<::std::string::String> for IpVersion {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpVersions {
@@ -8550,9 +8408,7 @@ impl ::std::fmt::Display for IpVersions {
 }
 impl ::std::str::FromStr for IpVersions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ipv4" => Ok(Self::IPv4),
             "ipv6" => Ok(Self::IPv6),
@@ -8562,9 +8418,7 @@ impl ::std::str::FromStr for IpVersions {
 }
 impl ::std::convert::TryFrom<&str> for IpVersions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8814,8 +8668,7 @@ pub struct LastPatchInstallationSummary {
     )]
     pub status: ::std::option::Option<PatchOperationStatus>,
 }
-impl ::std::convert::From<&LastPatchInstallationSummary>
-for LastPatchInstallationSummary {
+impl ::std::convert::From<&LastPatchInstallationSummary> for LastPatchInstallationSummary {
     fn from(value: &LastPatchInstallationSummary) -> Self {
         value.clone()
     }
@@ -9051,7 +8904,7 @@ impl ::std::default::Default for LinuxParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LinuxPatchAssessmentMode {
@@ -9073,9 +8926,7 @@ impl ::std::fmt::Display for LinuxPatchAssessmentMode {
 }
 impl ::std::str::FromStr for LinuxPatchAssessmentMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "imagedefault" => Ok(Self::ImageDefault),
             "automaticbyplatform" => Ok(Self::AutomaticByPlatform),
@@ -9085,9 +8936,7 @@ impl ::std::str::FromStr for LinuxPatchAssessmentMode {
 }
 impl ::std::convert::TryFrom<&str> for LinuxPatchAssessmentMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9144,9 +8993,8 @@ pub struct LinuxPatchSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub automatic_by_platform_settings: ::std::option::Option<
-        LinuxVmGuestPatchAutomaticByPlatformSettings,
-    >,
+    pub automatic_by_platform_settings:
+        ::std::option::Option<LinuxVmGuestPatchAutomaticByPlatformSettings>,
     #[serde(
         rename = "patchMode",
         default,
@@ -9218,7 +9066,7 @@ impl ::std::default::Default for LinuxPatchSettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
@@ -9244,9 +9092,7 @@ impl ::std::fmt::Display for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
 }
 impl ::std::str::FromStr for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "ifrequired" => Ok(Self::IfRequired),
@@ -9256,17 +9102,15 @@ impl ::std::str::FromStr for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
+impl ::std::convert::TryFrom<&str> for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
+    for LinuxVmGuestPatchAutomaticByPlatformRebootSetting
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -9275,7 +9119,8 @@ for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for LinuxVmGuestPatchAutomaticByPlatformRebootSetting {
+    for LinuxVmGuestPatchAutomaticByPlatformRebootSetting
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -9319,12 +9164,11 @@ pub struct LinuxVmGuestPatchAutomaticByPlatformSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub reboot_setting: ::std::option::Option<
-        LinuxVmGuestPatchAutomaticByPlatformRebootSetting,
-    >,
+    pub reboot_setting: ::std::option::Option<LinuxVmGuestPatchAutomaticByPlatformRebootSetting>,
 }
 impl ::std::convert::From<&LinuxVmGuestPatchAutomaticByPlatformSettings>
-for LinuxVmGuestPatchAutomaticByPlatformSettings {
+    for LinuxVmGuestPatchAutomaticByPlatformSettings
+{
     fn from(value: &LinuxVmGuestPatchAutomaticByPlatformSettings) -> Self {
         value.clone()
     }
@@ -9376,7 +9220,7 @@ impl ::std::default::Default for LinuxVmGuestPatchAutomaticByPlatformSettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LinuxVmGuestPatchMode {
@@ -9398,9 +9242,7 @@ impl ::std::fmt::Display for LinuxVmGuestPatchMode {
 }
 impl ::std::str::FromStr for LinuxVmGuestPatchMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "imagedefault" => Ok(Self::ImageDefault),
             "automaticbyplatform" => Ok(Self::AutomaticByPlatform),
@@ -9410,9 +9252,7 @@ impl ::std::str::FromStr for LinuxVmGuestPatchMode {
 }
 impl ::std::convert::TryFrom<&str> for LinuxVmGuestPatchMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9658,7 +9498,9 @@ impl ::std::convert::From<&LogAnalyticsOutput> for LogAnalyticsOutput {
 }
 impl ::std::default::Default for LogAnalyticsOutput {
     fn default() -> Self {
-        Self { output: Default::default() }
+        Self {
+            output: Default::default(),
+        }
     }
 }
 ///The Last Maintenance Operation Result Code.
@@ -9692,7 +9534,7 @@ impl ::std::default::Default for LogAnalyticsOutput {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum MaintenanceOperationResultCodeTypes {
@@ -9718,9 +9560,7 @@ impl ::std::fmt::Display for MaintenanceOperationResultCodeTypes {
 }
 impl ::std::str::FromStr for MaintenanceOperationResultCodeTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "retrylater" => Ok(Self::RetryLater),
@@ -9732,14 +9572,11 @@ impl ::std::str::FromStr for MaintenanceOperationResultCodeTypes {
 }
 impl ::std::convert::TryFrom<&str> for MaintenanceOperationResultCodeTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for MaintenanceOperationResultCodeTypes {
+impl ::std::convert::TryFrom<&::std::string::String> for MaintenanceOperationResultCodeTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -9747,8 +9584,7 @@ for MaintenanceOperationResultCodeTypes {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for MaintenanceOperationResultCodeTypes {
+impl ::std::convert::TryFrom<::std::string::String> for MaintenanceOperationResultCodeTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -9820,9 +9656,7 @@ pub struct MaintenanceRedeployStatus {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub last_operation_result_code: ::std::option::Option<
-        MaintenanceOperationResultCodeTypes,
-    >,
+    pub last_operation_result_code: ::std::option::Option<MaintenanceOperationResultCodeTypes>,
     ///End Time for the Maintenance Window.
     #[serde(
         rename = "maintenanceWindowEndTime",
@@ -9987,8 +9821,7 @@ pub struct MaxInstancePercentPerZonePolicy {
     )]
     pub value: ::std::option::Option<i32>,
 }
-impl ::std::convert::From<&MaxInstancePercentPerZonePolicy>
-for MaxInstancePercentPerZonePolicy {
+impl ::std::convert::From<&MaxInstancePercentPerZonePolicy> for MaxInstancePercentPerZonePolicy {
     fn from(value: &MaxInstancePercentPerZonePolicy) -> Self {
         value.clone()
     }
@@ -10026,7 +9859,8 @@ pub struct MigrateToVirtualMachineScaleSetInput {
     pub virtual_machine_scale_set_flexible: SubResource,
 }
 impl ::std::convert::From<&MigrateToVirtualMachineScaleSetInput>
-for MigrateToVirtualMachineScaleSetInput {
+    for MigrateToVirtualMachineScaleSetInput
+{
     fn from(value: &MigrateToVirtualMachineScaleSetInput) -> Self {
         value.clone()
     }
@@ -10085,7 +9919,8 @@ pub struct MigrateVmToVirtualMachineScaleSetInput {
     pub target_zone: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&MigrateVmToVirtualMachineScaleSetInput>
-for MigrateVmToVirtualMachineScaleSetInput {
+    for MigrateVmToVirtualMachineScaleSetInput
+{
     fn from(value: &MigrateVmToVirtualMachineScaleSetInput) -> Self {
         value.clone()
     }
@@ -10138,7 +9973,7 @@ impl ::std::default::Default for MigrateVmToVirtualMachineScaleSetInput {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum Mode {
@@ -10160,9 +9995,7 @@ impl ::std::fmt::Display for Mode {
 }
 impl ::std::str::FromStr for Mode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "audit" => Ok(Self::Audit),
             "enforce" => Ok(Self::Enforce),
@@ -10172,9 +10005,7 @@ impl ::std::str::FromStr for Mode {
 }
 impl ::std::convert::TryFrom<&str> for Mode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10238,7 +10069,7 @@ impl ::std::convert::TryFrom<::std::string::String> for Mode {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum Modes {
@@ -10262,9 +10093,7 @@ impl ::std::fmt::Display for Modes {
 }
 impl ::std::str::FromStr for Modes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "audit" => Ok(Self::Audit),
             "enforce" => Ok(Self::Enforce),
@@ -10275,9 +10104,7 @@ impl ::std::str::FromStr for Modes {
 }
 impl ::std::convert::TryFrom<&str> for Modes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10336,7 +10163,7 @@ impl ::std::convert::TryFrom<::std::string::String> for Modes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkApiVersion {
@@ -10360,9 +10187,7 @@ impl ::std::fmt::Display for NetworkApiVersion {
 }
 impl ::std::str::FromStr for NetworkApiVersion {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "2020-11-01" => Ok(Self::X20201101),
             "2022-11-01" => Ok(Self::X20221101),
@@ -10372,9 +10197,7 @@ impl ::std::str::FromStr for NetworkApiVersion {
 }
 impl ::std::convert::TryFrom<&str> for NetworkApiVersion {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10438,7 +10261,7 @@ impl ::std::convert::TryFrom<::std::string::String> for NetworkApiVersion {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfaceAuxiliaryMode {
@@ -10462,9 +10285,7 @@ impl ::std::fmt::Display for NetworkInterfaceAuxiliaryMode {
 }
 impl ::std::str::FromStr for NetworkInterfaceAuxiliaryMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "acceleratedconnections" => Ok(Self::AcceleratedConnections),
@@ -10475,9 +10296,7 @@ impl ::std::str::FromStr for NetworkInterfaceAuxiliaryMode {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfaceAuxiliaryMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10551,7 +10370,7 @@ impl ::std::convert::TryFrom<::std::string::String> for NetworkInterfaceAuxiliar
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfaceAuxiliarySku {
@@ -10579,9 +10398,7 @@ impl ::std::fmt::Display for NetworkInterfaceAuxiliarySku {
 }
 impl ::std::str::FromStr for NetworkInterfaceAuxiliarySku {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "a1" => Ok(Self::A1),
@@ -10594,9 +10411,7 @@ impl ::std::str::FromStr for NetworkInterfaceAuxiliarySku {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfaceAuxiliarySku {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10704,7 +10519,8 @@ pub struct NetworkInterfaceReferenceProperties {
     pub primary: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&NetworkInterfaceReferenceProperties>
-for NetworkInterfaceReferenceProperties {
+    for NetworkInterfaceReferenceProperties
+{
     fn from(value: &NetworkInterfaceReferenceProperties) -> Self {
         value.clone()
     }
@@ -10766,9 +10582,8 @@ pub struct NetworkProfile {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_interface_configurations: ::std::vec::Vec<
-        VirtualMachineNetworkInterfaceConfiguration,
-    >,
+    pub network_interface_configurations:
+        ::std::vec::Vec<VirtualMachineNetworkInterfaceConfiguration>,
     ///Specifies the list of resource Ids for the network interfaces associated with the virtual machine.
     #[serde(
         rename = "networkInterfaces",
@@ -10833,7 +10648,7 @@ impl ::std::default::Default for NetworkProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperatingSystemStateTypes {
@@ -10855,9 +10670,7 @@ impl ::std::fmt::Display for OperatingSystemStateTypes {
 }
 impl ::std::str::FromStr for OperatingSystemStateTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "generalized" => Ok(Self::Generalized),
             "specialized" => Ok(Self::Specialized),
@@ -10867,9 +10680,7 @@ impl ::std::str::FromStr for OperatingSystemStateTypes {
 }
 impl ::std::convert::TryFrom<&str> for OperatingSystemStateTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10928,7 +10739,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OperatingSystemStateType
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperatingSystemType {
@@ -10950,9 +10761,7 @@ impl ::std::fmt::Display for OperatingSystemType {
 }
 impl ::std::str::FromStr for OperatingSystemType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "windows" => Ok(Self::Windows),
             "linux" => Ok(Self::Linux),
@@ -10962,9 +10771,7 @@ impl ::std::str::FromStr for OperatingSystemType {
 }
 impl ::std::convert::TryFrom<&str> for OperatingSystemType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11013,7 +10820,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OperatingSystemType {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperatingSystemTypes {
@@ -11035,9 +10842,7 @@ impl ::std::fmt::Display for OperatingSystemTypes {
 }
 impl ::std::str::FromStr for OperatingSystemTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "windows" => Ok(Self::Windows),
             "linux" => Ok(Self::Linux),
@@ -11047,9 +10852,7 @@ impl ::std::str::FromStr for OperatingSystemTypes {
 }
 impl ::std::convert::TryFrom<&str> for OperatingSystemTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11229,7 +11032,7 @@ impl ::std::default::Default for Operation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperationActionType {
@@ -11249,9 +11052,7 @@ impl ::std::fmt::Display for OperationActionType {
 }
 impl ::std::str::FromStr for OperationActionType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "internal" => Ok(Self::Internal),
             _ => Err("invalid value".into()),
@@ -11260,9 +11061,7 @@ impl ::std::str::FromStr for OperationActionType {
 }
 impl ::std::convert::TryFrom<&str> for OperationActionType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11452,7 +11251,7 @@ impl ::std::default::Default for OperationListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OperationOrigin {
@@ -11479,9 +11278,7 @@ impl ::std::fmt::Display for OperationOrigin {
 }
 impl ::std::str::FromStr for OperationOrigin {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "system" => Ok(Self::System),
@@ -11492,9 +11289,7 @@ impl ::std::str::FromStr for OperationOrigin {
 }
 impl ::std::convert::TryFrom<&str> for OperationOrigin {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11553,7 +11348,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OperationOrigin {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OrchestrationMode {
@@ -11575,9 +11370,7 @@ impl ::std::fmt::Display for OrchestrationMode {
 }
 impl ::std::str::FromStr for OrchestrationMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "uniform" => Ok(Self::Uniform),
             "flexible" => Ok(Self::Flexible),
@@ -11587,9 +11380,7 @@ impl ::std::str::FromStr for OrchestrationMode {
 }
 impl ::std::convert::TryFrom<&str> for OrchestrationMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11649,7 +11440,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OrchestrationMode {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OrchestrationServiceNames {
@@ -11671,9 +11462,7 @@ impl ::std::fmt::Display for OrchestrationServiceNames {
 }
 impl ::std::str::FromStr for OrchestrationServiceNames {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "automaticrepairs" => Ok(Self::AutomaticRepairs),
             "automaticzonerebalancing" => Ok(Self::AutomaticZoneRebalancing),
@@ -11683,9 +11472,7 @@ impl ::std::str::FromStr for OrchestrationServiceNames {
 }
 impl ::std::convert::TryFrom<&str> for OrchestrationServiceNames {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11746,7 +11533,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OrchestrationServiceName
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OrchestrationServiceOperationStatus {
@@ -11768,9 +11555,7 @@ impl ::std::fmt::Display for OrchestrationServiceOperationStatus {
 }
 impl ::std::str::FromStr for OrchestrationServiceOperationStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "inprogress" => Ok(Self::InProgress),
             "completed" => Ok(Self::Completed),
@@ -11780,14 +11565,11 @@ impl ::std::str::FromStr for OrchestrationServiceOperationStatus {
 }
 impl ::std::convert::TryFrom<&str> for OrchestrationServiceOperationStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for OrchestrationServiceOperationStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for OrchestrationServiceOperationStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -11795,8 +11577,7 @@ for OrchestrationServiceOperationStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for OrchestrationServiceOperationStatus {
+impl ::std::convert::TryFrom<::std::string::String> for OrchestrationServiceOperationStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -11848,7 +11629,7 @@ for OrchestrationServiceOperationStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OrchestrationServiceState {
@@ -11872,9 +11653,7 @@ impl ::std::fmt::Display for OrchestrationServiceState {
 }
 impl ::std::str::FromStr for OrchestrationServiceState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "notrunning" => Ok(Self::NotRunning),
             "running" => Ok(Self::Running),
@@ -11885,9 +11664,7 @@ impl ::std::str::FromStr for OrchestrationServiceState {
 }
 impl ::std::convert::TryFrom<&str> for OrchestrationServiceState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -11946,7 +11723,7 @@ impl ::std::convert::TryFrom<::std::string::String> for OrchestrationServiceStat
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum OrchestrationServiceStateAction {
@@ -11968,9 +11745,7 @@ impl ::std::fmt::Display for OrchestrationServiceStateAction {
 }
 impl ::std::str::FromStr for OrchestrationServiceStateAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "resume" => Ok(Self::Resume),
             "suspend" => Ok(Self::Suspend),
@@ -11980,14 +11755,11 @@ impl ::std::str::FromStr for OrchestrationServiceStateAction {
 }
 impl ::std::convert::TryFrom<&str> for OrchestrationServiceStateAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for OrchestrationServiceStateAction {
+impl ::std::convert::TryFrom<&::std::string::String> for OrchestrationServiceStateAction {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -12032,8 +11804,7 @@ pub struct OrchestrationServiceStateInput {
     #[serde(rename = "serviceName")]
     pub service_name: OrchestrationServiceNames,
 }
-impl ::std::convert::From<&OrchestrationServiceStateInput>
-for OrchestrationServiceStateInput {
+impl ::std::convert::From<&OrchestrationServiceStateInput> for OrchestrationServiceStateInput {
     fn from(value: &OrchestrationServiceStateInput) -> Self {
         value.clone()
     }
@@ -12081,9 +11852,7 @@ pub struct OrchestrationServiceSummary {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub latest_operation_status: ::std::option::Option<
-        OrchestrationServiceOperationStatus,
-    >,
+    pub latest_operation_status: ::std::option::Option<OrchestrationServiceOperationStatus>,
     #[serde(
         rename = "serviceName",
         default,
@@ -12564,7 +12333,7 @@ impl ::std::default::Default for OsProfileProvisioningData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PassNames {
@@ -12584,9 +12353,7 @@ impl ::std::fmt::Display for PassNames {
 }
 impl ::std::str::FromStr for PassNames {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "oobesystem" => Ok(Self::OobeSystem),
             _ => Err("invalid value".into()),
@@ -12595,9 +12362,7 @@ impl ::std::str::FromStr for PassNames {
 }
 impl ::std::convert::TryFrom<&str> for PassNames {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12656,7 +12421,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PassNames {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PatchAssessmentState {
@@ -12678,9 +12443,7 @@ impl ::std::fmt::Display for PatchAssessmentState {
 }
 impl ::std::str::FromStr for PatchAssessmentState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "available" => Ok(Self::Available),
@@ -12690,9 +12453,7 @@ impl ::std::str::FromStr for PatchAssessmentState {
 }
 impl ::std::convert::TryFrom<&str> for PatchAssessmentState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12879,7 +12640,7 @@ impl ::std::default::Default for PatchInstallationDetail {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PatchInstallationState {
@@ -12909,9 +12670,7 @@ impl ::std::fmt::Display for PatchInstallationState {
 }
 impl ::std::str::FromStr for PatchInstallationState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "installed" => Ok(Self::Installed),
@@ -12925,9 +12684,7 @@ impl ::std::str::FromStr for PatchInstallationState {
 }
 impl ::std::convert::TryFrom<&str> for PatchInstallationState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -13001,7 +12758,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PatchInstallationState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PatchOperationStatus {
@@ -13029,9 +12786,7 @@ impl ::std::fmt::Display for PatchOperationStatus {
 }
 impl ::std::str::FromStr for PatchOperationStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "inprogress" => Ok(Self::InProgress),
@@ -13044,9 +12799,7 @@ impl ::std::str::FromStr for PatchOperationStatus {
 }
 impl ::std::convert::TryFrom<&str> for PatchOperationStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -13107,9 +12860,8 @@ pub struct PatchSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub automatic_by_platform_settings: ::std::option::Option<
-        WindowsVmGuestPatchAutomaticByPlatformSettings,
-    >,
+    pub automatic_by_platform_settings:
+        ::std::option::Option<WindowsVmGuestPatchAutomaticByPlatformSettings>,
     ///Enables customers to patch their Azure VMs without requiring a reboot. For enableHotpatching, the 'provisionVMAgent' must be set to true and 'patchMode' must be set to 'AutomaticByPlatform'.
     #[serde(
         rename = "enableHotpatching",
@@ -13372,7 +13124,7 @@ impl ::std::default::Default for PriorityMixPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ProtocolTypes {
@@ -13394,9 +13146,7 @@ impl ::std::fmt::Display for ProtocolTypes {
 }
 impl ::std::str::FromStr for ProtocolTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "http" => Ok(Self::Http),
             "https" => Ok(Self::Https),
@@ -13406,9 +13156,7 @@ impl ::std::str::FromStr for ProtocolTypes {
 }
 impl ::std::convert::TryFrom<&str> for ProtocolTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -13557,7 +13305,8 @@ pub struct ProximityPlacementGroupListResult {
     pub value: ::std::vec::Vec<ProximityPlacementGroup>,
 }
 impl ::std::convert::From<&ProximityPlacementGroupListResult>
-for ProximityPlacementGroupListResult {
+    for ProximityPlacementGroupListResult
+{
     fn from(value: &ProximityPlacementGroupListResult) -> Self {
         value.clone()
     }
@@ -13637,9 +13386,7 @@ pub struct ProximityPlacementGroupProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub proximity_placement_group_type: ::std::option::Option<
-        ProximityPlacementGroupType,
-    >,
+    pub proximity_placement_group_type: ::std::option::Option<ProximityPlacementGroupType>,
     ///A list of references to all virtual machine scale sets in the proximity placement group.
     #[serde(
         rename = "virtualMachineScaleSets",
@@ -13658,7 +13405,8 @@ pub struct ProximityPlacementGroupProperties {
     pub virtual_machines: ::std::vec::Vec<SubResourceWithColocationStatus>,
 }
 impl ::std::convert::From<&ProximityPlacementGroupProperties>
-for ProximityPlacementGroupProperties {
+    for ProximityPlacementGroupProperties
+{
     fn from(value: &ProximityPlacementGroupProperties) -> Self {
         value.clone()
     }
@@ -13707,7 +13455,8 @@ pub struct ProximityPlacementGroupPropertiesIntent {
     pub vm_sizes: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&ProximityPlacementGroupPropertiesIntent>
-for ProximityPlacementGroupPropertiesIntent {
+    for ProximityPlacementGroupPropertiesIntent
+{
     fn from(value: &ProximityPlacementGroupPropertiesIntent) -> Self {
         value.clone()
     }
@@ -13758,7 +13507,7 @@ impl ::std::default::Default for ProximityPlacementGroupPropertiesIntent {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ProximityPlacementGroupType {
@@ -13780,9 +13529,7 @@ impl ::std::fmt::Display for ProximityPlacementGroupType {
 }
 impl ::std::str::FromStr for ProximityPlacementGroupType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard" => Ok(Self::Standard),
             "ultra" => Ok(Self::Ultra),
@@ -13792,9 +13539,7 @@ impl ::std::str::FromStr for ProximityPlacementGroupType {
 }
 impl ::std::convert::TryFrom<&str> for ProximityPlacementGroupType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -13844,8 +13589,7 @@ impl ::std::convert::From<ProximityPlacementGroupUpdate> for UpdateResource {
         value.0
     }
 }
-impl ::std::convert::From<&ProximityPlacementGroupUpdate>
-for ProximityPlacementGroupUpdate {
+impl ::std::convert::From<&ProximityPlacementGroupUpdate> for ProximityPlacementGroupUpdate {
     fn from(value: &ProximityPlacementGroupUpdate) -> Self {
         value.clone()
     }
@@ -14079,7 +13823,7 @@ impl ::std::default::Default for PublicIpAddressSku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressSkuName {
@@ -14101,9 +13845,7 @@ impl ::std::fmt::Display for PublicIpAddressSkuName {
 }
 impl ::std::str::FromStr for PublicIpAddressSkuName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "basic" => Ok(Self::Basic),
             "standard" => Ok(Self::Standard),
@@ -14113,9 +13855,7 @@ impl ::std::str::FromStr for PublicIpAddressSkuName {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressSkuName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14174,7 +13914,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PublicIpAddressSkuName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressSkuTier {
@@ -14196,9 +13936,7 @@ impl ::std::fmt::Display for PublicIpAddressSkuTier {
 }
 impl ::std::str::FromStr for PublicIpAddressSkuTier {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "regional" => Ok(Self::Regional),
             "global" => Ok(Self::Global),
@@ -14208,9 +13946,7 @@ impl ::std::str::FromStr for PublicIpAddressSkuTier {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressSkuTier {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14269,7 +14005,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PublicIpAddressSkuTier {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAllocationMethod {
@@ -14291,9 +14027,7 @@ impl ::std::fmt::Display for PublicIpAllocationMethod {
 }
 impl ::std::str::FromStr for PublicIpAllocationMethod {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "dynamic" => Ok(Self::Dynamic),
             "static" => Ok(Self::Static),
@@ -14303,9 +14037,7 @@ impl ::std::str::FromStr for PublicIpAllocationMethod {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAllocationMethod {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14403,7 +14135,7 @@ impl ::std::convert::From<&PurchasePlan> for PurchasePlan {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RebalanceBehavior {
@@ -14423,9 +14155,7 @@ impl ::std::fmt::Display for RebalanceBehavior {
 }
 impl ::std::str::FromStr for RebalanceBehavior {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "createbeforedelete" => Ok(Self::CreateBeforeDelete),
             _ => Err("invalid value".into()),
@@ -14434,9 +14164,7 @@ impl ::std::str::FromStr for RebalanceBehavior {
 }
 impl ::std::convert::TryFrom<&str> for RebalanceBehavior {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14490,7 +14218,7 @@ impl ::std::convert::TryFrom<::std::string::String> for RebalanceBehavior {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RebalanceStrategy {
@@ -14510,9 +14238,7 @@ impl ::std::fmt::Display for RebalanceStrategy {
 }
 impl ::std::str::FromStr for RebalanceStrategy {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "recreate" => Ok(Self::Recreate),
             _ => Err("invalid value".into()),
@@ -14521,9 +14247,7 @@ impl ::std::str::FromStr for RebalanceStrategy {
 }
 impl ::std::convert::TryFrom<&str> for RebalanceStrategy {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14643,7 +14367,7 @@ impl ::std::default::Default for RecoveryWalkResponse {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RepairAction {
@@ -14667,9 +14391,7 @@ impl ::std::fmt::Display for RepairAction {
 }
 impl ::std::str::FromStr for RepairAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "replace" => Ok(Self::Replace),
             "restart" => Ok(Self::Restart),
@@ -14680,9 +14402,7 @@ impl ::std::str::FromStr for RepairAction {
 }
 impl ::std::convert::TryFrom<&str> for RepairAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14826,7 +14546,7 @@ impl ::std::convert::From<&RequestRateByIntervalInput> for RequestRateByInterval
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ReservationType {
@@ -14848,9 +14568,7 @@ impl ::std::fmt::Display for ReservationType {
 }
 impl ::std::str::FromStr for ReservationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "targeted" => Ok(Self::Targeted),
             "block" => Ok(Self::Block),
@@ -14860,9 +14578,7 @@ impl ::std::str::FromStr for ReservationType {
 }
 impl ::std::convert::TryFrom<&str> for ReservationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -14915,9 +14631,7 @@ pub struct ResiliencyPolicy {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub automatic_zone_rebalancing_policy: ::std::option::Option<
-        AutomaticZoneRebalancingPolicy,
-    >,
+    pub automatic_zone_rebalancing_policy: ::std::option::Option<AutomaticZoneRebalancingPolicy>,
     #[serde(
         rename = "resilientVMCreationPolicy",
         default,
@@ -15082,7 +14796,7 @@ impl ::std::default::Default for ResilientVmDeletionPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ResilientVmDeletionStatus {
@@ -15108,9 +14822,7 @@ impl ::std::fmt::Display for ResilientVmDeletionStatus {
 }
 impl ::std::str::FromStr for ResilientVmDeletionStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -15122,9 +14834,7 @@ impl ::std::str::FromStr for ResilientVmDeletionStatus {
 }
 impl ::std::convert::TryFrom<&str> for ResilientVmDeletionStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -15267,7 +14977,7 @@ impl ::std::default::Default for Resource {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ResourceIdOptionsForGetCapacityReservationGroups {
@@ -15291,9 +15001,7 @@ impl ::std::fmt::Display for ResourceIdOptionsForGetCapacityReservationGroups {
 }
 impl ::std::str::FromStr for ResourceIdOptionsForGetCapacityReservationGroups {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "createdinsubscription" => Ok(Self::CreatedInSubscription),
             "sharedwithsubscription" => Ok(Self::SharedWithSubscription),
@@ -15304,14 +15012,13 @@ impl ::std::str::FromStr for ResourceIdOptionsForGetCapacityReservationGroups {
 }
 impl ::std::convert::TryFrom<&str> for ResourceIdOptionsForGetCapacityReservationGroups {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ResourceIdOptionsForGetCapacityReservationGroups {
+    for ResourceIdOptionsForGetCapacityReservationGroups
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -15320,7 +15027,8 @@ for ResourceIdOptionsForGetCapacityReservationGroups {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ResourceIdOptionsForGetCapacityReservationGroups {
+    for ResourceIdOptionsForGetCapacityReservationGroups
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -15359,7 +15067,7 @@ for ResourceIdOptionsForGetCapacityReservationGroups {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ResourceIdentityType {
@@ -15379,18 +15087,14 @@ impl ::std::fmt::Display for ResourceIdentityType {
         match *self {
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned, UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned, UserAssigned"),
             Self::None => f.write_str("None"),
         }
     }
 }
 impl ::std::str::FromStr for ResourceIdentityType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "systemassigned" => Ok(Self::SystemAssigned),
             "userassigned" => Ok(Self::UserAssigned),
@@ -15402,9 +15106,7 @@ impl ::std::str::FromStr for ResourceIdentityType {
 }
 impl ::std::convert::TryFrom<&str> for ResourceIdentityType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -15544,8 +15246,7 @@ pub struct ResourceWithOptionalLocation {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ResourceWithOptionalLocation>
-for ResourceWithOptionalLocation {
+impl ::std::convert::From<&ResourceWithOptionalLocation> for ResourceWithOptionalLocation {
     fn from(value: &ResourceWithOptionalLocation) -> Self {
         value.clone()
     }
@@ -15742,7 +15443,7 @@ impl ::std::convert::From<&RestorePointCollection> for RestorePointCollection {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RestorePointCollectionExpandOptions {
@@ -15763,9 +15464,7 @@ impl ::std::fmt::Display for RestorePointCollectionExpandOptions {
 }
 impl ::std::str::FromStr for RestorePointCollectionExpandOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "restorepoints" => Ok(Self::RestorePoints),
             _ => Err("invalid value".into()),
@@ -15774,14 +15473,11 @@ impl ::std::str::FromStr for RestorePointCollectionExpandOptions {
 }
 impl ::std::convert::TryFrom<&str> for RestorePointCollectionExpandOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for RestorePointCollectionExpandOptions {
+impl ::std::convert::TryFrom<&::std::string::String> for RestorePointCollectionExpandOptions {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -15789,8 +15485,7 @@ for RestorePointCollectionExpandOptions {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for RestorePointCollectionExpandOptions {
+impl ::std::convert::TryFrom<::std::string::String> for RestorePointCollectionExpandOptions {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -15839,8 +15534,7 @@ pub struct RestorePointCollectionListResult {
     ///Gets the list of restore point collections.
     pub value: ::std::vec::Vec<RestorePointCollection>,
 }
-impl ::std::convert::From<&RestorePointCollectionListResult>
-for RestorePointCollectionListResult {
+impl ::std::convert::From<&RestorePointCollectionListResult> for RestorePointCollectionListResult {
     fn from(value: &RestorePointCollectionListResult) -> Self {
         value.clone()
     }
@@ -15924,8 +15618,7 @@ pub struct RestorePointCollectionProperties {
     )]
     pub source: ::std::option::Option<RestorePointCollectionSourceProperties>,
 }
-impl ::std::convert::From<&RestorePointCollectionProperties>
-for RestorePointCollectionProperties {
+impl ::std::convert::From<&RestorePointCollectionProperties> for RestorePointCollectionProperties {
     fn from(value: &RestorePointCollectionProperties) -> Self {
         value.clone()
     }
@@ -15981,7 +15674,8 @@ pub struct RestorePointCollectionSourceProperties {
     pub location: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&RestorePointCollectionSourceProperties>
-for RestorePointCollectionSourceProperties {
+    for RestorePointCollectionSourceProperties
+{
     fn from(value: &RestorePointCollectionSourceProperties) -> Self {
         value.clone()
     }
@@ -16031,8 +15725,7 @@ pub struct RestorePointCollectionUpdate {
     )]
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
-impl ::std::convert::From<&RestorePointCollectionUpdate>
-for RestorePointCollectionUpdate {
+impl ::std::convert::From<&RestorePointCollectionUpdate> for RestorePointCollectionUpdate {
     fn from(value: &RestorePointCollectionUpdate) -> Self {
         value.clone()
     }
@@ -16141,7 +15834,7 @@ impl ::std::default::Default for RestorePointEncryption {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RestorePointEncryptionType {
@@ -16157,12 +15850,8 @@ impl ::std::convert::From<&Self> for RestorePointEncryptionType {
 impl ::std::fmt::Display for RestorePointEncryptionType {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::EncryptionAtRestWithPlatformKey => {
-                f.write_str("EncryptionAtRestWithPlatformKey")
-            }
-            Self::EncryptionAtRestWithCustomerKey => {
-                f.write_str("EncryptionAtRestWithCustomerKey")
-            }
+            Self::EncryptionAtRestWithPlatformKey => f.write_str("EncryptionAtRestWithPlatformKey"),
+            Self::EncryptionAtRestWithCustomerKey => f.write_str("EncryptionAtRestWithCustomerKey"),
             Self::EncryptionAtRestWithPlatformAndCustomerKeys => {
                 f.write_str("EncryptionAtRestWithPlatformAndCustomerKeys")
             }
@@ -16171,16 +15860,10 @@ impl ::std::fmt::Display for RestorePointEncryptionType {
 }
 impl ::std::str::FromStr for RestorePointEncryptionType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
-            "encryptionatrestwithplatformkey" => {
-                Ok(Self::EncryptionAtRestWithPlatformKey)
-            }
-            "encryptionatrestwithcustomerkey" => {
-                Ok(Self::EncryptionAtRestWithCustomerKey)
-            }
+            "encryptionatrestwithplatformkey" => Ok(Self::EncryptionAtRestWithPlatformKey),
+            "encryptionatrestwithcustomerkey" => Ok(Self::EncryptionAtRestWithCustomerKey),
             "encryptionatrestwithplatformandcustomerkeys" => {
                 Ok(Self::EncryptionAtRestWithPlatformAndCustomerKeys)
             }
@@ -16190,9 +15873,7 @@ impl ::std::str::FromStr for RestorePointEncryptionType {
 }
 impl ::std::convert::TryFrom<&str> for RestorePointEncryptionType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -16245,7 +15926,7 @@ impl ::std::convert::TryFrom<::std::string::String> for RestorePointEncryptionTy
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RestorePointExpandOptions {
@@ -16266,9 +15947,7 @@ impl ::std::fmt::Display for RestorePointExpandOptions {
 }
 impl ::std::str::FromStr for RestorePointExpandOptions {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "instanceview" => Ok(Self::InstanceView),
             _ => Err("invalid value".into()),
@@ -16277,9 +15956,7 @@ impl ::std::str::FromStr for RestorePointExpandOptions {
 }
 impl ::std::convert::TryFrom<&str> for RestorePointExpandOptions {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -16731,8 +16408,7 @@ pub struct RestorePointSourceVmDataDisk {
     )]
     pub write_accelerator_enabled: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&RestorePointSourceVmDataDisk>
-for RestorePointSourceVmDataDisk {
+impl ::std::convert::From<&RestorePointSourceVmDataDisk> for RestorePointSourceVmDataDisk {
     fn from(value: &RestorePointSourceVmDataDisk) -> Self {
         value.clone()
     }
@@ -16805,7 +16481,8 @@ pub struct RestorePointSourceVmStorageProfile {
     pub os_disk: ::std::option::Option<RestorePointSourceVmosDisk>,
 }
 impl ::std::convert::From<&RestorePointSourceVmStorageProfile>
-for RestorePointSourceVmStorageProfile {
+    for RestorePointSourceVmStorageProfile
+{
     fn from(value: &RestorePointSourceVmStorageProfile) -> Self {
         value.clone()
     }
@@ -16985,7 +16662,8 @@ pub struct RetrieveBootDiagnosticsDataResult {
     pub serial_console_log_blob_uri: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&RetrieveBootDiagnosticsDataResult>
-for RetrieveBootDiagnosticsDataResult {
+    for RetrieveBootDiagnosticsDataResult
+{
     fn from(value: &RetrieveBootDiagnosticsDataResult) -> Self {
         value.clone()
     }
@@ -17095,7 +16773,7 @@ impl ::std::default::Default for RollbackStatusInfo {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RollingUpgradeActionType {
@@ -17117,9 +16795,7 @@ impl ::std::fmt::Display for RollingUpgradeActionType {
 }
 impl ::std::str::FromStr for RollingUpgradeActionType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "start" => Ok(Self::Start),
             "cancel" => Ok(Self::Cancel),
@@ -17129,9 +16805,7 @@ impl ::std::str::FromStr for RollingUpgradeActionType {
 }
 impl ::std::convert::TryFrom<&str> for RollingUpgradeActionType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -17484,7 +17158,7 @@ impl ::std::default::Default for RollingUpgradeRunningStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RollingUpgradeStatusCode {
@@ -17510,9 +17184,7 @@ impl ::std::fmt::Display for RollingUpgradeStatusCode {
 }
 impl ::std::str::FromStr for RollingUpgradeStatusCode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "rollingforward" => Ok(Self::RollingForward),
             "cancelled" => Ok(Self::Cancelled),
@@ -17524,9 +17196,7 @@ impl ::std::str::FromStr for RollingUpgradeStatusCode {
 }
 impl ::std::convert::TryFrom<&str> for RollingUpgradeStatusCode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -17673,7 +17343,8 @@ pub struct RollingUpgradeStatusInfoProperties {
     pub running_status: ::std::option::Option<RollingUpgradeRunningStatus>,
 }
 impl ::std::convert::From<&RollingUpgradeStatusInfoProperties>
-for RollingUpgradeStatusInfoProperties {
+    for RollingUpgradeStatusInfoProperties
+{
     fn from(value: &RollingUpgradeStatusInfoProperties) -> Self {
         value.clone()
     }
@@ -18068,8 +17739,7 @@ pub struct RunCommandParameterDefinition {
     #[serde(rename = "type")]
     pub type_: ::std::string::String,
 }
-impl ::std::convert::From<&RunCommandParameterDefinition>
-for RunCommandParameterDefinition {
+impl ::std::convert::From<&RunCommandParameterDefinition> for RunCommandParameterDefinition {
     fn from(value: &RunCommandParameterDefinition) -> Self {
         value.clone()
     }
@@ -18111,7 +17781,9 @@ impl ::std::convert::From<&RunCommandResult> for RunCommandResult {
 }
 impl ::std::default::Default for RunCommandResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///Describes a scale-in policy for a virtual machine scale set.
@@ -18259,7 +17931,8 @@ pub struct ScheduledEventsAdditionalPublishingTargets {
     pub event_grid_and_resource_graph: ::std::option::Option<EventGridAndResourceGraph>,
 }
 impl ::std::convert::From<&ScheduledEventsAdditionalPublishingTargets>
-for ScheduledEventsAdditionalPublishingTargets {
+    for ScheduledEventsAdditionalPublishingTargets
+{
     fn from(value: &ScheduledEventsAdditionalPublishingTargets) -> Self {
         value.clone()
     }
@@ -18311,9 +17984,8 @@ pub struct ScheduledEventsPolicy {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub scheduled_events_additional_publishing_targets: ::std::option::Option<
-        ScheduledEventsAdditionalPublishingTargets,
-    >,
+    pub scheduled_events_additional_publishing_targets:
+        ::std::option::Option<ScheduledEventsAdditionalPublishingTargets>,
     #[serde(
         rename = "userInitiatedReboot",
         default,
@@ -18377,9 +18049,7 @@ pub struct ScheduledEventsProfile {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub terminate_notification_profile: ::std::option::Option<
-        TerminateNotificationProfile,
-    >,
+    pub terminate_notification_profile: ::std::option::Option<TerminateNotificationProfile>,
 }
 impl ::std::convert::From<&ScheduledEventsProfile> for ScheduledEventsProfile {
     fn from(value: &ScheduledEventsProfile) -> Self {
@@ -18435,7 +18105,7 @@ impl ::std::default::Default for ScheduledEventsProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ScriptShellTypes {
@@ -18457,9 +18127,7 @@ impl ::std::fmt::Display for ScriptShellTypes {
 }
 impl ::std::str::FromStr for ScriptShellTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
             "powershell7" => Ok(Self::Powershell7),
@@ -18469,9 +18137,7 @@ impl ::std::str::FromStr for ScriptShellTypes {
 }
 impl ::std::convert::TryFrom<&str> for ScriptShellTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -18535,7 +18201,7 @@ impl ::std::convert::TryFrom<::std::string::String> for ScriptShellTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SecurityEncryptionTypes {
@@ -18562,9 +18228,7 @@ impl ::std::fmt::Display for SecurityEncryptionTypes {
 }
 impl ::std::str::FromStr for SecurityEncryptionTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "vmgueststateonly" => Ok(Self::VmGuestStateOnly),
             "diskwithvmgueststate" => Ok(Self::DiskWithVmGuestState),
@@ -18575,9 +18239,7 @@ impl ::std::str::FromStr for SecurityEncryptionTypes {
 }
 impl ::std::convert::TryFrom<&str> for SecurityEncryptionTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -18708,8 +18370,7 @@ pub struct SecurityPostureReferenceUpdate {
     )]
     pub is_overridable: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&SecurityPostureReferenceUpdate>
-for SecurityPostureReferenceUpdate {
+impl ::std::convert::From<&SecurityPostureReferenceUpdate> for SecurityPostureReferenceUpdate {
     fn from(value: &SecurityPostureReferenceUpdate) -> Self {
         value.clone()
     }
@@ -18846,7 +18507,7 @@ impl ::std::default::Default for SecurityProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SecurityTypes {
@@ -18869,9 +18530,7 @@ impl ::std::fmt::Display for SecurityTypes {
 }
 impl ::std::str::FromStr for SecurityTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "trustedlaunch" => Ok(Self::TrustedLaunch),
             "confidentialvm" => Ok(Self::ConfidentialVm),
@@ -18881,9 +18540,7 @@ impl ::std::str::FromStr for SecurityTypes {
 }
 impl ::std::convert::TryFrom<&str> for SecurityTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -18937,7 +18594,9 @@ impl ::std::convert::From<&ServiceArtifactReference> for ServiceArtifactReferenc
 }
 impl ::std::default::Default for ServiceArtifactReference {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///Specifies the name of the setting to which the content applies. Possible values are: FirstLogonCommands and AutoLogon.
@@ -18969,7 +18628,7 @@ impl ::std::default::Default for ServiceArtifactReference {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SettingNames {
@@ -18991,9 +18650,7 @@ impl ::std::fmt::Display for SettingNames {
 }
 impl ::std::str::FromStr for SettingNames {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "autologon" => Ok(Self::AutoLogon),
             "firstlogoncommands" => Ok(Self::FirstLogonCommands),
@@ -19003,9 +18660,7 @@ impl ::std::str::FromStr for SettingNames {
 }
 impl ::std::convert::TryFrom<&str> for SettingNames {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -19257,7 +18912,7 @@ impl ::std::default::Default for SkuProfileVmSize {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SnapshotAccessState {
@@ -19285,9 +18940,7 @@ impl ::std::fmt::Display for SnapshotAccessState {
 }
 impl ::std::str::FromStr for SnapshotAccessState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "pending" => Ok(Self::Pending),
@@ -19300,9 +18953,7 @@ impl ::std::str::FromStr for SnapshotAccessState {
 }
 impl ::std::convert::TryFrom<&str> for SnapshotAccessState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -19459,7 +19110,7 @@ impl ::std::default::Default for SshConfiguration {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SshEncryptionTypes {
@@ -19482,9 +19133,7 @@ impl ::std::fmt::Display for SshEncryptionTypes {
 }
 impl ::std::str::FromStr for SshEncryptionTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "rsa" => Ok(Self::Rsa),
             "ed25519" => Ok(Self::Ed25519),
@@ -19494,9 +19143,7 @@ impl ::std::str::FromStr for SshEncryptionTypes {
 }
 impl ::std::convert::TryFrom<&str> for SshEncryptionTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -19543,7 +19190,8 @@ pub struct SshGenerateKeyPairInputParameters {
     pub encryption_type: ::std::option::Option<SshEncryptionTypes>,
 }
 impl ::std::convert::From<&SshGenerateKeyPairInputParameters>
-for SshGenerateKeyPairInputParameters {
+    for SshGenerateKeyPairInputParameters
+{
     fn from(value: &SshGenerateKeyPairInputParameters) -> Self {
         value.clone()
     }
@@ -19649,7 +19297,8 @@ pub struct SshPublicKeyGenerateKeyPairResult {
     pub public_key: ::std::string::String,
 }
 impl ::std::convert::From<&SshPublicKeyGenerateKeyPairResult>
-for SshPublicKeyGenerateKeyPairResult {
+    for SshPublicKeyGenerateKeyPairResult
+{
     fn from(value: &SshPublicKeyGenerateKeyPairResult) -> Self {
         value.clone()
     }
@@ -19755,8 +19404,7 @@ pub struct SshPublicKeyResourceProperties {
     )]
     pub public_key: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&SshPublicKeyResourceProperties>
-for SshPublicKeyResourceProperties {
+impl ::std::convert::From<&SshPublicKeyResourceProperties> for SshPublicKeyResourceProperties {
     fn from(value: &SshPublicKeyResourceProperties) -> Self {
         value.clone()
     }
@@ -19859,8 +19507,7 @@ pub struct SshPublicKeysGroupListResult {
     ///The list of SSH public keys.
     pub value: ::std::vec::Vec<SshPublicKeyResource>,
 }
-impl ::std::convert::From<&SshPublicKeysGroupListResult>
-for SshPublicKeysGroupListResult {
+impl ::std::convert::From<&SshPublicKeysGroupListResult> for SshPublicKeysGroupListResult {
     fn from(value: &SshPublicKeysGroupListResult) -> Self {
         value.clone()
     }
@@ -19895,7 +19542,7 @@ for SshPublicKeysGroupListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum StatusLevelTypes {
@@ -19919,9 +19566,7 @@ impl ::std::fmt::Display for StatusLevelTypes {
 }
 impl ::std::str::FromStr for StatusLevelTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "info" => Ok(Self::Info),
             "warning" => Ok(Self::Warning),
@@ -19932,9 +19577,7 @@ impl ::std::str::FromStr for StatusLevelTypes {
 }
 impl ::std::convert::TryFrom<&str> for StatusLevelTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -20018,7 +19661,7 @@ impl ::std::convert::TryFrom<::std::string::String> for StatusLevelTypes {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum StorageAccountTypes {
@@ -20057,9 +19700,7 @@ impl ::std::fmt::Display for StorageAccountTypes {
 }
 impl ::std::str::FromStr for StorageAccountTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard_lrs" => Ok(Self::StandardLrs),
             "premium_lrs" => Ok(Self::PremiumLrs),
@@ -20074,9 +19715,7 @@ impl ::std::str::FromStr for StorageAccountTypes {
 }
 impl ::std::convert::TryFrom<&str> for StorageAccountTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -20221,7 +19860,9 @@ impl ::std::convert::From<&SubResource> for SubResource {
 }
 impl ::std::default::Default for SubResource {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///`SubResourceReadOnly`
@@ -20258,7 +19899,9 @@ impl ::std::convert::From<&SubResourceReadOnly> for SubResourceReadOnly {
 }
 impl ::std::default::Default for SubResourceReadOnly {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///`SubResourceWithColocationStatus`
@@ -20298,8 +19941,7 @@ pub struct SubResourceWithColocationStatus {
     )]
     pub id: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&SubResourceWithColocationStatus>
-for SubResourceWithColocationStatus {
+impl ::std::convert::From<&SubResourceWithColocationStatus> for SubResourceWithColocationStatus {
     fn from(value: &SubResourceWithColocationStatus) -> Self {
         value.clone()
     }
@@ -20469,7 +20111,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -20495,9 +20137,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -20509,9 +20149,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -20562,7 +20200,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -20588,9 +20226,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -20602,9 +20238,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -20662,8 +20296,7 @@ pub struct TerminateNotificationProfile {
     )]
     pub not_before_timeout: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&TerminateNotificationProfile>
-for TerminateNotificationProfile {
+impl ::std::convert::From<&TerminateNotificationProfile> for TerminateNotificationProfile {
     fn from(value: &TerminateNotificationProfile) -> Self {
         value.clone()
     }
@@ -20894,7 +20527,9 @@ impl ::std::convert::From<&UpdateResource> for UpdateResource {
 }
 impl ::std::default::Default for UpdateResource {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }
 ///Specifies the mode of an upgrade to virtual machines in the scale set.<br /><br /> Possible values are:<br /><br /> **Manual** - You  control the application of updates to virtual machines in the scale set. You do this by using the manualUpgrade action.<br /><br /> **Automatic** - All virtual machines in the scale set are  automatically updated at the same time.
@@ -20927,7 +20562,7 @@ impl ::std::default::Default for UpdateResource {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum UpgradeMode {
@@ -20951,9 +20586,7 @@ impl ::std::fmt::Display for UpgradeMode {
 }
 impl ::std::str::FromStr for UpgradeMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "automatic" => Ok(Self::Automatic),
             "manual" => Ok(Self::Manual),
@@ -20964,9 +20597,7 @@ impl ::std::str::FromStr for UpgradeMode {
 }
 impl ::std::convert::TryFrom<&str> for UpgradeMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -21026,9 +20657,7 @@ pub struct UpgradeOperationHistoricalStatusInfo {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        UpgradeOperationHistoricalStatusInfoProperties,
-    >,
+    pub properties: ::std::option::Option<UpgradeOperationHistoricalStatusInfoProperties>,
     ///Resource type
     #[serde(
         rename = "type",
@@ -21039,7 +20668,8 @@ pub struct UpgradeOperationHistoricalStatusInfo {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&UpgradeOperationHistoricalStatusInfo>
-for UpgradeOperationHistoricalStatusInfo {
+    for UpgradeOperationHistoricalStatusInfo
+{
     fn from(value: &UpgradeOperationHistoricalStatusInfo) -> Self {
         value.clone()
     }
@@ -21128,7 +20758,8 @@ pub struct UpgradeOperationHistoricalStatusInfoProperties {
     pub target_image_reference: ::std::option::Option<ImageReference>,
 }
 impl ::std::convert::From<&UpgradeOperationHistoricalStatusInfoProperties>
-for UpgradeOperationHistoricalStatusInfoProperties {
+    for UpgradeOperationHistoricalStatusInfoProperties
+{
     fn from(value: &UpgradeOperationHistoricalStatusInfoProperties) -> Self {
         value.clone()
     }
@@ -21196,8 +20827,7 @@ pub struct UpgradeOperationHistoryStatus {
     )]
     pub start_time: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&UpgradeOperationHistoryStatus>
-for UpgradeOperationHistoryStatus {
+impl ::std::convert::From<&UpgradeOperationHistoryStatus> for UpgradeOperationHistoryStatus {
     fn from(value: &UpgradeOperationHistoryStatus) -> Self {
         value.clone()
     }
@@ -21241,7 +20871,7 @@ impl ::std::default::Default for UpgradeOperationHistoryStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum UpgradeOperationInvoker {
@@ -21265,9 +20895,7 @@ impl ::std::fmt::Display for UpgradeOperationInvoker {
 }
 impl ::std::str::FromStr for UpgradeOperationInvoker {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "user" => Ok(Self::User),
@@ -21278,9 +20906,7 @@ impl ::std::str::FromStr for UpgradeOperationInvoker {
 }
 impl ::std::convert::TryFrom<&str> for UpgradeOperationInvoker {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -21390,7 +21016,7 @@ impl ::std::default::Default for UpgradePolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum UpgradeState {
@@ -21416,9 +21042,7 @@ impl ::std::fmt::Display for UpgradeState {
 }
 impl ::std::str::FromStr for UpgradeState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "rollingforward" => Ok(Self::RollingForward),
             "cancelled" => Ok(Self::Cancelled),
@@ -21430,9 +21054,7 @@ impl ::std::str::FromStr for UpgradeState {
 }
 impl ::std::convert::TryFrom<&str> for UpgradeState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -21589,7 +21211,7 @@ impl ::std::default::Default for UsageName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum UsageUnit {
@@ -21609,9 +21231,7 @@ impl ::std::fmt::Display for UsageUnit {
 }
 impl ::std::str::FromStr for UsageUnit {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "count" => Ok(Self::Count),
             _ => Err("invalid value".into()),
@@ -21620,9 +21240,7 @@ impl ::std::str::FromStr for UsageUnit {
 }
 impl ::std::convert::TryFrom<&str> for UsageUnit {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -21920,7 +21538,9 @@ impl ::std::convert::From<&VirtualHardDisk> for VirtualHardDisk {
 }
 impl ::std::default::Default for VirtualHardDisk {
     fn default() -> Self {
-        Self { uri: Default::default() }
+        Self {
+            uri: Default::default(),
+        }
     }
 }
 ///Describes a Virtual Machine.
@@ -22146,8 +21766,7 @@ pub struct VirtualMachineAgentInstanceView {
     )]
     pub vm_agent_version: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineAgentInstanceView>
-for VirtualMachineAgentInstanceView {
+impl ::std::convert::From<&VirtualMachineAgentInstanceView> for VirtualMachineAgentInstanceView {
     fn from(value: &VirtualMachineAgentInstanceView) -> Self {
         value.clone()
     }
@@ -22282,7 +21901,8 @@ pub struct VirtualMachineAssessPatchesResult {
     pub status: ::std::option::Option<PatchOperationStatus>,
 }
 impl ::std::convert::From<&VirtualMachineAssessPatchesResult>
-for VirtualMachineAssessPatchesResult {
+    for VirtualMachineAssessPatchesResult
+{
     fn from(value: &VirtualMachineAssessPatchesResult) -> Self {
         value.clone()
     }
@@ -22343,8 +21963,7 @@ pub struct VirtualMachineCaptureParameters {
     #[serde(rename = "vhdPrefix")]
     pub vhd_prefix: ::std::string::String,
 }
-impl ::std::convert::From<&VirtualMachineCaptureParameters>
-for VirtualMachineCaptureParameters {
+impl ::std::convert::From<&VirtualMachineCaptureParameters> for VirtualMachineCaptureParameters {
     fn from(value: &VirtualMachineCaptureParameters) -> Self {
         value.clone()
     }
@@ -22483,7 +22102,7 @@ impl ::std::default::Default for VirtualMachineCaptureResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VirtualMachineEvictionPolicyTypes {
@@ -22505,9 +22124,7 @@ impl ::std::fmt::Display for VirtualMachineEvictionPolicyTypes {
 }
 impl ::std::str::FromStr for VirtualMachineEvictionPolicyTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "deallocate" => Ok(Self::Deallocate),
             "delete" => Ok(Self::Delete),
@@ -22517,14 +22134,11 @@ impl ::std::str::FromStr for VirtualMachineEvictionPolicyTypes {
 }
 impl ::std::convert::TryFrom<&str> for VirtualMachineEvictionPolicyTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for VirtualMachineEvictionPolicyTypes {
+impl ::std::convert::TryFrom<&::std::string::String> for VirtualMachineEvictionPolicyTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -22532,8 +22146,7 @@ for VirtualMachineEvictionPolicyTypes {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for VirtualMachineEvictionPolicyTypes {
+impl ::std::convert::TryFrom<::std::string::String> for VirtualMachineEvictionPolicyTypes {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -22664,7 +22277,8 @@ pub struct VirtualMachineExtensionHandlerInstanceView {
     pub type_handler_version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionHandlerInstanceView>
-for VirtualMachineExtensionHandlerInstanceView {
+    for VirtualMachineExtensionHandlerInstanceView
+{
     fn from(value: &VirtualMachineExtensionHandlerInstanceView) -> Self {
         value.clone()
     }
@@ -22746,8 +22360,7 @@ pub struct VirtualMachineExtensionImage {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineExtensionImage>
-for VirtualMachineExtensionImage {
+impl ::std::convert::From<&VirtualMachineExtensionImage> for VirtualMachineExtensionImage {
     fn from(value: &VirtualMachineExtensionImage) -> Self {
         value.clone()
     }
@@ -22819,7 +22432,8 @@ pub struct VirtualMachineExtensionImageProperties {
     pub vm_scale_set_enabled: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionImageProperties>
-for VirtualMachineExtensionImageProperties {
+    for VirtualMachineExtensionImageProperties
+{
     fn from(value: &VirtualMachineExtensionImageProperties) -> Self {
         value.clone()
     }
@@ -22906,7 +22520,8 @@ pub struct VirtualMachineExtensionInstanceView {
     pub type_handler_version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionInstanceView>
-for VirtualMachineExtensionInstanceView {
+    for VirtualMachineExtensionInstanceView
+{
     fn from(value: &VirtualMachineExtensionInstanceView) -> Self {
         value.clone()
     }
@@ -23034,9 +22649,7 @@ pub struct VirtualMachineExtensionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub protected_settings_from_key_vault: ::std::option::Option<
-        KeyVaultSecretReference,
-    >,
+    pub protected_settings_from_key_vault: ::std::option::Option<KeyVaultSecretReference>,
     ///Collection of extension names after which this extension needs to be provisioned.
     #[serde(
         rename = "provisionAfterExtensions",
@@ -23093,7 +22706,8 @@ pub struct VirtualMachineExtensionProperties {
     pub type_handler_version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionProperties>
-for VirtualMachineExtensionProperties {
+    for VirtualMachineExtensionProperties
+{
     fn from(value: &VirtualMachineExtensionProperties) -> Self {
         value.clone()
     }
@@ -23154,8 +22768,7 @@ pub struct VirtualMachineExtensionUpdate {
     )]
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineExtensionUpdate>
-for VirtualMachineExtensionUpdate {
+impl ::std::convert::From<&VirtualMachineExtensionUpdate> for VirtualMachineExtensionUpdate {
     fn from(value: &VirtualMachineExtensionUpdate) -> Self {
         value.clone()
     }
@@ -23258,9 +22871,7 @@ pub struct VirtualMachineExtensionUpdateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub protected_settings_from_key_vault: ::std::option::Option<
-        KeyVaultSecretReference,
-    >,
+    pub protected_settings_from_key_vault: ::std::option::Option<KeyVaultSecretReference>,
     ///The name of the extension handler publisher.
     #[serde(
         default,
@@ -23301,7 +22912,8 @@ pub struct VirtualMachineExtensionUpdateProperties {
     pub type_handler_version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionUpdateProperties>
-for VirtualMachineExtensionUpdateProperties {
+    for VirtualMachineExtensionUpdateProperties
+{
     fn from(value: &VirtualMachineExtensionUpdateProperties) -> Self {
         value.clone()
     }
@@ -23353,14 +22965,17 @@ pub struct VirtualMachineExtensionsListResult {
     pub value: ::std::vec::Vec<VirtualMachineExtension>,
 }
 impl ::std::convert::From<&VirtualMachineExtensionsListResult>
-for VirtualMachineExtensionsListResult {
+    for VirtualMachineExtensionsListResult
+{
     fn from(value: &VirtualMachineExtensionsListResult) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for VirtualMachineExtensionsListResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///The health status of the VM.
@@ -23395,7 +23010,9 @@ impl ::std::convert::From<&VirtualMachineHealthStatus> for VirtualMachineHealthS
 }
 impl ::std::default::Default for VirtualMachineHealthStatus {
     fn default() -> Self {
-        Self { status: Default::default() }
+        Self {
+            status: Default::default(),
+        }
     }
 }
 ///Identity for the virtual machine.
@@ -23463,10 +23080,8 @@ pub struct VirtualMachineIdentity {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub user_assigned_identities: ::std::collections::HashMap<
-        ::std::string::String,
-        UserAssignedIdentitiesValue,
-    >,
+    pub user_assigned_identities:
+        ::std::collections::HashMap<::std::string::String, UserAssignedIdentitiesValue>,
 }
 impl ::std::convert::From<&VirtualMachineIdentity> for VirtualMachineIdentity {
     fn from(value: &VirtualMachineIdentity) -> Self {
@@ -23661,9 +23276,7 @@ pub struct VirtualMachineImageProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub automatic_os_upgrade_properties: ::std::option::Option<
-        AutomaticOsUpgradeProperties,
-    >,
+    pub automatic_os_upgrade_properties: ::std::option::Option<AutomaticOsUpgradeProperties>,
     ///The list of data disk images information.
     #[serde(
         rename = "dataDiskImages",
@@ -23712,8 +23325,7 @@ pub struct VirtualMachineImageProperties {
     )]
     pub plan: ::std::option::Option<PurchasePlan>,
 }
-impl ::std::convert::From<&VirtualMachineImageProperties>
-for VirtualMachineImageProperties {
+impl ::std::convert::From<&VirtualMachineImageProperties> for VirtualMachineImageProperties {
     fn from(value: &VirtualMachineImageProperties) -> Self {
         value.clone()
     }
@@ -23864,7 +23476,8 @@ pub struct VirtualMachineInstallPatchesParameters {
     pub windows_parameters: ::std::option::Option<WindowsParameters>,
 }
 impl ::std::convert::From<&VirtualMachineInstallPatchesParameters>
-for VirtualMachineInstallPatchesParameters {
+    for VirtualMachineInstallPatchesParameters
+{
     fn from(value: &VirtualMachineInstallPatchesParameters) -> Self {
         value.clone()
     }
@@ -24041,7 +23654,8 @@ pub struct VirtualMachineInstallPatchesResult {
     pub status: ::std::option::Option<PatchOperationStatus>,
 }
 impl ::std::convert::From<&VirtualMachineInstallPatchesResult>
-for VirtualMachineInstallPatchesResult {
+    for VirtualMachineInstallPatchesResult
+{
     fn from(value: &VirtualMachineInstallPatchesResult) -> Self {
         value.clone()
     }
@@ -24455,9 +24069,7 @@ pub struct VirtualMachineNetworkInterfaceConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineNetworkInterfaceConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachineNetworkInterfaceConfigurationProperties>,
     ///Resource tags applied to the networkInterface address created by this NetworkInterfaceConfiguration
     #[serde(
         default,
@@ -24467,7 +24079,8 @@ pub struct VirtualMachineNetworkInterfaceConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineNetworkInterfaceConfiguration>
-for VirtualMachineNetworkInterfaceConfiguration {
+    for VirtualMachineNetworkInterfaceConfiguration
+{
     fn from(value: &VirtualMachineNetworkInterfaceConfiguration) -> Self {
         value.clone()
     }
@@ -24573,9 +24186,7 @@ pub struct VirtualMachineNetworkInterfaceConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachineNetworkInterfaceDnsSettingsConfiguration,
-    >,
+    pub dns_settings: ::std::option::Option<VirtualMachineNetworkInterfaceDnsSettingsConfiguration>,
     #[serde(
         rename = "dscpConfiguration",
         default,
@@ -24609,9 +24220,7 @@ pub struct VirtualMachineNetworkInterfaceConfigurationProperties {
     pub enable_ip_forwarding: ::std::option::Option<bool>,
     ///Specifies the IP configurations of the network interface.
     #[serde(rename = "ipConfigurations")]
-    pub ip_configurations: ::std::vec::Vec<
-        VirtualMachineNetworkInterfaceIpConfiguration,
-    >,
+    pub ip_configurations: ::std::vec::Vec<VirtualMachineNetworkInterfaceIpConfiguration>,
     #[serde(
         rename = "networkSecurityGroup",
         default,
@@ -24628,7 +24237,8 @@ pub struct VirtualMachineNetworkInterfaceConfigurationProperties {
     pub primary: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineNetworkInterfaceConfigurationProperties>
-for VirtualMachineNetworkInterfaceConfigurationProperties {
+    for VirtualMachineNetworkInterfaceConfigurationProperties
+{
     fn from(value: &VirtualMachineNetworkInterfaceConfigurationProperties) -> Self {
         value.clone()
     }
@@ -24665,7 +24275,8 @@ pub struct VirtualMachineNetworkInterfaceDnsSettingsConfiguration {
     pub dns_servers: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineNetworkInterfaceDnsSettingsConfiguration>
-for VirtualMachineNetworkInterfaceDnsSettingsConfiguration {
+    for VirtualMachineNetworkInterfaceDnsSettingsConfiguration
+{
     fn from(value: &VirtualMachineNetworkInterfaceDnsSettingsConfiguration) -> Self {
         value.clone()
     }
@@ -24709,12 +24320,11 @@ pub struct VirtualMachineNetworkInterfaceIpConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineNetworkInterfaceIpConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachineNetworkInterfaceIpConfigurationProperties>,
 }
 impl ::std::convert::From<&VirtualMachineNetworkInterfaceIpConfiguration>
-for VirtualMachineNetworkInterfaceIpConfiguration {
+    for VirtualMachineNetworkInterfaceIpConfiguration
+{
     fn from(value: &VirtualMachineNetworkInterfaceIpConfiguration) -> Self {
         value.clone()
     }
@@ -24812,9 +24422,8 @@ pub struct VirtualMachineNetworkInterfaceIpConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub public_ip_address_configuration: ::std::option::Option<
-        VirtualMachinePublicIpAddressConfiguration,
-    >,
+    pub public_ip_address_configuration:
+        ::std::option::Option<VirtualMachinePublicIpAddressConfiguration>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -24823,13 +24432,13 @@ pub struct VirtualMachineNetworkInterfaceIpConfigurationProperties {
     pub subnet: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&VirtualMachineNetworkInterfaceIpConfigurationProperties>
-for VirtualMachineNetworkInterfaceIpConfigurationProperties {
+    for VirtualMachineNetworkInterfaceIpConfigurationProperties
+{
     fn from(value: &VirtualMachineNetworkInterfaceIpConfigurationProperties) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for VirtualMachineNetworkInterfaceIpConfigurationProperties {
+impl ::std::default::Default for VirtualMachineNetworkInterfaceIpConfigurationProperties {
     fn default() -> Self {
         Self {
             application_gateway_backend_address_pools: Default::default(),
@@ -24893,9 +24502,7 @@ pub struct VirtualMachinePatchStatus {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub last_patch_installation_summary: ::std::option::Option<
-        LastPatchInstallationSummary,
-    >,
+    pub last_patch_installation_summary: ::std::option::Option<LastPatchInstallationSummary>,
 }
 impl ::std::convert::From<&VirtualMachinePatchStatus> for VirtualMachinePatchStatus {
     fn from(value: &VirtualMachinePatchStatus) -> Self {
@@ -24955,7 +24562,7 @@ impl ::std::default::Default for VirtualMachinePatchStatus {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VirtualMachinePriorityTypes {
@@ -24979,9 +24586,7 @@ impl ::std::fmt::Display for VirtualMachinePriorityTypes {
 }
 impl ::std::str::FromStr for VirtualMachinePriorityTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "regular" => Ok(Self::Regular),
             "low" => Ok(Self::Low),
@@ -24992,9 +24597,7 @@ impl ::std::str::FromStr for VirtualMachinePriorityTypes {
 }
 impl ::std::convert::TryFrom<&str> for VirtualMachinePriorityTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -25396,9 +24999,7 @@ pub struct VirtualMachinePublicIpAddressConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachinePublicIpAddressConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachinePublicIpAddressConfigurationProperties>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -25414,7 +25015,8 @@ pub struct VirtualMachinePublicIpAddressConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachinePublicIpAddressConfiguration>
-for VirtualMachinePublicIpAddressConfiguration {
+    for VirtualMachinePublicIpAddressConfiguration
+{
     fn from(value: &VirtualMachinePublicIpAddressConfiguration) -> Self {
         value.clone()
     }
@@ -25475,9 +25077,7 @@ pub struct VirtualMachinePublicIpAddressConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachinePublicIpAddressDnsSettingsConfiguration,
-    >,
+    pub dns_settings: ::std::option::Option<VirtualMachinePublicIpAddressDnsSettingsConfiguration>,
     ///The idle timeout of the public IP address.
     #[serde(
         rename = "idleTimeoutInMinutes",
@@ -25517,7 +25117,8 @@ pub struct VirtualMachinePublicIpAddressConfigurationProperties {
     pub public_ip_prefix: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&VirtualMachinePublicIpAddressConfigurationProperties>
-for VirtualMachinePublicIpAddressConfigurationProperties {
+    for VirtualMachinePublicIpAddressConfigurationProperties
+{
     fn from(value: &VirtualMachinePublicIpAddressConfigurationProperties) -> Self {
         value.clone()
     }
@@ -25572,7 +25173,8 @@ pub struct VirtualMachinePublicIpAddressDnsSettingsConfiguration {
     pub domain_name_label_scope: ::std::option::Option<DomainNameLabelScopeTypes>,
 }
 impl ::std::convert::From<&VirtualMachinePublicIpAddressDnsSettingsConfiguration>
-for VirtualMachinePublicIpAddressDnsSettingsConfiguration {
+    for VirtualMachinePublicIpAddressDnsSettingsConfiguration
+{
     fn from(value: &VirtualMachinePublicIpAddressDnsSettingsConfiguration) -> Self {
         value.clone()
     }
@@ -25627,8 +25229,7 @@ pub struct VirtualMachineReimageParameters {
     )]
     pub temp_disk: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&VirtualMachineReimageParameters>
-for VirtualMachineReimageParameters {
+impl ::std::convert::From<&VirtualMachineReimageParameters> for VirtualMachineReimageParameters {
     fn from(value: &VirtualMachineReimageParameters) -> Self {
         value.clone()
     }
@@ -25828,7 +25429,8 @@ pub struct VirtualMachineRunCommandInstanceView {
     pub statuses: ::std::vec::Vec<InstanceViewStatus>,
 }
 impl ::std::convert::From<&VirtualMachineRunCommandInstanceView>
-for VirtualMachineRunCommandInstanceView {
+    for VirtualMachineRunCommandInstanceView
+{
     fn from(value: &VirtualMachineRunCommandInstanceView) -> Self {
         value.clone()
     }
@@ -26036,7 +25638,8 @@ pub struct VirtualMachineRunCommandProperties {
     pub treat_failure_as_deployment_failure: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineRunCommandProperties>
-for VirtualMachineRunCommandProperties {
+    for VirtualMachineRunCommandProperties
+{
     fn from(value: &VirtualMachineRunCommandProperties) -> Self {
         value.clone()
     }
@@ -26145,7 +25748,8 @@ pub struct VirtualMachineRunCommandScriptSource {
     pub script_uri_managed_identity: ::std::option::Option<RunCommandManagedIdentity>,
 }
 impl ::std::convert::From<&VirtualMachineRunCommandScriptSource>
-for VirtualMachineRunCommandScriptSource {
+    for VirtualMachineRunCommandScriptSource
+{
     fn from(value: &VirtualMachineRunCommandScriptSource) -> Self {
         value.clone()
     }
@@ -26199,8 +25803,7 @@ pub struct VirtualMachineRunCommandUpdate {
     )]
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineRunCommandUpdate>
-for VirtualMachineRunCommandUpdate {
+impl ::std::convert::From<&VirtualMachineRunCommandUpdate> for VirtualMachineRunCommandUpdate {
     fn from(value: &VirtualMachineRunCommandUpdate) -> Self {
         value.clone()
     }
@@ -26255,7 +25858,8 @@ pub struct VirtualMachineRunCommandsListResult {
     pub value: ::std::vec::Vec<VirtualMachineRunCommand>,
 }
 impl ::std::convert::From<&VirtualMachineRunCommandsListResult>
-for VirtualMachineRunCommandsListResult {
+    for VirtualMachineRunCommandsListResult
+{
     fn from(value: &VirtualMachineRunCommandsListResult) -> Self {
         value.clone()
     }
@@ -26528,8 +26132,7 @@ pub struct VirtualMachineScaleSetDataDisk {
     )]
     pub write_accelerator_enabled: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetDataDisk>
-for VirtualMachineScaleSetDataDisk {
+impl ::std::convert::From<&VirtualMachineScaleSetDataDisk> for VirtualMachineScaleSetDataDisk {
     fn from(value: &VirtualMachineScaleSetDataDisk) -> Self {
         value.clone()
     }
@@ -26595,8 +26198,7 @@ pub struct VirtualMachineScaleSetExtension {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetExtension>
-for VirtualMachineScaleSetExtension {
+impl ::std::convert::From<&VirtualMachineScaleSetExtension> for VirtualMachineScaleSetExtension {
     fn from(value: &VirtualMachineScaleSetExtension) -> Self {
         value.clone()
     }
@@ -26657,7 +26259,8 @@ pub struct VirtualMachineScaleSetExtensionListResult {
     pub value: ::std::vec::Vec<VirtualMachineScaleSetExtension>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetExtensionListResult>
-for VirtualMachineScaleSetExtensionListResult {
+    for VirtualMachineScaleSetExtensionListResult
+{
     fn from(value: &VirtualMachineScaleSetExtensionListResult) -> Self {
         value.clone()
     }
@@ -26709,7 +26312,8 @@ pub struct VirtualMachineScaleSetExtensionProfile {
     pub extensions_time_budget: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetExtensionProfile>
-for VirtualMachineScaleSetExtensionProfile {
+    for VirtualMachineScaleSetExtensionProfile
+{
     fn from(value: &VirtualMachineScaleSetExtensionProfile) -> Self {
         value.clone()
     }
@@ -26824,9 +26428,7 @@ pub struct VirtualMachineScaleSetExtensionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub protected_settings_from_key_vault: ::std::option::Option<
-        KeyVaultSecretReference,
-    >,
+    pub protected_settings_from_key_vault: ::std::option::Option<KeyVaultSecretReference>,
     ///Collection of extension names after which this extension needs to be provisioned.
     #[serde(
         rename = "provisionAfterExtensions",
@@ -26883,7 +26485,8 @@ pub struct VirtualMachineScaleSetExtensionProperties {
     pub type_handler_version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetExtensionProperties>
-for VirtualMachineScaleSetExtensionProperties {
+    for VirtualMachineScaleSetExtensionProperties
+{
     fn from(value: &VirtualMachineScaleSetExtensionProperties) -> Self {
         value.clone()
     }
@@ -26969,7 +26572,8 @@ pub struct VirtualMachineScaleSetExtensionUpdate {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetExtensionUpdate>
-for VirtualMachineScaleSetExtensionUpdate {
+    for VirtualMachineScaleSetExtensionUpdate
+{
     fn from(value: &VirtualMachineScaleSetExtensionUpdate) -> Self {
         value.clone()
     }
@@ -27011,7 +26615,8 @@ pub struct VirtualMachineScaleSetHardwareProfile {
     pub vm_size_properties: ::std::option::Option<VmSizeProperties>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetHardwareProfile>
-for VirtualMachineScaleSetHardwareProfile {
+    for VirtualMachineScaleSetHardwareProfile
+{
     fn from(value: &VirtualMachineScaleSetHardwareProfile) -> Self {
         value.clone()
     }
@@ -27088,13 +26693,10 @@ pub struct VirtualMachineScaleSetIdentity {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub user_assigned_identities: ::std::collections::HashMap<
-        ::std::string::String,
-        UserAssignedIdentitiesValue,
-    >,
+    pub user_assigned_identities:
+        ::std::collections::HashMap<::std::string::String, UserAssignedIdentitiesValue>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetIdentity>
-for VirtualMachineScaleSetIdentity {
+impl ::std::convert::From<&VirtualMachineScaleSetIdentity> for VirtualMachineScaleSetIdentity {
     fn from(value: &VirtualMachineScaleSetIdentity) -> Self {
         value.clone()
     }
@@ -27185,12 +26787,11 @@ pub struct VirtualMachineScaleSetInstanceView {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub virtual_machine: ::std::option::Option<
-        VirtualMachineScaleSetInstanceViewStatusesSummary,
-    >,
+    pub virtual_machine: ::std::option::Option<VirtualMachineScaleSetInstanceViewStatusesSummary>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetInstanceView>
-for VirtualMachineScaleSetInstanceView {
+    for VirtualMachineScaleSetInstanceView
+{
     fn from(value: &VirtualMachineScaleSetInstanceView) -> Self {
         value.clone()
     }
@@ -27239,7 +26840,8 @@ pub struct VirtualMachineScaleSetInstanceViewStatusesSummary {
     pub statuses_summary: ::std::vec::Vec<VirtualMachineStatusCodeCount>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetInstanceViewStatusesSummary>
-for VirtualMachineScaleSetInstanceViewStatusesSummary {
+    for VirtualMachineScaleSetInstanceViewStatusesSummary
+{
     fn from(value: &VirtualMachineScaleSetInstanceViewStatusesSummary) -> Self {
         value.clone()
     }
@@ -27283,12 +26885,11 @@ pub struct VirtualMachineScaleSetIpConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetIpConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachineScaleSetIpConfigurationProperties>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetIpConfiguration>
-for VirtualMachineScaleSetIpConfiguration {
+    for VirtualMachineScaleSetIpConfiguration
+{
     fn from(value: &VirtualMachineScaleSetIpConfiguration) -> Self {
         value.clone()
     }
@@ -27401,9 +27002,8 @@ pub struct VirtualMachineScaleSetIpConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub public_ip_address_configuration: ::std::option::Option<
-        VirtualMachineScaleSetPublicIpAddressConfiguration,
-    >,
+    pub public_ip_address_configuration:
+        ::std::option::Option<VirtualMachineScaleSetPublicIpAddressConfiguration>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -27412,7 +27012,8 @@ pub struct VirtualMachineScaleSetIpConfigurationProperties {
     pub subnet: ::std::option::Option<ApiEntityReference>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetIpConfigurationProperties>
-for VirtualMachineScaleSetIpConfigurationProperties {
+    for VirtualMachineScaleSetIpConfigurationProperties
+{
     fn from(value: &VirtualMachineScaleSetIpConfigurationProperties) -> Self {
         value.clone()
     }
@@ -27529,7 +27130,8 @@ pub struct VirtualMachineScaleSetListOsUpgradeHistory {
     pub value: ::std::vec::Vec<UpgradeOperationHistoricalStatusInfo>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetListOsUpgradeHistory>
-for VirtualMachineScaleSetListOsUpgradeHistory {
+    for VirtualMachineScaleSetListOsUpgradeHistory
+{
     fn from(value: &VirtualMachineScaleSetListOsUpgradeHistory) -> Self {
         value.clone()
     }
@@ -27575,8 +27177,7 @@ pub struct VirtualMachineScaleSetListResult {
     ///The list of virtual machine scale sets.
     pub value: ::std::vec::Vec<VirtualMachineScaleSet>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetListResult>
-for VirtualMachineScaleSetListResult {
+impl ::std::convert::From<&VirtualMachineScaleSetListResult> for VirtualMachineScaleSetListResult {
     fn from(value: &VirtualMachineScaleSetListResult) -> Self {
         value.clone()
     }
@@ -27627,7 +27228,8 @@ pub struct VirtualMachineScaleSetListSkusResult {
     pub value: ::std::vec::Vec<VirtualMachineScaleSetSku>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetListSkusResult>
-for VirtualMachineScaleSetListSkusResult {
+    for VirtualMachineScaleSetListSkusResult
+{
     fn from(value: &VirtualMachineScaleSetListSkusResult) -> Self {
         value.clone()
     }
@@ -27674,7 +27276,8 @@ pub struct VirtualMachineScaleSetListWithLinkResult {
     pub value: ::std::vec::Vec<VirtualMachineScaleSet>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetListWithLinkResult>
-for VirtualMachineScaleSetListWithLinkResult {
+    for VirtualMachineScaleSetListWithLinkResult
+{
     fn from(value: &VirtualMachineScaleSetListWithLinkResult) -> Self {
         value.clone()
     }
@@ -27726,7 +27329,8 @@ pub struct VirtualMachineScaleSetManagedDiskParameters {
     pub storage_account_type: ::std::option::Option<StorageAccountTypes>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetManagedDiskParameters>
-for VirtualMachineScaleSetManagedDiskParameters {
+    for VirtualMachineScaleSetManagedDiskParameters
+{
     fn from(value: &VirtualMachineScaleSetManagedDiskParameters) -> Self {
         value.clone()
     }
@@ -27767,9 +27371,8 @@ pub struct VirtualMachineScaleSetMigrationInfo {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub default_virtual_machine_scale_set_info: ::std::option::Option<
-        DefaultVirtualMachineScaleSetInfo,
-    >,
+    pub default_virtual_machine_scale_set_info:
+        ::std::option::Option<DefaultVirtualMachineScaleSetInfo>,
     #[serde(
         rename = "migrateToVirtualMachineScaleSet",
         default,
@@ -27779,7 +27382,8 @@ pub struct VirtualMachineScaleSetMigrationInfo {
     pub migrate_to_virtual_machine_scale_set: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetMigrationInfo>
-for VirtualMachineScaleSetMigrationInfo {
+    for VirtualMachineScaleSetMigrationInfo
+{
     fn from(value: &VirtualMachineScaleSetMigrationInfo) -> Self {
         value.clone()
     }
@@ -27831,9 +27435,7 @@ pub struct VirtualMachineScaleSetNetworkConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetNetworkConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachineScaleSetNetworkConfigurationProperties>,
     ///Resource tags applied to the networkInterface address created by this NetworkInterfaceConfiguration
     #[serde(
         default,
@@ -27843,7 +27445,8 @@ pub struct VirtualMachineScaleSetNetworkConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetNetworkConfiguration>
-for VirtualMachineScaleSetNetworkConfiguration {
+    for VirtualMachineScaleSetNetworkConfiguration
+{
     fn from(value: &VirtualMachineScaleSetNetworkConfiguration) -> Self {
         value.clone()
     }
@@ -27880,7 +27483,8 @@ pub struct VirtualMachineScaleSetNetworkConfigurationDnsSettings {
     pub dns_servers: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetNetworkConfigurationDnsSettings>
-for VirtualMachineScaleSetNetworkConfigurationDnsSettings {
+    for VirtualMachineScaleSetNetworkConfigurationDnsSettings
+{
     fn from(value: &VirtualMachineScaleSetNetworkConfigurationDnsSettings) -> Self {
         value.clone()
     }
@@ -27990,9 +27594,7 @@ pub struct VirtualMachineScaleSetNetworkConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachineScaleSetNetworkConfigurationDnsSettings,
-    >,
+    pub dns_settings: ::std::option::Option<VirtualMachineScaleSetNetworkConfigurationDnsSettings>,
     ///Specifies whether the network interface is accelerated networking-enabled.
     #[serde(
         rename = "enableAcceleratedNetworking",
@@ -28036,7 +27638,8 @@ pub struct VirtualMachineScaleSetNetworkConfigurationProperties {
     pub primary: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetNetworkConfigurationProperties>
-for VirtualMachineScaleSetNetworkConfigurationProperties {
+    for VirtualMachineScaleSetNetworkConfigurationProperties
+{
     fn from(value: &VirtualMachineScaleSetNetworkConfigurationProperties) -> Self {
         value.clone()
     }
@@ -28091,12 +27694,12 @@ pub struct VirtualMachineScaleSetNetworkProfile {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_interface_configurations: ::std::vec::Vec<
-        VirtualMachineScaleSetNetworkConfiguration,
-    >,
+    pub network_interface_configurations:
+        ::std::vec::Vec<VirtualMachineScaleSetNetworkConfiguration>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetNetworkProfile>
-for VirtualMachineScaleSetNetworkProfile {
+    for VirtualMachineScaleSetNetworkProfile
+{
     fn from(value: &VirtualMachineScaleSetNetworkProfile) -> Self {
         value.clone()
     }
@@ -28243,8 +27846,7 @@ pub struct VirtualMachineScaleSetOsDisk {
     )]
     pub write_accelerator_enabled: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetOsDisk>
-for VirtualMachineScaleSetOsDisk {
+impl ::std::convert::From<&VirtualMachineScaleSetOsDisk> for VirtualMachineScaleSetOsDisk {
     fn from(value: &VirtualMachineScaleSetOsDisk) -> Self {
         value.clone()
     }
@@ -28376,8 +27978,7 @@ pub struct VirtualMachineScaleSetOsProfile {
     )]
     pub windows_configuration: ::std::option::Option<WindowsConfiguration>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetOsProfile>
-for VirtualMachineScaleSetOsProfile {
+impl ::std::convert::From<&VirtualMachineScaleSetOsProfile> for VirtualMachineScaleSetOsProfile {
     fn from(value: &VirtualMachineScaleSetOsProfile) -> Self {
         value.clone()
     }
@@ -28533,9 +28134,7 @@ pub struct VirtualMachineScaleSetProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub high_speed_interconnect_placement: ::std::option::Option<
-        HighSpeedInterconnectPlacement,
-    >,
+    pub high_speed_interconnect_placement: ::std::option::Option<HighSpeedInterconnectPlacement>,
     #[serde(
         rename = "hostGroup",
         default,
@@ -28666,9 +28265,8 @@ pub struct VirtualMachineScaleSetProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub zonal_platform_fault_domain_align_mode: ::std::option::Option<
-        ZonalPlatformFaultDomainAlignMode,
-    >,
+    pub zonal_platform_fault_domain_align_mode:
+        ::std::option::Option<ZonalPlatformFaultDomainAlignMode>,
     ///Whether to force strictly even Virtual Machine distribution cross x-zones in case there is zone outage. zoneBalance property can only be set if the zones property of the scale set contains more than one zone. If there are no zones or only one zone specified, then zoneBalance property should not be set.
     #[serde(
         rename = "zoneBalance",
@@ -28678,8 +28276,7 @@ pub struct VirtualMachineScaleSetProperties {
     )]
     pub zone_balance: ::std::option::Option<bool>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetProperties>
-for VirtualMachineScaleSetProperties {
+impl ::std::convert::From<&VirtualMachineScaleSetProperties> for VirtualMachineScaleSetProperties {
     fn from(value: &VirtualMachineScaleSetProperties) -> Self {
         value.clone()
     }
@@ -28756,9 +28353,8 @@ pub struct VirtualMachineScaleSetPublicIpAddressConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetPublicIpAddressConfigurationProperties,
-    >,
+    pub properties:
+        ::std::option::Option<VirtualMachineScaleSetPublicIpAddressConfigurationProperties>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -28774,7 +28370,8 @@ pub struct VirtualMachineScaleSetPublicIpAddressConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetPublicIpAddressConfiguration>
-for VirtualMachineScaleSetPublicIpAddressConfiguration {
+    for VirtualMachineScaleSetPublicIpAddressConfiguration
+{
     fn from(value: &VirtualMachineScaleSetPublicIpAddressConfiguration) -> Self {
         value.clone()
     }
@@ -28816,10 +28413,9 @@ pub struct VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings {
     pub domain_name_label_scope: ::std::option::Option<DomainNameLabelScopeTypes>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings>
-for VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings {
-    fn from(
-        value: &VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings,
-    ) -> Self {
+    for VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings
+{
+    fn from(value: &VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings) -> Self {
         value.clone()
     }
 }
@@ -28876,9 +28472,8 @@ pub struct VirtualMachineScaleSetPublicIpAddressConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings,
-    >,
+    pub dns_settings:
+        ::std::option::Option<VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings>,
     ///The idle timeout of the public IP address.
     #[serde(
         rename = "idleTimeoutInMinutes",
@@ -28911,15 +28506,13 @@ pub struct VirtualMachineScaleSetPublicIpAddressConfigurationProperties {
     pub public_ip_prefix: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetPublicIpAddressConfigurationProperties>
-for VirtualMachineScaleSetPublicIpAddressConfigurationProperties {
-    fn from(
-        value: &VirtualMachineScaleSetPublicIpAddressConfigurationProperties,
-    ) -> Self {
+    for VirtualMachineScaleSetPublicIpAddressConfigurationProperties
+{
+    fn from(value: &VirtualMachineScaleSetPublicIpAddressConfigurationProperties) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for VirtualMachineScaleSetPublicIpAddressConfigurationProperties {
+impl ::std::default::Default for VirtualMachineScaleSetPublicIpAddressConfigurationProperties {
     fn default() -> Self {
         Self {
             delete_option: Default::default(),
@@ -28999,7 +28592,8 @@ pub struct VirtualMachineScaleSetReimageParameters {
     pub temp_disk: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetReimageParameters>
-for VirtualMachineScaleSetReimageParameters {
+    for VirtualMachineScaleSetReimageParameters
+{
     fn from(value: &VirtualMachineScaleSetReimageParameters) -> Self {
         value.clone()
     }
@@ -29058,7 +28652,7 @@ impl ::std::default::Default for VirtualMachineScaleSetReimageParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VirtualMachineScaleSetScaleInRules {
@@ -29084,9 +28678,7 @@ impl ::std::fmt::Display for VirtualMachineScaleSetScaleInRules {
 }
 impl ::std::str::FromStr for VirtualMachineScaleSetScaleInRules {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
             "oldestvm" => Ok(Self::OldestVm),
@@ -29097,14 +28689,11 @@ impl ::std::str::FromStr for VirtualMachineScaleSetScaleInRules {
 }
 impl ::std::convert::TryFrom<&str> for VirtualMachineScaleSetScaleInRules {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for VirtualMachineScaleSetScaleInRules {
+impl ::std::convert::TryFrom<&::std::string::String> for VirtualMachineScaleSetScaleInRules {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -29112,8 +28701,7 @@ for VirtualMachineScaleSetScaleInRules {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for VirtualMachineScaleSetScaleInRules {
+impl ::std::convert::TryFrom<::std::string::String> for VirtualMachineScaleSetScaleInRules {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -29249,7 +28837,8 @@ pub struct VirtualMachineScaleSetSkuCapacity {
     pub scale_type: ::std::option::Option<VirtualMachineScaleSetSkuScaleType>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetSkuCapacity>
-for VirtualMachineScaleSetSkuCapacity {
+    for VirtualMachineScaleSetSkuCapacity
+{
     fn from(value: &VirtualMachineScaleSetSkuCapacity) -> Self {
         value.clone()
     }
@@ -29293,7 +28882,7 @@ impl ::std::default::Default for VirtualMachineScaleSetSkuCapacity {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VirtualMachineScaleSetSkuScaleType {
@@ -29315,9 +28904,7 @@ impl ::std::fmt::Display for VirtualMachineScaleSetSkuScaleType {
 }
 impl ::std::str::FromStr for VirtualMachineScaleSetSkuScaleType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "automatic" => Ok(Self::Automatic),
             "none" => Ok(Self::None),
@@ -29327,14 +28914,11 @@ impl ::std::str::FromStr for VirtualMachineScaleSetSkuScaleType {
 }
 impl ::std::convert::TryFrom<&str> for VirtualMachineScaleSetSkuScaleType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for VirtualMachineScaleSetSkuScaleType {
+impl ::std::convert::TryFrom<&::std::string::String> for VirtualMachineScaleSetSkuScaleType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -29342,8 +28926,7 @@ for VirtualMachineScaleSetSkuScaleType {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for VirtualMachineScaleSetSkuScaleType {
+impl ::std::convert::TryFrom<::std::string::String> for VirtualMachineScaleSetSkuScaleType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -29417,7 +29000,8 @@ pub struct VirtualMachineScaleSetStorageProfile {
     pub os_disk: ::std::option::Option<VirtualMachineScaleSetOsDisk>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetStorageProfile>
-for VirtualMachineScaleSetStorageProfile {
+    for VirtualMachineScaleSetStorageProfile
+{
     fn from(value: &VirtualMachineScaleSetStorageProfile) -> Self {
         value.clone()
     }
@@ -29510,8 +29094,7 @@ pub struct VirtualMachineScaleSetUpdate {
     )]
     pub zones: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetUpdate>
-for VirtualMachineScaleSetUpdate {
+impl ::std::convert::From<&VirtualMachineScaleSetUpdate> for VirtualMachineScaleSetUpdate {
     fn from(value: &VirtualMachineScaleSetUpdate) -> Self {
         value.clone()
     }
@@ -29562,12 +29145,11 @@ pub struct VirtualMachineScaleSetUpdateIpConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetUpdateIpConfigurationProperties,
-    >,
+    pub properties: ::std::option::Option<VirtualMachineScaleSetUpdateIpConfigurationProperties>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateIpConfiguration>
-for VirtualMachineScaleSetUpdateIpConfiguration {
+    for VirtualMachineScaleSetUpdateIpConfiguration
+{
     fn from(value: &VirtualMachineScaleSetUpdateIpConfiguration) -> Self {
         value.clone()
     }
@@ -29688,9 +29270,8 @@ pub struct VirtualMachineScaleSetUpdateIpConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub public_ip_address_configuration: ::std::option::Option<
-        VirtualMachineScaleSetUpdatePublicIpAddressConfiguration,
-    >,
+    pub public_ip_address_configuration:
+        ::std::option::Option<VirtualMachineScaleSetUpdatePublicIpAddressConfiguration>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -29699,7 +29280,8 @@ pub struct VirtualMachineScaleSetUpdateIpConfigurationProperties {
     pub subnet: ::std::option::Option<ApiEntityReference>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateIpConfigurationProperties>
-for VirtualMachineScaleSetUpdateIpConfigurationProperties {
+    for VirtualMachineScaleSetUpdateIpConfigurationProperties
+{
     fn from(value: &VirtualMachineScaleSetUpdateIpConfigurationProperties) -> Self {
         value.clone()
     }
@@ -29759,9 +29341,8 @@ pub struct VirtualMachineScaleSetUpdateNetworkConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetUpdateNetworkConfigurationProperties,
-    >,
+    pub properties:
+        ::std::option::Option<VirtualMachineScaleSetUpdateNetworkConfigurationProperties>,
     ///Resource tags applied to the networkInterface address created by this NetworkInterfaceConfiguration
     #[serde(
         default,
@@ -29771,7 +29352,8 @@ pub struct VirtualMachineScaleSetUpdateNetworkConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateNetworkConfiguration>
-for VirtualMachineScaleSetUpdateNetworkConfiguration {
+    for VirtualMachineScaleSetUpdateNetworkConfiguration
+{
     fn from(value: &VirtualMachineScaleSetUpdateNetworkConfiguration) -> Self {
         value.clone()
     }
@@ -29880,9 +29462,7 @@ pub struct VirtualMachineScaleSetUpdateNetworkConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachineScaleSetNetworkConfigurationDnsSettings,
-    >,
+    pub dns_settings: ::std::option::Option<VirtualMachineScaleSetNetworkConfigurationDnsSettings>,
     ///Specifies whether the network interface is accelerated networking-enabled.
     #[serde(
         rename = "enableAcceleratedNetworking",
@@ -29931,13 +29511,13 @@ pub struct VirtualMachineScaleSetUpdateNetworkConfigurationProperties {
     pub primary: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateNetworkConfigurationProperties>
-for VirtualMachineScaleSetUpdateNetworkConfigurationProperties {
+    for VirtualMachineScaleSetUpdateNetworkConfigurationProperties
+{
     fn from(value: &VirtualMachineScaleSetUpdateNetworkConfigurationProperties) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for VirtualMachineScaleSetUpdateNetworkConfigurationProperties {
+impl ::std::default::Default for VirtualMachineScaleSetUpdateNetworkConfigurationProperties {
     fn default() -> Self {
         Self {
             auxiliary_mode: Default::default(),
@@ -30006,12 +29586,12 @@ pub struct VirtualMachineScaleSetUpdateNetworkProfile {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_interface_configurations: ::std::vec::Vec<
-        VirtualMachineScaleSetUpdateNetworkConfiguration,
-    >,
+    pub network_interface_configurations:
+        ::std::vec::Vec<VirtualMachineScaleSetUpdateNetworkConfiguration>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateNetworkProfile>
-for VirtualMachineScaleSetUpdateNetworkProfile {
+    for VirtualMachineScaleSetUpdateNetworkProfile
+{
     fn from(value: &VirtualMachineScaleSetUpdateNetworkProfile) -> Self {
         value.clone()
     }
@@ -30130,7 +29710,8 @@ pub struct VirtualMachineScaleSetUpdateOsDisk {
     pub write_accelerator_enabled: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateOsDisk>
-for VirtualMachineScaleSetUpdateOsDisk {
+    for VirtualMachineScaleSetUpdateOsDisk
+{
     fn from(value: &VirtualMachineScaleSetUpdateOsDisk) -> Self {
         value.clone()
     }
@@ -30215,7 +29796,8 @@ pub struct VirtualMachineScaleSetUpdateOsProfile {
     pub windows_configuration: ::std::option::Option<WindowsConfiguration>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateOsProfile>
-for VirtualMachineScaleSetUpdateOsProfile {
+    for VirtualMachineScaleSetUpdateOsProfile
+{
     fn from(value: &VirtualMachineScaleSetUpdateOsProfile) -> Self {
         value.clone()
     }
@@ -30382,21 +29964,19 @@ pub struct VirtualMachineScaleSetUpdateProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub virtual_machine_profile: ::std::option::Option<
-        VirtualMachineScaleSetUpdateVmProfile,
-    >,
+    pub virtual_machine_profile: ::std::option::Option<VirtualMachineScaleSetUpdateVmProfile>,
     #[serde(
         rename = "zonalPlatformFaultDomainAlignMode",
         default,
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub zonal_platform_fault_domain_align_mode: ::std::option::Option<
-        ZonalPlatformFaultDomainAlignMode,
-    >,
+    pub zonal_platform_fault_domain_align_mode:
+        ::std::option::Option<ZonalPlatformFaultDomainAlignMode>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateProperties>
-for VirtualMachineScaleSetUpdateProperties {
+    for VirtualMachineScaleSetUpdateProperties
+{
     fn from(value: &VirtualMachineScaleSetUpdateProperties) -> Self {
         value.clone()
     }
@@ -30462,9 +30042,8 @@ pub struct VirtualMachineScaleSetUpdatePublicIpAddressConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties,
-    >,
+    pub properties:
+        ::std::option::Option<VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties>,
     ///Resource tags applied to the publicIP address created by this PublicIPAddressConfiguration
     #[serde(
         default,
@@ -30474,13 +30053,13 @@ pub struct VirtualMachineScaleSetUpdatePublicIpAddressConfiguration {
     pub tags: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdatePublicIpAddressConfiguration>
-for VirtualMachineScaleSetUpdatePublicIpAddressConfiguration {
+    for VirtualMachineScaleSetUpdatePublicIpAddressConfiguration
+{
     fn from(value: &VirtualMachineScaleSetUpdatePublicIpAddressConfiguration) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for VirtualMachineScaleSetUpdatePublicIpAddressConfiguration {
+impl ::std::default::Default for VirtualMachineScaleSetUpdatePublicIpAddressConfiguration {
     fn default() -> Self {
         Self {
             name: Default::default(),
@@ -30531,9 +30110,8 @@ pub struct VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub dns_settings: ::std::option::Option<
-        VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings,
-    >,
+    pub dns_settings:
+        ::std::option::Option<VirtualMachineScaleSetPublicIpAddressConfigurationDnsSettings>,
     ///The idle timeout of the public IP address.
     #[serde(
         rename = "idleTimeoutInMinutes",
@@ -30550,17 +30128,16 @@ pub struct VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties {
     )]
     pub public_ip_prefix: ::std::option::Option<SubResource>,
 }
-impl ::std::convert::From<
-    &VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties,
-> for VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties {
-    fn from(
-        value: &VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties,
-    ) -> Self {
+impl ::std::convert::From<&VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties>
+    for VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties
+{
+    fn from(value: &VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default
-for VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties {
+    for VirtualMachineScaleSetUpdatePublicIpAddressConfigurationProperties
+{
     fn default() -> Self {
         Self {
             delete_option: Default::default(),
@@ -30636,7 +30213,8 @@ pub struct VirtualMachineScaleSetUpdateStorageProfile {
     pub os_disk: ::std::option::Option<VirtualMachineScaleSetUpdateOsDisk>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateStorageProfile>
-for VirtualMachineScaleSetUpdateStorageProfile {
+    for VirtualMachineScaleSetUpdateStorageProfile
+{
     fn from(value: &VirtualMachineScaleSetUpdateStorageProfile) -> Self {
         value.clone()
     }
@@ -30746,9 +30324,7 @@ pub struct VirtualMachineScaleSetUpdateVmProfile {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_profile: ::std::option::Option<
-        VirtualMachineScaleSetUpdateNetworkProfile,
-    >,
+    pub network_profile: ::std::option::Option<VirtualMachineScaleSetUpdateNetworkProfile>,
     #[serde(
         rename = "osProfile",
         default,
@@ -30769,9 +30345,7 @@ pub struct VirtualMachineScaleSetUpdateVmProfile {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub security_posture_reference: ::std::option::Option<
-        SecurityPostureReferenceUpdate,
-    >,
+    pub security_posture_reference: ::std::option::Option<SecurityPostureReferenceUpdate>,
     #[serde(
         rename = "securityProfile",
         default,
@@ -30785,9 +30359,7 @@ pub struct VirtualMachineScaleSetUpdateVmProfile {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub storage_profile: ::std::option::Option<
-        VirtualMachineScaleSetUpdateStorageProfile,
-    >,
+    pub storage_profile: ::std::option::Option<VirtualMachineScaleSetUpdateStorageProfile>,
     ///UserData for the VM, which must be base-64 encoded. Customer should not pass any secrets in here. <br><br>Minimum api-version: 2021-03-01
     #[serde(
         rename = "userData",
@@ -30798,7 +30370,8 @@ pub struct VirtualMachineScaleSetUpdateVmProfile {
     pub user_data: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetUpdateVmProfile>
-for VirtualMachineScaleSetUpdateVmProfile {
+    for VirtualMachineScaleSetUpdateVmProfile
+{
     fn from(value: &VirtualMachineScaleSetUpdateVmProfile) -> Self {
         value.clone()
     }
@@ -31054,7 +30627,8 @@ pub struct VirtualMachineScaleSetVmExtension {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmExtension>
-for VirtualMachineScaleSetVmExtension {
+    for VirtualMachineScaleSetVmExtension
+{
     fn from(value: &VirtualMachineScaleSetVmExtension) -> Self {
         value.clone()
     }
@@ -31133,7 +30707,8 @@ pub struct VirtualMachineScaleSetVmExtensionUpdate {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmExtensionUpdate>
-for VirtualMachineScaleSetVmExtensionUpdate {
+    for VirtualMachineScaleSetVmExtensionUpdate
+{
     fn from(value: &VirtualMachineScaleSetVmExtensionUpdate) -> Self {
         value.clone()
     }
@@ -31183,14 +30758,17 @@ pub struct VirtualMachineScaleSetVmExtensionsListResult {
     pub value: ::std::vec::Vec<VirtualMachineScaleSetVmExtension>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmExtensionsListResult>
-for VirtualMachineScaleSetVmExtensionsListResult {
+    for VirtualMachineScaleSetVmExtensionsListResult
+{
     fn from(value: &VirtualMachineScaleSetVmExtensionsListResult) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for VirtualMachineScaleSetVmExtensionsListResult {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///Extensions summary for virtual machines of a virtual machine scale set.
@@ -31239,7 +30817,8 @@ pub struct VirtualMachineScaleSetVmExtensionsSummary {
     pub statuses_summary: ::std::vec::Vec<VirtualMachineStatusCodeCount>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmExtensionsSummary>
-for VirtualMachineScaleSetVmExtensionsSummary {
+    for VirtualMachineScaleSetVmExtensionsSummary
+{
     fn from(value: &VirtualMachineScaleSetVmExtensionsSummary) -> Self {
         value.clone()
     }
@@ -31284,7 +30863,8 @@ pub struct VirtualMachineScaleSetVmInstanceIDs {
     pub instance_ids: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmInstanceIDs>
-for VirtualMachineScaleSetVmInstanceIDs {
+    for VirtualMachineScaleSetVmInstanceIDs
+{
     fn from(value: &VirtualMachineScaleSetVmInstanceIDs) -> Self {
         value.clone()
     }
@@ -31326,7 +30906,8 @@ pub struct VirtualMachineScaleSetVmInstanceRequiredIDs {
     pub instance_ids: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmInstanceRequiredIDs>
-for VirtualMachineScaleSetVmInstanceRequiredIDs {
+    for VirtualMachineScaleSetVmInstanceRequiredIDs
+{
     fn from(value: &VirtualMachineScaleSetVmInstanceRequiredIDs) -> Self {
         value.clone()
     }
@@ -31547,7 +31128,8 @@ pub struct VirtualMachineScaleSetVmInstanceView {
     pub vm_health: ::std::option::Option<VirtualMachineHealthStatus>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmInstanceView>
-for VirtualMachineScaleSetVmInstanceView {
+    for VirtualMachineScaleSetVmInstanceView
+{
     fn from(value: &VirtualMachineScaleSetVmInstanceView) -> Self {
         value.clone()
     }
@@ -31616,7 +31198,8 @@ pub struct VirtualMachineScaleSetVmListResult {
     pub value: ::std::vec::Vec<VirtualMachineScaleSetVm>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmListResult>
-for VirtualMachineScaleSetVmListResult {
+    for VirtualMachineScaleSetVmListResult
+{
     fn from(value: &VirtualMachineScaleSetVmListResult) -> Self {
         value.clone()
     }
@@ -31653,12 +31236,12 @@ pub struct VirtualMachineScaleSetVmNetworkProfileConfiguration {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_interface_configurations: ::std::vec::Vec<
-        VirtualMachineScaleSetNetworkConfiguration,
-    >,
+    pub network_interface_configurations:
+        ::std::vec::Vec<VirtualMachineScaleSetNetworkConfiguration>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmNetworkProfileConfiguration>
-for VirtualMachineScaleSetVmNetworkProfileConfiguration {
+    for VirtualMachineScaleSetVmNetworkProfileConfiguration
+{
     fn from(value: &VirtualMachineScaleSetVmNetworkProfileConfiguration) -> Self {
         value.clone()
     }
@@ -31872,8 +31455,7 @@ pub struct VirtualMachineScaleSetVmProfile {
     )]
     pub user_data: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&VirtualMachineScaleSetVmProfile>
-for VirtualMachineScaleSetVmProfile {
+impl ::std::convert::From<&VirtualMachineScaleSetVmProfile> for VirtualMachineScaleSetVmProfile {
     fn from(value: &VirtualMachineScaleSetVmProfile) -> Self {
         value.clone()
     }
@@ -32058,9 +31640,8 @@ pub struct VirtualMachineScaleSetVmProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_profile_configuration: ::std::option::Option<
-        VirtualMachineScaleSetVmNetworkProfileConfiguration,
-    >,
+    pub network_profile_configuration:
+        ::std::option::Option<VirtualMachineScaleSetVmNetworkProfileConfiguration>,
     #[serde(
         rename = "osProfile",
         default,
@@ -32074,9 +31655,7 @@ pub struct VirtualMachineScaleSetVmProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub protection_policy: ::std::option::Option<
-        VirtualMachineScaleSetVmProtectionPolicy,
-    >,
+    pub protection_policy: ::std::option::Option<VirtualMachineScaleSetVmProtectionPolicy>,
     ///The provisioning state, which only appears in the response.
     #[serde(
         rename = "provisioningState",
@@ -32132,7 +31711,8 @@ pub struct VirtualMachineScaleSetVmProperties {
     pub vm_id: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmProperties>
-for VirtualMachineScaleSetVmProperties {
+    for VirtualMachineScaleSetVmProperties
+{
     fn from(value: &VirtualMachineScaleSetVmProperties) -> Self {
         value.clone()
     }
@@ -32203,7 +31783,8 @@ pub struct VirtualMachineScaleSetVmProtectionPolicy {
     pub protect_from_scale_set_actions: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmProtectionPolicy>
-for VirtualMachineScaleSetVmProtectionPolicy {
+    for VirtualMachineScaleSetVmProtectionPolicy
+{
     fn from(value: &VirtualMachineScaleSetVmProtectionPolicy) -> Self {
         value.clone()
     }
@@ -32273,7 +31854,8 @@ pub struct VirtualMachineScaleSetVmReimageParameters {
     pub temp_disk: ::std::option::Option<bool>,
 }
 impl ::std::convert::From<&VirtualMachineScaleSetVmReimageParameters>
-for VirtualMachineScaleSetVmReimageParameters {
+    for VirtualMachineScaleSetVmReimageParameters
+{
     fn from(value: &VirtualMachineScaleSetVmReimageParameters) -> Self {
         value.clone()
     }
@@ -32442,8 +32024,7 @@ pub struct VirtualMachineSizeListResult {
     )]
     pub value: ::std::vec::Vec<VirtualMachineSize>,
 }
-impl ::std::convert::From<&VirtualMachineSizeListResult>
-for VirtualMachineSizeListResult {
+impl ::std::convert::From<&VirtualMachineSizeListResult> for VirtualMachineSizeListResult {
     fn from(value: &VirtualMachineSizeListResult) -> Self {
         value.clone()
     }
@@ -33315,7 +32896,7 @@ impl ::std::default::Default for VirtualMachineSizeListResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VirtualMachineSizeTypes {
@@ -33831,9 +33412,7 @@ impl ::std::fmt::Display for VirtualMachineSizeTypes {
 }
 impl ::std::str::FromStr for VirtualMachineSizeTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "basic_a0" => Ok(Self::BasicA0),
             "basic_a1" => Ok(Self::BasicA1),
@@ -34007,9 +33586,7 @@ impl ::std::str::FromStr for VirtualMachineSizeTypes {
 }
 impl ::std::convert::TryFrom<&str> for VirtualMachineSizeTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -34170,7 +33747,8 @@ pub struct VirtualMachineSoftwarePatchProperties {
     pub version: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualMachineSoftwarePatchProperties>
-for VirtualMachineSoftwarePatchProperties {
+    for VirtualMachineSoftwarePatchProperties
+{
     fn from(value: &VirtualMachineSoftwarePatchProperties) -> Self {
         value.clone()
     }
@@ -34232,8 +33810,7 @@ pub struct VirtualMachineStatusCodeCount {
     )]
     pub count: ::std::option::Option<i32>,
 }
-impl ::std::convert::From<&VirtualMachineStatusCodeCount>
-for VirtualMachineStatusCodeCount {
+impl ::std::convert::From<&VirtualMachineStatusCodeCount> for VirtualMachineStatusCodeCount {
     fn from(value: &VirtualMachineStatusCodeCount) -> Self {
         value.clone()
     }
@@ -34419,7 +33996,7 @@ impl ::std::default::Default for VmDiskSecurityProfile {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmDiskTypes {
@@ -34441,9 +34018,7 @@ impl ::std::fmt::Display for VmDiskTypes {
 }
 impl ::std::str::FromStr for VmDiskTypes {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "unmanaged" => Ok(Self::Unmanaged),
@@ -34453,9 +34028,7 @@ impl ::std::str::FromStr for VmDiskTypes {
 }
 impl ::std::convert::TryFrom<&str> for VmDiskTypes {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -34608,7 +34181,7 @@ impl ::std::convert::From<&VmGalleryApplication> for VmGalleryApplication {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmGuestPatchClassificationLinux {
@@ -34632,9 +34205,7 @@ impl ::std::fmt::Display for VmGuestPatchClassificationLinux {
 }
 impl ::std::str::FromStr for VmGuestPatchClassificationLinux {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "critical" => Ok(Self::Critical),
             "security" => Ok(Self::Security),
@@ -34645,14 +34216,11 @@ impl ::std::str::FromStr for VmGuestPatchClassificationLinux {
 }
 impl ::std::convert::TryFrom<&str> for VmGuestPatchClassificationLinux {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for VmGuestPatchClassificationLinux {
+impl ::std::convert::TryFrom<&::std::string::String> for VmGuestPatchClassificationLinux {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -34736,7 +34304,7 @@ impl ::std::convert::TryFrom<::std::string::String> for VmGuestPatchClassificati
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmGuestPatchClassificationWindows {
@@ -34770,9 +34338,7 @@ impl ::std::fmt::Display for VmGuestPatchClassificationWindows {
 }
 impl ::std::str::FromStr for VmGuestPatchClassificationWindows {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "critical" => Ok(Self::Critical),
             "security" => Ok(Self::Security),
@@ -34788,14 +34354,11 @@ impl ::std::str::FromStr for VmGuestPatchClassificationWindows {
 }
 impl ::std::convert::TryFrom<&str> for VmGuestPatchClassificationWindows {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for VmGuestPatchClassificationWindows {
+impl ::std::convert::TryFrom<&::std::string::String> for VmGuestPatchClassificationWindows {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -34803,8 +34366,7 @@ for VmGuestPatchClassificationWindows {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for VmGuestPatchClassificationWindows {
+impl ::std::convert::TryFrom<::std::string::String> for VmGuestPatchClassificationWindows {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -34861,7 +34423,7 @@ for VmGuestPatchClassificationWindows {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmGuestPatchRebootBehavior {
@@ -34887,9 +34449,7 @@ impl ::std::fmt::Display for VmGuestPatchRebootBehavior {
 }
 impl ::std::str::FromStr for VmGuestPatchRebootBehavior {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "neverreboots" => Ok(Self::NeverReboots),
@@ -34901,9 +34461,7 @@ impl ::std::str::FromStr for VmGuestPatchRebootBehavior {
 }
 impl ::std::convert::TryFrom<&str> for VmGuestPatchRebootBehavior {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -34967,7 +34525,7 @@ impl ::std::convert::TryFrom<::std::string::String> for VmGuestPatchRebootBehavi
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmGuestPatchRebootSetting {
@@ -34991,9 +34549,7 @@ impl ::std::fmt::Display for VmGuestPatchRebootSetting {
 }
 impl ::std::str::FromStr for VmGuestPatchRebootSetting {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ifrequired" => Ok(Self::IfRequired),
             "never" => Ok(Self::Never),
@@ -35004,9 +34560,7 @@ impl ::std::str::FromStr for VmGuestPatchRebootSetting {
 }
 impl ::std::convert::TryFrom<&str> for VmGuestPatchRebootSetting {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -35085,7 +34639,7 @@ impl ::std::convert::TryFrom<::std::string::String> for VmGuestPatchRebootSettin
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VmGuestPatchRebootStatus {
@@ -35115,9 +34669,7 @@ impl ::std::fmt::Display for VmGuestPatchRebootStatus {
 }
 impl ::std::str::FromStr for VmGuestPatchRebootStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "notneeded" => Ok(Self::NotNeeded),
@@ -35131,9 +34683,7 @@ impl ::std::str::FromStr for VmGuestPatchRebootStatus {
 }
 impl ::std::convert::TryFrom<&str> for VmGuestPatchRebootStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -35195,8 +34745,7 @@ pub struct VmImagesInEdgeZoneListResult {
     )]
     pub value: ::std::vec::Vec<VirtualMachineImageResource>,
 }
-impl ::std::convert::From<&VmImagesInEdgeZoneListResult>
-for VmImagesInEdgeZoneListResult {
+impl ::std::convert::From<&VmImagesInEdgeZoneListResult> for VmImagesInEdgeZoneListResult {
     fn from(value: &VmImagesInEdgeZoneListResult) -> Self {
         value.clone()
     }
@@ -35237,7 +34786,8 @@ pub struct VmScaleSetConvertToSinglePlacementGroupInput {
     pub active_placement_group_id: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VmScaleSetConvertToSinglePlacementGroupInput>
-for VmScaleSetConvertToSinglePlacementGroupInput {
+    for VmScaleSetConvertToSinglePlacementGroupInput
+{
     fn from(value: &VmScaleSetConvertToSinglePlacementGroupInput) -> Self {
         value.clone()
     }
@@ -35317,14 +34867,17 @@ pub struct VmScaleSetScaleOutInputProperties {
     pub zone: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VmScaleSetScaleOutInputProperties>
-for VmScaleSetScaleOutInputProperties {
+    for VmScaleSetScaleOutInputProperties
+{
     fn from(value: &VmScaleSetScaleOutInputProperties) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for VmScaleSetScaleOutInputProperties {
     fn default() -> Self {
-        Self { zone: Default::default() }
+        Self {
+            zone: Default::default(),
+        }
     }
 }
 ///Specifies VM Size Property settings on the virtual machine.
@@ -35766,7 +35319,7 @@ impl ::std::default::Default for WindowsParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WindowsPatchAssessmentMode {
@@ -35788,9 +35341,7 @@ impl ::std::fmt::Display for WindowsPatchAssessmentMode {
 }
 impl ::std::str::FromStr for WindowsPatchAssessmentMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "imagedefault" => Ok(Self::ImageDefault),
             "automaticbyplatform" => Ok(Self::AutomaticByPlatform),
@@ -35800,9 +35351,7 @@ impl ::std::str::FromStr for WindowsPatchAssessmentMode {
 }
 impl ::std::convert::TryFrom<&str> for WindowsPatchAssessmentMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -35871,7 +35420,7 @@ impl ::std::convert::TryFrom<::std::string::String> for WindowsPatchAssessmentMo
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
@@ -35880,8 +35429,7 @@ pub enum WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
     Never,
     Always,
 }
-impl ::std::convert::From<&Self>
-for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
+impl ::std::convert::From<&Self> for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
     fn from(value: &WindowsVmGuestPatchAutomaticByPlatformRebootSetting) -> Self {
         value.clone()
     }
@@ -35898,9 +35446,7 @@ impl ::std::fmt::Display for WindowsVmGuestPatchAutomaticByPlatformRebootSetting
 }
 impl ::std::str::FromStr for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "unknown" => Ok(Self::Unknown),
             "ifrequired" => Ok(Self::IfRequired),
@@ -35910,17 +35456,15 @@ impl ::std::str::FromStr for WindowsVmGuestPatchAutomaticByPlatformRebootSetting
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
+impl ::std::convert::TryFrom<&str> for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
+    for WindowsVmGuestPatchAutomaticByPlatformRebootSetting
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -35929,7 +35473,8 @@ for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for WindowsVmGuestPatchAutomaticByPlatformRebootSetting {
+    for WindowsVmGuestPatchAutomaticByPlatformRebootSetting
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -35973,12 +35518,11 @@ pub struct WindowsVmGuestPatchAutomaticByPlatformSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub reboot_setting: ::std::option::Option<
-        WindowsVmGuestPatchAutomaticByPlatformRebootSetting,
-    >,
+    pub reboot_setting: ::std::option::Option<WindowsVmGuestPatchAutomaticByPlatformRebootSetting>,
 }
 impl ::std::convert::From<&WindowsVmGuestPatchAutomaticByPlatformSettings>
-for WindowsVmGuestPatchAutomaticByPlatformSettings {
+    for WindowsVmGuestPatchAutomaticByPlatformSettings
+{
     fn from(value: &WindowsVmGuestPatchAutomaticByPlatformSettings) -> Self {
         value.clone()
     }
@@ -36035,7 +35579,7 @@ impl ::std::default::Default for WindowsVmGuestPatchAutomaticByPlatformSettings 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum WindowsVmGuestPatchMode {
@@ -36060,9 +35604,7 @@ impl ::std::fmt::Display for WindowsVmGuestPatchMode {
 }
 impl ::std::str::FromStr for WindowsVmGuestPatchMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "manual" => Ok(Self::Manual),
             "automaticbyos" => Ok(Self::AutomaticByOs),
@@ -36073,9 +35615,7 @@ impl ::std::str::FromStr for WindowsVmGuestPatchMode {
 }
 impl ::std::convert::TryFrom<&str> for WindowsVmGuestPatchMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -36134,7 +35674,7 @@ impl ::std::convert::TryFrom<::std::string::String> for WindowsVmGuestPatchMode 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ZonalPlatformFaultDomainAlignMode {
@@ -36156,9 +35696,7 @@ impl ::std::fmt::Display for ZonalPlatformFaultDomainAlignMode {
 }
 impl ::std::str::FromStr for ZonalPlatformFaultDomainAlignMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "aligned" => Ok(Self::Aligned),
             "unaligned" => Ok(Self::Unaligned),
@@ -36168,14 +35706,11 @@ impl ::std::str::FromStr for ZonalPlatformFaultDomainAlignMode {
 }
 impl ::std::convert::TryFrom<&str> for ZonalPlatformFaultDomainAlignMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ZonalPlatformFaultDomainAlignMode {
+impl ::std::convert::TryFrom<&::std::string::String> for ZonalPlatformFaultDomainAlignMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -36183,8 +35718,7 @@ for ZonalPlatformFaultDomainAlignMode {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ZonalPlatformFaultDomainAlignMode {
+impl ::std::convert::TryFrom<::std::string::String> for ZonalPlatformFaultDomainAlignMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -36221,9 +35755,8 @@ pub struct ZoneAllocationPolicy {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub max_instance_percent_per_zone_policy: ::std::option::Option<
-        MaxInstancePercentPerZonePolicy,
-    >,
+    pub max_instance_percent_per_zone_policy:
+        ::std::option::Option<MaxInstancePercentPerZonePolicy>,
     ///The maximum number of availability zones to use if the ZonePlacementPolicy is 'Auto'. If not specified, all availability zones will be used.
     #[serde(
         rename = "maxZoneCount",
@@ -36286,7 +35819,7 @@ impl ::std::default::Default for ZoneAllocationPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ZonePlacementPolicyType {
@@ -36308,9 +35841,7 @@ impl ::std::fmt::Display for ZonePlacementPolicyType {
 }
 impl ::std::str::FromStr for ZonePlacementPolicyType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "any" => Ok(Self::Any),
             "auto" => Ok(Self::Auto),
@@ -36320,9 +35851,7 @@ impl ::std::str::FromStr for ZonePlacementPolicyType {
 }
 impl ::std::convert::TryFrom<&str> for ZonePlacementPolicyType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }

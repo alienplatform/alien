@@ -408,7 +408,10 @@ impl AsyncTestContext for KubernetesProviderTestContext {
         let mut env_map: HashMap<String, String> = env::vars().collect(); // Start with process env
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
         env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
-        env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "kubernetes".to_string());
+        env_map.insert(
+            "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            "kubernetes".to_string(),
+        );
 
         let provider = BindingsProvider::from_env(env_map)
             .await

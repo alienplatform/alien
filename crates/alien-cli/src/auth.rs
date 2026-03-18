@@ -1,7 +1,7 @@
 // Authentication module: OAuth/API-key auth and workspace/profile store
 
-use alien_platform_api::Client as SdkClient;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::Client as SdkClient;
 use axum::extract::Query;
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;

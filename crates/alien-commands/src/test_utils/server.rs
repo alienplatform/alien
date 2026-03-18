@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Router;
 use async_trait::async_trait;
+use axum::Router;
 use object_store::ObjectStore;
 use reqwest::Url;
 use tempfile::TempDir;

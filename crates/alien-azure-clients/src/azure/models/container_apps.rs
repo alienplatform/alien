@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -234,7 +228,7 @@ impl ::std::default::Default for BaseContainer {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct Configuration {
     /**ActiveRevisionsMode controls how active revisions are handled for the Container app:
-<list><item>Multiple: multiple revisions can be active.</item><item>Single: Only one revision can be active at a time. Revision weights can not be used in this mode. If no value if provided, this is the default.</item></list>*/
+    <list><item>Multiple: multiple revisions can be active.</item><item>Single: Only one revision can be active at a time. Revision weights can not be used in this mode. If no value if provided, this is the default.</item></list>*/
     #[serde(
         rename = "activeRevisionsMode",
         default = "defaults::configuration_active_revisions_mode",
@@ -347,7 +341,7 @@ impl ::std::default::Default for Configuration {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ConfigurationActiveRevisionsMode {
@@ -369,9 +363,7 @@ impl ::std::fmt::Display for ConfigurationActiveRevisionsMode {
 }
 impl ::std::str::FromStr for ConfigurationActiveRevisionsMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "multiple" => Ok(Self::Multiple),
             "single" => Ok(Self::Single),
@@ -381,14 +373,11 @@ impl ::std::str::FromStr for ConfigurationActiveRevisionsMode {
 }
 impl ::std::convert::TryFrom<&str> for ConfigurationActiveRevisionsMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ConfigurationActiveRevisionsMode {
+impl ::std::convert::TryFrom<&::std::string::String> for ConfigurationActiveRevisionsMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -396,8 +385,7 @@ for ConfigurationActiveRevisionsMode {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ConfigurationActiveRevisionsMode {
+impl ::std::convert::TryFrom<::std::string::String> for ConfigurationActiveRevisionsMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -871,8 +859,7 @@ pub struct ContainerAppAuthTokenProperties {
     )]
     pub token: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ContainerAppAuthTokenProperties>
-for ContainerAppAuthTokenProperties {
+impl ::std::convert::From<&ContainerAppAuthTokenProperties> for ContainerAppAuthTokenProperties {
     fn from(value: &ContainerAppAuthTokenProperties) -> Self {
         value.clone()
     }
@@ -1295,7 +1282,8 @@ pub struct ContainerAppProbeHttpGetHttpHeadersItem {
     pub value: ::std::string::String,
 }
 impl ::std::convert::From<&ContainerAppProbeHttpGetHttpHeadersItem>
-for ContainerAppProbeHttpGetHttpHeadersItem {
+    for ContainerAppProbeHttpGetHttpHeadersItem
+{
     fn from(value: &ContainerAppProbeHttpGetHttpHeadersItem) -> Self {
         value.clone()
     }
@@ -1329,7 +1317,7 @@ for ContainerAppProbeHttpGetHttpHeadersItem {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ContainerAppProbeHttpGetScheme {
@@ -1353,9 +1341,7 @@ impl ::std::fmt::Display for ContainerAppProbeHttpGetScheme {
 }
 impl ::std::str::FromStr for ContainerAppProbeHttpGetScheme {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "http" => Ok(Self::Http),
             "https" => Ok(Self::Https),
@@ -1365,9 +1351,7 @@ impl ::std::str::FromStr for ContainerAppProbeHttpGetScheme {
 }
 impl ::std::convert::TryFrom<&str> for ContainerAppProbeHttpGetScheme {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1459,7 +1443,7 @@ impl ::std::convert::From<&ContainerAppProbeTcpSocket> for ContainerAppProbeTcpS
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ContainerAppProbeType {
@@ -1483,9 +1467,7 @@ impl ::std::fmt::Display for ContainerAppProbeType {
 }
 impl ::std::str::FromStr for ContainerAppProbeType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "liveness" => Ok(Self::Liveness),
             "readiness" => Ok(Self::Readiness),
@@ -1496,9 +1478,7 @@ impl ::std::str::FromStr for ContainerAppProbeType {
 }
 impl ::std::convert::TryFrom<&str> for ContainerAppProbeType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1723,9 +1703,7 @@ pub struct ContainerAppProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        ContainerAppPropertiesProvisioningState,
-    >,
+    pub provisioning_state: ::std::option::Option<ContainerAppPropertiesProvisioningState>,
     ///Running status of the Container App.
     #[serde(
         rename = "runningStatus",
@@ -1805,7 +1783,7 @@ impl ::std::default::Default for ContainerAppProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ContainerAppPropertiesProvisioningState {
@@ -1833,9 +1811,7 @@ impl ::std::fmt::Display for ContainerAppPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for ContainerAppPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "inprogress" => Ok(Self::InProgress),
             "succeeded" => Ok(Self::Succeeded),
@@ -1848,14 +1824,11 @@ impl ::std::str::FromStr for ContainerAppPropertiesProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ContainerAppPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ContainerAppPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&::std::string::String> for ContainerAppPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1863,8 +1836,7 @@ for ContainerAppPropertiesProvisioningState {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ContainerAppPropertiesProvisioningState {
+impl ::std::convert::TryFrom<::std::string::String> for ContainerAppPropertiesProvisioningState {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1927,7 +1899,7 @@ for ContainerAppPropertiesProvisioningState {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ContainerAppPropertiesRunningStatus {
@@ -1955,9 +1927,7 @@ impl ::std::fmt::Display for ContainerAppPropertiesRunningStatus {
 }
 impl ::std::str::FromStr for ContainerAppPropertiesRunningStatus {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "progressing" => Ok(Self::Progressing),
             "running" => Ok(Self::Running),
@@ -1970,14 +1940,11 @@ impl ::std::str::FromStr for ContainerAppPropertiesRunningStatus {
 }
 impl ::std::convert::TryFrom<&str> for ContainerAppPropertiesRunningStatus {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for ContainerAppPropertiesRunningStatus {
+impl ::std::convert::TryFrom<&::std::string::String> for ContainerAppPropertiesRunningStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1985,8 +1952,7 @@ for ContainerAppPropertiesRunningStatus {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for ContainerAppPropertiesRunningStatus {
+impl ::std::convert::TryFrom<::std::string::String> for ContainerAppPropertiesRunningStatus {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2335,7 +2301,7 @@ impl ::std::convert::From<&CustomDomain> for CustomDomain {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CustomDomainBindingType {
@@ -2357,9 +2323,7 @@ impl ::std::fmt::Display for CustomDomainBindingType {
 }
 impl ::std::str::FromStr for CustomDomainBindingType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "disabled" => Ok(Self::Disabled),
             "snienabled" => Ok(Self::SniEnabled),
@@ -2369,9 +2333,7 @@ impl ::std::str::FromStr for CustomDomainBindingType {
 }
 impl ::std::convert::TryFrom<&str> for CustomDomainBindingType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2579,18 +2541,15 @@ pub struct CustomHostnameAnalysisResult {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub conflicting_container_app_resource_id: ::std::option::Option<
-        ::std::string::String,
-    >,
+    pub conflicting_container_app_resource_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "customDomainVerificationFailureInfo",
         default,
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub custom_domain_verification_failure_info: ::std::option::Option<
-        CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo,
-    >,
+    pub custom_domain_verification_failure_info:
+        ::std::option::Option<CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo>,
     ///DNS verification test result.
     #[serde(
         rename = "customDomainVerificationTest",
@@ -2598,9 +2557,8 @@ pub struct CustomHostnameAnalysisResult {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub custom_domain_verification_test: ::std::option::Option<
-        CustomHostnameAnalysisResultCustomDomainVerificationTest,
-    >,
+    pub custom_domain_verification_test:
+        ::std::option::Option<CustomHostnameAnalysisResultCustomDomainVerificationTest>,
     ///<code>true</code> if there is a conflict on the Container App's managed environment; otherwise, <code>false</code>.
     #[serde(
         rename = "hasConflictOnManagedEnvironment",
@@ -2634,8 +2592,7 @@ pub struct CustomHostnameAnalysisResult {
     )]
     pub txt_records: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&CustomHostnameAnalysisResult>
-for CustomHostnameAnalysisResult {
+impl ::std::convert::From<&CustomHostnameAnalysisResult> for CustomHostnameAnalysisResult {
     fn from(value: &CustomHostnameAnalysisResult) -> Self {
         value.clone()
     }
@@ -2731,9 +2688,8 @@ pub struct CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub details: ::std::vec::Vec<
-        CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem,
-    >,
+    pub details:
+        ::std::vec::Vec<CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem>,
     ///Detailed error description and debugging information.
     #[serde(
         default,
@@ -2749,17 +2705,14 @@ pub struct CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo {
     )]
     pub target: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<
-    &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo,
-> for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo {
-    fn from(
-        value: &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo,
-    ) -> Self {
+impl ::std::convert::From<&CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo>
+    for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo
+{
+    fn from(value: &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo {
+impl ::std::default::Default for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo {
     fn default() -> Self {
         Self {
             code: Default::default(),
@@ -2822,9 +2775,11 @@ pub struct CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetail
     )]
     pub target: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<
-    &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem,
-> for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem {
+impl
+    ::std::convert::From<
+        &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem,
+    > for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem
+{
     fn from(
         value: &CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem,
     ) -> Self {
@@ -2832,7 +2787,8 @@ impl ::std::convert::From<
     }
 }
 impl ::std::default::Default
-for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem {
+    for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem
+{
     fn default() -> Self {
         Self {
             code: Default::default(),
@@ -2872,7 +2828,7 @@ for CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum CustomHostnameAnalysisResultCustomDomainVerificationTest {
@@ -2880,8 +2836,7 @@ pub enum CustomHostnameAnalysisResultCustomDomainVerificationTest {
     Failed,
     Skipped,
 }
-impl ::std::convert::From<&Self>
-for CustomHostnameAnalysisResultCustomDomainVerificationTest {
+impl ::std::convert::From<&Self> for CustomHostnameAnalysisResultCustomDomainVerificationTest {
     fn from(value: &CustomHostnameAnalysisResultCustomDomainVerificationTest) -> Self {
         value.clone()
     }
@@ -2897,9 +2852,7 @@ impl ::std::fmt::Display for CustomHostnameAnalysisResultCustomDomainVerificatio
 }
 impl ::std::str::FromStr for CustomHostnameAnalysisResultCustomDomainVerificationTest {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "passed" => Ok(Self::Passed),
             "failed" => Ok(Self::Failed),
@@ -2908,17 +2861,15 @@ impl ::std::str::FromStr for CustomHostnameAnalysisResultCustomDomainVerificatio
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for CustomHostnameAnalysisResultCustomDomainVerificationTest {
+impl ::std::convert::TryFrom<&str> for CustomHostnameAnalysisResultCustomDomainVerificationTest {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for CustomHostnameAnalysisResultCustomDomainVerificationTest {
+    for CustomHostnameAnalysisResultCustomDomainVerificationTest
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2927,7 +2878,8 @@ for CustomHostnameAnalysisResultCustomDomainVerificationTest {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for CustomHostnameAnalysisResultCustomDomainVerificationTest {
+    for CustomHostnameAnalysisResultCustomDomainVerificationTest
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2995,12 +2947,9 @@ pub struct CustomScaleRule {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub metadata: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub metadata: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
     /**Type of the custom scale rule
-eg: azure-servicebus, redis etc.*/
+    eg: azure-servicebus, redis etc.*/
     #[serde(
         rename = "type",
         default,
@@ -3205,7 +3154,7 @@ impl ::std::default::Default for Dapr {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DaprAppProtocol {
@@ -3229,9 +3178,7 @@ impl ::std::fmt::Display for DaprAppProtocol {
 }
 impl ::std::str::FromStr for DaprAppProtocol {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "http" => Ok(Self::Http),
             "grpc" => Ok(Self::Grpc),
@@ -3241,9 +3188,7 @@ impl ::std::str::FromStr for DaprAppProtocol {
 }
 impl ::std::convert::TryFrom<&str> for DaprAppProtocol {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3299,7 +3244,7 @@ impl ::std::default::Default for DaprAppProtocol {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DaprLogLevel {
@@ -3329,9 +3274,7 @@ impl ::std::fmt::Display for DaprLogLevel {
 }
 impl ::std::str::FromStr for DaprLogLevel {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "info" => Ok(Self::Info),
             "debug" => Ok(Self::Debug),
@@ -3343,9 +3286,7 @@ impl ::std::str::FromStr for DaprLogLevel {
 }
 impl ::std::convert::TryFrom<&str> for DaprLogLevel {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3450,7 +3391,9 @@ impl ::std::convert::From<&DefaultErrorResponse> for DefaultErrorResponse {
 }
 impl ::std::default::Default for DefaultErrorResponse {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Error model.
@@ -3624,7 +3567,8 @@ pub struct DefaultErrorResponseErrorDetailsItem {
     pub target: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&DefaultErrorResponseErrorDetailsItem>
-for DefaultErrorResponseErrorDetailsItem {
+    for DefaultErrorResponseErrorDetailsItem
+{
     fn from(value: &DefaultErrorResponseErrorDetailsItem) -> Self {
         value.clone()
     }
@@ -3780,7 +3724,7 @@ impl ::std::default::Default for ExtendedLocation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExtendedLocationType {
@@ -3800,9 +3744,7 @@ impl ::std::fmt::Display for ExtendedLocationType {
 }
 impl ::std::str::FromStr for ExtendedLocationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "customlocation" => Ok(Self::CustomLocation),
             _ => Err("invalid value".into()),
@@ -3811,9 +3753,7 @@ impl ::std::str::FromStr for ExtendedLocationType {
 }
 impl ::std::convert::TryFrom<&str> for ExtendedLocationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3889,10 +3829,7 @@ pub struct HttpScaleRule {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub metadata: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub metadata: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&HttpScaleRule> for HttpScaleRule {
     fn from(value: &HttpScaleRule) -> Self {
@@ -3991,7 +3928,7 @@ impl ::std::convert::From<&IdentitySettings> for IdentitySettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IdentitySettingsLifecycle {
@@ -4017,9 +3954,7 @@ impl ::std::fmt::Display for IdentitySettingsLifecycle {
 }
 impl ::std::str::FromStr for IdentitySettingsLifecycle {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "init" => Ok(Self::Init),
             "main" => Ok(Self::Main),
@@ -4031,9 +3966,7 @@ impl ::std::str::FromStr for IdentitySettingsLifecycle {
 }
 impl ::std::convert::TryFrom<&str> for IdentitySettingsLifecycle {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4337,7 +4270,7 @@ impl ::std::default::Default for Ingress {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IngressClientCertificateMode {
@@ -4364,9 +4297,7 @@ impl ::std::fmt::Display for IngressClientCertificateMode {
 }
 impl ::std::str::FromStr for IngressClientCertificateMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ignore" => Ok(Self::Ignore),
             "accept" => Ok(Self::Accept),
@@ -4377,9 +4308,7 @@ impl ::std::str::FromStr for IngressClientCertificateMode {
 }
 impl ::std::convert::TryFrom<&str> for IngressClientCertificateMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4527,7 +4456,7 @@ impl ::std::default::Default for IngressStickySessions {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IngressStickySessionsAffinity {
@@ -4551,9 +4480,7 @@ impl ::std::fmt::Display for IngressStickySessionsAffinity {
 }
 impl ::std::str::FromStr for IngressStickySessionsAffinity {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "sticky" => Ok(Self::Sticky),
             "none" => Ok(Self::None),
@@ -4563,9 +4490,7 @@ impl ::std::str::FromStr for IngressStickySessionsAffinity {
 }
 impl ::std::convert::TryFrom<&str> for IngressStickySessionsAffinity {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4617,7 +4542,7 @@ impl ::std::convert::TryFrom<::std::string::String> for IngressStickySessionsAff
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IngressTransport {
@@ -4647,9 +4572,7 @@ impl ::std::fmt::Display for IngressTransport {
 }
 impl ::std::str::FromStr for IngressTransport {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
             "http" => Ok(Self::Http),
@@ -4661,9 +4584,7 @@ impl ::std::str::FromStr for IngressTransport {
 }
 impl ::std::convert::TryFrom<&str> for IngressTransport {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4821,7 +4742,7 @@ impl ::std::convert::From<&IpSecurityRestrictionRule> for IpSecurityRestrictionR
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpSecurityRestrictionRuleAction {
@@ -4843,9 +4764,7 @@ impl ::std::fmt::Display for IpSecurityRestrictionRuleAction {
 }
 impl ::std::str::FromStr for IpSecurityRestrictionRuleAction {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "allow" => Ok(Self::Allow),
             "deny" => Ok(Self::Deny),
@@ -4855,14 +4774,11 @@ impl ::std::str::FromStr for IpSecurityRestrictionRuleAction {
 }
 impl ::std::convert::TryFrom<&str> for IpSecurityRestrictionRuleAction {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for IpSecurityRestrictionRuleAction {
+impl ::std::convert::TryFrom<&::std::string::String> for IpSecurityRestrictionRuleAction {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -4976,7 +4892,7 @@ impl ::std::convert::From<&ManagedServiceIdentity> for ManagedServiceIdentity {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedServiceIdentityType {
@@ -4997,17 +4913,13 @@ impl ::std::fmt::Display for ManagedServiceIdentityType {
             Self::None => f.write_str("None"),
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned,UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned,UserAssigned"),
         }
     }
 }
 impl ::std::str::FromStr for ManagedServiceIdentityType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "systemassigned" => Ok(Self::SystemAssigned),
@@ -5019,9 +4931,7 @@ impl ::std::str::FromStr for ManagedServiceIdentityType {
 }
 impl ::std::convert::TryFrom<&str> for ManagedServiceIdentityType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5334,7 +5244,9 @@ impl ::std::convert::From<&Runtime> for Runtime {
 }
 impl ::std::default::Default for Runtime {
     fn default() -> Self {
-        Self { java: Default::default() }
+        Self {
+            java: Default::default(),
+        }
     }
 }
 ///Java app configuration
@@ -6020,7 +5932,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -6046,9 +5958,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -6060,9 +5970,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6113,7 +6021,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -6139,9 +6047,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -6153,9 +6059,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6231,10 +6135,7 @@ pub struct TcpScaleRule {
         skip_serializing_if = ":: std :: collections :: HashMap::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub metadata: ::std::collections::HashMap<
-        ::std::string::String,
-        ::std::string::String,
-    >,
+    pub metadata: ::std::collections::HashMap<::std::string::String, ::std::string::String>,
 }
 impl ::std::convert::From<&TcpScaleRule> for TcpScaleRule {
     fn from(value: &TcpScaleRule) -> Self {
@@ -6577,18 +6478,14 @@ pub struct UserAssignedIdentities(
     pub ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
 );
 impl ::std::ops::Deref for UserAssignedIdentities {
-    type Target = ::std::collections::HashMap<
-        ::std::string::String,
-        UserAssignedIdentity,
-    >;
-    fn deref(
-        &self,
-    ) -> &::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
+    type Target = ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>;
+    fn deref(&self) -> &::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
         &self.0
     }
 }
 impl ::std::convert::From<UserAssignedIdentities>
-for ::std::collections::HashMap<::std::string::String, UserAssignedIdentity> {
+    for ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>
+{
     fn from(value: UserAssignedIdentities) -> Self {
         value.0
     }
@@ -6598,9 +6495,9 @@ impl ::std::convert::From<&UserAssignedIdentities> for UserAssignedIdentities {
         value.clone()
     }
 }
-impl ::std::convert::From<
-    ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
-> for UserAssignedIdentities {
+impl ::std::convert::From<::std::collections::HashMap<::std::string::String, UserAssignedIdentity>>
+    for UserAssignedIdentities
+{
     fn from(
         value: ::std::collections::HashMap<::std::string::String, UserAssignedIdentity>,
     ) -> Self {
@@ -6867,7 +6764,7 @@ impl ::std::default::Default for VolumeMount {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum VolumeStorageType {
@@ -6893,9 +6790,7 @@ impl ::std::fmt::Display for VolumeStorageType {
 }
 impl ::std::str::FromStr for VolumeStorageType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "azurefile" => Ok(Self::AzureFile),
             "emptydir" => Ok(Self::EmptyDir),
@@ -6907,9 +6802,7 @@ impl ::std::str::FromStr for VolumeStorageType {
 }
 impl ::std::convert::TryFrom<&str> for VolumeStorageType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6941,15 +6834,7 @@ impl ::std::convert::TryFrom<::std::string::String> for VolumeStorageType {
 /// ```
 /// </details>
 #[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
-    Clone,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd
+    ::serde::Deserialize, ::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd,
 )]
 #[serde(transparent)]
 pub struct WorkloadProfileName(pub ::std::string::String);

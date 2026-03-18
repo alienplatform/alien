@@ -22,8 +22,8 @@
 //! ```
 
 use crate::{ErrorData, Result};
-use alien_platform_api::types::GitMetadata;
 use alien_error::{Context, IntoAlienError};
+use alien_platform_api::types::GitMetadata;
 use git_url_parse::GitUrl;
 use std::path::Path;
 use std::process::Command;

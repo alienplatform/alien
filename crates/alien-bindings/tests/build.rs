@@ -1111,9 +1111,7 @@ async fn test_build_with_monitoring_to_axiom(#[case] ctx: impl BuildTestContext)
             provider_name
         );
 
-        let tables = query_result
-            .get("tables")
-            .and_then(|t| t.as_array());
+        let tables = query_result.get("tables").and_then(|t| t.as_array());
 
         let found = if let Some(tables) = tables {
             if let Some(table) = tables.first() {

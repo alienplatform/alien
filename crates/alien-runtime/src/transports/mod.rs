@@ -10,8 +10,8 @@
 #[cfg(feature = "aws")]
 pub mod lambda;
 
-pub mod commands_polling;
 pub mod cloudrun;
+pub mod commands_polling;
 pub mod containerapp;
 pub mod local;
 pub mod shared;

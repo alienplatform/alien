@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -68,8 +62,7 @@ pub struct ApplicationGatewayBackendAddress {
     )]
     pub ip_address: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ApplicationGatewayBackendAddress>
-for ApplicationGatewayBackendAddress {
+impl ::std::convert::From<&ApplicationGatewayBackendAddress> for ApplicationGatewayBackendAddress {
     fn from(value: &ApplicationGatewayBackendAddress) -> Self {
         value.clone()
     }
@@ -144,9 +137,7 @@ pub struct ApplicationGatewayBackendAddressPool {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        ApplicationGatewayBackendAddressPoolPropertiesFormat,
-    >,
+    pub properties: ::std::option::Option<ApplicationGatewayBackendAddressPoolPropertiesFormat>,
     ///Type of the resource.
     #[serde(
         rename = "type",
@@ -157,7 +148,8 @@ pub struct ApplicationGatewayBackendAddressPool {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ApplicationGatewayBackendAddressPool>
-for ApplicationGatewayBackendAddressPool {
+    for ApplicationGatewayBackendAddressPool
+{
     fn from(value: &ApplicationGatewayBackendAddressPool) -> Self {
         value.clone()
     }
@@ -230,7 +222,8 @@ pub struct ApplicationGatewayBackendAddressPoolPropertiesFormat {
     pub provisioning_state: ::std::option::Option<ProvisioningState>,
 }
 impl ::std::convert::From<&ApplicationGatewayBackendAddressPoolPropertiesFormat>
-for ApplicationGatewayBackendAddressPoolPropertiesFormat {
+    for ApplicationGatewayBackendAddressPoolPropertiesFormat
+{
     fn from(value: &ApplicationGatewayBackendAddressPoolPropertiesFormat) -> Self {
         value.clone()
     }
@@ -306,9 +299,7 @@ pub struct ApplicationGatewayIpConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        ApplicationGatewayIpConfigurationPropertiesFormat,
-    >,
+    pub properties: ::std::option::Option<ApplicationGatewayIpConfigurationPropertiesFormat>,
     ///Type of the resource.
     #[serde(
         rename = "type",
@@ -319,7 +310,8 @@ pub struct ApplicationGatewayIpConfiguration {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ApplicationGatewayIpConfiguration>
-for ApplicationGatewayIpConfiguration {
+    for ApplicationGatewayIpConfiguration
+{
     fn from(value: &ApplicationGatewayIpConfiguration) -> Self {
         value.clone()
     }
@@ -370,7 +362,8 @@ pub struct ApplicationGatewayIpConfigurationPropertiesFormat {
     pub subnet: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&ApplicationGatewayIpConfigurationPropertiesFormat>
-for ApplicationGatewayIpConfigurationPropertiesFormat {
+    for ApplicationGatewayIpConfigurationPropertiesFormat
+{
     fn from(value: &ApplicationGatewayIpConfigurationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -517,7 +510,8 @@ pub struct ApplicationSecurityGroupPropertiesFormat {
     pub resource_guid: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ApplicationSecurityGroupPropertiesFormat>
-for ApplicationSecurityGroupPropertiesFormat {
+    for ApplicationSecurityGroupPropertiesFormat
+{
     fn from(value: &ApplicationSecurityGroupPropertiesFormat) -> Self {
         value.clone()
     }
@@ -802,7 +796,8 @@ pub struct BackendAddressPoolPropertiesFormat {
     pub virtual_network: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&BackendAddressPoolPropertiesFormat>
-for BackendAddressPoolPropertiesFormat {
+    for BackendAddressPoolPropertiesFormat
+{
     fn from(value: &BackendAddressPoolPropertiesFormat) -> Self {
         value.clone()
     }
@@ -854,7 +849,7 @@ impl ::std::default::Default for BackendAddressPoolPropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum BackendAddressPoolPropertiesFormatSyncMode {
@@ -876,9 +871,7 @@ impl ::std::fmt::Display for BackendAddressPoolPropertiesFormatSyncMode {
 }
 impl ::std::str::FromStr for BackendAddressPoolPropertiesFormatSyncMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "automatic" => Ok(Self::Automatic),
             "manual" => Ok(Self::Manual),
@@ -888,14 +881,13 @@ impl ::std::str::FromStr for BackendAddressPoolPropertiesFormatSyncMode {
 }
 impl ::std::convert::TryFrom<&str> for BackendAddressPoolPropertiesFormatSyncMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for BackendAddressPoolPropertiesFormatSyncMode {
+    for BackendAddressPoolPropertiesFormatSyncMode
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -903,8 +895,7 @@ for BackendAddressPoolPropertiesFormatSyncMode {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for BackendAddressPoolPropertiesFormatSyncMode {
+impl ::std::convert::TryFrom<::std::string::String> for BackendAddressPoolPropertiesFormatSyncMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -944,7 +935,9 @@ impl ::std::convert::From<&CloudError> for CloudError {
 }
 impl ::std::default::Default for CloudError {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///An error response from the service.
@@ -1066,8 +1059,7 @@ pub struct CustomDnsConfigPropertiesFormat {
     )]
     pub ip_addresses: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&CustomDnsConfigPropertiesFormat>
-for CustomDnsConfigPropertiesFormat {
+impl ::std::convert::From<&CustomDnsConfigPropertiesFormat> for CustomDnsConfigPropertiesFormat {
     fn from(value: &CustomDnsConfigPropertiesFormat) -> Self {
         value.clone()
     }
@@ -1169,7 +1161,7 @@ impl ::std::default::Default for DdosSettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum DdosSettingsProtectionMode {
@@ -1193,9 +1185,7 @@ impl ::std::fmt::Display for DdosSettingsProtectionMode {
 }
 impl ::std::str::FromStr for DdosSettingsProtectionMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "virtualnetworkinherited" => Ok(Self::VirtualNetworkInherited),
             "enabled" => Ok(Self::Enabled),
@@ -1206,9 +1196,7 @@ impl ::std::str::FromStr for DdosSettingsProtectionMode {
 }
 impl ::std::convert::TryFrom<&str> for DdosSettingsProtectionMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1350,7 +1338,8 @@ pub struct DisassociateCloudServicePublicIpRequest {
     pub public_ip_arm_id: ::std::string::String,
 }
 impl ::std::convert::From<&DisassociateCloudServicePublicIpRequest>
-for DisassociateCloudServicePublicIpRequest {
+    for DisassociateCloudServicePublicIpRequest
+{
     fn from(value: &DisassociateCloudServicePublicIpRequest) -> Self {
         value.clone()
     }
@@ -1432,7 +1421,7 @@ impl ::std::default::Default for ExtendedLocation {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ExtendedLocationType {
@@ -1452,9 +1441,7 @@ impl ::std::fmt::Display for ExtendedLocationType {
 }
 impl ::std::str::FromStr for ExtendedLocationType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "edgezone" => Ok(Self::EdgeZone),
             _ => Err("invalid value".into()),
@@ -1463,9 +1450,7 @@ impl ::std::str::FromStr for ExtendedLocationType {
 }
 impl ::std::convert::TryFrom<&str> for ExtendedLocationType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1677,7 +1662,7 @@ impl ::std::default::Default for FlowLogFormatParameters {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum FlowLogFormatParametersType {
@@ -1698,9 +1683,7 @@ impl ::std::fmt::Display for FlowLogFormatParametersType {
 }
 impl ::std::str::FromStr for FlowLogFormatParametersType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "json" => Ok(Self::Json),
             _ => Err("invalid value".into()),
@@ -1709,9 +1692,7 @@ impl ::std::str::FromStr for FlowLogFormatParametersType {
 }
 impl ::std::convert::TryFrom<&str> for FlowLogFormatParametersType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2120,7 +2101,8 @@ pub struct FrontendIpConfigurationPropertiesFormat {
     pub subnet: ::std::option::Option<Subnet>,
 }
 impl ::std::convert::From<&FrontendIpConfigurationPropertiesFormat>
-for FrontendIpConfigurationPropertiesFormat {
+    for FrontendIpConfigurationPropertiesFormat
+{
     fn from(value: &FrontendIpConfigurationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -2224,7 +2206,8 @@ pub struct GatewayLoadBalancerTunnelInterface {
     pub type_: ::std::option::Option<GatewayLoadBalancerTunnelInterfaceType>,
 }
 impl ::std::convert::From<&GatewayLoadBalancerTunnelInterface>
-for GatewayLoadBalancerTunnelInterface {
+    for GatewayLoadBalancerTunnelInterface
+{
     fn from(value: &GatewayLoadBalancerTunnelInterface) -> Self {
         value.clone()
     }
@@ -2269,7 +2252,7 @@ impl ::std::default::Default for GatewayLoadBalancerTunnelInterface {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum GatewayLoadBalancerTunnelInterfaceProtocol {
@@ -2294,9 +2277,7 @@ impl ::std::fmt::Display for GatewayLoadBalancerTunnelInterfaceProtocol {
 }
 impl ::std::str::FromStr for GatewayLoadBalancerTunnelInterfaceProtocol {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "native" => Ok(Self::Native),
@@ -2307,14 +2288,13 @@ impl ::std::str::FromStr for GatewayLoadBalancerTunnelInterfaceProtocol {
 }
 impl ::std::convert::TryFrom<&str> for GatewayLoadBalancerTunnelInterfaceProtocol {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for GatewayLoadBalancerTunnelInterfaceProtocol {
+    for GatewayLoadBalancerTunnelInterfaceProtocol
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2322,8 +2302,7 @@ for GatewayLoadBalancerTunnelInterfaceProtocol {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for GatewayLoadBalancerTunnelInterfaceProtocol {
+impl ::std::convert::TryFrom<::std::string::String> for GatewayLoadBalancerTunnelInterfaceProtocol {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2361,7 +2340,7 @@ for GatewayLoadBalancerTunnelInterfaceProtocol {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum GatewayLoadBalancerTunnelInterfaceType {
@@ -2385,9 +2364,7 @@ impl ::std::fmt::Display for GatewayLoadBalancerTunnelInterfaceType {
 }
 impl ::std::str::FromStr for GatewayLoadBalancerTunnelInterfaceType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "internal" => Ok(Self::Internal),
@@ -2398,14 +2375,11 @@ impl ::std::str::FromStr for GatewayLoadBalancerTunnelInterfaceType {
 }
 impl ::std::convert::TryFrom<&str> for GatewayLoadBalancerTunnelInterfaceType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for GatewayLoadBalancerTunnelInterfaceType {
+impl ::std::convert::TryFrom<&::std::string::String> for GatewayLoadBalancerTunnelInterfaceType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2413,8 +2387,7 @@ for GatewayLoadBalancerTunnelInterfaceType {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for GatewayLoadBalancerTunnelInterfaceType {
+impl ::std::convert::TryFrom<::std::string::String> for GatewayLoadBalancerTunnelInterfaceType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2663,8 +2636,7 @@ pub struct InboundNatRulePropertiesFormat {
     )]
     pub provisioning_state: ::std::option::Option<ProvisioningState>,
 }
-impl ::std::convert::From<&InboundNatRulePropertiesFormat>
-for InboundNatRulePropertiesFormat {
+impl ::std::convert::From<&InboundNatRulePropertiesFormat> for InboundNatRulePropertiesFormat {
     fn from(value: &InboundNatRulePropertiesFormat) -> Self {
         value.clone()
     }
@@ -2716,7 +2688,7 @@ impl ::std::default::Default for InboundNatRulePropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpAllocationMethod {
@@ -2738,9 +2710,7 @@ impl ::std::fmt::Display for IpAllocationMethod {
 }
 impl ::std::str::FromStr for IpAllocationMethod {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "static" => Ok(Self::Static),
             "dynamic" => Ok(Self::Dynamic),
@@ -2750,9 +2720,7 @@ impl ::std::str::FromStr for IpAllocationMethod {
 }
 impl ::std::convert::TryFrom<&str> for IpAllocationMethod {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2969,7 +2937,8 @@ pub struct IpConfigurationProfilePropertiesFormat {
     pub subnet: ::std::option::Option<Subnet>,
 }
 impl ::std::convert::From<&IpConfigurationProfilePropertiesFormat>
-for IpConfigurationProfilePropertiesFormat {
+    for IpConfigurationProfilePropertiesFormat
+{
     fn from(value: &IpConfigurationProfilePropertiesFormat) -> Self {
         value.clone()
     }
@@ -3048,8 +3017,7 @@ pub struct IpConfigurationPropertiesFormat {
     )]
     pub subnet: ::std::option::Option<Subnet>,
 }
-impl ::std::convert::From<&IpConfigurationPropertiesFormat>
-for IpConfigurationPropertiesFormat {
+impl ::std::convert::From<&IpConfigurationPropertiesFormat> for IpConfigurationPropertiesFormat {
     fn from(value: &IpConfigurationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -3145,7 +3113,7 @@ impl ::std::default::Default for IpTag {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum IpVersion {
@@ -3167,9 +3135,7 @@ impl ::std::fmt::Display for IpVersion {
 }
 impl ::std::str::FromStr for IpVersion {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ipv4" => Ok(Self::IPv4),
             "ipv6" => Ok(Self::IPv6),
@@ -3179,9 +3145,7 @@ impl ::std::str::FromStr for IpVersion {
 }
 impl ::std::convert::TryFrom<&str> for IpVersion {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3304,15 +3268,16 @@ pub struct IpamPoolPrefixAllocationPool {
     )]
     pub id: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&IpamPoolPrefixAllocationPool>
-for IpamPoolPrefixAllocationPool {
+impl ::std::convert::From<&IpamPoolPrefixAllocationPool> for IpamPoolPrefixAllocationPool {
     fn from(value: &IpamPoolPrefixAllocationPool) -> Self {
         value.clone()
     }
 }
 impl ::std::default::Default for IpamPoolPrefixAllocationPool {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///Load balancer backend addresses.
@@ -3422,9 +3387,7 @@ pub struct LoadBalancerBackendAddressPropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub admin_state: ::std::option::Option<
-        LoadBalancerBackendAddressPropertiesFormatAdminState,
-    >,
+    pub admin_state: ::std::option::Option<LoadBalancerBackendAddressPropertiesFormatAdminState>,
     ///Collection of inbound NAT rule port mappings.
     #[serde(
         rename = "inboundNatRulesPortMapping",
@@ -3470,7 +3433,8 @@ pub struct LoadBalancerBackendAddressPropertiesFormat {
     pub virtual_network: ::std::option::Option<SubResource>,
 }
 impl ::std::convert::From<&LoadBalancerBackendAddressPropertiesFormat>
-for LoadBalancerBackendAddressPropertiesFormat {
+    for LoadBalancerBackendAddressPropertiesFormat
+{
     fn from(value: &LoadBalancerBackendAddressPropertiesFormat) -> Self {
         value.clone()
     }
@@ -3518,7 +3482,7 @@ impl ::std::default::Default for LoadBalancerBackendAddressPropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum LoadBalancerBackendAddressPropertiesFormatAdminState {
@@ -3526,8 +3490,7 @@ pub enum LoadBalancerBackendAddressPropertiesFormatAdminState {
     Up,
     Down,
 }
-impl ::std::convert::From<&Self>
-for LoadBalancerBackendAddressPropertiesFormatAdminState {
+impl ::std::convert::From<&Self> for LoadBalancerBackendAddressPropertiesFormatAdminState {
     fn from(value: &LoadBalancerBackendAddressPropertiesFormatAdminState) -> Self {
         value.clone()
     }
@@ -3543,9 +3506,7 @@ impl ::std::fmt::Display for LoadBalancerBackendAddressPropertiesFormatAdminStat
 }
 impl ::std::str::FromStr for LoadBalancerBackendAddressPropertiesFormatAdminState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "up" => Ok(Self::Up),
@@ -3554,17 +3515,15 @@ impl ::std::str::FromStr for LoadBalancerBackendAddressPropertiesFormatAdminStat
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for LoadBalancerBackendAddressPropertiesFormatAdminState {
+impl ::std::convert::TryFrom<&str> for LoadBalancerBackendAddressPropertiesFormatAdminState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for LoadBalancerBackendAddressPropertiesFormatAdminState {
+    for LoadBalancerBackendAddressPropertiesFormatAdminState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -3573,7 +3532,8 @@ for LoadBalancerBackendAddressPropertiesFormatAdminState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for LoadBalancerBackendAddressPropertiesFormatAdminState {
+    for LoadBalancerBackendAddressPropertiesFormatAdminState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3720,7 +3680,7 @@ impl ::std::default::Default for ManagedServiceIdentity {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ManagedServiceIdentityType {
@@ -3740,18 +3700,14 @@ impl ::std::fmt::Display for ManagedServiceIdentityType {
         match *self {
             Self::SystemAssigned => f.write_str("SystemAssigned"),
             Self::UserAssigned => f.write_str("UserAssigned"),
-            Self::SystemAssignedUserAssigned => {
-                f.write_str("SystemAssigned, UserAssigned")
-            }
+            Self::SystemAssignedUserAssigned => f.write_str("SystemAssigned, UserAssigned"),
             Self::None => f.write_str("None"),
         }
     }
 }
 impl ::std::str::FromStr for ManagedServiceIdentityType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "systemassigned" => Ok(Self::SystemAssigned),
             "userassigned" => Ok(Self::UserAssigned),
@@ -3763,9 +3719,7 @@ impl ::std::str::FromStr for ManagedServiceIdentityType {
 }
 impl ::std::convert::TryFrom<&str> for ManagedServiceIdentityType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3827,7 +3781,8 @@ pub struct ManagedServiceIdentityUserAssignedIdentitiesValue {
     pub principal_id: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ManagedServiceIdentityUserAssignedIdentitiesValue>
-for ManagedServiceIdentityUserAssignedIdentitiesValue {
+    for ManagedServiceIdentityUserAssignedIdentitiesValue
+{
     fn from(value: &ManagedServiceIdentityUserAssignedIdentitiesValue) -> Self {
         value.clone()
     }
@@ -4157,7 +4112,9 @@ impl ::std::convert::From<&NatGatewaySku> for NatGatewaySku {
 }
 impl ::std::default::Default for NatGatewaySku {
     fn default() -> Self {
-        Self { name: Default::default() }
+        Self {
+            name: Default::default(),
+        }
     }
 }
 ///Name of Nat Gateway SKU.
@@ -4189,7 +4146,7 @@ impl ::std::default::Default for NatGatewaySku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NatGatewaySkuName {
@@ -4211,9 +4168,7 @@ impl ::std::fmt::Display for NatGatewaySkuName {
 }
 impl ::std::str::FromStr for NatGatewaySkuName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard" => Ok(Self::Standard),
             "standardv2" => Ok(Self::StandardV2),
@@ -4223,9 +4178,7 @@ impl ::std::str::FromStr for NatGatewaySkuName {
 }
 impl ::std::convert::TryFrom<&str> for NatGatewaySkuName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4580,9 +4533,7 @@ pub struct NetworkInterfaceIpConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        NetworkInterfaceIpConfigurationPropertiesFormat,
-    >,
+    pub properties: ::std::option::Option<NetworkInterfaceIpConfigurationPropertiesFormat>,
     ///Resource type.
     #[serde(
         rename = "type",
@@ -4592,8 +4543,7 @@ pub struct NetworkInterfaceIpConfiguration {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&NetworkInterfaceIpConfiguration>
-for NetworkInterfaceIpConfiguration {
+impl ::std::convert::From<&NetworkInterfaceIpConfiguration> for NetworkInterfaceIpConfiguration {
     fn from(value: &NetworkInterfaceIpConfiguration) -> Self {
         value.clone()
     }
@@ -4665,17 +4615,14 @@ pub struct NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties {
     )]
     pub required_member_name: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<
-    &NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties,
-> for NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties {
-    fn from(
-        value: &NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties,
-    ) -> Self {
+impl ::std::convert::From<&NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties>
+    for NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties
+{
+    fn from(value: &NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties {
+impl ::std::default::Default for NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties {
     fn default() -> Self {
         Self {
             fqdns: Default::default(),
@@ -4779,9 +4726,8 @@ pub struct NetworkInterfaceIpConfigurationPropertiesFormat {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub application_gateway_backend_address_pools: ::std::vec::Vec<
-        ApplicationGatewayBackendAddressPool,
-    >,
+    pub application_gateway_backend_address_pools:
+        ::std::vec::Vec<ApplicationGatewayBackendAddressPool>,
     ///Application security groups in which the IP configuration is included.
     #[serde(
         rename = "applicationSecurityGroups",
@@ -4856,9 +4802,8 @@ pub struct NetworkInterfaceIpConfigurationPropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub private_link_connection_properties: ::std::option::Option<
-        NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties,
-    >,
+    pub private_link_connection_properties:
+        ::std::option::Option<NetworkInterfaceIpConfigurationPrivateLinkConnectionProperties>,
     #[serde(
         rename = "provisioningState",
         default,
@@ -4889,7 +4834,8 @@ pub struct NetworkInterfaceIpConfigurationPropertiesFormat {
     pub virtual_network_taps: ::std::vec::Vec<VirtualNetworkTap>,
 }
 impl ::std::convert::From<&NetworkInterfaceIpConfigurationPropertiesFormat>
-for NetworkInterfaceIpConfigurationPropertiesFormat {
+    for NetworkInterfaceIpConfigurationPropertiesFormat
+{
     fn from(value: &NetworkInterfaceIpConfigurationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -5077,9 +5023,7 @@ pub struct NetworkInterfacePropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub auxiliary_mode: ::std::option::Option<
-        NetworkInterfacePropertiesFormatAuxiliaryMode,
-    >,
+    pub auxiliary_mode: ::std::option::Option<NetworkInterfacePropertiesFormatAuxiliaryMode>,
     ///Auxiliary sku of Network Interface resource.
     #[serde(
         rename = "auxiliarySku",
@@ -5087,9 +5031,7 @@ pub struct NetworkInterfacePropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub auxiliary_sku: ::std::option::Option<
-        NetworkInterfacePropertiesFormatAuxiliarySku,
-    >,
+    pub auxiliary_sku: ::std::option::Option<NetworkInterfacePropertiesFormatAuxiliarySku>,
     ///Whether default outbound connectivity for nic was configured or not.
     #[serde(
         rename = "defaultOutboundConnectivityEnabled",
@@ -5167,9 +5109,7 @@ pub struct NetworkInterfacePropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub migration_phase: ::std::option::Option<
-        NetworkInterfacePropertiesFormatMigrationPhase,
-    >,
+    pub migration_phase: ::std::option::Option<NetworkInterfacePropertiesFormatMigrationPhase>,
     #[serde(
         rename = "networkSecurityGroup",
         default,
@@ -5253,8 +5193,7 @@ pub struct NetworkInterfacePropertiesFormat {
     )]
     pub workload_type: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&NetworkInterfacePropertiesFormat>
-for NetworkInterfacePropertiesFormat {
+impl ::std::convert::From<&NetworkInterfacePropertiesFormat> for NetworkInterfacePropertiesFormat {
     fn from(value: &NetworkInterfacePropertiesFormat) -> Self {
         value.clone()
     }
@@ -5319,7 +5258,7 @@ impl ::std::default::Default for NetworkInterfacePropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfacePropertiesFormatAuxiliaryMode {
@@ -5345,9 +5284,7 @@ impl ::std::fmt::Display for NetworkInterfacePropertiesFormatAuxiliaryMode {
 }
 impl ::std::str::FromStr for NetworkInterfacePropertiesFormatAuxiliaryMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "maxconnections" => Ok(Self::MaxConnections),
@@ -5359,14 +5296,13 @@ impl ::std::str::FromStr for NetworkInterfacePropertiesFormatAuxiliaryMode {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfacePropertiesFormatAuxiliaryMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for NetworkInterfacePropertiesFormatAuxiliaryMode {
+    for NetworkInterfacePropertiesFormatAuxiliaryMode
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5375,7 +5311,8 @@ for NetworkInterfacePropertiesFormatAuxiliaryMode {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for NetworkInterfacePropertiesFormatAuxiliaryMode {
+    for NetworkInterfacePropertiesFormatAuxiliaryMode
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5415,7 +5352,7 @@ for NetworkInterfacePropertiesFormatAuxiliaryMode {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfacePropertiesFormatAuxiliarySku {
@@ -5443,9 +5380,7 @@ impl ::std::fmt::Display for NetworkInterfacePropertiesFormatAuxiliarySku {
 }
 impl ::std::str::FromStr for NetworkInterfacePropertiesFormatAuxiliarySku {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "a1" => Ok(Self::A1),
@@ -5458,14 +5393,13 @@ impl ::std::str::FromStr for NetworkInterfacePropertiesFormatAuxiliarySku {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfacePropertiesFormatAuxiliarySku {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for NetworkInterfacePropertiesFormatAuxiliarySku {
+    for NetworkInterfacePropertiesFormatAuxiliarySku
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5474,7 +5408,8 @@ for NetworkInterfacePropertiesFormatAuxiliarySku {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for NetworkInterfacePropertiesFormatAuxiliarySku {
+    for NetworkInterfacePropertiesFormatAuxiliarySku
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5514,7 +5449,7 @@ for NetworkInterfacePropertiesFormatAuxiliarySku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfacePropertiesFormatMigrationPhase {
@@ -5542,9 +5477,7 @@ impl ::std::fmt::Display for NetworkInterfacePropertiesFormatMigrationPhase {
 }
 impl ::std::str::FromStr for NetworkInterfacePropertiesFormatMigrationPhase {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "prepare" => Ok(Self::Prepare),
@@ -5557,14 +5490,13 @@ impl ::std::str::FromStr for NetworkInterfacePropertiesFormatMigrationPhase {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfacePropertiesFormatMigrationPhase {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for NetworkInterfacePropertiesFormatMigrationPhase {
+    for NetworkInterfacePropertiesFormatMigrationPhase
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5573,7 +5505,8 @@ for NetworkInterfacePropertiesFormatMigrationPhase {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for NetworkInterfacePropertiesFormatMigrationPhase {
+    for NetworkInterfacePropertiesFormatMigrationPhase
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5610,7 +5543,7 @@ for NetworkInterfacePropertiesFormatMigrationPhase {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum NetworkInterfacePropertiesFormatNicType {
@@ -5632,9 +5565,7 @@ impl ::std::fmt::Display for NetworkInterfacePropertiesFormatNicType {
 }
 impl ::std::str::FromStr for NetworkInterfacePropertiesFormatNicType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "standard" => Ok(Self::Standard),
             "elastic" => Ok(Self::Elastic),
@@ -5644,14 +5575,11 @@ impl ::std::str::FromStr for NetworkInterfacePropertiesFormatNicType {
 }
 impl ::std::convert::TryFrom<&str> for NetworkInterfacePropertiesFormatNicType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for NetworkInterfacePropertiesFormatNicType {
+impl ::std::convert::TryFrom<&::std::string::String> for NetworkInterfacePropertiesFormatNicType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -5659,8 +5587,7 @@ for NetworkInterfacePropertiesFormatNicType {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for NetworkInterfacePropertiesFormatNicType {
+impl ::std::convert::TryFrom<::std::string::String> for NetworkInterfacePropertiesFormatNicType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5730,9 +5657,7 @@ pub struct NetworkInterfaceTapConfiguration {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        NetworkInterfaceTapConfigurationPropertiesFormat,
-    >,
+    pub properties: ::std::option::Option<NetworkInterfaceTapConfigurationPropertiesFormat>,
     ///Sub Resource type.
     #[serde(
         rename = "type",
@@ -5742,8 +5667,7 @@ pub struct NetworkInterfaceTapConfiguration {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&NetworkInterfaceTapConfiguration>
-for NetworkInterfaceTapConfiguration {
+impl ::std::convert::From<&NetworkInterfaceTapConfiguration> for NetworkInterfaceTapConfiguration {
     fn from(value: &NetworkInterfaceTapConfiguration) -> Self {
         value.clone()
     }
@@ -5795,7 +5719,8 @@ pub struct NetworkInterfaceTapConfigurationPropertiesFormat {
     pub virtual_network_tap: ::std::option::Option<VirtualNetworkTap>,
 }
 impl ::std::convert::From<&NetworkInterfaceTapConfigurationPropertiesFormat>
-for NetworkInterfaceTapConfigurationPropertiesFormat {
+    for NetworkInterfaceTapConfigurationPropertiesFormat
+{
     fn from(value: &NetworkInterfaceTapConfigurationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -6032,7 +5957,8 @@ pub struct NetworkSecurityGroupPropertiesFormat {
     pub subnets: ::std::vec::Vec<Subnet>,
 }
 impl ::std::convert::From<&NetworkSecurityGroupPropertiesFormat>
-for NetworkSecurityGroupPropertiesFormat {
+    for NetworkSecurityGroupPropertiesFormat
+{
     fn from(value: &NetworkSecurityGroupPropertiesFormat) -> Self {
         value.clone()
     }
@@ -6307,9 +6233,8 @@ pub struct PrivateEndpointConnectionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub private_link_service_connection_state: ::std::option::Option<
-        PrivateLinkServiceConnectionState,
-    >,
+    pub private_link_service_connection_state:
+        ::std::option::Option<PrivateLinkServiceConnectionState>,
     #[serde(
         rename = "provisioningState",
         default,
@@ -6319,7 +6244,8 @@ pub struct PrivateEndpointConnectionProperties {
     pub provisioning_state: ::std::option::Option<ProvisioningState>,
 }
 impl ::std::convert::From<&PrivateEndpointConnectionProperties>
-for PrivateEndpointConnectionProperties {
+    for PrivateEndpointConnectionProperties
+{
     fn from(value: &PrivateEndpointConnectionProperties) -> Self {
         value.clone()
     }
@@ -6396,8 +6322,7 @@ pub struct PrivateEndpointIpConfiguration {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&PrivateEndpointIpConfiguration>
-for PrivateEndpointIpConfiguration {
+impl ::std::convert::From<&PrivateEndpointIpConfiguration> for PrivateEndpointIpConfiguration {
     fn from(value: &PrivateEndpointIpConfiguration) -> Self {
         value.clone()
     }
@@ -6465,7 +6390,8 @@ pub struct PrivateEndpointIpConfigurationProperties {
     pub private_ip_address: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PrivateEndpointIpConfigurationProperties>
-for PrivateEndpointIpConfigurationProperties {
+    for PrivateEndpointIpConfigurationProperties
+{
     fn from(value: &PrivateEndpointIpConfigurationProperties) -> Self {
         value.clone()
     }
@@ -6623,9 +6549,7 @@ pub struct PrivateEndpointProperties {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub manual_private_link_service_connections: ::std::vec::Vec<
-        PrivateLinkServiceConnection,
-    >,
+    pub manual_private_link_service_connections: ::std::vec::Vec<PrivateLinkServiceConnection>,
     ///An array of references to the network interfaces created for this private endpoint.
     #[serde(
         rename = "networkInterfaces",
@@ -6725,7 +6649,7 @@ impl ::std::default::Default for PrivateEndpointProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateEndpointPropertiesIpVersionType {
@@ -6749,9 +6673,7 @@ impl ::std::fmt::Display for PrivateEndpointPropertiesIpVersionType {
 }
 impl ::std::str::FromStr for PrivateEndpointPropertiesIpVersionType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "ipv4" => Ok(Self::IPv4),
             "ipv6" => Ok(Self::IPv6),
@@ -6762,14 +6684,11 @@ impl ::std::str::FromStr for PrivateEndpointPropertiesIpVersionType {
 }
 impl ::std::convert::TryFrom<&str> for PrivateEndpointPropertiesIpVersionType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateEndpointPropertiesIpVersionType {
+impl ::std::convert::TryFrom<&::std::string::String> for PrivateEndpointPropertiesIpVersionType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -6777,8 +6696,7 @@ for PrivateEndpointPropertiesIpVersionType {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for PrivateEndpointPropertiesIpVersionType {
+impl ::std::convert::TryFrom<::std::string::String> for PrivateEndpointPropertiesIpVersionType {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -6969,8 +6887,7 @@ pub struct PrivateLinkServiceConnection {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&PrivateLinkServiceConnection>
-for PrivateLinkServiceConnection {
+impl ::std::convert::From<&PrivateLinkServiceConnection> for PrivateLinkServiceConnection {
     fn from(value: &PrivateLinkServiceConnection) -> Self {
         value.clone()
     }
@@ -7035,9 +6952,8 @@ pub struct PrivateLinkServiceConnectionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub private_link_service_connection_state: ::std::option::Option<
-        PrivateLinkServiceConnectionState,
-    >,
+    pub private_link_service_connection_state:
+        ::std::option::Option<PrivateLinkServiceConnectionState>,
     ///The resource id of private link service.
     #[serde(
         rename = "privateLinkServiceId",
@@ -7063,7 +6979,8 @@ pub struct PrivateLinkServiceConnectionProperties {
     pub request_message: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PrivateLinkServiceConnectionProperties>
-for PrivateLinkServiceConnectionProperties {
+    for PrivateLinkServiceConnectionProperties
+{
     fn from(value: &PrivateLinkServiceConnectionProperties) -> Self {
         value.clone()
     }
@@ -7129,7 +7046,8 @@ pub struct PrivateLinkServiceConnectionState {
     pub status: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PrivateLinkServiceConnectionState>
-for PrivateLinkServiceConnectionState {
+    for PrivateLinkServiceConnectionState
+{
     fn from(value: &PrivateLinkServiceConnectionState) -> Self {
         value.clone()
     }
@@ -7216,7 +7134,8 @@ pub struct PrivateLinkServiceIpConfiguration {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PrivateLinkServiceIpConfiguration>
-for PrivateLinkServiceIpConfiguration {
+    for PrivateLinkServiceIpConfiguration
+{
     fn from(value: &PrivateLinkServiceIpConfiguration) -> Self {
         value.clone()
     }
@@ -7310,7 +7229,8 @@ pub struct PrivateLinkServiceIpConfigurationProperties {
     pub subnet: ::std::option::Option<Subnet>,
 }
 impl ::std::convert::From<&PrivateLinkServiceIpConfigurationProperties>
-for PrivateLinkServiceIpConfigurationProperties {
+    for PrivateLinkServiceIpConfigurationProperties
+{
     fn from(value: &PrivateLinkServiceIpConfigurationProperties) -> Self {
         value.clone()
     }
@@ -7495,9 +7415,7 @@ pub struct PrivateLinkServiceProperties {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub load_balancer_frontend_ip_configurations: ::std::vec::Vec<
-        FrontendIpConfiguration,
-    >,
+    pub load_balancer_frontend_ip_configurations: ::std::vec::Vec<FrontendIpConfiguration>,
     ///An array of references to the network interfaces created for this private link service.
     #[serde(
         rename = "networkInterfaces",
@@ -7529,8 +7447,7 @@ pub struct PrivateLinkServiceProperties {
     )]
     pub visibility: ::std::option::Option<ResourceSet>,
 }
-impl ::std::convert::From<&PrivateLinkServiceProperties>
-for PrivateLinkServiceProperties {
+impl ::std::convert::From<&PrivateLinkServiceProperties> for PrivateLinkServiceProperties {
     fn from(value: &PrivateLinkServiceProperties) -> Self {
         value.clone()
     }
@@ -7594,7 +7511,7 @@ impl ::std::default::Default for PrivateLinkServiceProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PrivateLinkServicePropertiesAccessMode {
@@ -7616,9 +7533,7 @@ impl ::std::fmt::Display for PrivateLinkServicePropertiesAccessMode {
 }
 impl ::std::str::FromStr for PrivateLinkServicePropertiesAccessMode {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
             "restricted" => Ok(Self::Restricted),
@@ -7628,14 +7543,11 @@ impl ::std::str::FromStr for PrivateLinkServicePropertiesAccessMode {
 }
 impl ::std::convert::TryFrom<&str> for PrivateLinkServicePropertiesAccessMode {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for PrivateLinkServicePropertiesAccessMode {
+impl ::std::convert::TryFrom<&::std::string::String> for PrivateLinkServicePropertiesAccessMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -7643,8 +7555,7 @@ for PrivateLinkServicePropertiesAccessMode {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for PrivateLinkServicePropertiesAccessMode {
+impl ::std::convert::TryFrom<::std::string::String> for PrivateLinkServicePropertiesAccessMode {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7684,7 +7595,7 @@ for PrivateLinkServicePropertiesAccessMode {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ProvisioningState {
@@ -7710,9 +7621,7 @@ impl ::std::fmt::Display for ProvisioningState {
 }
 impl ::std::str::FromStr for ProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "succeeded" => Ok(Self::Succeeded),
             "updating" => Ok(Self::Updating),
@@ -7724,9 +7633,7 @@ impl ::std::str::FromStr for ProvisioningState {
 }
 impl ::std::convert::TryFrom<&str> for ProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7826,9 +7733,7 @@ pub struct PublicIpAddress {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        ::std::boxed::Box<PublicIpAddressPropertiesFormat>,
-    >,
+    pub properties: ::std::option::Option<::std::boxed::Box<PublicIpAddressPropertiesFormat>>,
     #[serde(
         default,
         skip_serializing_if = "::std::option::Option::is_none",
@@ -7934,9 +7839,8 @@ pub struct PublicIpAddressDnsSettings {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub domain_name_label_scope: ::std::option::Option<
-        PublicIpAddressDnsSettingsDomainNameLabelScope,
-    >,
+    pub domain_name_label_scope:
+        ::std::option::Option<PublicIpAddressDnsSettingsDomainNameLabelScope>,
     ///The Fully Qualified Domain Name of the A DNS record associated with the public IP. This is the concatenation of the domainNameLabel and the regionalized DNS zone.
     #[serde(
         default,
@@ -7999,7 +7903,7 @@ impl ::std::default::Default for PublicIpAddressDnsSettings {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressDnsSettingsDomainNameLabelScope {
@@ -8025,9 +7929,7 @@ impl ::std::fmt::Display for PublicIpAddressDnsSettingsDomainNameLabelScope {
 }
 impl ::std::str::FromStr for PublicIpAddressDnsSettingsDomainNameLabelScope {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "tenantreuse" => Ok(Self::TenantReuse),
             "subscriptionreuse" => Ok(Self::SubscriptionReuse),
@@ -8039,14 +7941,13 @@ impl ::std::str::FromStr for PublicIpAddressDnsSettingsDomainNameLabelScope {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressDnsSettingsDomainNameLabelScope {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PublicIpAddressDnsSettingsDomainNameLabelScope {
+    for PublicIpAddressDnsSettingsDomainNameLabelScope
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8055,7 +7956,8 @@ for PublicIpAddressDnsSettingsDomainNameLabelScope {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PublicIpAddressDnsSettingsDomainNameLabelScope {
+    for PublicIpAddressDnsSettingsDomainNameLabelScope
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8223,9 +8125,7 @@ pub struct PublicIpAddressPropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub delete_option: ::std::option::Option<
-        PublicIpAddressPropertiesFormatDeleteOption,
-    >,
+    pub delete_option: ::std::option::Option<PublicIpAddressPropertiesFormatDeleteOption>,
     #[serde(
         rename = "dnsSettings",
         default,
@@ -8278,9 +8178,7 @@ pub struct PublicIpAddressPropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub migration_phase: ::std::option::Option<
-        PublicIpAddressPropertiesFormatMigrationPhase,
-    >,
+    pub migration_phase: ::std::option::Option<PublicIpAddressPropertiesFormatMigrationPhase>,
     #[serde(
         rename = "natGateway",
         default,
@@ -8332,8 +8230,7 @@ pub struct PublicIpAddressPropertiesFormat {
     )]
     pub service_public_ip_address: ::std::option::Option<PublicIpAddress>,
 }
-impl ::std::convert::From<&PublicIpAddressPropertiesFormat>
-for PublicIpAddressPropertiesFormat {
+impl ::std::convert::From<&PublicIpAddressPropertiesFormat> for PublicIpAddressPropertiesFormat {
     fn from(value: &PublicIpAddressPropertiesFormat) -> Self {
         value.clone()
     }
@@ -8389,7 +8286,7 @@ impl ::std::default::Default for PublicIpAddressPropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressPropertiesFormatDeleteOption {
@@ -8411,9 +8308,7 @@ impl ::std::fmt::Display for PublicIpAddressPropertiesFormatDeleteOption {
 }
 impl ::std::str::FromStr for PublicIpAddressPropertiesFormatDeleteOption {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "delete" => Ok(Self::Delete),
             "detach" => Ok(Self::Detach),
@@ -8423,14 +8318,13 @@ impl ::std::str::FromStr for PublicIpAddressPropertiesFormatDeleteOption {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressPropertiesFormatDeleteOption {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PublicIpAddressPropertiesFormatDeleteOption {
+    for PublicIpAddressPropertiesFormatDeleteOption
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8439,7 +8333,8 @@ for PublicIpAddressPropertiesFormatDeleteOption {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PublicIpAddressPropertiesFormatDeleteOption {
+    for PublicIpAddressPropertiesFormatDeleteOption
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8479,7 +8374,7 @@ for PublicIpAddressPropertiesFormatDeleteOption {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressPropertiesFormatMigrationPhase {
@@ -8507,9 +8402,7 @@ impl ::std::fmt::Display for PublicIpAddressPropertiesFormatMigrationPhase {
 }
 impl ::std::str::FromStr for PublicIpAddressPropertiesFormatMigrationPhase {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),
             "prepare" => Ok(Self::Prepare),
@@ -8522,14 +8415,13 @@ impl ::std::str::FromStr for PublicIpAddressPropertiesFormatMigrationPhase {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressPropertiesFormatMigrationPhase {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PublicIpAddressPropertiesFormatMigrationPhase {
+    for PublicIpAddressPropertiesFormatMigrationPhase
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8538,7 +8430,8 @@ for PublicIpAddressPropertiesFormatMigrationPhase {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PublicIpAddressPropertiesFormatMigrationPhase {
+    for PublicIpAddressPropertiesFormatMigrationPhase
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8643,7 +8536,7 @@ impl ::std::default::Default for PublicIpAddressSku {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressSkuName {
@@ -8667,9 +8560,7 @@ impl ::std::fmt::Display for PublicIpAddressSkuName {
 }
 impl ::std::str::FromStr for PublicIpAddressSkuName {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "basic" => Ok(Self::Basic),
             "standard" => Ok(Self::Standard),
@@ -8680,9 +8571,7 @@ impl ::std::str::FromStr for PublicIpAddressSkuName {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressSkuName {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8731,7 +8620,7 @@ impl ::std::convert::TryFrom<::std::string::String> for PublicIpAddressSkuName {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpAddressSkuTier {
@@ -8753,9 +8642,7 @@ impl ::std::fmt::Display for PublicIpAddressSkuTier {
 }
 impl ::std::str::FromStr for PublicIpAddressSkuTier {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "regional" => Ok(Self::Regional),
             "global" => Ok(Self::Global),
@@ -8765,9 +8652,7 @@ impl ::std::str::FromStr for PublicIpAddressSkuTier {
 }
 impl ::std::convert::TryFrom<&str> for PublicIpAddressSkuTier {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8841,9 +8726,8 @@ pub struct PublicIpDdosProtectionStatusResult {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub is_workload_protected: ::std::option::Option<
-        PublicIpDdosProtectionStatusResultIsWorkloadProtected,
-    >,
+    pub is_workload_protected:
+        ::std::option::Option<PublicIpDdosProtectionStatusResultIsWorkloadProtected>,
     ///IP Address of the Public IP Resource
     #[serde(
         rename = "publicIpAddress",
@@ -8862,7 +8746,8 @@ pub struct PublicIpDdosProtectionStatusResult {
     pub public_ip_address_id: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&PublicIpDdosProtectionStatusResult>
-for PublicIpDdosProtectionStatusResult {
+    for PublicIpDdosProtectionStatusResult
+{
     fn from(value: &PublicIpDdosProtectionStatusResult) -> Self {
         value.clone()
     }
@@ -8906,15 +8791,14 @@ impl ::std::default::Default for PublicIpDdosProtectionStatusResult {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum PublicIpDdosProtectionStatusResultIsWorkloadProtected {
     False,
     True,
 }
-impl ::std::convert::From<&Self>
-for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
+impl ::std::convert::From<&Self> for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
     fn from(value: &PublicIpDdosProtectionStatusResultIsWorkloadProtected) -> Self {
         value.clone()
     }
@@ -8929,9 +8813,7 @@ impl ::std::fmt::Display for PublicIpDdosProtectionStatusResultIsWorkloadProtect
 }
 impl ::std::str::FromStr for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "false" => Ok(Self::False),
             "true" => Ok(Self::True),
@@ -8939,17 +8821,15 @@ impl ::std::str::FromStr for PublicIpDdosProtectionStatusResultIsWorkloadProtect
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
+impl ::std::convert::TryFrom<&str> for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
+    for PublicIpDdosProtectionStatusResultIsWorkloadProtected
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -8958,7 +8838,8 @@ for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for PublicIpDdosProtectionStatusResultIsWorkloadProtected {
+    for PublicIpDdosProtectionStatusResultIsWorkloadProtected
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -9001,7 +8882,8 @@ pub struct ReserveCloudServicePublicIpAddressRequest {
     pub is_rollback: ReserveCloudServicePublicIpAddressRequestIsRollback,
 }
 impl ::std::convert::From<&ReserveCloudServicePublicIpAddressRequest>
-for ReserveCloudServicePublicIpAddressRequest {
+    for ReserveCloudServicePublicIpAddressRequest
+{
     fn from(value: &ReserveCloudServicePublicIpAddressRequest) -> Self {
         value.clone()
     }
@@ -9035,7 +8917,7 @@ for ReserveCloudServicePublicIpAddressRequest {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum ReserveCloudServicePublicIpAddressRequestIsRollback {
@@ -9044,8 +8926,7 @@ pub enum ReserveCloudServicePublicIpAddressRequestIsRollback {
     #[serde(rename = "false")]
     False,
 }
-impl ::std::convert::From<&Self>
-for ReserveCloudServicePublicIpAddressRequestIsRollback {
+impl ::std::convert::From<&Self> for ReserveCloudServicePublicIpAddressRequestIsRollback {
     fn from(value: &ReserveCloudServicePublicIpAddressRequestIsRollback) -> Self {
         value.clone()
     }
@@ -9060,9 +8941,7 @@ impl ::std::fmt::Display for ReserveCloudServicePublicIpAddressRequestIsRollback
 }
 impl ::std::str::FromStr for ReserveCloudServicePublicIpAddressRequestIsRollback {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "true" => Ok(Self::True),
             "false" => Ok(Self::False),
@@ -9070,17 +8949,15 @@ impl ::std::str::FromStr for ReserveCloudServicePublicIpAddressRequestIsRollback
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for ReserveCloudServicePublicIpAddressRequestIsRollback {
+impl ::std::convert::TryFrom<&str> for ReserveCloudServicePublicIpAddressRequestIsRollback {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for ReserveCloudServicePublicIpAddressRequestIsRollback {
+    for ReserveCloudServicePublicIpAddressRequestIsRollback
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -9089,7 +8966,8 @@ for ReserveCloudServicePublicIpAddressRequestIsRollback {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for ReserveCloudServicePublicIpAddressRequestIsRollback {
+    for ReserveCloudServicePublicIpAddressRequestIsRollback
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -9330,8 +9208,7 @@ pub struct ResourceNavigationLinkFormat {
     )]
     pub provisioning_state: ::std::option::Option<ProvisioningState>,
 }
-impl ::std::convert::From<&ResourceNavigationLinkFormat>
-for ResourceNavigationLinkFormat {
+impl ::std::convert::From<&ResourceNavigationLinkFormat> for ResourceNavigationLinkFormat {
     fn from(value: &ResourceNavigationLinkFormat) -> Self {
         value.clone()
     }
@@ -9556,7 +9433,7 @@ impl ::std::default::Default for Route {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RouteNextHopType {
@@ -9584,9 +9461,7 @@ impl ::std::fmt::Display for RouteNextHopType {
 }
 impl ::std::str::FromStr for RouteNextHopType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "virtualnetworkgateway" => Ok(Self::VirtualNetworkGateway),
             "vnetlocal" => Ok(Self::VnetLocal),
@@ -9599,9 +9474,7 @@ impl ::std::str::FromStr for RouteNextHopType {
 }
 impl ::std::convert::TryFrom<&str> for RouteNextHopType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10002,7 +9875,7 @@ impl ::std::default::Default for SecurityRule {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SecurityRuleAccess {
@@ -10024,9 +9897,7 @@ impl ::std::fmt::Display for SecurityRuleAccess {
 }
 impl ::std::str::FromStr for SecurityRuleAccess {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "allow" => Ok(Self::Allow),
             "deny" => Ok(Self::Deny),
@@ -10036,9 +9907,7 @@ impl ::std::str::FromStr for SecurityRuleAccess {
 }
 impl ::std::convert::TryFrom<&str> for SecurityRuleAccess {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10087,7 +9956,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SecurityRuleAccess {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SecurityRuleDirection {
@@ -10109,9 +9978,7 @@ impl ::std::fmt::Display for SecurityRuleDirection {
 }
 impl ::std::str::FromStr for SecurityRuleDirection {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "inbound" => Ok(Self::Inbound),
             "outbound" => Ok(Self::Outbound),
@@ -10121,9 +9988,7 @@ impl ::std::str::FromStr for SecurityRuleDirection {
 }
 impl ::std::convert::TryFrom<&str> for SecurityRuleDirection {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -10288,9 +10153,7 @@ pub struct SecurityRulePropertiesFormat {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub destination_application_security_groups: ::std::vec::Vec<
-        ApplicationSecurityGroup,
-    >,
+    pub destination_application_security_groups: ::std::vec::Vec<ApplicationSecurityGroup>,
     ///The destination port or range. Integer or range between 0 and 65535. Asterisk '*' can also be used to match all ports.
     #[serde(
         rename = "destinationPortRange",
@@ -10360,8 +10223,7 @@ pub struct SecurityRulePropertiesFormat {
     )]
     pub source_port_ranges: ::std::vec::Vec<::std::string::String>,
 }
-impl ::std::convert::From<&SecurityRulePropertiesFormat>
-for SecurityRulePropertiesFormat {
+impl ::std::convert::From<&SecurityRulePropertiesFormat> for SecurityRulePropertiesFormat {
     fn from(value: &SecurityRulePropertiesFormat) -> Self {
         value.clone()
     }
@@ -10399,7 +10261,7 @@ for SecurityRulePropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SecurityRulePropertiesFormatProtocol {
@@ -10430,9 +10292,7 @@ impl ::std::fmt::Display for SecurityRulePropertiesFormatProtocol {
 }
 impl ::std::str::FromStr for SecurityRulePropertiesFormatProtocol {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "tcp" => Ok(Self::Tcp),
             "udp" => Ok(Self::Udp),
@@ -10446,14 +10306,11 @@ impl ::std::str::FromStr for SecurityRulePropertiesFormatProtocol {
 }
 impl ::std::convert::TryFrom<&str> for SecurityRulePropertiesFormatProtocol {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for SecurityRulePropertiesFormatProtocol {
+impl ::std::convert::TryFrom<&::std::string::String> for SecurityRulePropertiesFormatProtocol {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -10461,8 +10318,7 @@ for SecurityRulePropertiesFormatProtocol {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for SecurityRulePropertiesFormatProtocol {
+impl ::std::convert::TryFrom<::std::string::String> for SecurityRulePropertiesFormatProtocol {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -10633,7 +10489,8 @@ pub struct ServiceAssociationLinkPropertiesFormat {
     pub provisioning_state: ::std::option::Option<ProvisioningState>,
 }
 impl ::std::convert::From<&ServiceAssociationLinkPropertiesFormat>
-for ServiceAssociationLinkPropertiesFormat {
+    for ServiceAssociationLinkPropertiesFormat
+{
     fn from(value: &ServiceAssociationLinkPropertiesFormat) -> Self {
         value.clone()
     }
@@ -10702,7 +10559,8 @@ pub struct ServiceDelegationPropertiesFormat {
     pub service_name: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&ServiceDelegationPropertiesFormat>
-for ServiceDelegationPropertiesFormat {
+    for ServiceDelegationPropertiesFormat
+{
     fn from(value: &ServiceDelegationPropertiesFormat) -> Self {
         value.clone()
     }
@@ -10885,9 +10743,7 @@ pub struct ServiceEndpointPolicyDefinition {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        ServiceEndpointPolicyDefinitionPropertiesFormat,
-    >,
+    pub properties: ::std::option::Option<ServiceEndpointPolicyDefinitionPropertiesFormat>,
     ///The type of the resource.
     #[serde(
         rename = "type",
@@ -10897,8 +10753,7 @@ pub struct ServiceEndpointPolicyDefinition {
     )]
     pub type_: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ServiceEndpointPolicyDefinition>
-for ServiceEndpointPolicyDefinition {
+impl ::std::convert::From<&ServiceEndpointPolicyDefinition> for ServiceEndpointPolicyDefinition {
     fn from(value: &ServiceEndpointPolicyDefinition) -> Self {
         value.clone()
     }
@@ -10977,7 +10832,8 @@ pub struct ServiceEndpointPolicyDefinitionPropertiesFormat {
     pub service_resources: ::std::vec::Vec<::std::string::String>,
 }
 impl ::std::convert::From<&ServiceEndpointPolicyDefinitionPropertiesFormat>
-for ServiceEndpointPolicyDefinitionPropertiesFormat {
+    for ServiceEndpointPolicyDefinitionPropertiesFormat
+{
     fn from(value: &ServiceEndpointPolicyDefinitionPropertiesFormat) -> Self {
         value.clone()
     }
@@ -11078,9 +10934,7 @@ pub struct ServiceEndpointPolicyPropertiesFormat {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub service_endpoint_policy_definitions: ::std::vec::Vec<
-        ServiceEndpointPolicyDefinition,
-    >,
+    pub service_endpoint_policy_definitions: ::std::vec::Vec<ServiceEndpointPolicyDefinition>,
     ///A collection of references to subnets.
     #[serde(
         default,
@@ -11090,7 +10944,8 @@ pub struct ServiceEndpointPolicyPropertiesFormat {
     pub subnets: ::std::vec::Vec<Subnet>,
 }
 impl ::std::convert::From<&ServiceEndpointPolicyPropertiesFormat>
-for ServiceEndpointPolicyPropertiesFormat {
+    for ServiceEndpointPolicyPropertiesFormat
+{
     fn from(value: &ServiceEndpointPolicyPropertiesFormat) -> Self {
         value.clone()
     }
@@ -11167,8 +11022,7 @@ pub struct ServiceEndpointPropertiesFormat {
     )]
     pub service: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&ServiceEndpointPropertiesFormat>
-for ServiceEndpointPropertiesFormat {
+impl ::std::convert::From<&ServiceEndpointPropertiesFormat> for ServiceEndpointPropertiesFormat {
     fn from(value: &ServiceEndpointPropertiesFormat) -> Self {
         value.clone()
     }
@@ -11217,7 +11071,9 @@ impl ::std::convert::From<&SubResource> for SubResource {
 }
 impl ::std::default::Default for SubResource {
     fn default() -> Self {
-        Self { id: Default::default() }
+        Self {
+            id: Default::default(),
+        }
     }
 }
 ///Subnet in a virtual network resource.
@@ -11498,9 +11354,7 @@ pub struct SubnetPropertiesFormat {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub application_gateway_ip_configurations: ::std::vec::Vec<
-        ApplicationGatewayIpConfiguration,
-    >,
+    pub application_gateway_ip_configurations: ::std::vec::Vec<ApplicationGatewayIpConfiguration>,
     ///Set this property to false to disable default outbound connectivity for all VMs in the subnet.
     #[serde(
         rename = "defaultOutboundAccess",
@@ -11583,7 +11437,8 @@ pub struct SubnetPropertiesFormat {
         default = "defaults::subnet_properties_format_private_link_service_network_policies",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub private_link_service_network_policies: SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies,
+    pub private_link_service_network_policies:
+        SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies,
     #[serde(
         rename = "provisioningState",
         default,
@@ -11665,9 +11520,11 @@ impl ::std::default::Default for SubnetPropertiesFormat {
             ipam_pool_prefix_allocations: Default::default(),
             nat_gateway: Default::default(),
             network_security_group: Default::default(),
-            private_endpoint_network_policies: defaults::subnet_properties_format_private_endpoint_network_policies(),
+            private_endpoint_network_policies:
+                defaults::subnet_properties_format_private_endpoint_network_policies(),
             private_endpoints: Default::default(),
-            private_link_service_network_policies: defaults::subnet_properties_format_private_link_service_network_policies(),
+            private_link_service_network_policies:
+                defaults::subnet_properties_format_private_link_service_network_policies(),
             provisioning_state: Default::default(),
             purpose: Default::default(),
             resource_navigation_links: Default::default(),
@@ -11711,7 +11568,7 @@ impl ::std::default::Default for SubnetPropertiesFormat {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
@@ -11720,8 +11577,7 @@ pub enum SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
     NetworkSecurityGroupEnabled,
     RouteTableEnabled,
 }
-impl ::std::convert::From<&Self>
-for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
+impl ::std::convert::From<&Self> for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
     fn from(value: &SubnetPropertiesFormatPrivateEndpointNetworkPolicies) -> Self {
         value.clone()
     }
@@ -11731,18 +11587,14 @@ impl ::std::fmt::Display for SubnetPropertiesFormatPrivateEndpointNetworkPolicie
         match *self {
             Self::Enabled => f.write_str("Enabled"),
             Self::Disabled => f.write_str("Disabled"),
-            Self::NetworkSecurityGroupEnabled => {
-                f.write_str("NetworkSecurityGroupEnabled")
-            }
+            Self::NetworkSecurityGroupEnabled => f.write_str("NetworkSecurityGroupEnabled"),
             Self::RouteTableEnabled => f.write_str("RouteTableEnabled"),
         }
     }
 }
 impl ::std::str::FromStr for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -11752,17 +11604,15 @@ impl ::std::str::FromStr for SubnetPropertiesFormatPrivateEndpointNetworkPolicie
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
+impl ::std::convert::TryFrom<&str> for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
+    for SubnetPropertiesFormatPrivateEndpointNetworkPolicies
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -11771,7 +11621,8 @@ for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
+    for SubnetPropertiesFormatPrivateEndpointNetworkPolicies
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -11814,15 +11665,14 @@ impl ::std::default::Default for SubnetPropertiesFormatPrivateEndpointNetworkPol
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     Enabled,
     Disabled,
 }
-impl ::std::convert::From<&Self>
-for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+impl ::std::convert::From<&Self> for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     fn from(value: &SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies) -> Self {
         value.clone()
     }
@@ -11837,9 +11687,7 @@ impl ::std::fmt::Display for SubnetPropertiesFormatPrivateLinkServiceNetworkPoli
 }
 impl ::std::str::FromStr for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => Ok(Self::Enabled),
             "disabled" => Ok(Self::Disabled),
@@ -11847,17 +11695,15 @@ impl ::std::str::FromStr for SubnetPropertiesFormatPrivateLinkServiceNetworkPoli
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+impl ::std::convert::TryFrom<&str> for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+    for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -11866,7 +11712,8 @@ for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+    for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -11874,8 +11721,7 @@ for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
         value.parse()
     }
 }
-impl ::std::default::Default
-for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+impl ::std::default::Default for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     fn default() -> Self {
         SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies::Enabled
     }
@@ -11909,7 +11755,7 @@ for SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SubnetPropertiesFormatSharingScope {
@@ -11931,9 +11777,7 @@ impl ::std::fmt::Display for SubnetPropertiesFormatSharingScope {
 }
 impl ::std::str::FromStr for SubnetPropertiesFormatSharingScope {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "tenant" => Ok(Self::Tenant),
             "delegatedservices" => Ok(Self::DelegatedServices),
@@ -11943,14 +11787,11 @@ impl ::std::str::FromStr for SubnetPropertiesFormatSharingScope {
 }
 impl ::std::convert::TryFrom<&str> for SubnetPropertiesFormatSharingScope {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<&::std::string::String>
-for SubnetPropertiesFormatSharingScope {
+impl ::std::convert::TryFrom<&::std::string::String> for SubnetPropertiesFormatSharingScope {
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -11958,8 +11799,7 @@ for SubnetPropertiesFormatSharingScope {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String>
-for SubnetPropertiesFormatSharingScope {
+impl ::std::convert::TryFrom<::std::string::String> for SubnetPropertiesFormatSharingScope {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -12003,7 +11843,9 @@ impl ::std::convert::From<&TagsObject> for TagsObject {
 }
 impl ::std::default::Default for TagsObject {
     fn default() -> Self {
-        Self { tags: Default::default() }
+        Self {
+            tags: Default::default(),
+        }
     }
 }
 ///Parameters that define the configuration of traffic analytics.
@@ -12082,7 +11924,8 @@ pub struct TrafficAnalyticsConfigurationProperties {
     pub workspace_resource_id: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&TrafficAnalyticsConfigurationProperties>
-for TrafficAnalyticsConfigurationProperties {
+    for TrafficAnalyticsConfigurationProperties
+{
     fn from(value: &TrafficAnalyticsConfigurationProperties) -> Self {
         value.clone()
     }
@@ -12121,9 +11964,8 @@ pub struct TrafficAnalyticsProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_watcher_flow_analytics_configuration: ::std::option::Option<
-        TrafficAnalyticsConfigurationProperties,
-    >,
+    pub network_watcher_flow_analytics_configuration:
+        ::std::option::Option<TrafficAnalyticsConfigurationProperties>,
 }
 impl ::std::convert::From<&TrafficAnalyticsProperties> for TrafficAnalyticsProperties {
     fn from(value: &TrafficAnalyticsProperties) -> Self {
@@ -12168,7 +12010,7 @@ impl ::std::default::Default for TrafficAnalyticsProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum TransportProtocol {
@@ -12194,9 +12036,7 @@ impl ::std::fmt::Display for TransportProtocol {
 }
 impl ::std::str::FromStr for TransportProtocol {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "udp" => Ok(Self::Udp),
             "tcp" => Ok(Self::Tcp),
@@ -12208,9 +12048,7 @@ impl ::std::str::FromStr for TransportProtocol {
 }
 impl ::std::convert::TryFrom<&str> for TransportProtocol {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -12371,18 +12209,16 @@ pub struct VirtualNetworkTapPropertiesFormat {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub destination_load_balancer_front_end_ip_configuration: ::std::option::Option<
-        FrontendIpConfiguration,
-    >,
+    pub destination_load_balancer_front_end_ip_configuration:
+        ::std::option::Option<FrontendIpConfiguration>,
     #[serde(
         rename = "destinationNetworkInterfaceIPConfiguration",
         default,
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub destination_network_interface_ip_configuration: ::std::option::Option<
-        NetworkInterfaceIpConfiguration,
-    >,
+    pub destination_network_interface_ip_configuration:
+        ::std::option::Option<NetworkInterfaceIpConfiguration>,
     ///The VXLAN destination port that will receive the tapped traffic.
     #[serde(
         rename = "destinationPort",
@@ -12398,9 +12234,7 @@ pub struct VirtualNetworkTapPropertiesFormat {
         skip_serializing_if = "::std::vec::Vec::is_empty",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub network_interface_tap_configurations: ::std::vec::Vec<
-        NetworkInterfaceTapConfiguration,
-    >,
+    pub network_interface_tap_configurations: ::std::vec::Vec<NetworkInterfaceTapConfiguration>,
     #[serde(
         rename = "provisioningState",
         default,
@@ -12418,7 +12252,8 @@ pub struct VirtualNetworkTapPropertiesFormat {
     pub resource_guid: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&VirtualNetworkTapPropertiesFormat>
-for VirtualNetworkTapPropertiesFormat {
+    for VirtualNetworkTapPropertiesFormat
+{
     fn from(value: &VirtualNetworkTapPropertiesFormat) -> Self {
         value.clone()
     }
@@ -12437,13 +12272,16 @@ impl ::std::default::Default for VirtualNetworkTapPropertiesFormat {
 }
 /// Generation of default values for serde.
 pub mod defaults {
-    pub(super) fn private_endpoint_properties_ip_version_type() -> super::PrivateEndpointPropertiesIpVersionType {
+    pub(super) fn private_endpoint_properties_ip_version_type(
+    ) -> super::PrivateEndpointPropertiesIpVersionType {
         super::PrivateEndpointPropertiesIpVersionType::IPv4
     }
-    pub(super) fn subnet_properties_format_private_endpoint_network_policies() -> super::SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
+    pub(super) fn subnet_properties_format_private_endpoint_network_policies(
+    ) -> super::SubnetPropertiesFormatPrivateEndpointNetworkPolicies {
         super::SubnetPropertiesFormatPrivateEndpointNetworkPolicies::Disabled
     }
-    pub(super) fn subnet_properties_format_private_link_service_network_policies() -> super::SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
+    pub(super) fn subnet_properties_format_private_link_service_network_policies(
+    ) -> super::SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies {
         super::SubnetPropertiesFormatPrivateLinkServiceNetworkPolicies::Enabled
     }
 }

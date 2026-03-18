@@ -9,9 +9,9 @@ use crate::auth::AuthHttp;
 use crate::error::{ErrorData, Result};
 use crate::get_current_dir;
 use crate::git_utils;
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types;
 use alien_platform_api::SdkResultExt;
-use alien_error::{AlienError, Context, IntoAlienError};
 use ratatui::{prelude::*, widgets::Paragraph, TerminalOptions, Viewport};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -600,7 +600,7 @@ async fn create_new_project<P: AsRef<Path>>(
             .transpose()?,
         deployment_page_background: None,
         packages_config: None,
-        deployment_count: Some(0.0),  // New project has no deployments yet
+        deployment_count: Some(0.0), // New project has no deployments yet
         latest_release: None.into(), // New project has no releases yet
     })
 }

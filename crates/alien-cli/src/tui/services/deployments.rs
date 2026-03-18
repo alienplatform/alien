@@ -4,12 +4,12 @@ use crate::tui::state::deployments::{
     DeploymentItem, DeploymentMetadata, DeploymentPlatform, DeploymentStatus, ReleaseInfo,
     ResourceInfo,
 };
-use alien_platform_api::{types, Client, SdkResultExt};
 use alien_core::{
     ContainerOutputs, EnvironmentInfo, FunctionOutputs, KvOutputs, QueueOutputs, ResourceLifecycle,
     ResourceOutputs, ResourceStatus, ResourceType, StorageOutputs,
 };
 use alien_error::{AlienError, GenericError};
+use alien_platform_api::{types, Client, SdkResultExt};
 use serde_json;
 
 /// Service for deployment-related SDK calls
@@ -143,7 +143,13 @@ impl DeploymentsService {
 
     /// Delete a deployment
     pub async fn delete(&self, id: &str) -> Result<(), String> {
-        let result = self.sdk.delete_deployment().id(id).send().await.into_sdk_error();
+        let result = self
+            .sdk
+            .delete_deployment()
+            .id(id)
+            .send()
+            .await
+            .into_sdk_error();
         match result {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Failed to delete deployment: {}", e)),
@@ -232,7 +238,9 @@ fn extract_resources_from_stack_state(
 }
 
 /// Extract metadata from deployment response
-fn extract_metadata_from_deployment(deployment: &types::DeploymentDetailResponse) -> DeploymentMetadata {
+fn extract_metadata_from_deployment(
+    deployment: &types::DeploymentDetailResponse,
+) -> DeploymentMetadata {
     // Parse environment info from SDK type (which is a JSON value)
     let environment_info = deployment
         .environment_info
@@ -319,15 +327,21 @@ fn deployment_from_api(deployment: types::DeploymentListItemResponse) -> Deploym
 
     // Extract release info if present
     // `release` is Option<DeploymentReleaseInfo> where DeploymentReleaseInfo wraps Option<Inner>
-    let release_info = deployment.release.as_deref().and_then(Option::as_ref).map(|rel| {
-        let gm = rel.git_metadata.as_deref().and_then(Option::as_ref);
-        ReleaseInfo {
-            id: rel.id.as_str().to_string(),
-            git_commit_sha: gm.and_then(|gm| gm.commit_sha.as_ref().map(|cs| cs.as_str().to_string())),
-            git_branch: gm.and_then(|gm| gm.commit_ref.as_ref().map(|cr| cr.as_str().to_string())),
-            created_at: rel.created_at,
-        }
-    });
+    let release_info = deployment
+        .release
+        .as_deref()
+        .and_then(Option::as_ref)
+        .map(|rel| {
+            let gm = rel.git_metadata.as_deref().and_then(Option::as_ref);
+            ReleaseInfo {
+                id: rel.id.as_str().to_string(),
+                git_commit_sha: gm
+                    .and_then(|gm| gm.commit_sha.as_ref().map(|cs| cs.as_str().to_string())),
+                git_branch: gm
+                    .and_then(|gm| gm.commit_ref.as_ref().map(|cr| cr.as_str().to_string())),
+                created_at: rel.created_at,
+            }
+        });
 
     DeploymentItem {
         id: deployment.id.as_str().to_string(),
@@ -350,15 +364,21 @@ fn deployment_from_api_detail(deployment: types::DeploymentDetailResponse) -> De
 
     // Extract release info if present
     // `release` is Option<DeploymentReleaseInfo> where DeploymentReleaseInfo wraps Option<Inner>
-    let release_info = deployment.release.as_deref().and_then(Option::as_ref).map(|rel| {
-        let gm = rel.git_metadata.as_deref().and_then(Option::as_ref);
-        ReleaseInfo {
-            id: rel.id.as_str().to_string(),
-            git_commit_sha: gm.and_then(|gm| gm.commit_sha.as_ref().map(|cs| cs.as_str().to_string())),
-            git_branch: gm.and_then(|gm| gm.commit_ref.as_ref().map(|cr| cr.as_str().to_string())),
-            created_at: rel.created_at,
-        }
-    });
+    let release_info = deployment
+        .release
+        .as_deref()
+        .and_then(Option::as_ref)
+        .map(|rel| {
+            let gm = rel.git_metadata.as_deref().and_then(Option::as_ref);
+            ReleaseInfo {
+                id: rel.id.as_str().to_string(),
+                git_commit_sha: gm
+                    .and_then(|gm| gm.commit_sha.as_ref().map(|cs| cs.as_str().to_string())),
+                git_branch: gm
+                    .and_then(|gm| gm.commit_ref.as_ref().map(|cr| cr.as_str().to_string())),
+                created_at: rel.created_at,
+            }
+        });
 
     DeploymentItem {
         id: deployment.id.as_str().to_string(),
@@ -436,7 +456,9 @@ fn status_from_api(status: types::DeploymentStatus) -> DeploymentStatus {
     }
 }
 
-fn platform_from_api_list(platform: types::DeploymentListItemResponsePlatform) -> DeploymentPlatform {
+fn platform_from_api_list(
+    platform: types::DeploymentListItemResponsePlatform,
+) -> DeploymentPlatform {
     match platform {
         types::DeploymentListItemResponsePlatform::Aws => DeploymentPlatform::Aws,
         types::DeploymentListItemResponsePlatform::Gcp => DeploymentPlatform::Gcp,
@@ -447,7 +469,9 @@ fn platform_from_api_list(platform: types::DeploymentListItemResponsePlatform) -
     }
 }
 
-fn platform_from_api_detail(platform: types::DeploymentDetailResponsePlatform) -> DeploymentPlatform {
+fn platform_from_api_detail(
+    platform: types::DeploymentDetailResponsePlatform,
+) -> DeploymentPlatform {
     match platform {
         types::DeploymentDetailResponsePlatform::Aws => DeploymentPlatform::Aws,
         types::DeploymentDetailResponsePlatform::Gcp => DeploymentPlatform::Gcp,

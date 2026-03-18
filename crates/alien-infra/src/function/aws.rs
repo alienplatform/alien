@@ -2409,9 +2409,7 @@ mod tests {
                     .to_string(),
             })
         });
-        mock_acm
-            .expect_delete_certificate()
-            .returning(|_| Ok(()));
+        mock_acm.expect_delete_certificate().returning(|_| Ok(()));
         Arc::new(mock_acm)
     }
 
@@ -2427,15 +2425,13 @@ mod tests {
                 protocol_type: None,
             })
         });
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_, _| {
-                Ok(Integration {
-                    integration_id: Some("test-integration-id".to_string()),
-                    integration_type: None,
-                    integration_uri: None,
-                })
-            });
+        mock_apigw.expect_create_integration().returning(|_, _| {
+            Ok(Integration {
+                integration_id: Some("test-integration-id".to_string()),
+                integration_type: None,
+                integration_uri: None,
+            })
+        });
         mock_apigw.expect_create_route().returning(|_, _| {
             Ok(Route {
                 route_id: Some("test-route-id".to_string()),
@@ -2485,15 +2481,13 @@ mod tests {
                 protocol_type: None,
             })
         });
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_, _| {
-                Ok(Integration {
-                    integration_id: Some("test-integration-id".to_string()),
-                    integration_type: None,
-                    integration_uri: None,
-                })
-            });
+        mock_apigw.expect_create_integration().returning(|_, _| {
+            Ok(Integration {
+                integration_id: Some("test-integration-id".to_string()),
+                integration_type: None,
+                integration_uri: None,
+            })
+        });
         mock_apigw.expect_create_route().returning(|_, _| {
             Ok(Route {
                 route_id: Some("test-route-id".to_string()),
@@ -2531,9 +2525,7 @@ mod tests {
         mock_apigw
             .expect_delete_api_mapping()
             .returning(|_, _| Ok(()));
-        mock_apigw
-            .expect_delete_domain_name()
-            .returning(|_| Ok(()));
+        mock_apigw.expect_delete_domain_name().returning(|_| Ok(()));
         mock_apigw.expect_delete_api().returning(|_| Ok(()));
         Arc::new(mock_apigw)
     }
@@ -3070,13 +3062,11 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Ok(ImportCertificateResponse {
-                    certificate_arn:
-                        "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id".to_string(),
+                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                        .to_string(),
                 })
             });
-        mock_acm
-            .expect_delete_certificate()
-            .returning(|_| Ok(()));
+        mock_acm.expect_delete_certificate().returning(|_| Ok(()));
 
         // Validate API Gateway is created with the function's name in the API name
         let mut mock_apigw = MockApiGatewayV2Api::new();
@@ -3091,15 +3081,13 @@ mod tests {
                     protocol_type: None,
                 })
             });
-        mock_apigw
-            .expect_create_integration()
-            .returning(|_, _| {
-                Ok(Integration {
-                    integration_id: Some("test-integration-id".to_string()),
-                    integration_type: None,
-                    integration_uri: None,
-                })
-            });
+        mock_apigw.expect_create_integration().returning(|_, _| {
+            Ok(Integration {
+                integration_id: Some("test-integration-id".to_string()),
+                integration_type: None,
+                integration_uri: None,
+            })
+        });
         mock_apigw.expect_create_route().returning(|_, _| {
             Ok(Route {
                 route_id: Some("test-route-id".to_string()),
@@ -3116,8 +3104,8 @@ mod tests {
             Ok(DomainName {
                 domain_name: Some("public-func.test.example.com".to_string()),
                 domain_name_configurations: Some(vec![DomainNameConfiguration {
-                    certificate_arn:
-                        "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id".to_string(),
+                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
+                        .to_string(),
                     endpoint_type: "REGIONAL".to_string(),
                     security_policy: "TLS_1_2".to_string(),
                     api_gateway_domain_name: Some(
@@ -3137,9 +3125,7 @@ mod tests {
         mock_apigw
             .expect_delete_api_mapping()
             .returning(|_, _| Ok(()));
-        mock_apigw
-            .expect_delete_domain_name()
-            .returning(|_| Ok(()));
+        mock_apigw.expect_delete_domain_name().returning(|_| Ok(()));
         mock_apigw.expect_delete_api().returning(|_| Ok(()));
 
         let mock_provider = setup_mock_service_provider(

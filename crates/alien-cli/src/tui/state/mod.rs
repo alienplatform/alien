@@ -3,17 +3,16 @@
 //! This module contains all state types that views need to render.
 //! These are plain data structures with no async operations or SDK dependencies.
 
-pub mod managers;
 pub mod app;
 pub mod commands;
 pub mod connection;
 pub mod deployment_groups;
 pub mod deployments;
 pub mod list;
+pub mod managers;
 pub mod packages;
 pub mod releases;
 
-pub use managers::{ManagerItem, ManagerStatus, LogsConnectionStatus};
 pub use app::{Action, AppState, BuildState, InputMode, SearchState, ViewId};
 pub use commands::{CommandItem, CommandState};
 pub use connection::ConnectionInfo;
@@ -25,5 +24,6 @@ pub use deployments::{
     LogLine, LogsViewState, ResourceInfo,
 };
 pub use list::ListState;
+pub use managers::{LogsConnectionStatus, ManagerItem, ManagerStatus};
 pub use packages::{PackageItem, PackageStatus};
 pub use releases::ReleaseItem;

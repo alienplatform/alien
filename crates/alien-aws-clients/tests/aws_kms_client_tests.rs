@@ -293,7 +293,10 @@ async fn test_describe_key_not_found(ctx: &mut KmsTestContext) {
         } => {
             info!("KMS returned AccessDenied for non-existent key (expected security behavior)");
         }
-        other => panic!("Expected RemoteResourceNotFound or RemoteAccessDenied, got: {:?}", other),
+        other => panic!(
+            "Expected RemoteResourceNotFound or RemoteAccessDenied, got: {:?}",
+            other
+        ),
     }
 }
 

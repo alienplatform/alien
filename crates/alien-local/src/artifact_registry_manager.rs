@@ -161,12 +161,9 @@ mod unix_impl {
                 if entry.path().is_dir() {
                     let metadata_file = entry.path().join("metadata.json");
                     if metadata_file.exists() {
-                        if let Err(e) = Self::recover_single_registry(
-                            &metadata_file,
-                            state_dir,
-                            registries,
-                        )
-                        .await
+                        if let Err(e) =
+                            Self::recover_single_registry(&metadata_file, state_dir, registries)
+                                .await
                         {
                             warn!(
                                 "Failed to recover registry from {:?}: {:?}",
@@ -515,7 +512,12 @@ mod non_unix_stub {
             state_dir: PathBuf,
             _shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         ) -> (Self, Option<tokio::task::JoinHandle<()>>) {
-            (Self { _state_dir: state_dir }, None)
+            (
+                Self {
+                    _state_dir: state_dir,
+                },
+                None,
+            )
         }
 
         pub async fn start_registry(&self, id: &str) -> Result<String> {

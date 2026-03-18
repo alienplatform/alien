@@ -182,10 +182,7 @@ impl BindingsProvider {
 
         let http_client = reqwest::Client::new();
         let client_config = http_client
-            .post(format!(
-                "{}/v1/deployment/resolve-credentials",
-                manager_url
-            ))
+            .post(format!("{}/v1/deployment/resolve-credentials", manager_url))
             .json(&serde_json::json!({
                 "platform": deployment_response.platform,
                 "stackState": stack_state,

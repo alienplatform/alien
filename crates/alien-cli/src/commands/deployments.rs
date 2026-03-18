@@ -18,8 +18,8 @@ use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     DeleteDeploymentId, DeleteDeploymentWorkspace, GetDeploymentId, GetDeploymentWorkspace,
     ListDeploymentsWorkspace, PinDeploymentReleaseId, PinDeploymentReleaseWorkspace,
-    PinReleaseRequest, PinReleaseRequestReleaseId, RedeployDeploymentId, RedeployDeploymentWorkspace,
-    RetryDeploymentId, RetryDeploymentWorkspace,
+    PinReleaseRequest, PinReleaseRequestReleaseId, RedeployDeploymentId,
+    RedeployDeploymentWorkspace, RetryDeploymentId, RetryDeploymentWorkspace,
 };
 use alien_platform_api::SdkResultExt as _;
 use std::io::{self, Write};
@@ -623,7 +623,8 @@ mod tests {
     #[test]
     fn test_parse_targeted_env_var_with_url() {
         // Test URL with https:// (contains colon)
-        let result = parse_targeted_env_var("PLATFORM_BASE_URL=https://example.com:deployment-manager");
+        let result =
+            parse_targeted_env_var("PLATFORM_BASE_URL=https://example.com:deployment-manager");
         assert!(result.is_some());
         let (key, value, patterns) = result.unwrap();
         assert_eq!(key, "PLATFORM_BASE_URL");
@@ -975,18 +976,19 @@ async fn retry_deployment_task(
             field: "deployment_id".to_string(),
             message: "deployment ID format is invalid".to_string(),
         })?;
-    let response: alien_platform_api::ResponseValue<alien_platform_api::types::RetryDeploymentResponse> =
-        client
-            .retry_deployment()
-            .id(&retry_deployment_id_param)
-            .workspace(&retry_workspace_param)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "retrying deployment".to_string(),
-                url: None,
-            })?;
+    let response: alien_platform_api::ResponseValue<
+        alien_platform_api::types::RetryDeploymentResponse,
+    > = client
+        .retry_deployment()
+        .id(&retry_deployment_id_param)
+        .workspace(&retry_workspace_param)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "retrying deployment".to_string(),
+            url: None,
+        })?;
     let retry_response = response.into_inner();
 
     println!("✅ Deployment retry initiated successfully!");

@@ -4,18 +4,12 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(
-            &self,
-            f: &mut ::std::fmt::Formatter<'_>,
-        ) -> Result<(), ::std::fmt::Error> {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }
@@ -283,7 +277,9 @@ impl ::std::convert::From<&ErrorResponse> for ErrorResponse {
 }
 impl ::std::default::Default for ErrorResponse {
     fn default() -> Self {
-        Self { error: Default::default() }
+        Self {
+            error: Default::default(),
+        }
     }
 }
 ///Just-in-time access policy setting.
@@ -384,7 +380,7 @@ impl ::std::convert::From<&JustInTimeAccessPolicy> for JustInTimeAccessPolicy {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum JustInTimeAccessPolicyMultiFactorAuthProvider {
@@ -406,9 +402,7 @@ impl ::std::fmt::Display for JustInTimeAccessPolicyMultiFactorAuthProvider {
 }
 impl ::std::str::FromStr for JustInTimeAccessPolicyMultiFactorAuthProvider {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "azure" => Ok(Self::Azure),
             "none" => Ok(Self::None),
@@ -418,14 +412,13 @@ impl ::std::str::FromStr for JustInTimeAccessPolicyMultiFactorAuthProvider {
 }
 impl ::std::convert::TryFrom<&str> for JustInTimeAccessPolicyMultiFactorAuthProvider {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for JustInTimeAccessPolicyMultiFactorAuthProvider {
+    for JustInTimeAccessPolicyMultiFactorAuthProvider
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -434,7 +427,8 @@ for JustInTimeAccessPolicyMultiFactorAuthProvider {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for JustInTimeAccessPolicyMultiFactorAuthProvider {
+    for JustInTimeAccessPolicyMultiFactorAuthProvider
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -519,7 +513,8 @@ pub struct MarketplaceRegistrationDefinition {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&MarketplaceRegistrationDefinition>
-for MarketplaceRegistrationDefinition {
+    for MarketplaceRegistrationDefinition
+{
     fn from(value: &MarketplaceRegistrationDefinition) -> Self {
         value.clone()
     }
@@ -579,7 +574,8 @@ pub struct MarketplaceRegistrationDefinitionList {
     pub value: ::std::vec::Vec<MarketplaceRegistrationDefinition>,
 }
 impl ::std::convert::From<&MarketplaceRegistrationDefinitionList>
-for MarketplaceRegistrationDefinitionList {
+    for MarketplaceRegistrationDefinitionList
+{
     fn from(value: &MarketplaceRegistrationDefinitionList) -> Self {
         value.clone()
     }
@@ -680,7 +676,8 @@ pub struct MarketplaceRegistrationDefinitionProperties {
     pub publisher_display_name: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&MarketplaceRegistrationDefinitionProperties>
-for MarketplaceRegistrationDefinitionProperties {
+    for MarketplaceRegistrationDefinitionProperties
+{
     fn from(value: &MarketplaceRegistrationDefinitionProperties) -> Self {
         value.clone()
     }
@@ -867,7 +864,9 @@ impl ::std::convert::From<&OperationList> for OperationList {
 }
 impl ::std::default::Default for OperationList {
     fn default() -> Self {
-        Self { value: Default::default() }
+        Self {
+            value: Default::default(),
+        }
     }
 }
 ///The details for the Managed Services offer’s plan in Azure Marketplace.
@@ -1211,24 +1210,21 @@ pub struct RegistrationAssignmentProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        RegistrationAssignmentPropertiesProvisioningState,
-    >,
+    pub provisioning_state:
+        ::std::option::Option<RegistrationAssignmentPropertiesProvisioningState>,
     #[serde(
         rename = "registrationDefinition",
         default,
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub registration_definition: ::std::option::Option<
-        RegistrationAssignmentPropertiesRegistrationDefinition,
-    >,
+    pub registration_definition:
+        ::std::option::Option<RegistrationAssignmentPropertiesRegistrationDefinition>,
     ///The fully qualified path of the registration definition.
     #[serde(rename = "registrationDefinitionId")]
     pub registration_definition_id: ::std::string::String,
 }
-impl ::std::convert::From<&RegistrationAssignmentProperties>
-for RegistrationAssignmentProperties {
+impl ::std::convert::From<&RegistrationAssignmentProperties> for RegistrationAssignmentProperties {
     fn from(value: &RegistrationAssignmentProperties) -> Self {
         value.clone()
     }
@@ -1273,7 +1269,7 @@ for RegistrationAssignmentProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistrationAssignmentPropertiesProvisioningState {
@@ -1315,9 +1311,7 @@ impl ::std::fmt::Display for RegistrationAssignmentPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for RegistrationAssignmentPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "notspecified" => Ok(Self::NotSpecified),
             "accepted" => Ok(Self::Accepted),
@@ -1335,17 +1329,15 @@ impl ::std::str::FromStr for RegistrationAssignmentPropertiesProvisioningState {
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for RegistrationAssignmentPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&str> for RegistrationAssignmentPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistrationAssignmentPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1354,7 +1346,8 @@ for RegistrationAssignmentPropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for RegistrationAssignmentPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1489,9 +1482,8 @@ pub struct RegistrationAssignmentPropertiesRegistrationDefinition {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub properties: ::std::option::Option<
-        RegistrationAssignmentPropertiesRegistrationDefinitionProperties,
-    >,
+    pub properties:
+        ::std::option::Option<RegistrationAssignmentPropertiesRegistrationDefinitionProperties>,
     #[serde(
         rename = "systemData",
         default,
@@ -1509,7 +1501,8 @@ pub struct RegistrationAssignmentPropertiesRegistrationDefinition {
     pub type_: ::std::option::Option<::std::string::String>,
 }
 impl ::std::convert::From<&RegistrationAssignmentPropertiesRegistrationDefinition>
-for RegistrationAssignmentPropertiesRegistrationDefinition {
+    for RegistrationAssignmentPropertiesRegistrationDefinition
+{
     fn from(value: &RegistrationAssignmentPropertiesRegistrationDefinition) -> Self {
         value.clone()
     }
@@ -1673,17 +1666,14 @@ pub struct RegistrationAssignmentPropertiesRegistrationDefinitionProperties {
     )]
     pub registration_definition_name: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<
-    &RegistrationAssignmentPropertiesRegistrationDefinitionProperties,
-> for RegistrationAssignmentPropertiesRegistrationDefinitionProperties {
-    fn from(
-        value: &RegistrationAssignmentPropertiesRegistrationDefinitionProperties,
-    ) -> Self {
+impl ::std::convert::From<&RegistrationAssignmentPropertiesRegistrationDefinitionProperties>
+    for RegistrationAssignmentPropertiesRegistrationDefinitionProperties
+{
+    fn from(value: &RegistrationAssignmentPropertiesRegistrationDefinitionProperties) -> Self {
         value.clone()
     }
 }
-impl ::std::default::Default
-for RegistrationAssignmentPropertiesRegistrationDefinitionProperties {
+impl ::std::default::Default for RegistrationAssignmentPropertiesRegistrationDefinitionProperties {
     fn default() -> Self {
         Self {
             authorizations: Default::default(),
@@ -1737,7 +1727,7 @@ for RegistrationAssignmentPropertiesRegistrationDefinitionProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
@@ -1755,7 +1745,8 @@ pub enum RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisi
     Updating,
 }
 impl ::std::convert::From<&Self>
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     fn from(
         value: &RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState,
     ) -> Self {
@@ -1763,7 +1754,8 @@ for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioning
     }
 }
 impl ::std::fmt::Display
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
             Self::NotSpecified => f.write_str("NotSpecified"),
@@ -1782,11 +1774,10 @@ for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioning
     }
 }
 impl ::std::str::FromStr
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "notspecified" => Ok(Self::NotSpecified),
             "accepted" => Ok(Self::Accepted),
@@ -1805,16 +1796,16 @@ for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioning
     }
 }
 impl ::std::convert::TryFrom<&str>
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -1823,7 +1814,8 @@ for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioning
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationAssignmentPropertiesRegistrationDefinitionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2120,9 +2112,8 @@ pub struct RegistrationDefinitionProperties {
         skip_serializing_if = "::std::option::Option::is_none",
         deserialize_with = "serde_aux::field_attributes::deserialize_default_from_null"
     )]
-    pub provisioning_state: ::std::option::Option<
-        RegistrationDefinitionPropertiesProvisioningState,
-    >,
+    pub provisioning_state:
+        ::std::option::Option<RegistrationDefinitionPropertiesProvisioningState>,
     ///The name of the registration definition.
     #[serde(
         rename = "registrationDefinitionName",
@@ -2132,8 +2123,7 @@ pub struct RegistrationDefinitionProperties {
     )]
     pub registration_definition_name: ::std::option::Option<::std::string::String>,
 }
-impl ::std::convert::From<&RegistrationDefinitionProperties>
-for RegistrationDefinitionProperties {
+impl ::std::convert::From<&RegistrationDefinitionProperties> for RegistrationDefinitionProperties {
     fn from(value: &RegistrationDefinitionProperties) -> Self {
         value.clone()
     }
@@ -2178,7 +2168,7 @@ for RegistrationDefinitionProperties {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum RegistrationDefinitionPropertiesProvisioningState {
@@ -2220,9 +2210,7 @@ impl ::std::fmt::Display for RegistrationDefinitionPropertiesProvisioningState {
 }
 impl ::std::str::FromStr for RegistrationDefinitionPropertiesProvisioningState {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "notspecified" => Ok(Self::NotSpecified),
             "accepted" => Ok(Self::Accepted),
@@ -2240,17 +2228,15 @@ impl ::std::str::FromStr for RegistrationDefinitionPropertiesProvisioningState {
         }
     }
 }
-impl ::std::convert::TryFrom<&str>
-for RegistrationDefinitionPropertiesProvisioningState {
+impl ::std::convert::TryFrom<&str> for RegistrationDefinitionPropertiesProvisioningState {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
 impl ::std::convert::TryFrom<&::std::string::String>
-for RegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationDefinitionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: &::std::string::String,
@@ -2259,7 +2245,8 @@ for RegistrationDefinitionPropertiesProvisioningState {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String>
-for RegistrationDefinitionPropertiesProvisioningState {
+    for RegistrationDefinitionPropertiesProvisioningState
+{
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2424,7 +2411,7 @@ impl ::std::default::Default for SystemData {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataCreatedByType {
@@ -2450,9 +2437,7 @@ impl ::std::fmt::Display for SystemDataCreatedByType {
 }
 impl ::std::str::FromStr for SystemDataCreatedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -2464,9 +2449,7 @@ impl ::std::str::FromStr for SystemDataCreatedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataCreatedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2517,7 +2500,7 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataCreatedByType 
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
 )]
 #[serde(try_from = "String")]
 pub enum SystemDataLastModifiedByType {
@@ -2543,9 +2526,7 @@ impl ::std::fmt::Display for SystemDataLastModifiedByType {
 }
 impl ::std::str::FromStr for SystemDataLastModifiedByType {
     type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value.to_ascii_lowercase().as_str() {
             "user" => Ok(Self::User),
             "application" => Ok(Self::Application),
@@ -2557,9 +2538,7 @@ impl ::std::str::FromStr for SystemDataLastModifiedByType {
 }
 impl ::std::convert::TryFrom<&str> for SystemDataLastModifiedByType {
     type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2581,7 +2560,8 @@ impl ::std::convert::TryFrom<::std::string::String> for SystemDataLastModifiedBy
 }
 /// Generation of default values for serde.
 pub mod defaults {
-    pub(super) fn just_in_time_access_policy_maximum_activation_duration() -> ::std::string::String {
+    pub(super) fn just_in_time_access_policy_maximum_activation_duration() -> ::std::string::String
+    {
         "PT8H".to_string()
     }
 }

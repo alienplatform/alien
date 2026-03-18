@@ -217,7 +217,10 @@ impl CommandServer {
                     // Pull model: create pending index, deployment will poll
                     self.create_pending_index(&request.deployment_id, &command_id)
                         .await?;
-                    debug!("Command {} ready for pull (deployment will poll)", command_id);
+                    debug!(
+                        "Command {} ready for pull (deployment will poll)",
+                        command_id
+                    );
                     (CommandState::Pending, "poll")
                 }
             }
@@ -883,7 +886,10 @@ impl CommandServer {
 
     async fn create_pending_index(&self, deployment_id: &str, command_id: &str) -> Result<()> {
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        let key = format!("target:{}:pending:{}:{}", deployment_id, timestamp, command_id);
+        let key = format!(
+            "target:{}:pending:{}:{}",
+            deployment_id, timestamp, command_id
+        );
 
         // Store empty value - just for ordering
         self.kv
