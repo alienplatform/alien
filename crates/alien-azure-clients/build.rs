@@ -1,11 +1,12 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 fn main() {
     generate_azure_models();
 }
 
 fn generate_azure_models() {
+    println!("cargo:rerun-if-changed=build.rs");
+
     let specs = [
         (
             "./openapi/ContainerApps.json",
@@ -295,7 +296,11 @@ fn generate_azure_models() {
 
         let content = prettyplease::unparse(&new_file);
 
-        let out_file: PathBuf = output_file.into();
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+        let file_name = std::path::Path::new(output_file)
+            .file_name()
+            .expect("invalid output_file");
+        let out_file = std::path::Path::new(&out_dir).join(file_name);
 
         std::fs::write(out_file, content).unwrap();
     }
