@@ -1,6 +1,6 @@
 # DeleteDeploymentResponse
 
-Agent deletion enqueued successfully.
+Deployment deletion enqueued successfully.
 
 ## Example Usage
 

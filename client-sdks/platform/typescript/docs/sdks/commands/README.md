@@ -5,11 +5,11 @@
 ### Available Operations
 
 * [list](#list) - Retrieve commands. Use for dashboard analytics and command history.
-* [create](#create) - Create command metadata. Called by Agent Manager when processing ARC commands. Returns project info for routing decisions.
+* [create](#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 * [listNames](#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [get](#get) - Retrieve a command by ID.
-* [update](#update) - Update command state. Called by Agent Manager when command is dispatched or completes.
+* [update](#update) - Update command state. Called by manager when command is dispatched or completes.
 
 ## list
 
@@ -91,7 +91,7 @@ run();
 
 ## create
 
-Create command metadata. Called by Agent Manager when processing ARC commands. Returns project info for routing decisions.
+Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 
 ### Example Usage
 
@@ -254,7 +254,7 @@ List distinct deployments that have commands, including deployment group info. U
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="listCommandAgents" method="get" path="/v1/commands/deployments" -->
+<!-- UsageSnippet language="typescript" operationID="listCommandDeployments" method="get" path="/v1/commands/deployments" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -308,7 +308,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ListCommandAgentsRequest](../../models/operations/listcommandagentsrequest.md)                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.ListCommandDeploymentsRequest](../../models/operations/listcommanddeploymentsrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -403,7 +403,7 @@ run();
 
 ## update
 
-Update command state. Called by Agent Manager when command is dispatched or completes.
+Update command state. Called by manager when command is dispatched or completes.
 
 ### Example Usage
 

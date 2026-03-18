@@ -4,24 +4,24 @@
 
 ### Available Operations
 
-* [list](#list) - Retrieve all agents.
+* [list](#list) - Retrieve all deployments.
 * [create](#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
-* [getStats](#getstats) - Get aggregated agent statistics. Returns total count and breakdown by status.
-* [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by agents. Used for filter dropdowns.
+* [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
+* [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
 * [get](#get) - Retrieve an agent by ID.
 * [delete](#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
 * [getInfo](#getinfo) - Get deployment connection information including ARC endpoint and resource URLs.
 * [import](#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
 * [redeploy](#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
-* [pinRelease](#pinrelease) - Pin or unpin agent to a specific release. Only works for running agents. Controller will automatically trigger update to target release.
+* [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [updateEnvironmentVariables](#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
 
 ## list
 
-Retrieve all agents.
+Retrieve all deployments.
 
 ### Example Usage
 
@@ -186,7 +186,7 @@ run();
 
 ## getStats
 
-Get aggregated agent statistics. Returns total count and breakdown by status.
+Get aggregated deployment statistics. Returns total count and breakdown by status.
 
 ### Example Usage
 
@@ -262,7 +262,7 @@ run();
 
 ## listFilterPlatforms
 
-List distinct platforms used by agents. Used for filter dropdowns.
+List distinct platforms used by deployments. Used for filter dropdowns.
 
 ### Example Usage
 
@@ -821,7 +821,7 @@ run();
 
 ## pinRelease
 
-Pin or unpin agent to a specific release. Only works for running agents. Controller will automatically trigger update to target release.
+Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 
 ### Example Usage
 

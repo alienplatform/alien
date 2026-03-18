@@ -12,7 +12,7 @@ import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
 
 /**
- * @description User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\nagent is deployed and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Agent Manager\'s ServiceAccount).
+ * @description User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager\'s ServiceAccount).
  */
 export const StackSettingsSchema = z.object({
     get "deploymentModel"(){
@@ -31,8 +31,8 @@ get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()
               },
 get "updates"(){
-                return UpdatesModeSchema.describe("How updates are delivered to the agent.").optional()
+                return UpdatesModeSchema.describe("How updates are delivered to the deployment.").optional()
               }
-    }).describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\nagent is deployed and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Agent Manager's ServiceAccount).")
+    }).describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).")
 
 export type StackSettings = z.infer<typeof StackSettingsSchema>

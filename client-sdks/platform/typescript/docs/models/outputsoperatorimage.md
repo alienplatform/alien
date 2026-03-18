@@ -1,7 +1,5 @@
 # OutputsOperatorImage
 
-Outputs from an operator image package build
-
 ## Example Usage
 
 ```typescript

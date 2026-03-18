@@ -28,7 +28,7 @@ let value: CreateDeploymentResponse = {
 
 ## Fields
 
-| Field                                                         | Type                                                          | Required                                                      | Description                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| `deployment`                                                  | [models.Deployment](../models/deployment.md)                  | :heavy_check_mark:                                            | N/A                                                           |
-| `token`                                                       | *string*                                                      | :heavy_minus_sign:                                            | Agent token (only returned when using deployment group token) |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `deployment`                                                       | [models.Deployment](../models/deployment.md)                       | :heavy_check_mark:                                                 | N/A                                                                |
+| `token`                                                            | *string*                                                           | :heavy_minus_sign:                                                 | Deployment token (only returned when using deployment group token) |

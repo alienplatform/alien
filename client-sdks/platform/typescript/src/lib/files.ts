@@ -11,32 +11,32 @@
 export async function readableStreamToArrayBuffer(
   readable: ReadableStream<Uint8Array>,
 ): Promise<ArrayBuffer> {
-  const reader = readable.getReader()
-  const chunks: Uint8Array[] = []
+  const reader = readable.getReader();
+  const chunks: Uint8Array[] = [];
 
-  let totalLength = 0
-  let done = false
+  let totalLength = 0;
+  let done = false;
 
   while (!done) {
-    const { value, done: doneReading } = await reader.read()
+    const { value, done: doneReading } = await reader.read();
 
     if (doneReading) {
-      done = true
+      done = true;
     } else {
-      chunks.push(value)
-      totalLength += value.length
+      chunks.push(value);
+      totalLength += value.length;
     }
   }
 
-  const concatenatedChunks = new Uint8Array(totalLength)
-  let offset = 0
+  const concatenatedChunks = new Uint8Array(totalLength);
+  let offset = 0;
 
   for (const chunk of chunks) {
-    concatenatedChunks.set(chunk, offset)
-    offset += chunk.length
+    concatenatedChunks.set(chunk, offset);
+    offset += chunk.length;
   }
 
-  return concatenatedChunks.buffer as ArrayBuffer
+  return concatenatedChunks.buffer as ArrayBuffer;
 }
 
 /**
@@ -44,10 +44,10 @@ export async function readableStreamToArrayBuffer(
  * Returns null if the extension is not recognized.
  */
 export function getContentTypeFromFileName(fileName: string): string | null {
-  if (!fileName) return null
+  if (!fileName) return null;
 
-  const ext = fileName.toLowerCase().split(".").pop()
-  if (!ext) return null
+  const ext = fileName.toLowerCase().split(".").pop();
+  if (!ext) return null;
 
   const mimeTypes: Record<string, string> = {
     json: "application/json",
@@ -76,7 +76,7 @@ export function getContentTypeFromFileName(fileName: string): string | null {
     woff2: "font/woff2",
     ttf: "font/ttf",
     otf: "font/otf",
-  }
+  };
 
-  return mimeTypes[ext] || null
+  return mimeTypes[ext] || null;
 }

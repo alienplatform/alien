@@ -3,7 +3,7 @@
 Management configuration for different cloud platforms.
 
 Platform-derived configuration for cross-account/cross-tenant access.
-This is NOT user-specified - it's derived from the Agent Manager's ServiceAccount.
+This is NOT user-specified - it's derived from the Manager's ServiceAccount.
 
 
 ## Supported Types

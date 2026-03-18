@@ -13,7 +13,7 @@ let value: ReleaseListItemResponse = {
     commitMessage:
       "add method to measure Interaction to Next Paint (INP) (#36490)",
     commitRef: "main",
-    commitDate: new Date("2025-09-29T12:00:00Z"),
+    commitDate: new Date("2026-03-16T12:00:00Z"),
     dirty: true,
     remoteUrl: "https://github.com/alienplatform/alien",
     commitAuthorName: "John Doe",

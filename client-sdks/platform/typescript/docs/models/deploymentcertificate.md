@@ -12,8 +12,8 @@ let value: DeploymentCertificate = {};
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `aws`              | *any*              | :heavy_minus_sign: | N/A                |
-| `azure`            | *any*              | :heavy_minus_sign: | N/A                |
-| `gcp`              | *any*              | :heavy_minus_sign: | N/A                |
+| Field                         | Type                          | Required                      | Description                   |
+| ----------------------------- | ----------------------------- | ----------------------------- | ----------------------------- |
+| `aws`                         | *models.DeploymentAwsUnion*   | :heavy_minus_sign:            | N/A                           |
+| `azure`                       | *models.DeploymentAzureUnion* | :heavy_minus_sign:            | N/A                           |
+| `gcp`                         | *models.DeploymentGcpUnion*   | :heavy_minus_sign:            | N/A                           |

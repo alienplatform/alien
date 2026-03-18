@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description How updates are delivered to the agent.
+ * @description How updates are delivered to the deployment.
  */
-export const UpdatesModeSchema = z.enum(["auto", "approval-required"]).describe("How updates are delivered to the agent.")
+export const UpdatesModeSchema = z.enum(["auto", "approval-required"]).describe("How updates are delivered to the deployment.")
 
 export type UpdatesMode = z.infer<typeof UpdatesModeSchema>

@@ -13,7 +13,7 @@ let value: Arc = {
 
 ## Fields
 
-| Field                              | Type                               | Required                           | Description                        |
-| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
-| `url`                              | *string*                           | :heavy_check_mark:                 | Agent Manager URL for ARC commands |
-| `deploymentId`                     | *string*                           | :heavy_check_mark:                 | Agent ID to use in ARC requests    |
+| Field                                | Type                                 | Required                             | Description                          |
+| ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
+| `url`                                | *string*                             | :heavy_check_mark:                   | Manager URL for ARC commands         |
+| `deploymentId`                       | *string*                             | :heavy_check_mark:                   | Deployment ID to use in ARC requests |

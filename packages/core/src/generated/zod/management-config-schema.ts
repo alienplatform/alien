@@ -9,7 +9,7 @@ import { AzureManagementConfigSchema } from "./azure-management-config-schema.js
 import { GcpManagementConfigSchema } from "./gcp-management-config-schema.js";
 
 /**
- * @description Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it\'s derived from the Agent Manager\'s ServiceAccount.
+ * @description Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it\'s derived from the Manager\'s ServiceAccount.
  */
 export const ManagementConfigSchema = z.union([z.lazy(() => AwsManagementConfigSchema).and(z.object({
     "platform": z.enum(["aws"])
@@ -19,6 +19,6 @@ export const ManagementConfigSchema = z.union([z.lazy(() => AwsManagementConfigS
     "platform": z.enum(["azure"])
     })), z.object({
     "platform": z.enum(["kubernetes"])
-    })]).describe("Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Agent Manager's ServiceAccount.")
+    })]).describe("Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount.")
 
 export type ManagementConfig = z.infer<typeof ManagementConfigSchema>

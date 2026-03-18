@@ -1,6 +1,6 @@
 # NewDeploymentRequestUpdates
 
-How updates are delivered to the agent.
+How updates are delivered to the deployment.
 
 ## Example Usage
 

@@ -14,7 +14,7 @@ let value: SyncReconcileResponseCurrentReleaseProfileGcpStack = {
 
 ## Fields
 
-| Field                          | Type                           | Required                       | Description                    |
-| ------------------------------ | ------------------------------ | ------------------------------ | ------------------------------ |
-| `condition`                    | *any*                          | :heavy_minus_sign:             | N/A                            |
-| `scope`                        | *string*                       | :heavy_check_mark:             | Scope (project/resource level) |
+| Field                                                             | Type                                                              | Required                                                          | Description                                                       |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `condition`                                                       | *models.SyncReconcileResponseCurrentReleaseProfileConditionUnion* | :heavy_minus_sign:                                                | N/A                                                               |
+| `scope`                                                           | *string*                                                          | :heavy_check_mark:                                                | Scope (project/resource level)                                    |

@@ -1,7 +1,5 @@
 # OutputsCloudformation
 
-Outputs from a CloudFormation package build
-
 ## Example Usage
 
 ```typescript

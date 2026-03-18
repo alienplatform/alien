@@ -12,6 +12,6 @@ let value: Failed = {};
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `error`            | *any*              | :heavy_minus_sign: | N/A                |
+| Field                     | Type                      | Required                  | Description               |
+| ------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| `error`                   | *models.FailedErrorUnion* | :heavy_minus_sign:        | N/A                       |

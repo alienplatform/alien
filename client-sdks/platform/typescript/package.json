@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.0.68",
+  "version": "1.0.72",
   "author": "Speakeasy",
   "type": "module",
   "main": "./esm/index.js",
@@ -48,7 +48,9 @@
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "peerDependencies": {},
+  "peerDependencies": {
+    
+  },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "eslint": "^9.19.0",

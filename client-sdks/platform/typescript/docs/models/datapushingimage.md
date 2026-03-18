@@ -16,5 +16,5 @@ let value: DataPushingImage = {
 | Field                          | Type                           | Required                       | Description                    |
 | ------------------------------ | ------------------------------ | ------------------------------ | ------------------------------ |
 | `image`                        | *string*                       | :heavy_check_mark:             | Name of the image being pushed |
-| `progress`                     | *any*                          | :heavy_minus_sign:             | N/A                            |
+| `progress`                     | *models.ProgressUnion*         | :heavy_minus_sign:             | N/A                            |
 | `type`                         | *"PushingImage"*               | :heavy_check_mark:             | N/A                            |

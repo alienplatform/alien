@@ -1,7 +1,5 @@
 # OutputsHelm
 
-Outputs from a Helm chart package build
-
 ## Example Usage
 
 ```typescript

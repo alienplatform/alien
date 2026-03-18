@@ -28,7 +28,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # Encrypted database
-turso = "0.3.2"
+turso = "0.5"
 
 # Utilities
 chrono = { workspace = true, features = ["serde"] }

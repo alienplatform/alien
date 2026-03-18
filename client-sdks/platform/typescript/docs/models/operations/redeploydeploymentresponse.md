@@ -1,6 +1,6 @@
 # RedeployDeploymentResponse
 
-Agent redeployment triggered successfully.
+Deployment redeployment triggered successfully.
 
 ## Example Usage
 

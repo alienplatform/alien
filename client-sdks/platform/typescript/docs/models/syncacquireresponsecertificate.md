@@ -12,8 +12,8 @@ let value: SyncAcquireResponseCertificate = {};
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `aws`              | *any*              | :heavy_minus_sign: | N/A                |
-| `azure`            | *any*              | :heavy_minus_sign: | N/A                |
-| `gcp`              | *any*              | :heavy_minus_sign: | N/A                |
+| Field                                  | Type                                   | Required                               | Description                            |
+| -------------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------------- |
+| `aws`                                  | *models.SyncAcquireResponseAwsUnion*   | :heavy_minus_sign:                     | N/A                                    |
+| `azure`                                | *models.SyncAcquireResponseAzureUnion* | :heavy_minus_sign:                     | N/A                                    |
+| `gcp`                                  | *models.SyncAcquireResponseGcpUnion*   | :heavy_minus_sign:                     | N/A                                    |

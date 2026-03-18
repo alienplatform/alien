@@ -29,15 +29,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 export function isPlainObject(value: unknown): value is object {
   if (typeof value !== "object" || value === null) {
-    return false
+    return false;
   }
 
-  const prototype = Object.getPrototypeOf(value)
+  const prototype = Object.getPrototypeOf(value);
   return (
     (prototype === null ||
       prototype === Object.prototype ||
       Object.getPrototypeOf(prototype) === null) &&
     !(Symbol.toStringTag in value) &&
     !(Symbol.iterator in value)
-  )
+  );
 }

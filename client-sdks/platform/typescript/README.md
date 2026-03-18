@@ -144,21 +144,6 @@ run();
 <details open>
 <summary>Available methods</summary>
 
-### [AgentManagers](docs/sdks/agentmanagers/README.md)
-
-* [list](docs/sdks/agentmanagers/README.md#list) - Retrieve all managers.
-* [create](docs/sdks/agentmanagers/README.md#create) - Create a new manager.
-* [get](docs/sdks/agentmanagers/README.md#get) - Retrieve a manager by ID.
-* [delete](docs/sdks/agentmanagers/README.md#delete) - Delete a manager by ID.
-* [getManagementConfig](docs/sdks/agentmanagers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-* [provision](docs/sdks/agentmanagers/README.md#provision) - Enqueue provisioning for a manager by ID.
-* [update](docs/sdks/agentmanagers/README.md#update) - Update a manager to a specific release ID or active release.
-* [listEvents](docs/sdks/agentmanagers/README.md#listevents) - Retrieve all events of a manager.
-* [generateDeepstoreToken](docs/sdks/agentmanagers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
-* [reportHeartbeat](docs/sdks/agentmanagers/README.md#reportheartbeat) - Report Manager health status and metrics.
-* [getDeployment](docs/sdks/agentmanagers/README.md#getdeployment) - Get deployment details for a user manager (internal agent platform, status, resources).
-* [googleCloudConnect](docs/sdks/agentmanagers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
-
 ### [ApiKeys](docs/sdks/apikeys/README.md)
 
 * [list](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
@@ -175,11 +160,11 @@ run();
 ### [Commands](docs/sdks/commands/README.md)
 
 * [list](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
-* [create](docs/sdks/commands/README.md#create) - Create command metadata. Called by Agent Manager when processing ARC commands. Returns project info for routing decisions.
+* [create](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
-* [update](docs/sdks/commands/README.md#update) - Update command state. Called by Agent Manager when command is dispatched or completes.
+* [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 
 ### [Containers](docs/sdks/containers/README.md)
 
@@ -209,17 +194,17 @@ run();
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
-* [list](docs/sdks/deployments/README.md#list) - Retrieve all agents.
+* [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 * [create](docs/sdks/deployments/README.md#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
-* [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated agent statistics. Returns total count and breakdown by status.
-* [listFilterPlatforms](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by agents. Used for filter dropdowns.
+* [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
+* [listFilterPlatforms](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including ARC endpoint and resource URLs.
 * [import](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
-* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin agent to a specific release. Only works for running agents. Controller will automatically trigger update to target release.
+* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
@@ -235,6 +220,21 @@ run();
 
 * [list](docs/sdks/events/README.md#list) - Retrieve all events.
 * [get](docs/sdks/events/README.md#get) - Retrieve an event by ID.
+
+### [Managers](docs/sdks/managers/README.md)
+
+* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
+* [create](docs/sdks/managers/README.md#create) - Create a new manager.
+* [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
+* [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
+* [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
+* [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
+* [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
+* [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
+* [generateDeepstoreToken](docs/sdks/managers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+* [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
+* [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a user manager (internal agent platform, status, resources).
+* [googleCloudConnect](docs/sdks/managers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
 
 ### [Packages](docs/sdks/packages/README.md)
 
@@ -307,18 +307,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 
 <summary>Available standalone functions</summary>
 
-- [`agentManagersCreate`](docs/sdks/agentmanagers/README.md#create) - Create a new manager.
-- [`agentManagersDelete`](docs/sdks/agentmanagers/README.md#delete) - Delete a manager by ID.
-- [`agentManagersGenerateDeepstoreToken`](docs/sdks/agentmanagers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
-- [`agentManagersGet`](docs/sdks/agentmanagers/README.md#get) - Retrieve a manager by ID.
-- [`agentManagersGetDeployment`](docs/sdks/agentmanagers/README.md#getdeployment) - Get deployment details for a user manager (internal agent platform, status, resources).
-- [`agentManagersGetManagementConfig`](docs/sdks/agentmanagers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-- [`agentManagersGoogleCloudConnect`](docs/sdks/agentmanagers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
-- [`agentManagersList`](docs/sdks/agentmanagers/README.md#list) - Retrieve all managers.
-- [`agentManagersListEvents`](docs/sdks/agentmanagers/README.md#listevents) - Retrieve all events of a manager.
-- [`agentManagersProvision`](docs/sdks/agentmanagers/README.md#provision) - Enqueue provisioning for a manager by ID.
-- [`agentManagersReportHeartbeat`](docs/sdks/agentmanagers/README.md#reportheartbeat) - Report Manager health status and metrics.
-- [`agentManagersUpdate`](docs/sdks/agentmanagers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`apiKeysCreate`](docs/sdks/apikeys/README.md#create) - Create a new API key.
 - [`apiKeysDeleteMultiple`](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 - [`apiKeysGet`](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
@@ -326,12 +314,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`apiKeysRevoke`](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 - [`apiKeysUpdate`](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
 - [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
-- [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by Agent Manager when processing ARC commands. Returns project info for routing decisions.
+- [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
-- [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by Agent Manager when command is dispatched or completes.
+- [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 - [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
 - [`containersGetDeploymentCluster`](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 - [`containersGetDeploymentContainer`](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
@@ -354,12 +342,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including ARC endpoint and resource URLs.
-- [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated agent statistics. Returns total count and breakdown by status.
+- [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 - [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
-- [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all agents.
+- [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
-- [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by agents. Used for filter dropdowns.
-- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin agent to a specific release. Only works for running agents. Controller will automatically trigger update to target release.
+- [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
+- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
@@ -369,6 +357,18 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
+- [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
+- [`managersGenerateDeepstoreToken`](docs/sdks/managers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+- [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
+- [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a user manager (internal agent platform, status, resources).
+- [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
+- [`managersGoogleCloudConnect`](docs/sdks/managers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
+- [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
+- [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
+- [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
+- [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
+- [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
