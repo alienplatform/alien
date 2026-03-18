@@ -72,7 +72,9 @@ mod gcp {
 
             let token = self
                 .config
-                .get_bearer_token("https://www.googleapis.com/")
+                // For service-account JWT credentials, GCP expects the JWT audience
+                // to match the target service endpoint.
+                .get_bearer_token("https://storage.googleapis.com/")
                 .await
                 .map_err(|e| to_object_store_error("GCS", e))?;
 
