@@ -796,19 +796,9 @@ async fn fetch_push_settings_from_platform(
     // Now call the manager to get credentials
     info!("   Generating repository credentials...");
 
-    use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
-    let reqwest_client = reqwest::Client::builder()
-        .default_headers({
-            let mut headers = HeaderMap::new();
-            headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
-            headers
-        })
-        .build()
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to create HTTP client for manager".to_string(),
-            url: None,
-        })?;
+    // Use the authenticated HTTP client so the manager receives the same
+    // Authorization header that the caller used with the platform API.
+    let reqwest_client = &http.client;
 
     // Call manager API to generate credentials
     let credentials_response = reqwest_client
