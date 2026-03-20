@@ -148,7 +148,10 @@ impl AwsClientConfigExt for AwsClientConfig {
         use reqwest::Client;
         use uuid::Uuid;
 
-        let sts_client = StsClient::new(Client::new(), self.clone());
+        // If using WebIdentity (IRSA), first exchange the token for real temporary credentials
+        // before calling AssumeRole, which requires valid signed credentials.
+        let base_config = self.get_web_identity_credentials().await?;
+        let sts_client = StsClient::new(Client::new(), base_config);
 
         let session_name = config
             .session_name

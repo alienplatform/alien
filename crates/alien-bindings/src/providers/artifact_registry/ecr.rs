@@ -206,12 +206,33 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "Creating ECR repository"
         );
 
+        // Assume the push role for repository creation
+        let push_role_arn = self.push_role_arn.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::BindingConfigInvalid {
+                binding_name: self.binding_name.clone(),
+                reason: "Push role ARN not available".to_string(),
+            })
+        })?;
+        let impersonated = self
+            .aws_config
+            .impersonate(alien_aws_clients::AwsImpersonationConfig {
+                role_arn: push_role_arn.clone(),
+                session_name: Some("alien-ecr-create".to_string()),
+                duration_seconds: None,
+                external_id: None,
+            })
+            .await
+            .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR push role".to_string(), Some(repo_name.to_string())))?;
+        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
+            crate::http_client::create_http_client(),
+            impersonated,
+        );
+
         let request = CreateRepositoryRequest::builder()
             .repository_name(full_repo_name.clone())
             .build();
 
-        let response = self
-            .ecr_client
+        let response = ecr_client
             .create_repository(request)
             .await
             .map_err(|e| {
@@ -252,12 +273,33 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "Getting ECR repository details"
         );
 
+        // Assume the pull role for repository reads
+        let pull_role_arn = self.pull_role_arn.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::BindingConfigInvalid {
+                binding_name: self.binding_name.clone(),
+                reason: "Pull role ARN not available".to_string(),
+            })
+        })?;
+        let impersonated = self
+            .aws_config
+            .impersonate(alien_aws_clients::AwsImpersonationConfig {
+                role_arn: pull_role_arn.clone(),
+                session_name: Some("alien-ecr-describe".to_string()),
+                duration_seconds: None,
+                external_id: None,
+            })
+            .await
+            .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR pull role".to_string(), Some(repo_id.to_string())))?;
+        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
+            crate::http_client::create_http_client(),
+            impersonated,
+        );
+
         let request = DescribeRepositoriesRequest::builder()
             .repository_names(vec![full_repo_name.clone()])
             .build();
 
-        let response = self
-            .ecr_client
+        let response = ecr_client
             .describe_repositories(request)
             .await
             .map_err(|e| {
