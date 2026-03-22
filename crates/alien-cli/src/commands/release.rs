@@ -803,8 +803,8 @@ async fn fetch_push_settings_from_platform(
     // Call manager API to generate credentials
     let credentials_response = reqwest_client
         .post(format!(
-            "{}/v1/artifact-registry/repositories/{}/credentials",
-            build_config.manager_url, build_config.repository_name
+            "{}/v1/artifact-registry/repositories/{}/credentials?platform={}",
+            build_config.manager_url, build_config.repository_name, platform.as_str()
         ))
         .json(&serde_json::json!({
             "operation": "push",
