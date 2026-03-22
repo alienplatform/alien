@@ -100,7 +100,7 @@ impl AwsClientConfigExt for AwsClientConfig {
             }));
         };
 
-        Ok(Self {
+        let config = Self {
             account_id: environment_variables
                 .get("AWS_ACCOUNT_ID")
                 .ok_or_else(|| {
@@ -133,7 +133,15 @@ impl AwsClientConfigExt for AwsClientConfig {
             } else {
                 None
             },
-        })
+        };
+
+        // If using WebIdentity (IRSA), resolve the token to real AccessKeys immediately.
+        // This avoids every downstream client needing to handle WebIdentity specially.
+        if matches!(config.credentials, AwsCredentials::WebIdentity { .. }) {
+            return config.get_web_identity_credentials().await;
+        }
+
+        Ok(config)
     }
 
     /// Create a new `AwsClientConfig` from standard environment variables.
