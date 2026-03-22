@@ -112,6 +112,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
       - name: Setup Depot
         uses: depot/setup-action@v1
 
@@ -122,6 +129,8 @@ jobs:
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Publish crates
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           for crate in \
             alien-error-derive \
@@ -201,6 +210,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
       - name: Setup Depot
         uses: depot/setup-action@v1
 
@@ -222,6 +238,8 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build alien CLI
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo zigbuild -p alien-cli --release \
             --target ${{ matrix.target }}
