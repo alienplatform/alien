@@ -19,7 +19,7 @@ path = "src/storybook/main.rs"
 required-features = ["storybook"]
 
 [features]
-default = ["storybook", "otlp", "platform"]
+default = ["otlp", "platform"]
 storybook = ["dep:color-eyre"]
 otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open", "dep:keyring"]
