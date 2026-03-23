@@ -27,6 +27,10 @@ pub struct AlienManagerBuilder {
     /// When `true`, the default `/v1/initialize` route is omitted from the router.
     /// Use this when embedding in a process that overrides initialize via `extra_routes`.
     skip_initialize: bool,
+    /// When `true`, the deploy page (`/deploy`) is omitted from the router.
+    skip_deploy_page: bool,
+    /// When `true`, the install script (`/v1/install`) is omitted from the router.
+    skip_install: bool,
 }
 
 impl AlienManagerBuilder {
@@ -43,6 +47,8 @@ impl AlienManagerBuilder {
             extra_routes: None,
             dev_status_tx: None,
             skip_initialize: false,
+            skip_deploy_page: false,
+            skip_install: false,
         }
     }
 
@@ -94,6 +100,20 @@ impl AlienManagerBuilder {
     /// Skip the default `/v1/initialize` route so a custom one can be provided via `extra_routes`.
     pub fn skip_initialize(mut self) -> Self {
         self.skip_initialize = true;
+        self
+    }
+
+    /// Skip the deploy page (`/deploy`) route.
+    /// Use this when the platform provides its own deploy page (e.g., a dashboard).
+    pub fn skip_deploy_page(mut self) -> Self {
+        self.skip_deploy_page = true;
+        self
+    }
+
+    /// Skip the install script (`/v1/install`) route.
+    /// Use this when binaries are distributed through a separate packages service.
+    pub fn skip_install(mut self) -> Self {
+        self.skip_install = true;
         self
     }
 
@@ -260,8 +280,14 @@ impl AlienManagerBuilder {
         };
 
         // --- Router ---
-        let mut router =
-            crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
+        let mut router = crate::routes::create_router_inner(
+            app_state.clone(),
+            crate::routes::RouterOptions {
+                include_initialize: !self.skip_initialize,
+                include_deploy_page: !self.skip_deploy_page,
+                include_install: !self.skip_install,
+            },
+        );
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }
@@ -372,8 +398,14 @@ impl AlienManagerBuilder {
             config: config.clone(),
         };
 
-        let mut router =
-            crate::routes::create_router_inner(app_state.clone(), !self.skip_initialize);
+        let mut router = crate::routes::create_router_inner(
+            app_state.clone(),
+            crate::routes::RouterOptions {
+                include_initialize: !self.skip_initialize,
+                include_deploy_page: !self.skip_deploy_page,
+                include_install: !self.skip_install,
+            },
+        );
         if let Some(extra) = self.extra_routes {
             router = router.merge(extra.with_state(app_state));
         }

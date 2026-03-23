@@ -62,13 +62,13 @@ pub fn setup_tracing(verbose: bool) {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<()> {
-    // Load embedded config if present (for white-labeled binaries)
-    let _embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
+    // Load embedded config if present (for white-labeled or pre-configured binaries)
+    let embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
 
     setup_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Up(args) => up_command(args).await,
+        Commands::Up(args) => up_command(args, embedded_config.as_ref()).await,
         Commands::Down(args) => down_command(args).await,
         Commands::Status(args) => status_command(args).await,
         Commands::List(args) => list_command(args).await,

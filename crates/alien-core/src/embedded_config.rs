@@ -17,33 +17,52 @@ pub const FOOTER_SIZE: usize = 12;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployCliConfig {
+    // --- Connection (for pre-configured/OSS binaries) ---
     /// Manager URL to connect to.
-    pub manager_url: String,
-    /// Authentication token for the manager API.
-    pub token: String,
-    /// Deployment group ID.
-    pub deployment_group_id: String,
-    /// Display name for the deployment group.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
+    pub manager_url: Option<String>,
+    /// Authentication token for the manager API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Deployment group ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_group_id: Option<String>,
     /// Default platform for deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_platform: Option<String>,
+    // --- Branding (for white-labeled SaaS binaries) ---
+    /// Binary name (e.g., "acme-deploy").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Human-friendly display name (e.g., "Acme Deploy CLI").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 /// Configuration embedded in alien-agent binaries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
+    // --- Connection (for pre-configured/OSS binaries) ---
     /// Manager URL to connect to.
-    pub manager_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager_url: Option<String>,
     /// Authentication token for the manager API.
-    pub token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     /// Deployment ID this agent manages.
-    pub deployment_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
     /// Sync interval in seconds (default: 30).
     #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,
+    // --- Branding (for white-labeled SaaS binaries) ---
+    /// Binary name (e.g., "acme-agent").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Human-friendly display name (e.g., "Acme Agent").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 fn default_sync_interval() -> u64 {
@@ -145,11 +164,12 @@ mod tests {
     #[test]
     fn test_roundtrip_deploy_cli_config() {
         let config = DeployCliConfig {
-            manager_url: "https://manager.example.com".into(),
-            token: "tok_abc123".into(),
-            deployment_group_id: "dg_xyz".into(),
+            manager_url: Some("https://manager.example.com".into()),
+            token: Some("tok_abc123".into()),
+            deployment_group_id: Some("dg_xyz".into()),
             display_name: Some("Production".into()),
             default_platform: Some("aws".into()),
+            name: Some("acme-deploy".into()),
         };
 
         let binary = b"fake binary content";
@@ -163,6 +183,7 @@ mod tests {
         assert_eq!(loaded.token, config.token);
         assert_eq!(loaded.deployment_group_id, config.deployment_group_id);
         assert_eq!(loaded.display_name, config.display_name);
+        assert_eq!(loaded.name, config.name);
     }
 
     #[test]
@@ -176,10 +197,12 @@ mod tests {
     #[test]
     fn test_roundtrip_agent_config() {
         let config = AgentConfig {
-            manager_url: "https://manager.example.com".into(),
-            token: "tok_agent123".into(),
-            deployment_id: "dep_abc".into(),
+            manager_url: Some("https://manager.example.com".into()),
+            token: Some("tok_agent123".into()),
+            deployment_id: Some("dep_abc".into()),
             sync_interval_secs: 60,
+            name: Some("acme-agent".into()),
+            display_name: Some("Acme Agent".into()),
         };
 
         let binary = b"agent binary";
@@ -192,6 +215,7 @@ mod tests {
         assert_eq!(loaded.manager_url, config.manager_url);
         assert_eq!(loaded.deployment_id, config.deployment_id);
         assert_eq!(loaded.sync_interval_secs, 60);
+        assert_eq!(loaded.name, config.name);
     }
 
     /// Helper that works on in-memory bytes (for tests that don't need files).

@@ -29,7 +29,7 @@ In both cases, the software is fully managed even though it lives in a remote en
 ### 1. Install the CLI
 
 ```bash
-curl -fsSL https://releases.alien.dev/alien/latest/install | bash
+curl -fsSL https://alien.dev/install | bash
 ```
 
 ### 2. Define your app

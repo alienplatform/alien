@@ -8,6 +8,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
     StackSettings,
@@ -64,9 +65,9 @@ pub struct UpArgs {
     pub foreground: bool,
 }
 
-pub async fn up_command(args: UpArgs) -> Result<()> {
-    // Resolve token and manager URL from args or tracked deployment
-    let (token, manager_url, platform_str, name) = resolve_deployment_info(&args)?;
+pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    // Resolve token and manager URL from args, embedded config, or tracked deployment
+    let (token, manager_url, platform_str, name) = resolve_deployment_info(&args, embedded_config)?;
 
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -125,7 +126,10 @@ pub async fn up_command(args: UpArgs) -> Result<()> {
     Ok(())
 }
 
-fn resolve_deployment_info(args: &UpArgs) -> Result<(String, String, String, String)> {
+fn resolve_deployment_info(
+    args: &UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<(String, String, String, String)> {
     // If name is provided, try to load from tracker
     if let Some(ref name) = args.name {
         let tracker = DeploymentTracker::new()?;
@@ -143,27 +147,39 @@ fn resolve_deployment_info(args: &UpArgs) -> Result<(String, String, String, Str
         }
     }
 
-    // Otherwise, require all fields
-    let token = args.token.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "token".to_string(),
-            message: "--token is required for new deployments. Get a token from 'alien onboard' or the deploy page.".to_string(),
-        })
-    })?;
+    // CLI args override embedded config, which overrides nothing (required)
+    let token = args
+        .token
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: "--token is required for new deployments. Get a token from 'alien onboard' or the deploy page.".to_string(),
+            })
+        })?;
 
-    let manager_url = args.manager_url.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "manager_url".to_string(),
-            message: "--manager-url is required for new deployments. Set ALIEN_MANAGER_URL or use --manager-url <url>.".to_string(),
-        })
-    })?;
+    let manager_url = args
+        .manager_url
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.manager_url.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "manager_url".to_string(),
+                message: "--manager-url is required for new deployments. Set ALIEN_MANAGER_URL or use --manager-url <url>.".to_string(),
+            })
+        })?;
 
-    let platform = args.platform.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
-            message: "--platform is required for new deployments. Choose from: aws, gcp, azure, kubernetes, local.".to_string(),
-        })
-    })?;
+    let platform = args
+        .platform
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.default_platform.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: "--platform is required for new deployments. Choose from: aws, gcp, azure, kubernetes, local.".to_string(),
+            })
+        })?;
 
     let name = args.name.clone().unwrap_or_else(|| {
         hostname::get()

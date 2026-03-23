@@ -149,8 +149,8 @@ fn main() {
 // ---------------------------------------------------------------------------
 
 async fn run(args: Args) -> Result<()> {
-    // Load embedded config (for white-label builds)
-    let _embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
+    // Load embedded config (for white-labeled or pre-configured builds)
+    let embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
 
     // Setup logging
     setup_tracing(args.verbose);
@@ -179,7 +179,15 @@ async fn run(args: Args) -> Result<()> {
     let db = alien_agent::db::AgentDb::new(&data_dir, &args.encryption_key).await?;
 
     // Initialize with manager (online mode only)
-    let sync_config = match (args.sync_url, args.sync_token) {
+    // CLI args override embedded config values
+    let effective_sync_url = args
+        .sync_url
+        .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
+    let effective_sync_token = args
+        .sync_token
+        .or_else(|| embedded_config.as_ref().and_then(|c| c.token.clone()));
+
+    let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
             let sync_url = sync_url_str
                 .parse::<url::Url>()

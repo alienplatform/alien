@@ -46,14 +46,28 @@ impl HasCommandServer for AppState {
 
 /// Create the complete router with all routes.
 pub fn create_router(state: AppState) -> Router {
-    create_router_inner(state, true)
+    create_router_inner(
+        state,
+        RouterOptions {
+            include_initialize: true,
+            include_deploy_page: true,
+            include_install: true,
+        },
+    )
 }
 
-/// Like [`create_router`], but lets the caller opt-out of the default `/v1/initialize` route.
+/// Route inclusion options for embedding alien-manager in another process.
+pub(crate) struct RouterOptions {
+    pub include_initialize: bool,
+    pub include_deploy_page: bool,
+    pub include_install: bool,
+}
+
+/// Like [`create_router`], but lets the caller opt-out of specific routes.
 ///
-/// Set `include_initialize = false` when embedding alien-manager in a process that needs to
-/// replace `/v1/initialize` with a custom implementation via `extra_routes`.
-pub(crate) fn create_router_inner(state: AppState, include_initialize: bool) -> Router {
+/// Use `RouterOptions` to control which routes are included when embedding alien-manager
+/// in a process that overrides certain routes via `extra_routes`.
+pub(crate) fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     // Command server routes (nested under /v1)
     let commands_router: Router<AppState> = create_axum_router();
 
@@ -78,12 +92,15 @@ pub(crate) fn create_router_inner(state: AppState, include_initialize: bool) -> 
         // Sync (acquire / reconcile / release / agent-sync)
         .merge(sync::router())
         // Credentials
-        .merge(credentials::router())
-        // Deploy page and install script (no auth, public)
-        .merge(deploy_page::router())
-        .merge(install::router());
+        .merge(credentials::router());
 
-    if include_initialize {
+    if options.include_deploy_page {
+        router = router.merge(deploy_page::router());
+    }
+    if options.include_install {
+        router = router.merge(install::router());
+    }
+    if options.include_initialize {
         router = router.merge(sync::initialize_router());
     }
 
