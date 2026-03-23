@@ -41,6 +41,8 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 

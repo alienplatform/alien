@@ -26,6 +26,9 @@ runs:
     - name: Setup Depot
       uses: depot/setup-action@v1
 
+    - name: Install sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
     - name: Configure git credentials for cargo git deps
       shell: bash
       run: |

@@ -117,6 +117,8 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
@@ -328,6 +330,10 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: depot/setup-action@v1
 
+      - name: Install sccache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: brew install protobuf
@@ -391,6 +397,10 @@ jobs:
       - name: Setup Depot
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: depot/setup-action@v1
+
+      - name: Install sccache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install build tools (protoc, nasm, cmake)
         if: steps.binary-cache.outputs.cache-hit != 'true'

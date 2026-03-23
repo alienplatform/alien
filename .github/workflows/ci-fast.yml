@@ -40,6 +40,8 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       - uses: taiki-e/install-action@nextest
 
       - uses: oven-sh/setup-bun@v2

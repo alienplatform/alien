@@ -160,6 +160,8 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
