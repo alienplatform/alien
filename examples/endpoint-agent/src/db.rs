@@ -37,6 +37,7 @@ impl EncryptedDb {
         };
 
         let db: Database = Builder::new_local(&db_path_str)
+            .experimental_encryption(true)
             .with_encryption(encryption_opts)
             .build()
             .await
