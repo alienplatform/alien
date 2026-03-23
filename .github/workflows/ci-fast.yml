@@ -15,18 +15,18 @@ jobs:
   fast:
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10.11.0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
@@ -34,42 +34,21 @@ jobs:
             pnpm-lock.yaml
             examples/pnpm-lock.yaml
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
 
-      - name: Setup Depot
-        uses: depot/setup-action@v1
+      - uses: depot/setup-action@v1
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: taiki-e/install-action@nextest
 
-      - name: Setup cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Add musl targets
-        run: |
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add x86_64-unknown-linux-musl
-
       - name: Configure git credentials for cargo
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -84,7 +63,6 @@ jobs:
 
       - name: Rust fast tests (non-cloud)
         env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           AXIOM_OTLP_ENDPOINT: ${{ secrets.AXIOM_OTLP_ENDPOINT }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
@@ -100,20 +78,8 @@ jobs:
             --exclude alien-test-server \
             --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda)'
 
-      - name: Build alien CLI
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: depot cargo build -p alien-cli --bin alien
-
-      - name: Build alien-deploy CLI
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: depot cargo build -p alien-deploy-cli --bin alien-deploy
-
-      - name: Build alien-agent
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: depot cargo build -p alien-agent --bin alien-agent
+      - name: Build all CLIs
+        run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-agent
 
       - name: Build TypeScript packages
         env:
@@ -122,7 +88,6 @@ jobs:
 
       - name: Run examples
         env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm test:examples
 

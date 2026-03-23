@@ -21,41 +21,37 @@ jobs:
   drift:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10.11.0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
+      - uses: dtolnay/rust-toolchain@nightly
 
-      - name: Setup Depot
-        uses: depot/setup-action@v1
+      - uses: depot/setup-action@v1
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Install Speakeasy CLI
         run: npm install -g speakeasy@latest
-
-      - name: Verify Speakeasy CLI
-        run: speakeasy --version
 
       - name: Regenerate code
         run: |

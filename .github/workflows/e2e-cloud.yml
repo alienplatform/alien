@@ -16,9 +16,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Setup and build run in parallel -- build doesn't need .env.test.
-  # Test jobs wait for both, then fan out across the matrix.
-
   setup:
     # Skip on fork PRs (no access to secrets)
     if: |
@@ -34,8 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
@@ -93,14 +89,11 @@ jobs:
           AZURE_MGMT_CLIENT_ID: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
           AZURE_MGMT_CLIENT_SECRET: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
         run: |
-          # AWS ECR (needs token from aws CLI)
           aws ecr get-login-password --region "${{ steps.registries.outputs.ecr_region }}" \
             | docker login --username AWS --password-stdin "${{ steps.registries.outputs.ecr_registry }}"
-          # GCP Artifact Registry (alien-test-manager SA key from terraform state)
           terraform output -raw management_gcp_service_account_key \
             | docker login -u _json_key --password-stdin \
                 "https://${{ steps.registries.outputs.gcr_registry }}"
-          # Azure ACR (management SP has AcrPush)
           docker login "${{ steps.registries.outputs.acr_registry }}" \
             -u "$AZURE_MGMT_CLIENT_ID" -p "$AZURE_MGMT_CLIENT_SECRET"
 
@@ -140,7 +133,6 @@ jobs:
           retention-days: 1
 
   build:
-    # Runs in parallel with setup -- build doesn't depend on .env.test
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'merge_group' ||
@@ -149,6 +141,9 @@ jobs:
         contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -162,30 +157,16 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
 
-      - name: Setup Depot
-        uses: depot/setup-action@v1
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: depot/setup-action@v1
 
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Add musl targets
-        run: |
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add x86_64-unknown-linux-musl
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Configure git credentials for cargo
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -197,8 +178,6 @@ jobs:
 
       - name: Build alien CLI
         run: depot cargo build -p alien-cli --bin alien
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -244,8 +223,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
 
       - name: Download .env.test
         uses: actions/download-artifact@v4

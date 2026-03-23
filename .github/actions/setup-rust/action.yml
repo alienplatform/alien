@@ -1,5 +1,5 @@
 name: Setup Rust Toolchain
-description: Setup Rust nightly, Depot, zig, cargo-zigbuild, and optional extras.
+description: Setup Rust nightly, Depot, musl-tools, and optional extras.
 
 inputs:
   depot-project-id:
@@ -31,22 +31,14 @@ runs:
       run: |
         git config --global url."https://x-access-token:${{ inputs.repo-access-token }}@github.com/".insteadOf "https://github.com/"
 
-    - name: Install protoc
-      if: inputs.install-protoc == 'true'
+    - name: Install musl-tools and protoc
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-    - name: Install zig
-      uses: mlugg/setup-zig@v2
-      with:
-        version: 0.13.0
-
-    - name: Run sccache-cache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    - name: Install cargo-zigbuild
-      shell: bash
-      run: depot cargo install cargo-zigbuild --locked
+      run: |
+        PACKAGES="musl-tools"
+        if [ "${{ inputs.install-protoc }}" = "true" ]; then
+          PACKAGES="$PACKAGES protobuf-compiler"
+        fi
+        sudo apt-get update && sudo apt-get install -y $PACKAGES
 
     - name: Add Rust targets
       if: inputs.targets != ''

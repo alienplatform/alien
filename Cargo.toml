@@ -221,7 +221,8 @@ panic = "abort"
 [profile.release]
 strip = true
 opt-level = "z"
-lto = true
+lto = "thin"
+panic = "abort"
 
 [profile.dev.build-override]
 opt-level = 0
