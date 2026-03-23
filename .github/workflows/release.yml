@@ -189,13 +189,15 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
-  # ─── Binary builds (Linux x86_64 + aarch64, parallel) ─────────────
+  # ─── Binary builds (4 targets, all parallel) ───────────────────────
 
   build-binaries-linux-x86_64:
     needs: prepare
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -212,41 +214,18 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-runtime
           key: release-linux-x86_64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
-
-      - name: Configure git credentials for cargo
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
-      - name: Install protoc
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install zig
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: depot cargo install cargo-zigbuild --locked
-
-      - name: Add musl target
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: rustup target add x86_64-unknown-linux-musl
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: x86_64-unknown-linux-musl
+          install-protoc: "true"
 
       - name: Build x86_64 linux binaries
         if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          RUSTC_WRAPPER: ""
         run: |
           depot cargo zigbuild --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
@@ -271,6 +250,8 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -287,41 +268,18 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-runtime
           key: release-linux-aarch64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
-
-      - name: Configure git credentials for cargo
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
-      - name: Install protoc
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Install zig
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: depot cargo install cargo-zigbuild --locked
-
-      - name: Add musl target
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: rustup target add aarch64-unknown-linux-musl
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: aarch64-unknown-linux-musl
+          install-protoc: "true"
 
       - name: Build aarch64 linux binaries
         if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          RUSTC_WRAPPER: ""
         run: |
           depot cargo zigbuild --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
@@ -341,7 +299,7 @@ jobs:
           retention-days: 1
           path: staged/aarch64-unknown-linux-musl/
 
-  # ─── macOS builds ─────────────────────────────────────────────────
+  # ─── macOS build (aarch64 only, native) ────────────────────────────
 
   build-binaries-darwin:
     needs: prepare
@@ -358,27 +316,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/x86_64-apple-darwin/release/alien
-            target/x86_64-apple-darwin/release/alien-deploy
-            target/x86_64-apple-darwin/release/alien-agent
             target/aarch64-apple-darwin/release/alien
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-agent
-          key: release-darwin-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+          key: release-darwin-aarch64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Configure git credentials for cargo
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
 
       - name: Run sccache-cache
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -395,28 +344,12 @@ jobs:
             -p alien-cli -p alien-deploy-cli -p alien-agent \
             --target aarch64-apple-darwin
 
-      - name: Build x86_64 darwin binaries
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: |
-          cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-agent \
-            --target x86_64-apple-darwin
-
       - name: Stage binaries for upload
         run: |
-          mkdir -p staged/x86_64-apple-darwin staged/aarch64-apple-darwin
-          for target in x86_64-apple-darwin aarch64-apple-darwin; do
-            for binary in alien alien-deploy alien-agent; do
-              cp "target/${target}/release/${binary}" "staged/${target}/${binary}"
-            done
+          mkdir -p staged/aarch64-apple-darwin
+          for binary in alien alien-deploy alien-agent; do
+            cp "target/aarch64-apple-darwin/release/${binary}" "staged/aarch64-apple-darwin/${binary}"
           done
-
-      - name: Upload x86_64 darwin binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: binaries-x86_64-apple-darwin
-          retention-days: 1
-          path: staged/x86_64-apple-darwin/
 
       - name: Upload aarch64 darwin binaries
         uses: actions/upload-artifact@v4
@@ -425,13 +358,15 @@ jobs:
           retention-days: 1
           path: staged/aarch64-apple-darwin/
 
-  # ─── Windows builds ───────────────────────────────────────────────
+  # ─── Windows build (x86_64, cross-compiled from arm64 Linux) ───────
 
   build-binaries-windows:
     needs: prepare
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -445,25 +380,15 @@ jobs:
             target/x86_64-pc-windows-gnu/release/alien.exe
             target/x86_64-pc-windows-gnu/release/alien-deploy.exe
             target/x86_64-pc-windows-gnu/release/alien-agent.exe
-          key: release-windows-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+          key: release-windows-x86_64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
         with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           targets: x86_64-pc-windows-gnu
-
-      - name: Configure git credentials for cargo
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
-      - name: Install protoc
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y protobuf-compiler
+          install-protoc: "true"
 
       # aws-lc-sys (transitive dep via deepstore-client -> reqwest 0.13/rustls)
       # cannot cross-compile to Windows with zig (missing sched.h POSIX header).
@@ -476,7 +401,6 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          RUSTC_WRAPPER: ""
           CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
           CXX_x86_64_pc_windows_gnu: x86_64-w64-mingw32-g++
           AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
@@ -540,7 +464,6 @@ jobs:
           done
 
           for binary in alien alien-deploy alien-agent; do
-            upload "$binary" x86_64-apple-darwin darwin x86_64
             upload "$binary" aarch64-apple-darwin darwin aarch64
           done
 

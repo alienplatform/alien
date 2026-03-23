@@ -1,0 +1,61 @@
+name: Setup Rust Toolchain
+description: Setup Rust nightly, Depot, zig, cargo-zigbuild, and optional extras.
+
+inputs:
+  depot-project-id:
+    description: Depot project id used for remote build caching.
+    required: true
+  repo-access-token:
+    description: Token used for private cargo git dependencies.
+    required: true
+  targets:
+    description: Newline-delimited Rust targets to install.
+    required: false
+    default: ""
+  install-protoc:
+    description: Install protobuf compiler for crates that need it.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Setup Depot
+      uses: depot/setup-action@v1
+
+    - name: Configure git credentials for cargo git deps
+      shell: bash
+      run: |
+        git config --global url."https://x-access-token:${{ inputs.repo-access-token }}@github.com/".insteadOf "https://github.com/"
+
+    - name: Install protoc
+      if: inputs.install-protoc == 'true'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+    - name: Install zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: 0.13.0
+
+    - name: Run sccache-cache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Install cargo-zigbuild
+      shell: bash
+      run: depot cargo install cargo-zigbuild --locked
+
+    - name: Add Rust targets
+      if: inputs.targets != ''
+      shell: bash
+      run: |
+        while IFS= read -r target; do
+          if [ -n "$target" ]; then
+            rustup target add "$target"
+          fi
+        done <<'EOF'
+        ${{ inputs.targets }}
+        EOF
