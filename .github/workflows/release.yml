@@ -8,12 +8,15 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
 jobs:
   prepare:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
-    permissions:
-      contents: write
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
@@ -98,9 +101,6 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
@@ -200,9 +200,6 @@ jobs:
           - aarch64-unknown-linux-musl
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -239,22 +236,12 @@ jobs:
       - name: Add musl target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build alien CLI
+      - name: Build all binaries
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo zigbuild -p alien-cli --release \
-            --target ${{ matrix.target }}
-
-      - name: Build alien-deploy CLI
-        run: |
-          depot cargo zigbuild -p alien-deploy-cli --release \
-            --target ${{ matrix.target }}
-
-      - name: Build alien-agent
-        run: |
-          depot cargo zigbuild -p alien-agent --release \
-            --target ${{ matrix.target }}
+          depot cargo zigbuild --release --target ${{ matrix.target }} \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime
 
       - name: Upload alien-cli binary
         uses: actions/upload-artifact@v4
@@ -274,6 +261,12 @@ jobs:
           name: alien-agent-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/alien-agent
 
+      - name: Upload alien-runtime binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-runtime-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien-runtime
+
   build-binaries-macos:
     needs: prepare
     if: ${{ !inputs.dry_run }}
@@ -286,8 +279,6 @@ jobs:
             runner: macos-14
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -303,14 +294,10 @@ jobs:
       - name: Install protoc
         run: brew install protobuf
 
-      - name: Build alien CLI
-        run: cargo build -p alien-cli --release --target ${{ matrix.target }}
-
-      - name: Build alien-deploy CLI
-        run: cargo build -p alien-deploy-cli --release --target ${{ matrix.target }}
-
-      - name: Build alien-agent
-        run: cargo build -p alien-agent --release --target ${{ matrix.target }}
+      - name: Build all binaries
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            -p alien-cli -p alien-deploy-cli -p alien-agent
 
       - name: Upload alien-cli binary
         uses: actions/upload-artifact@v4
@@ -335,9 +322,6 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -361,7 +345,7 @@ jobs:
           }
 
           # Linux
-          for binary in alien alien-deploy alien-agent; do
+          for binary in alien alien-deploy alien-agent alien-runtime; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
@@ -376,4 +360,120 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/alien/latest/*" "/alien-deploy/latest/*" "/alien-agent/latest/*"
+            --paths "/alien/latest/*" "/alien-deploy/latest/*" "/alien-agent/latest/*" "/alien-runtime/latest/*"
+
+  publish-images:
+    needs: [prepare, build-binaries-linux]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Place binaries in target layout for Dockerfiles
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            mkdir -p "target/${target}/release"
+            for binary in alien-agent alien-runtime; do
+              cp "./artifacts/${binary}-${target}/${binary}" "target/${target}/release/${binary}"
+              chmod +x "target/${target}/release/${binary}"
+            done
+          done
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+
+      - name: Metadata (alien-base)
+        id: meta_base
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-base
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-base
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_base.outputs.tags }}
+          labels: ${{ steps.meta_base.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-builder)
+        id: meta_builder
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-builder
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-builder
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-builder
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_builder.outputs.tags }}
+          labels: ${{ steps.meta_builder.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-agent)
+        id: meta_agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-agent
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_agent.outputs.tags }}
+          labels: ${{ steps.meta_agent.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s/^version:.*/version: $VERSION/" charts/alien-agent/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/alien-agent/Chart.yaml
+          helm package charts/alien-agent
+
+      - name: Push Helm chart to GHCR
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          helm push alien-agent-$VERSION.tgz oci://ghcr.io/alienplatform/charts

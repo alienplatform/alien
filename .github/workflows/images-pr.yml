@@ -5,9 +5,11 @@ on:
     paths:
       - 'docker/**'
       - 'crates/alien-runtime/**'
+      - 'crates/alien-agent/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/images*.yml'
+      - '.github/workflows/images-pr.yml'
+      - '.github/workflows/release.yml'
 
 permissions:
   contents: read
@@ -34,6 +36,11 @@ jobs:
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Configure git credentials for cargo
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
       - name: Install zig
         uses: mlugg/setup-zig@v2
         with:
@@ -47,17 +54,13 @@ jobs:
           rustup target add aarch64-unknown-linux-musl
           rustup target add x86_64-unknown-linux-musl
 
-      - name: Build alien-runtime (x86_64)
+      - name: Build binaries
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo zigbuild -p alien-runtime --bin alien-runtime \
+          depot cargo zigbuild -p alien-runtime -p alien-agent --release \
             --target x86_64-unknown-linux-musl \
-            --release
-
-      - name: Build alien-runtime (aarch64)
-        run: |
-          depot cargo zigbuild -p alien-runtime --bin alien-runtime \
-            --target aarch64-unknown-linux-musl \
-            --release
+            --target aarch64-unknown-linux-musl
 
       - name: Build alien-base (no push)
         uses: depot/build-push-action@v1
@@ -76,6 +79,17 @@ jobs:
           project: ${{ vars.DEPOT_PROJECT_ID }}
           context: .
           file: docker/Dockerfile.alien-builder
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+
+      - name: Build alien-agent (no push)
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
           platforms: linux/amd64,linux/arm64
           push: false
           provenance: false
