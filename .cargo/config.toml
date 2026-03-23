@@ -1,6 +1,8 @@
+# NOTE: "-Z", "threads=8" removed due to parallel frontend bug in nightly Rust.
+# turso_core hits query depth limit. Re-enable when rust-lang/rust#146616 is fixed.
 [build]
-rustflags = ["-Z", "threads=8", "--cfg", "tokio_unstable"]
+rustflags = ["--cfg", "tokio_unstable"]
 rustdocflags = ["--cfg", "tokio_unstable"]
 
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"', "-Z", "threads=8"]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
