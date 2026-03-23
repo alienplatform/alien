@@ -189,9 +189,9 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
-  # ─── Binary builds (Linux + macOS + Windows, cached) ───────────────
+  # ─── Binary builds (Linux x86_64 + aarch64, parallel) ─────────────
 
-  build-binaries-linux:
+  build-binaries-linux-x86_64:
     needs: prepare
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
@@ -210,11 +210,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-deploy
             target/x86_64-unknown-linux-musl/release/alien-agent
             target/x86_64-unknown-linux-musl/release/alien-runtime
-            target/aarch64-unknown-linux-musl/release/alien
-            target/aarch64-unknown-linux-musl/release/alien-deploy
-            target/aarch64-unknown-linux-musl/release/alien-agent
-            target/aarch64-unknown-linux-musl/release/alien-runtime
-          key: release-linux-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+          key: release-linux-x86_64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -227,10 +223,6 @@ jobs:
       - name: Setup Depot
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: depot/setup-action@v1
-
-      - name: Run sccache-cache
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -246,28 +238,25 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: depot cargo install cargo-zigbuild --locked
 
-      - name: Add musl targets
+      - name: Add musl target
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+        run: rustup target add x86_64-unknown-linux-musl
 
-      - name: Build all binaries (both targets)
+      - name: Build x86_64 linux binaries
         if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          RUSTC_WRAPPER: ""
         run: |
           depot cargo zigbuild --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
-            --target x86_64-unknown-linux-musl \
-            --target aarch64-unknown-linux-musl
+            --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
-          mkdir -p staged/x86_64-unknown-linux-musl staged/aarch64-unknown-linux-musl
-          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            for binary in alien alien-deploy alien-agent alien-runtime; do
-              cp "target/${target}/release/${binary}" "staged/${target}/${binary}"
-            done
+          mkdir -p staged/x86_64-unknown-linux-musl
+          for binary in alien alien-deploy alien-agent alien-runtime; do
+            cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
       - name: Upload x86_64 linux binaries
@@ -277,12 +266,82 @@ jobs:
           retention-days: 1
           path: staged/x86_64-unknown-linux-musl/
 
+  build-binaries-linux-aarch64:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien-deploy
+            target/aarch64-unknown-linux-musl/release/alien-agent
+            target/aarch64-unknown-linux-musl/release/alien-runtime
+          key: release-linux-aarch64-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+
+      - name: Configure git credentials for cargo
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Depot
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: depot/setup-action@v1
+
+      - name: Install protoc
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: depot cargo install cargo-zigbuild --locked
+
+      - name: Add musl target
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: rustup target add aarch64-unknown-linux-musl
+
+      - name: Build aarch64 linux binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          RUSTC_WRAPPER: ""
+        run: |
+          depot cargo zigbuild --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
+            --target aarch64-unknown-linux-musl
+
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/aarch64-unknown-linux-musl
+          for binary in alien alien-deploy alien-agent alien-runtime; do
+            cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
+          done
+
       - name: Upload aarch64 linux binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-aarch64-unknown-linux-musl
           retention-days: 1
           path: staged/aarch64-unknown-linux-musl/
+
+  # ─── macOS builds ─────────────────────────────────────────────────
 
   build-binaries-darwin:
     needs: prepare
@@ -366,6 +425,8 @@ jobs:
           retention-days: 1
           path: staged/aarch64-apple-darwin/
 
+  # ─── Windows builds ───────────────────────────────────────────────
+
   build-binaries-windows:
     needs: prepare
     if: ${{ !inputs.dry_run }}
@@ -383,6 +444,7 @@ jobs:
           path: |
             target/x86_64-pc-windows-gnu/release/alien.exe
             target/x86_64-pc-windows-gnu/release/alien-deploy.exe
+            target/x86_64-pc-windows-gnu/release/alien-agent.exe
           key: release-windows-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
 
       - uses: dtolnay/rust-toolchain@nightly
@@ -403,7 +465,7 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: sudo apt-get install -y protobuf-compiler
 
-      # aws-lc-sys (transitive dep via deepstore-client → reqwest 0.13/rustls)
+      # aws-lc-sys (transitive dep via deepstore-client -> reqwest 0.13/rustls)
       # cannot cross-compile to Windows with zig (missing sched.h POSIX header).
       # Use mingw-w64 cross toolchain + cmake builder for aws-lc-sys instead.
       - name: Install mingw-w64 cross toolchain
@@ -422,7 +484,7 @@ jobs:
           AWS_LC_SYS_CMAKE_BUILDER: "1"
         run: |
           cargo build --release \
-            -p alien-cli -p alien-deploy-cli \
+            -p alien-cli -p alien-deploy-cli -p alien-agent \
             --target x86_64-pc-windows-gnu
 
       - name: Stage binaries for upload
@@ -430,6 +492,7 @@ jobs:
           mkdir -p staged/x86_64-pc-windows-gnu
           cp target/x86_64-pc-windows-gnu/release/alien.exe staged/x86_64-pc-windows-gnu/
           cp target/x86_64-pc-windows-gnu/release/alien-deploy.exe staged/x86_64-pc-windows-gnu/
+          cp target/x86_64-pc-windows-gnu/release/alien-agent.exe staged/x86_64-pc-windows-gnu/
 
       - name: Upload windows binaries
         uses: actions/upload-artifact@v4
@@ -441,7 +504,7 @@ jobs:
   # ─── Upload binaries to S3 ──────────────────────────────────────────
 
   upload-binaries:
-    needs: [prepare, build-binaries-linux, build-binaries-darwin, build-binaries-windows]
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
@@ -488,7 +551,7 @@ jobs:
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
           }
 
-          for binary in alien alien-deploy; do
+          for binary in alien alien-deploy alien-agent; do
             upload_exe "$binary" x86_64-pc-windows-gnu windows x86_64
           done
 
@@ -501,7 +564,7 @@ jobs:
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
   publish-images:
-    needs: [prepare, build-binaries-linux]
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
