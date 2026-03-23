@@ -189,7 +189,7 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
-  # ─── Binary builds (Linux + macOS, cached) ──────────────────────────
+  # ─── Binary builds (Linux + macOS + Windows, cached) ───────────────
 
   build-binaries-linux:
     needs: prepare
@@ -261,27 +261,28 @@ jobs:
             --target x86_64-unknown-linux-musl \
             --target aarch64-unknown-linux-musl
 
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/x86_64-unknown-linux-musl staged/aarch64-unknown-linux-musl
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            for binary in alien alien-deploy alien-agent alien-runtime; do
+              cp "target/${target}/release/${binary}" "staged/${target}/${binary}"
+            done
+          done
+
       - name: Upload x86_64 linux binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-x86_64-unknown-linux-musl
           retention-days: 1
-          path: |
-            target/x86_64-unknown-linux-musl/release/alien
-            target/x86_64-unknown-linux-musl/release/alien-deploy
-            target/x86_64-unknown-linux-musl/release/alien-agent
-            target/x86_64-unknown-linux-musl/release/alien-runtime
+          path: staged/x86_64-unknown-linux-musl/
 
       - name: Upload aarch64 linux binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-aarch64-unknown-linux-musl
           retention-days: 1
-          path: |
-            target/aarch64-unknown-linux-musl/release/alien
-            target/aarch64-unknown-linux-musl/release/alien-deploy
-            target/aarch64-unknown-linux-musl/release/alien-agent
-            target/aarch64-unknown-linux-musl/release/alien-runtime
+          path: staged/aarch64-unknown-linux-musl/
 
   build-binaries-darwin:
     needs: prepare
@@ -342,25 +343,28 @@ jobs:
             -p alien-cli -p alien-deploy-cli -p alien-agent \
             --target x86_64-apple-darwin
 
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/x86_64-apple-darwin staged/aarch64-apple-darwin
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            for binary in alien alien-deploy alien-agent; do
+              cp "target/${target}/release/${binary}" "staged/${target}/${binary}"
+            done
+          done
+
       - name: Upload x86_64 darwin binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-x86_64-apple-darwin
           retention-days: 1
-          path: |
-            target/x86_64-apple-darwin/release/alien
-            target/x86_64-apple-darwin/release/alien-deploy
-            target/x86_64-apple-darwin/release/alien-agent
+          path: staged/x86_64-apple-darwin/
 
       - name: Upload aarch64 darwin binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-aarch64-apple-darwin
           retention-days: 1
-          path: |
-            target/aarch64-apple-darwin/release/alien
-            target/aarch64-apple-darwin/release/alien-deploy
-            target/aarch64-apple-darwin/release/alien-agent
+          path: staged/aarch64-apple-darwin/
 
   build-binaries-windows:
     needs: prepare
@@ -395,42 +399,44 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: depot/setup-action@v1
 
-      - name: Run sccache-cache
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Install zig
+      # aws-lc-sys (transitive dep via deepstore-client → reqwest 0.13/rustls)
+      # cannot cross-compile to Windows with zig (missing sched.h POSIX header).
+      # Use mingw-w64 cross toolchain + cmake builder for aws-lc-sys instead.
+      - name: Install mingw-w64 cross toolchain
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: depot cargo install cargo-zigbuild --locked
+        run: sudo apt-get install -y gcc-mingw-w64-x86-64 cmake
 
       - name: Build windows binaries
         if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           RUSTC_WRAPPER: ""
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          CXX_x86_64_pc_windows_gnu: x86_64-w64-mingw32-g++
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+          AWS_LC_SYS_CMAKE_BUILDER: "1"
         run: |
-          cargo zigbuild --release \
+          cargo build --release \
             -p alien-cli -p alien-deploy-cli \
             --target x86_64-pc-windows-gnu
+
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/x86_64-pc-windows-gnu
+          cp target/x86_64-pc-windows-gnu/release/alien.exe staged/x86_64-pc-windows-gnu/
+          cp target/x86_64-pc-windows-gnu/release/alien-deploy.exe staged/x86_64-pc-windows-gnu/
 
       - name: Upload windows binaries
         uses: actions/upload-artifact@v4
         with:
           name: binaries-x86_64-pc-windows-gnu
           retention-days: 1
-          path: |
-            target/x86_64-pc-windows-gnu/release/alien.exe
-            target/x86_64-pc-windows-gnu/release/alien-deploy.exe
+          path: staged/x86_64-pc-windows-gnu/
 
   # ─── Upload binaries to S3 ──────────────────────────────────────────
 
@@ -457,9 +463,10 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
 
+          # Artifacts are downloaded as: ./artifacts/binaries-<target>/<binary>
           upload() {
             local binary=$1 target=$2 os=$3 arch=$4
-            local src="./artifacts/binaries-${target}/target/${target}/release/${binary}"
+            local src="./artifacts/binaries-${target}/${binary}"
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
           }
@@ -476,7 +483,7 @@ jobs:
 
           upload_exe() {
             local binary=$1 target=$2 os=$3 arch=$4
-            local src="./artifacts/binaries-${target}/target/${target}/release/${binary}.exe"
+            local src="./artifacts/binaries-${target}/${binary}.exe"
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}.exe"
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
           }
@@ -515,7 +522,7 @@ jobs:
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
             for binary in alien-agent alien-runtime; do
-              cp "./linux-bins/binaries-${target}/target/${target}/release/${binary}" "target/${target}/release/${binary}"
+              cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
           done
