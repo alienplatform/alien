@@ -40,37 +40,37 @@ default-members = [
 ]
 
 [workspace.package]
-version = "1.1.2"
+version = "1.2.0"
 edition = "2021"
 authors = []
 description = "Alien Developer Platform"
 license = "MIT"
 
 [workspace.dependencies]
-alien-commands = { path = "crates/alien-commands", version = "1.1.2", default-features = false }
-alien-bindings = { path = "crates/alien-bindings", version = "1.1.2", default-features = false }
-alien-runtime = { path = "crates/alien-runtime", version = "1.1.2" }
+alien-commands = { path = "crates/alien-commands", version = "1.2.0", default-features = false }
+alien-bindings = { path = "crates/alien-bindings", version = "1.2.0", default-features = false }
+alien-runtime = { path = "crates/alien-runtime", version = "1.2.0" }
 dockdash = "0.1.0"
-alien-core = { path = "crates/alien-core", version = "1.1.2" }
-alien-infra = { path = "crates/alien-infra", version = "1.1.2" }
-alien-build = { path = "crates/alien-build", version = "1.1.2" }
-alien-macros = { path = "crates/alien-macros", version = "1.1.2" }
-alien-client-core = { path = "crates/alien-client-core", version = "1.1.2" }
-alien-client-config = { path = "crates/alien-client-config", version = "1.1.2" }
-alien-aws-clients = { path = "crates/alien-aws-clients", version = "1.1.2" }
-alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "1.1.2" }
-alien-azure-clients = { path = "crates/alien-azure-clients", version = "1.1.2" }
-alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "1.1.2" }
-alien-error = { path = "crates/alien-error", version = "1.1.2", features = ["anyhow"] }
-alien-error-derive = { path = "crates/alien-error-derive", version = "1.1.2" }
-alien-permissions = { path = "crates/alien-permissions", version = "1.1.2" }
-alien-preflights = { path = "crates/alien-preflights", version = "1.1.2" }
-alien-deployment = { path = "crates/alien-deployment", version = "1.1.2" }
-alien-cli-common = { path = "crates/alien-cli-common", version = "1.1.2" }
-alien-local = { path = "crates/alien-local", version = "1.1.2" }
-alien-manager = { path = "crates/alien-manager", version = "1.1.2" }
-alien-manager-api = { path = "client-sdks/manager/rust", version = "1.1.2", default-features = false, features = ["rustls"] }
-alien-platform-api = { path = "client-sdks/platform/rust", version = "1.1.2", default-features = false, features = ["rustls"] }
+alien-core = { path = "crates/alien-core", version = "1.2.0" }
+alien-infra = { path = "crates/alien-infra", version = "1.2.0" }
+alien-build = { path = "crates/alien-build", version = "1.2.0" }
+alien-macros = { path = "crates/alien-macros", version = "1.2.0" }
+alien-client-core = { path = "crates/alien-client-core", version = "1.2.0" }
+alien-client-config = { path = "crates/alien-client-config", version = "1.2.0" }
+alien-aws-clients = { path = "crates/alien-aws-clients", version = "1.2.0" }
+alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "1.2.0" }
+alien-azure-clients = { path = "crates/alien-azure-clients", version = "1.2.0" }
+alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "1.2.0" }
+alien-error = { path = "crates/alien-error", version = "1.2.0", features = ["anyhow"] }
+alien-error-derive = { path = "crates/alien-error-derive", version = "1.2.0" }
+alien-permissions = { path = "crates/alien-permissions", version = "1.2.0" }
+alien-preflights = { path = "crates/alien-preflights", version = "1.2.0" }
+alien-deployment = { path = "crates/alien-deployment", version = "1.2.0" }
+alien-cli-common = { path = "crates/alien-cli-common", version = "1.2.0" }
+alien-local = { path = "crates/alien-local", version = "1.2.0" }
+alien-manager = { path = "crates/alien-manager", version = "1.2.0" }
+alien-manager-api = { path = "client-sdks/manager/rust", version = "1.2.0", default-features = false, features = ["rustls"] }
+alien-platform-api = { path = "client-sdks/platform/rust", version = "1.2.0", default-features = false, features = ["rustls"] }
 horizon-client-sdk = { git = "https://github.com/alienplatform/horizon" }
 deepstore-client = { version = "1.0.0" }
 
