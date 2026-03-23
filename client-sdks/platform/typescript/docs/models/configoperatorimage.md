@@ -1,12 +1,14 @@
-# PackageConfigOperatorImage
+# ConfigOperatorImage
+
+Configuration for the Operator binary
 
 ## Example Usage
 
 ```typescript
-import { PackageConfigOperatorImage } from "@alienplatform/platform-api/models";
+import { ConfigOperatorImage } from "@alienplatform/platform-api/models";
 
-let value: PackageConfigOperatorImage = {
-  displayName: "Baylee_Lubowitz",
+let value: ConfigOperatorImage = {
+  displayName: "Gilda_Gibson",
   name: "<value>",
   type: "operator-image",
 };

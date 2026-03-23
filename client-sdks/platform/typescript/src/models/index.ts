@@ -62,7 +62,6 @@ export * from "./membership.js";
 export * from "./newdeploymentrequest.js";
 export * from "./newmanagerrequest.js";
 export * from "./package.js";
-export * from "./packageconfig.js";
 export * from "./pinreleaserequest.js";
 export * from "./project.js";
 export * from "./projectlistitemresponse.js";

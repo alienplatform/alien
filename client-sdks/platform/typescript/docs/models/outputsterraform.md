@@ -1,5 +1,7 @@
 # OutputsTerraform
 
+Outputs from a Terraform provider package build
+
 ## Example Usage
 
 ```typescript

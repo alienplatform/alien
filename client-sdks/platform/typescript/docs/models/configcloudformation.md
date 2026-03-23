@@ -1,11 +1,13 @@
-# PackageConfigCloudformation
+# ConfigCloudformation
+
+Configuration for CloudFormation packages
 
 ## Example Usage
 
 ```typescript
-import { PackageConfigCloudformation } from "@alienplatform/platform-api/models";
+import { ConfigCloudformation } from "@alienplatform/platform-api/models";
 
-let value: PackageConfigCloudformation = {
+let value: ConfigCloudformation = {
   type: "cloudformation",
 };
 ```

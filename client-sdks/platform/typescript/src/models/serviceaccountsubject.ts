@@ -26,6 +26,10 @@ export type ServiceAccountSubject = {
    */
   workspaceId: string;
   /**
+   * Name of the workspace the service account belongs to
+   */
+  workspaceName?: string | undefined;
+  /**
    * Authorization scope defining what resources this service account can access
    */
   scope: SubjectScope;
@@ -43,6 +47,7 @@ export const ServiceAccountSubject$inboundSchema: z.ZodType<
   kind: z.literal("serviceAccount"),
   id: z.string(),
   workspaceId: z.string(),
+  workspaceName: z.string().optional(),
   scope: SubjectScope$inboundSchema,
   role: Role$inboundSchema,
 });

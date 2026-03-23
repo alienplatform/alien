@@ -29,6 +29,10 @@ export type UserSubject = {
    */
   workspaceId: string;
   /**
+   * Name of the workspace the user is authenticated within
+   */
+  workspaceName?: string | undefined;
+  /**
    * User's role within the workspace
    */
   role: UserRole;
@@ -41,6 +45,7 @@ export const UserSubject$inboundSchema: z.ZodType<UserSubject, unknown> = z
     id: z.string(),
     email: z.string(),
     workspaceId: z.string(),
+    workspaceName: z.string().optional(),
     role: UserRole$inboundSchema,
   });
 

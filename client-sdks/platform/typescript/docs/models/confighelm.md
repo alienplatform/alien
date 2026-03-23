@@ -1,13 +1,15 @@
-# PackageConfigHelm
+# ConfigHelm
+
+Configuration for the Helm chart package
 
 ## Example Usage
 
 ```typescript
-import { PackageConfigHelm } from "@alienplatform/platform-api/models";
+import { ConfigHelm } from "@alienplatform/platform-api/models";
 
-let value: PackageConfigHelm = {
+let value: ConfigHelm = {
   chartName: "<value>",
-  description: "winged train redesign mob boiling saloon next",
+  description: "idle ew yippee approach abaft",
   type: "helm",
 };
 ```

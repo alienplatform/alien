@@ -249,31 +249,16 @@ pub fn logout() {
 
 /* ── internals ─────────────────────────────────────────────────────────── */
 
-/// Derive the dashboard success URL from the API base URL
-/// - https://api.alien.dev -> https://alien.dev/oauth/consent/success
-/// - http://localhost:8080 -> http://localhost:3000/oauth/consent/success
-/// - http://api.example.com -> http://example.com/oauth/consent/success
+/// Derive the dashboard success URL from the API base URL by stripping the `api.` prefix.
+/// e.g. https://api.alien.dev -> https://alien.dev/oauth/consent/success
+///      https://api.staging.alien.dev -> https://staging.alien.dev/oauth/consent/success
+/// Returns None if the host doesn't start with `api.` (OAuth still works, just no redirect).
 fn derive_dashboard_success_url(api_base: &str) -> Option<String> {
-    // Parse the API URL
-    let url = match url::Url::parse(api_base) {
-        Ok(u) => u,
-        Err(_) => return None,
-    };
-
+    let url = url::Url::parse(api_base).ok()?;
     let host = url.host_str()?;
-    let scheme = url.scheme();
-
-    // Derive the dashboard base URL
-    let dashboard_base = if host == "localhost" || host == "127.0.0.1" {
-        // For local development: API is on 8080, dashboard is on 3000
-        format!("{}://localhost:3000", scheme)
-    } else {
-        // For production: remove 'api.' subdomain
-        let dashboard_host = host.strip_prefix("api.").unwrap_or(host);
-        format!("{}://{}", scheme, dashboard_host)
-    };
-
-    Some(format!("{}/oauth/consent/success", dashboard_base))
+    let dashboard_host = host.strip_prefix("api.")?;
+    let port = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
+    Some(format!("{}://{}{}/oauth/consent/success", url.scheme(), dashboard_host, port))
 }
 
 /// Try to bind to one of the fixed OAuth callback ports

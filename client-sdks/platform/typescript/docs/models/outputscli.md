@@ -1,5 +1,7 @@
 # OutputsCli
 
+Outputs from a CLI package build
+
 ## Example Usage
 
 ```typescript

@@ -1,12 +1,14 @@
-# PackageConfigCli
+# ConfigCli
+
+Configuration for the project CLI binary
 
 ## Example Usage
 
 ```typescript
-import { PackageConfigCli } from "@alienplatform/platform-api/models";
+import { ConfigCli } from "@alienplatform/platform-api/models";
 
-let value: PackageConfigCli = {
-  displayName: "Vada_Schamberger76",
+let value: ConfigCli = {
+  displayName: "Triston_Hodkiewicz",
   name: "<value>",
   type: "cli",
 };

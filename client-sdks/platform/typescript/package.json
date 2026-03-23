@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.0.72",
+  "version": "1.0.73",
   "author": "Speakeasy",
   "type": "module",
   "main": "./esm/index.js",

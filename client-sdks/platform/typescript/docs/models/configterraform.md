@@ -1,11 +1,13 @@
-# PackageConfigTerraform
+# ConfigTerraform
+
+Configuration for the Terraform provider binary
 
 ## Example Usage
 
 ```typescript
-import { PackageConfigTerraform } from "@alienplatform/platform-api/models";
+import { ConfigTerraform } from "@alienplatform/platform-api/models";
 
-let value: PackageConfigTerraform = {
+let value: ConfigTerraform = {
   providerName: "<value>",
   resourceType: "<value>",
   type: "terraform",

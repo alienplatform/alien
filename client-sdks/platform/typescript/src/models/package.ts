@@ -7,12 +7,11 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import { PackageConfig, PackageConfig$inboundSchema } from "./packageconfig.js";
 
 /**
  * Types of packages that can be built
  */
-export const PackageType = {
+export const PackageTypeEnum = {
   Cli: "cli",
   Cloudformation: "cloudformation",
   Helm: "helm",
@@ -22,7 +21,7 @@ export const PackageType = {
 /**
  * Types of packages that can be built
  */
-export type PackageType = ClosedEnum<typeof PackageType>;
+export type PackageTypeEnum = ClosedEnum<typeof PackageTypeEnum>;
 
 /**
  * Status of a package build
@@ -38,6 +37,83 @@ export const PackageStatus = {
  * Status of a package build
  */
 export type PackageStatus = ClosedEnum<typeof PackageStatus>;
+
+/**
+ * Configuration for the Terraform provider binary
+ */
+export type ConfigTerraform = {
+  /**
+   * Terraform provider name (e.g., "acme")
+   */
+  providerName: string;
+  /**
+   * Terraform resource type name (e.g., "agent")
+   */
+  resourceType: string;
+  type: "terraform";
+};
+
+/**
+ * Configuration for the Operator binary
+ */
+export type ConfigOperatorImage = {
+  /**
+   * Human-friendly display name for logs and startup messages
+   */
+  displayName: string;
+  /**
+   * Binary name (e.g., "acme-operator")
+   */
+  name: string;
+  type: "operator-image";
+};
+
+/**
+ * Configuration for the Helm chart package
+ */
+export type ConfigHelm = {
+  /**
+   * Chart name (e.g., "acme-operator")
+   */
+  chartName: string;
+  /**
+   * Human-friendly description of the chart
+   */
+  description: string;
+  type: "helm";
+};
+
+/**
+ * Configuration for CloudFormation packages
+ */
+export type ConfigCloudformation = {
+  type: "cloudformation";
+};
+
+/**
+ * Configuration for the project CLI binary
+ */
+export type ConfigCli = {
+  /**
+   * Human-friendly display name for help banners and about text
+   */
+  displayName: string;
+  /**
+   * Binary name displayed in help and usage (e.g., "my-cli")
+   */
+  name: string;
+  type: "cli";
+};
+
+/**
+ * Type-specific configuration
+ */
+export type Config =
+  | ConfigCli
+  | ConfigCloudformation
+  | ConfigHelm
+  | ConfigOperatorImage
+  | ConfigTerraform;
 
 /**
  * GPG public key for Terraform provider signature verification
@@ -88,6 +164,9 @@ export const OutputsTypeTerraform = {
 } as const;
 export type OutputsTypeTerraform = ClosedEnum<typeof OutputsTypeTerraform>;
 
+/**
+ * Outputs from a Terraform provider package build
+ */
 export type OutputsTerraform = {
   /**
    * GPG public key for Terraform provider signature verification
@@ -107,6 +186,9 @@ export type OutputsTypeCloudformation = ClosedEnum<
   typeof OutputsTypeCloudformation
 >;
 
+/**
+ * Outputs from a CloudFormation package build
+ */
 export type OutputsCloudformation = {
   /**
    * AWS Console quick-launch URL
@@ -132,6 +214,9 @@ export const OutputsTypeHelm = {
 } as const;
 export type OutputsTypeHelm = ClosedEnum<typeof OutputsTypeHelm>;
 
+/**
+ * Outputs from a Helm chart package build
+ */
 export type OutputsHelm = {
   /**
    * OCI chart reference (e.g., "oci://public.ecr.aws/acme/charts/project-id")
@@ -151,6 +236,9 @@ export type OutputsTypeOperatorImage = ClosedEnum<
   typeof OutputsTypeOperatorImage
 >;
 
+/**
+ * Outputs from an operator image package build
+ */
 export type OutputsOperatorImage = {
   /**
    * Image digest (e.g., "sha256:abc123...")
@@ -186,6 +274,9 @@ export const OutputsTypeCli = {
 } as const;
 export type OutputsTypeCli = ClosedEnum<typeof OutputsTypeCli>;
 
+/**
+ * Outputs from a CLI package build
+ */
 export type OutputsCli = {
   /**
    * Binary information for each target platform
@@ -221,7 +312,7 @@ export type Package = {
   /**
    * Types of packages that can be built
    */
-  type: PackageType;
+  type: PackageTypeEnum;
   /**
    * Status of a package build
    */
@@ -233,7 +324,12 @@ export type Package = {
   /**
    * Type-specific configuration
    */
-  config: PackageConfig;
+  config:
+    | ConfigCli
+    | ConfigCloudformation
+    | ConfigHelm
+    | ConfigOperatorImage
+    | ConfigTerraform;
   /**
    * Package outputs (only when status is 'ready')
    */
@@ -266,13 +362,124 @@ export type Package = {
 };
 
 /** @internal */
-export const PackageType$inboundSchema: z.ZodEnum<typeof PackageType> = z.enum(
-  PackageType,
-);
+export const PackageTypeEnum$inboundSchema: z.ZodEnum<typeof PackageTypeEnum> =
+  z.enum(PackageTypeEnum);
 
 /** @internal */
 export const PackageStatus$inboundSchema: z.ZodEnum<typeof PackageStatus> = z
   .enum(PackageStatus);
+
+/** @internal */
+export const ConfigTerraform$inboundSchema: z.ZodType<
+  ConfigTerraform,
+  unknown
+> = z.object({
+  providerName: z.string(),
+  resourceType: z.string(),
+  type: z.literal("terraform"),
+});
+
+export function configTerraformFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigTerraform, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigTerraform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigOperatorImage$inboundSchema: z.ZodType<
+  ConfigOperatorImage,
+  unknown
+> = z.object({
+  displayName: z.string(),
+  name: z.string(),
+  type: z.literal("operator-image"),
+});
+
+export function configOperatorImageFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigOperatorImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigOperatorImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigOperatorImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigHelm$inboundSchema: z.ZodType<ConfigHelm, unknown> = z
+  .object({
+    chartName: z.string(),
+    description: z.string(),
+    type: z.literal("helm"),
+  });
+
+export function configHelmFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigHelm, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigHelm$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigHelm' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigCloudformation$inboundSchema: z.ZodType<
+  ConfigCloudformation,
+  unknown
+> = z.object({
+  type: z.literal("cloudformation"),
+});
+
+export function configCloudformationFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigCloudformation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigCloudformation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigCloudformation' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigCli$inboundSchema: z.ZodType<ConfigCli, unknown> = z.object({
+  displayName: z.string(),
+  name: z.string(),
+  type: z.literal("cli"),
+});
+
+export function configCliFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigCli, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigCli$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigCli' from JSON`,
+  );
+}
+
+/** @internal */
+export const Config$inboundSchema: z.ZodType<Config, unknown> = z.union([
+  z.lazy(() => ConfigCli$inboundSchema),
+  z.lazy(() => ConfigCloudformation$inboundSchema),
+  z.lazy(() => ConfigHelm$inboundSchema),
+  z.lazy(() => ConfigOperatorImage$inboundSchema),
+  z.lazy(() => ConfigTerraform$inboundSchema),
+]);
+
+export function configFromJSON(
+  jsonString: string,
+): SafeParseResult<Config, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Config$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Config' from JSON`,
+  );
+}
 
 /** @internal */
 export const PackageGpgPublicKey$inboundSchema: z.ZodType<
@@ -484,10 +691,16 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   id: z.string(),
   projectId: z.string(),
   workspaceId: z.string(),
-  type: PackageType$inboundSchema,
+  type: PackageTypeEnum$inboundSchema,
   status: PackageStatus$inboundSchema,
   version: z.string(),
-  config: PackageConfig$inboundSchema,
+  config: z.union([
+    z.lazy(() => ConfigCli$inboundSchema),
+    z.lazy(() => ConfigCloudformation$inboundSchema),
+    z.lazy(() => ConfigHelm$inboundSchema),
+    z.lazy(() => ConfigOperatorImage$inboundSchema),
+    z.lazy(() => ConfigTerraform$inboundSchema),
+  ]),
   outputs: z.nullable(
     z.union([
       z.lazy(() => OutputsCloudformation$inboundSchema),
