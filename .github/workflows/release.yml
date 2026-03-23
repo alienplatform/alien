@@ -99,7 +99,7 @@ jobs:
   # ─── Registry publishing (crates.io + npm) ──────────────────────────
 
   publish-crates:
-    needs: prepare
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
@@ -148,7 +148,7 @@ jobs:
           done
 
   publish-npm:
-    needs: prepare
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
