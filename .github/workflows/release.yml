@@ -96,6 +96,8 @@ jobs:
           git push
           git push --tags
 
+  # ─── Registry publishing (crates.io + npm) ──────────────────────────
+
   publish-crates:
     needs: prepare
     if: ${{ !inputs.dry_run }}
@@ -114,10 +116,7 @@ jobs:
 
       - name: Configure git credentials for cargo
         run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Setup Depot
         uses: depot/setup-action@v1
@@ -190,82 +189,99 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
+  # ─── Binary builds (Linux + macOS, cached) ──────────────────────────
+
   build-binaries-linux:
     needs: prepare
     if: ${{ !inputs.dry_run }}
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
         with:
-          components: rustfmt, clippy
+          path: |
+            target/x86_64-unknown-linux-musl/release/alien
+            target/x86_64-unknown-linux-musl/release/alien-deploy
+            target/x86_64-unknown-linux-musl/release/alien-agent
+            target/x86_64-unknown-linux-musl/release/alien-runtime
+            target/aarch64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien-deploy
+            target/aarch64-unknown-linux-musl/release/alien-agent
+            target/aarch64-unknown-linux-musl/release/alien-runtime
+          key: release-linux-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
 
       - name: Configure git credentials for cargo
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Setup Depot
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: depot/setup-action@v1
 
       - name: Run sccache-cache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install protoc
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Install zig
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: mlugg/setup-zig@v2
         with:
           version: 0.13.0
 
       - name: Install cargo-zigbuild
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         run: depot cargo install cargo-zigbuild --locked
 
-      - name: Add musl target
-        run: rustup target add ${{ matrix.target }}
+      - name: Add musl targets
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
-      - name: Build all binaries
+      - name: Build all binaries (both targets)
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
-          depot cargo zigbuild --release --target ${{ matrix.target }} \
-            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime
+          depot cargo zigbuild --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
+            --target x86_64-unknown-linux-musl \
+            --target aarch64-unknown-linux-musl
 
-      - name: Upload alien-cli binary
+      - name: Upload x86_64 linux binaries
         uses: actions/upload-artifact@v4
         with:
-          name: alien-cli-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien
+          name: binaries-x86_64-unknown-linux-musl
+          retention-days: 1
+          path: |
+            target/x86_64-unknown-linux-musl/release/alien
+            target/x86_64-unknown-linux-musl/release/alien-deploy
+            target/x86_64-unknown-linux-musl/release/alien-agent
+            target/x86_64-unknown-linux-musl/release/alien-runtime
 
-      - name: Upload alien-deploy binary
+      - name: Upload aarch64 linux binaries
         uses: actions/upload-artifact@v4
         with:
-          name: alien-deploy-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien-deploy
-
-      - name: Upload alien-agent binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: alien-agent-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien-agent
-
-      - name: Upload alien-runtime binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: alien-runtime-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien-runtime
+          name: binaries-aarch64-unknown-linux-musl
+          retention-days: 1
+          path: |
+            target/aarch64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien-deploy
+            target/aarch64-unknown-linux-musl/release/alien-agent
+            target/aarch64-unknown-linux-musl/release/alien-runtime
 
   build-binaries-macos:
     needs: prepare
@@ -284,38 +300,46 @@ jobs:
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/${{ matrix.target }}/release/alien
+            target/${{ matrix.target }}/release/alien-deploy
+            target/${{ matrix.target }}/release/alien-agent
+          key: release-${{ matrix.target }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+
       - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         with:
           targets: ${{ matrix.target }}
 
       - name: Run sccache-cache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install protoc
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         run: brew install protobuf
 
       - name: Build all binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
         run: |
           cargo build --release --target ${{ matrix.target }} \
             -p alien-cli -p alien-deploy-cli -p alien-agent
 
-      - name: Upload alien-cli binary
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: alien-cli-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien
+          name: binaries-${{ matrix.target }}
+          retention-days: 1
+          path: |
+            target/${{ matrix.target }}/release/alien
+            target/${{ matrix.target }}/release/alien-deploy
+            target/${{ matrix.target }}/release/alien-agent
 
-      - name: Upload alien-deploy binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: alien-deploy-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien-deploy
-
-      - name: Upload alien-agent binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: alien-agent-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/alien-agent
+  # ─── Upload binaries to S3 ──────────────────────────────────────────
 
   upload-binaries:
     needs: [prepare, build-binaries-linux, build-binaries-macos]
@@ -326,7 +350,9 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: binaries-*
           path: ./artifacts
+          merge-multiple: false
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -340,17 +366,16 @@ jobs:
 
           upload() {
             local binary=$1 target=$2 os=$3 arch=$4
-            aws s3 cp "./artifacts/${binary}-${target}/${binary}" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
-            aws s3 cp "./artifacts/${binary}-${target}/${binary}" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
+            local src="./artifacts/binaries-${target}/target/${target}/release/${binary}"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
           }
 
-          # Linux
           for binary in alien alien-deploy alien-agent alien-runtime; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
 
-          # macOS
           for binary in alien alien-deploy alien-agent; do
             upload "$binary" x86_64-apple-darwin darwin x86_64
             upload "$binary" aarch64-apple-darwin darwin aarch64
@@ -362,6 +387,8 @@ jobs:
             --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/alien/latest/*" "/alien-deploy/latest/*" "/alien-agent/latest/*" "/alien-runtime/latest/*"
 
+  # ─── Docker images + Helm chart ─────────────────────────────────────
+
   publish-images:
     needs: [prepare, build-binaries-linux]
     if: ${{ !inputs.dry_run }}
@@ -372,17 +399,19 @@ jobs:
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
-      - name: Download Linux binaries
+      - name: Download linux binaries
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
+          pattern: binaries-*-unknown-linux-musl
+          path: ./linux-bins
+          merge-multiple: false
 
       - name: Place binaries in target layout for Dockerfiles
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
             for binary in alien-agent alien-runtime; do
-              cp "./artifacts/${binary}-${target}/${binary}" "target/${target}/release/${binary}"
+              cp "./linux-bins/binaries-${target}/target/${target}/release/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
           done
