@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "alien-agent"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-agent",
  "alien-core",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-error",
  "chrono",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-error",
  "chrono",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "alien-runtime"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.1.2"
+version = "1.2.4"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -2806,9 +2806,9 @@ dependencies = [
 
 [[package]]
 name = "deepstore-client"
-version = "1.0.7"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1425a4857f573495f36379ef1cbe4eb95bd16ed8870e56eadb9e3abd01c8350a"
+checksum = "0bb2a1f178d5ba42b2b58d15c284f92c8fbe84efb204f258077771de2947247d"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2818,7 +2818,7 @@ dependencies = [
  "deepstore-server-client",
  "eventsource-client",
  "futures",
- "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

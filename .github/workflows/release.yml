@@ -286,7 +286,7 @@ jobs:
   build-binaries-darwin:
     needs: prepare
     if: ${{ !inputs.dry_run }}
-    runs-on: macos-14
+    runs-on: depot-macos-14
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -315,6 +315,10 @@ jobs:
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Depot
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: depot/setup-action@v1
 
       - name: Run sccache-cache
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -358,10 +362,80 @@ jobs:
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-agent
 
+  build-binaries-windows:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-pc-windows-gnu/release/alien.exe
+            target/x86_64-pc-windows-gnu/release/alien-deploy.exe
+          key: release-windows-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}-v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Configure git credentials for cargo
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Depot
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: depot/setup-action@v1
+
+      - name: Run sccache-cache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install protoc
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: depot cargo install cargo-zigbuild --locked
+
+      - name: Build windows binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          RUSTC_WRAPPER: ""
+        run: |
+          cargo zigbuild --release \
+            -p alien-cli -p alien-deploy-cli \
+            --target x86_64-pc-windows-gnu
+
+      - name: Upload windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-x86_64-pc-windows-gnu
+          retention-days: 1
+          path: |
+            target/x86_64-pc-windows-gnu/release/alien.exe
+            target/x86_64-pc-windows-gnu/release/alien-deploy.exe
+
   # ─── Upload binaries to S3 ──────────────────────────────────────────
 
   upload-binaries:
-    needs: [prepare, build-binaries-linux, build-binaries-darwin]
+    needs: [prepare, build-binaries-linux, build-binaries-darwin, build-binaries-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
@@ -400,11 +474,22 @@ jobs:
             upload "$binary" aarch64-apple-darwin darwin aarch64
           done
 
+          upload_exe() {
+            local binary=$1 target=$2 os=$3 arch=$4
+            local src="./artifacts/binaries-${target}/target/${target}/release/${binary}.exe"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}.exe"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
+          }
+
+          for binary in alien alien-deploy; do
+            upload_exe "$binary" x86_64-pc-windows-gnu windows x86_64
+          done
+
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/alien/latest/*" "/alien-deploy/latest/*" "/alien-agent/latest/*" "/alien-runtime/latest/*"
+            --paths "/*"
 
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
