@@ -13,7 +13,12 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "commands", "remote-command", "command"],
+  "keywords": [
+    "alien",
+    "commands",
+    "remote-command",
+    "command"
+  ],
   "author": "",
   "license": "ISC",
   "description": "Lightweight client for Alien Commands protocol",
