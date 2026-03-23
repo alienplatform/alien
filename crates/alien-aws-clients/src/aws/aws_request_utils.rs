@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 #[cfg(target_arch = "wasm32")]
 use std::time::{Duration, UNIX_EPOCH};
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
@@ -75,13 +75,13 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
             .and_then(|b| b.as_bytes().map(|b| b.to_vec()))
             .unwrap_or_default();
 
-        info!(
+        debug!(
             service = %config.service_name,
             region = %config.region,
             method = %reqwest_request.method(),
             url = %reqwest_request.url(),
             body_len = body_bytes.len(),
-            "Starting AWS request signing"
+            "Signing AWS request"
         );
 
         // Build an http::Request<String> that we can feed to the signing API.
@@ -89,10 +89,8 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
             .method(reqwest_request.method().as_str())
             .uri(reqwest_request.url().as_str());
 
-        info!("Request headers before signing:");
         for (name, value) in reqwest_request.headers() {
             if let Ok(value_str) = value.to_str() {
-                info!("  {}: {}", name, value_str);
                 http_request_builder = http_request_builder.header(name, value_str);
             }
         }
@@ -118,21 +116,11 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
 
         let signing_time = get_current_time();
 
-        info!(
+        trace!(
             signing_region = %signing_region,
             service = %config.service_name,
             "Signing parameters prepared"
         );
-
-        // Log body hash for debugging
-        if !body_bytes.is_empty() {
-            let mut hasher = Sha256::new();
-            hasher.update(&body_bytes);
-            let body_hash = hex::encode(hasher.finalize());
-            info!("Body SHA256: {}", body_hash);
-        } else {
-            info!("Body is empty (SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)");
-        }
 
         let signing_settings = SigningSettings::default();
         let signing_params = v4::SigningParams::builder()
@@ -179,20 +167,10 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
             })?
             .into_parts();
 
-        info!(
-            signature = %signature,
-            "AWS SigV4 signature generated successfully"
-        );
+        trace!(signature = %signature, "SigV4 signature generated");
 
         // Apply the generated headers to our http::Request.
         signing_instructions.apply_to_request_http1x(&mut http_request);
-
-        info!("Headers after signing:");
-        for (name, value) in http_request.headers() {
-            if let Ok(value_str) = value.to_str() {
-                info!("  {}: {}", name, value_str);
-            }
-        }
 
         // Now rebuild the reqwest request with the original body bytes preserved
         let (parts, _) = http_request.into_parts();
@@ -216,10 +194,10 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
             },
         )?;
 
-        info!(
+        debug!(
             service = %config.service_name,
             url = %signed_reqwest_request.url(),
-            "AWS request signing completed"
+            "AWS request signed"
         );
 
         // Recreate a RequestBuilder from the client & signed request so the caller can
