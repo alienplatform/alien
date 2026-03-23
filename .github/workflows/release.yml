@@ -360,7 +360,7 @@ jobs:
           CFLAGS_x86_64_apple_darwin: -isysroot ${{ env.SDKROOT }}
           CXXFLAGS_x86_64_apple_darwin: -isysroot ${{ env.SDKROOT }}
         run: |
-          depot cargo zigbuild --release \
+          cargo zigbuild --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent \
             --target x86_64-apple-darwin \
             --target aarch64-apple-darwin
