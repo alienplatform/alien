@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "tests/**/*", "alien.config.ts"],
+  "include": ["src/**/*", "tests/**/*", "alien.ts"],
   "exclude": ["node_modules", "dist"]
 }

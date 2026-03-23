@@ -1,19 +1,17 @@
-use crate::auth::AuthHttp;
-use crate::execution_context::ExecutionMode;
+use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
-use crate::project_link::ensure_project_linked;
 use crate::tui::{ErrorPrinter, ReleaseResult, ReleaseUiComponent, ReleaseUiEvent, ReleaseUiProps};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{alien_event, AlienEvent, EventChange, EventHandler, EventState};
 use alien_core::{Platform, Stack};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::{
-    CreateReleaseRequest, CreateReleaseRequestProject, CreateReleaseRequestRootDirectory,
-    CreateReleaseWorkspace, GitMetadata, StackByPlatform,
+use alien_platform_api::types::GitMetadata;
+use alien_server_sdk::types::{
+    CreateReleaseRequest as ManagerCreateReleaseRequest,
+    StackByPlatform as ManagerStackByPlatform,
 };
-use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -163,33 +161,28 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
 async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseJsonOutput> {
     let config = load_release_config(&args, &ctx).await?;
 
+    let project_name = config.project_link.project_name.clone();
+    let workspace_name = config.workspace_name.clone();
+    let platforms = config.platforms.clone();
+
     // Run core release logic
-    let result = release_task_core(
-        args,
-        config.output_dir,
-        config.http,
-        config.workspace_name.clone(),
-        config.project_link.clone(),
-        config.git_metadata,
-        config.platforms.clone(),
-    )
-    .await;
+    let result = release_task_core(args, config).await;
 
     match result {
         Ok(ReleaseResult::Success { release_id }) => Ok(ReleaseJsonOutput {
             success: true,
             release_id: Some(release_id),
-            project: config.project_link.project_name,
-            workspace: config.workspace_name,
-            platforms: config.platforms,
+            project: project_name,
+            workspace: workspace_name,
+            platforms,
             error: None,
         }),
         Ok(ReleaseResult::Failed(err)) => Ok(ReleaseJsonOutput {
             success: false,
             release_id: None,
-            project: config.project_link.project_name,
-            workspace: config.workspace_name,
-            platforms: config.platforms,
+            project: project_name,
+            workspace: workspace_name,
+            platforms,
             error: Some(format!("{}", err)),
         }),
         Err(err) => Err(err),
@@ -240,15 +233,6 @@ async fn run_release_with_tui(args: ReleaseArgs, ctx: ExecutionMode) -> Result<(
     let event_handler = ReleaseEventHandler::new(ui_event_tx.clone());
     let bus = alien_core::EventBus::with_handlers(vec![Arc::new(event_handler)]);
 
-    // Move config fields into the spawned task
-    let args_for_task = args.clone();
-    let http_for_task = config.http;
-    let workspace_name_for_task = config.workspace_name;
-    let project_link_for_task = config.project_link;
-    let git_metadata_for_task = config.git_metadata;
-    let platforms_for_task = config.platforms;
-    let output_dir_for_task = config.output_dir;
-
     // Run the release task in the background
     let release_ui_tx = ui_event_tx.clone();
     let release_handle = tokio::spawn(async move {
@@ -260,16 +244,7 @@ async fn run_release_with_tui(args: ReleaseArgs, ctx: ExecutionMode) -> Result<(
                     .await;
 
                 // Run core logic
-                release_task_core(
-                    args_for_task,
-                    output_dir_for_task,
-                    http_for_task,
-                    workspace_name_for_task,
-                    project_link_for_task,
-                    git_metadata_for_task,
-                    platforms_for_task,
-                )
-                .await
+                release_task_core(args, config).await
             })
             .await;
 
@@ -300,7 +275,7 @@ async fn run_release_with_tui(args: ReleaseArgs, ctx: ExecutionMode) -> Result<(
 /// Resolved release configuration (shared across TUI, console, and JSON modes)
 struct ReleaseConfig {
     output_dir: PathBuf,
-    http: AuthHttp,
+    manager: ManagerContext,
     workspace_name: String,
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
@@ -313,22 +288,97 @@ async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
-    if !output_dir.exists() {
+    let workspace_name = ctx.resolve_workspace().await?;
+
+    // Resolve project
+    let (_project_id, project_link) = ctx.resolve_project(args.project.as_deref()).await?;
+
+    // Determine platforms
+    let platforms = if let Some(platform_str) = &args.platform {
+        vec![platform_str.clone()]
+    } else {
+        discover_built_platforms(&output_dir)?
+    };
+
+    if platforms.is_empty() && !output_dir.exists() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "No .alien directory found. Please run `alien build` first.".to_string(),
         }));
     }
 
-    let http = ctx.auth_http().await?;
-    let workspace_name = ctx.resolve_workspace().await?;
+    // Auto-build if no build output exists (for any discovered platform)
+    let first_platform = args.platform.as_deref().unwrap_or("local");
+    let stack_file = output_dir
+        .join("build")
+        .join(first_platform)
+        .join("stack.json");
+    if !stack_file.exists() {
+        println!("No build found for {} platform, building...", first_platform);
 
-    // Release's own --project takes precedence over global --project
-    let effective_project = args.project.as_deref().or(ctx.project_override());
-    let project_link = if let Some(project_name) = effective_project {
-        crate::project_link::get_project_by_name(&http, &workspace_name, project_name).await?
+        let platform = Platform::from_str(first_platform).map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: e,
+            })
+        })?;
+
+        let config_path = current_dir.clone();
+        let stack = crate::config::load_configuration(config_path)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to load configuration".to_string(),
+            })?;
+
+        let platform_build_settings = match platform {
+            Platform::Aws => alien_build::settings::PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            Platform::Gcp => alien_build::settings::PlatformBuildSettings::Gcp {},
+            Platform::Azure => alien_build::settings::PlatformBuildSettings::Azure {},
+            Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {},
+            Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
+            Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
+        };
+
+        let targets = match platform {
+            Platform::Local => Some(vec![alien_core::BinaryTarget::current_os()]),
+            _ => None,
+        };
+
+        let settings = alien_build::settings::BuildSettings {
+            output_directory: output_dir.to_str().unwrap().to_string(),
+            platform: platform_build_settings,
+            targets,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        alien_build::build_stack(stack, &settings)
+            .await
+            .context(ErrorData::BuildFailed)?;
+    }
+
+    // Re-discover platforms after potential auto-build
+    let platforms = if let Some(platform_str) = &args.platform {
+        vec![platform_str.clone()]
     } else {
-        ensure_project_linked(&current_dir, &http, &workspace_name).await?
+        let discovered = discover_built_platforms(&output_dir)?;
+        if discovered.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "build output".to_string(),
+                message:
+                    "No built platforms found in .alien directory. Please run `alien build` first."
+                        .to_string(),
+            }));
+        }
+        discovered
     };
+
+    // Resolve manager (discovers URL in Platform mode, known in SelfHosted/Dev)
+    let manager = ctx
+        .resolve_manager(&project_link.project_id, &platforms[0])
+        .await?;
 
     let git_metadata = if args.no_git {
         None
@@ -342,24 +392,9 @@ async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<
         }
     };
 
-    let platforms = if let Some(platform_str) = &args.platform {
-        vec![platform_str.clone()]
-    } else {
-        discover_built_platforms(&output_dir)?
-    };
-
-    if platforms.is_empty() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "build output".to_string(),
-            message:
-                "No built platforms found in .alien directory. Please run `alien build` first."
-                    .to_string(),
-        }));
-    }
-
     Ok(ReleaseConfig {
         output_dir,
-        http,
+        manager,
         workspace_name,
         project_link,
         git_metadata,
@@ -393,32 +428,23 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         })
         .await?;
 
-    release_task_core(
-        args,
-        config.output_dir,
-        config.http,
-        config.workspace_name,
-        config.project_link,
-        config.git_metadata,
-        config.platforms,
-    )
-    .await
+    release_task_core(args, config).await
 }
 
-/// Core release logic (shared by TUI and console modes)
-async fn release_task_core(
-    args: ReleaseArgs,
-    output_dir: PathBuf,
-    http: AuthHttp,
-    workspace_name: String,
-    project_link: crate::project_link::ProjectLink,
-    git_metadata: Option<GitMetadata>,
-    platforms_to_release: Vec<String>,
-) -> Result<ReleaseResult> {
-    let client = http.sdk_client();
+/// Core release logic (shared by TUI and console modes).
+///
+/// Always uses the manager SDK to create the release — no mode branching.
+async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<ReleaseResult> {
+    let ReleaseConfig {
+        output_dir,
+        manager,
+        git_metadata,
+        platforms: platforms_to_release,
+        ..
+    } = config;
 
     // Process each platform: load stack, push images, collect pushed stacks
-    let mut stack_by_platform = StackByPlatform {
+    let mut stack_by_platform = ManagerStackByPlatform {
         aws: None,
         gcp: None,
         azure: None,
@@ -441,29 +467,25 @@ async fn release_task_core(
         // Load built stack
         let built_stack = load_built_stack(&output_dir, platform_str)?;
 
-        // Get push settings (either from platform API or manual override)
-        let push_settings = if let Some(ref image_repo) = args.image_repo {
-            // Manual override mode (for agent manager deployment)
-            create_manual_push_settings(&args, image_repo)?
+        // Push images if needed (local/test platforms skip pushing)
+        let pushed_stack = if platform != Platform::Local && platform != Platform::Test {
+            // Get push settings (either manual override or from manager context)
+            let push_settings = if let Some(ref image_repo) = args.image_repo {
+                create_manual_push_settings(&args, image_repo)?
+            } else {
+                fetch_push_settings_from_manager(&manager, &platform).await?
+            };
+
+            info!("   Pushing images to {}...", push_settings.repository);
+
+            alien_build::push_stack(built_stack, platform.clone(), &push_settings)
+                .await
+                .context(ErrorData::ReleaseFailed {
+                    message: format!("Failed to push images for {} platform", platform_str),
+                })?
         } else {
-            // Auto-fetch mode (standard workflow)
-            fetch_push_settings_from_platform(
-                &http,
-                &workspace_name,
-                &project_link.project_id,
-                &platform,
-            )
-            .await?
+            built_stack
         };
-
-        info!("   Pushing images to {}...", push_settings.repository);
-
-        // Push images and get updated stack (emits PushingStack and PushingResource events)
-        let pushed_stack = alien_build::push_stack(built_stack, platform, &push_settings)
-            .await
-            .context(ErrorData::ReleaseFailed {
-                message: format!("Failed to push images for {} platform", platform_str),
-            })?;
 
         // Convert to JSON for the API
         let stack_json = serde_json::to_value(&pushed_stack)
@@ -480,97 +502,58 @@ async fn release_task_core(
             Platform::Azure => stack_by_platform.azure = Some(stack_json),
             Platform::Kubernetes => stack_by_platform.kubernetes = Some(stack_json),
             Platform::Local => stack_by_platform.local = Some(stack_json),
-            #[allow(unreachable_patterns)]
-            _ => {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "platform".to_string(),
-                    message: format!("Cannot release {} platform", platform.as_str()),
-                }));
-            }
+            Platform::Test => stack_by_platform.test = Some(stack_json),
         }
 
         info!("   ✓ {} platform ready", platform_str);
     }
 
-    // Create release request
-    let release_request = CreateReleaseRequest {
-        project: CreateReleaseRequestProject::try_from(project_link.project_id.clone()).map_err(
-            |e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "project".to_string(),
-                    message: format!("Invalid project: {}", e),
-                })
-            },
-        )?,
-        git_metadata,
-        stack: stack_by_platform,
-        root_directory: project_link
-            .root_directory
-            .clone()
-            .and_then(|rd| CreateReleaseRequestRootDirectory::try_from(rd).ok()),
-    };
+    // Convert platform SDK GitMetadata to manager SDK GitMetadata (serde roundtrip)
+    let sdk_git_metadata = git_metadata.and_then(|m| {
+        m.0.map(|inner| alien_server_sdk::types::GitMetadata {
+            commit_sha: inner.commit_sha.map(|s| s.to_string()),
+            commit_ref: inner.commit_ref.map(|s| s.to_string()),
+            commit_message: inner.commit_message.map(|s| s.to_string()),
+        })
+    });
 
-    // Create the release on the platform
-    let release_id = create_platform_release(
-        client.clone(),
-        workspace_name,
-        project_link,
-        release_request,
-    )
-    .await?;
+    // Create release on the manager
+    let release_id = create_manager_release(&manager, stack_by_platform, sdk_git_metadata).await?;
 
     Ok(ReleaseResult::Success { release_id })
 }
 
-/// Create a release on the platform
+/// Create a release on the manager
 #[alien_event(AlienEvent::CreatingRelease {
-    project: project_link.project_name.clone(),
+    project: "release".to_string(),
 })]
-async fn create_platform_release(
-    client: alien_platform_api::Client,
-    workspace_name: String,
-    project_link: crate::project_link::ProjectLink,
-    release_request: CreateReleaseRequest,
+async fn create_manager_release(
+    manager: &ManagerContext,
+    stack: ManagerStackByPlatform,
+    git_metadata: Option<alien_server_sdk::types::GitMetadata>,
 ) -> Result<String> {
-    info!("Creating release on platform...");
+    info!("Creating release on manager...");
 
-    let workspace_param =
-        CreateReleaseWorkspace::try_from(workspace_name.as_str()).map_err(|e| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!("Invalid workspace '{}': {}", workspace_name, e),
+    let response = manager
+        .client
+        .create_release()
+        .body(ManagerCreateReleaseRequest {
+            stack,
+            git_metadata,
+        })
+        .send()
+        .await
+        .map_err(|e| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Failed to create release: {}", e),
+                url: None,
             })
         })?;
 
-    let response = client
-        .create_release()
-        .workspace(&workspace_param)
-        .body(&release_request)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create release".to_string(),
-            url: None,
-        })?;
+    let release_id = response.id.clone();
 
-    let release = response.into_inner();
-    let release_id = (*release.id).clone();
-
-    info!("✅ Release created successfully!");
+    info!("Release created successfully!");
     info!("   ID: {}", release_id);
-    info!(
-        "   Project: {}/{}",
-        workspace_name, project_link.project_name
-    );
-
-    if let Some(ref git_meta) = release.git_metadata {
-        if let Some(ref inner) = git_meta.0 {
-            if let Some(ref sha) = inner.commit_sha {
-                let short_sha = if sha.len() > 7 { &sha[..7] } else { sha };
-                info!("   Commit: {}", short_sha);
-            }
-        }
-    }
 
     Ok(release_id)
 }
@@ -680,132 +663,37 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
     })
 }
 
-/// Fetch push settings from the platform's agent manager
-async fn fetch_push_settings_from_platform(
-    http: &AuthHttp,
-    workspace_name: &str,
-    project_id: &str,
+/// Fetch push settings from the manager's artifact-registry credentials endpoint.
+///
+/// Uses `ManagerContext.repository_name` (available when resolved via platform discovery).
+/// For SelfHosted mode without `--image-repo`, this will fail with a helpful error.
+async fn fetch_push_settings_from_manager(
+    manager: &ManagerContext,
     platform: &Platform,
 ) -> Result<PushSettings> {
-    let client = http.sdk_client();
-
-    info!("   Fetching build configuration from platform...");
-
-    // Call the build-config API endpoint with retry logic for agent manager startup
-    use alien_platform_api::types::{
-        GetProjectBuildConfigPlatform, GetProjectBuildConfigWorkspace, ProjectIdOrNamePathParam,
-    };
-
-    let workspace_param =
-        GetProjectBuildConfigWorkspace::try_from(workspace_name).map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-
-    let project_param = ProjectIdOrNamePathParam::try_from(project_id).map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "project".to_string(),
-            message: format!("Invalid project: {}", e),
+    let repository_name = manager.repository_name.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "No repository name available. In self-hosted mode, use --image-repo to specify a container registry.\n\
+                 Example: alien release --platform {} --image-repo my-registry.com/my-app",
+                platform.as_str()
+            ),
         })
     })?;
 
-    let platform_param =
-        GetProjectBuildConfigPlatform::try_from(platform.as_str()).map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!("Invalid platform: {}", e),
-            })
-        })?;
-
-    // Retry logic: agent manager might be starting up
-    let max_duration = std::time::Duration::from_secs(60); // 1 minute total
-    let start_time = std::time::Instant::now();
-    let mut attempt = 0;
-
-    let build_config = loop {
-        attempt += 1;
-
-        let result = client
-            .get_project_build_config()
-            .id_or_name(&project_param)
-            .platform(&platform_param)
-            .workspace(&workspace_param)
-            .send()
-            .await
-            .into_sdk_error();
-
-        match result {
-            Ok(response) => break response.into_inner(),
-            Err(sdk_err) => {
-                // Check if this is a retryable error (503 - agent manager not ready)
-                let is_retryable = sdk_err.http_status_code == Some(503);
-
-                if is_retryable && start_time.elapsed() < max_duration {
-                    // Calculate backoff: 2s, 4s, 8s, 16s, capped at 15s
-                    let backoff_secs = std::cmp::min(2u64.pow(attempt - 1), 15);
-
-                    if attempt == 1 {
-                        info!("   Agent manager not ready yet, waiting for startup...");
-                    } else {
-                        info!(
-                            "   Still waiting for agent manager (attempt {})...",
-                            attempt
-                        );
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                    continue;
-                } else {
-                    // Either non-retryable error or timeout exceeded
-                    if is_retryable {
-                        let mut err = AlienError::new(ErrorData::ApiRequestFailed {
-                            message: format!(
-                                "Agent manager for {} platform did not become ready within {} seconds",
-                                platform.as_str(),
-                                max_duration.as_secs()
-                            ),
-                            url: None,
-                        });
-                        err.source = Some(Box::new(sdk_err));
-                        return Err(err);
-                    } else {
-                        let mut err = AlienError::new(ErrorData::ApiRequestFailed {
-                            message: format!(
-                                "Failed to get build configuration for {} platform",
-                                platform.as_str()
-                            ),
-                            url: None,
-                        });
-                        err.source = Some(Box::new(sdk_err));
-                        return Err(err);
-                    }
-                }
-            }
-        }
-    };
-
-    if attempt > 1 {
-        info!("   ✓ Agent manager ready after {} attempt(s)", attempt);
-    }
-
-    info!("   Manager: {}", build_config.manager_url);
-    info!("   Repository: {}", build_config.repository_name);
-
-    // Now call the manager to get credentials
     info!("   Generating repository credentials...");
 
-    // Use the authenticated HTTP client so the manager receives the same
-    // Authorization header that the caller used with the platform API.
-    let reqwest_client = &http.client;
-
     // Call manager API to generate credentials
-    let credentials_response = reqwest_client
-        .post(format!(
-            "{}/v1/artifact-registry/repositories/{}/credentials?platform={}",
-            build_config.manager_url, build_config.repository_name, platform.as_str()
-        ))
+    let credentials_url = format!(
+        "{}/v1/artifact-registry/repositories/{}/credentials",
+        manager.manager_url, repository_name
+    );
+
+    // Use the authenticated HTTP client so the manager receives the same
+    // Authorization header that the caller used.
+    let credentials_response = manager
+        .http_client
+        .post(&credentials_url)
         .json(&serde_json::json!({
             "operation": "push",
             "durationSeconds": 3600
@@ -815,7 +703,7 @@ async fn fetch_push_settings_from_platform(
         .into_alien_error()
         .context(ErrorData::HttpRequestFailed {
             message: "Failed to request credentials from manager".to_string(),
-            url: Some(build_config.manager_url.clone()),
+            url: Some(manager.manager_url.clone()),
         })?;
 
     if !credentials_response.status().is_success() {
@@ -823,7 +711,7 @@ async fn fetch_push_settings_from_platform(
         let body = credentials_response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::HttpRequestFailed {
             message: format!("Manager returned error {}: {}", status, body),
-            url: Some(build_config.manager_url),
+            url: Some(manager.manager_url.clone()),
         }));
     }
 
@@ -858,13 +746,13 @@ async fn fetch_push_settings_from_platform(
         .to_string();
 
     // Determine repository URI
-    let repository_uri = build_config
+    let repository_uri = manager
         .repository_uri
-        .unwrap_or_else(|| build_config.repository_name.clone());
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| repository_name.clone());
 
     // Translate registry URL for CLI access.
-    // The agent manager container sees the host registry as host.docker.internal:<port>,
-    // but the CLI runs on the host itself, so we translate to localhost:<port>.
     let (repository_uri, protocol) = translate_registry_url_for_cli(&repository_uri, platform)?;
 
     info!("   ✓ Credentials generated successfully");
@@ -897,8 +785,6 @@ fn translate_registry_url_for_cli(
     platform: &Platform,
 ) -> Result<(String, ClientProtocol)> {
     // Parse registry URL to extract hostname
-    // Registry URLs are in format: hostname:port/path or just hostname/path
-    // Examples: "localhost:5000/artifacts/repo", "123.dkr.ecr.us-east-1.amazonaws.com/repo"
     let hostname = if let Some(slash_pos) = repository_uri.find('/') {
         &repository_uri[..slash_pos]
     } else {
@@ -907,17 +793,12 @@ fn translate_registry_url_for_cli(
 
     // Extract just the hostname part (before port if present)
     let hostname_without_port = if let Some(colon_pos) = hostname.rfind(':') {
-        // Check if this is actually a port (not IPv6)
-        // For simplicity, we assume IPv6 addresses won't appear in registry URLs
         &hostname[..colon_pos]
     } else {
         hostname
     };
 
     // Translate host.docker.internal to localhost for CLI access.
-    // host.docker.internal is how containers reach the host, but the CLI runs on the host itself.
-    // This is the normal case for the local platform, and also valid in development setups
-    // where a single local agent manager serves multiple platforms.
     if hostname_without_port == "host.docker.internal" {
         if platform != &Platform::Local {
             info!(
@@ -938,7 +819,6 @@ fn translate_registry_url_for_cli(
     }
 
     // Determine protocol based on hostname
-    // Local registries (localhost, 127.0.0.1) use HTTP, everything else uses HTTPS
     let protocol = if hostname_without_port == "localhost" || hostname_without_port == "127.0.0.1" {
         ClientProtocol::Http
     } else {

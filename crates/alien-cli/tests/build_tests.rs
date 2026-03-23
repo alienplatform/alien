@@ -9,7 +9,7 @@ use test_utils::*;
 
 #[test]
 fn test_build_command_basic_platforms() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Test AWS platform
@@ -66,7 +66,7 @@ fn test_build_command_basic_platforms() {
 
 #[test]
 fn test_build_command_with_aws_managing_account() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     let assert = Command::new(get_alien_cli_binary())
@@ -90,7 +90,7 @@ fn test_build_command_with_aws_managing_account() {
 
 #[test]
 fn test_build_command_registry_auth() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Build no longer accepts registry auth flags; ensure we error cleanly.
@@ -132,7 +132,7 @@ fn test_build_command_registry_auth() {
 
 #[test]
 fn test_build_command_validation_errors() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Invalid platform
@@ -209,7 +209,7 @@ fn test_build_command_no_config_file() {
 
 #[test]
 fn test_build_command_tty_environments() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Test with TTY
@@ -251,7 +251,7 @@ fn test_build_command_tty_environments() {
 
 #[test]
 fn test_build_command_custom_output_dir() {
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
     let custom_output_dir = temp_path.join("custom-output");
 

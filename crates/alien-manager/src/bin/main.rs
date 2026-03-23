@@ -72,6 +72,7 @@ fn config_from_env() -> ManagerConfig {
         .unwrap_or(false);
 
     let base_url = std::env::var("BASE_URL").ok();
+    let releases_url = std::env::var("ALIEN_RELEASES_URL").ok();
 
     ManagerConfig {
         port,
@@ -82,6 +83,7 @@ fn config_from_env() -> ManagerConfig {
         otlp_endpoint,
         dev_mode,
         base_url,
+        releases_url,
     }
 }
 

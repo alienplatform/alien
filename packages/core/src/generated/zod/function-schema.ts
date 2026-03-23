@@ -14,7 +14,7 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
  * @description Represents a serverless function that executes code in response to triggers or direct invocations.\nFunctions are the primary compute resource in serverless applications, designed to be stateless and ephemeral.
  */
 export const FunctionSchema = z.object({
-    "arcEnabled": z.optional(z.boolean().default(false).describe("Whether the function can be invoked via ARC (Alien Remote Call) protocol from the control plane.\nWhen enabled, the necessary queue infrastructure is automatically created for the target platform.")),
+    "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the function can receive remote commands via the Commands protocol.\nWhen enabled, the runtime polls the manager for pending commands and executes registered handlers.")),
 get "code"(){
                 return FunctionCodeSchema.describe("Specifies the source of the function's executable code.\nThis can be a pre-built container image or source code that the system will build.")
               },

@@ -66,6 +66,22 @@ jobs:
             --target aarch64-unknown-linux-musl \
             --release
 
+      - name: Build alien-agent (x86_64)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          depot cargo zigbuild -p alien-agent --bin alien-agent \
+            --target x86_64-unknown-linux-musl \
+            --release
+
+      - name: Build alien-agent (aarch64)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          depot cargo zigbuild -p alien-agent --bin alien-agent \
+            --target aarch64-unknown-linux-musl \
+            --release
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -116,3 +132,40 @@ jobs:
           labels: ${{ steps.meta_builder.outputs.labels }}
           provenance: true
           sbom: true
+
+      - name: Metadata (alien-agent)
+        id: meta_agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-agent
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+
+      - name: Publish alien-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_agent.outputs.tags }}
+          labels: ${{ steps.meta_agent.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version:.*/version: $VERSION/" charts/alien-agent/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/alien-agent/Chart.yaml
+          helm package charts/alien-agent
+
+      - name: Push Helm chart to GHCR
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm push alien-agent-$VERSION.tgz oci://ghcr.io/alienplatform/charts

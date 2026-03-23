@@ -2,9 +2,11 @@
 
 pub mod commands;
 pub mod credentials;
+pub mod deploy_page;
 pub mod deployment_groups;
 pub mod deployments;
 pub mod health;
+pub mod install;
 pub mod releases;
 pub mod sync;
 pub mod telemetry;
@@ -73,10 +75,13 @@ pub(crate) fn create_router_inner(state: AppState, include_initialize: bool) -> 
         .route("/v1/logs", post(telemetry::ingest_logs))
         .route("/v1/traces", post(telemetry::ingest_traces))
         .route("/v1/metrics", post(telemetry::ingest_metrics))
-        // Sync (acquire / reconcile / release / operator-sync)
+        // Sync (acquire / reconcile / release / agent-sync)
         .merge(sync::router())
         // Credentials
-        .merge(credentials::router());
+        .merge(credentials::router())
+        // Deploy page and install script (no auth, public)
+        .merge(deploy_page::router())
+        .merge(install::router());
 
     if include_initialize {
         router = router.merge(sync::initialize_router());

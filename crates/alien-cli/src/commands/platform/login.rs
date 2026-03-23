@@ -1,5 +1,5 @@
 use crate::auth::{force_login, save_workspace};
-use crate::commands::workspace::prompt_workspace_with_tui;
+use crate::commands::platform::workspace::prompt_workspace_with_tui;
 use crate::error::Result;
 use crate::execution_context::ExecutionMode;
 use clap::Parser;

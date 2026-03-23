@@ -87,16 +87,16 @@ alien release --server $ALIEN_SERVER
 
 ### Pull model (Kubernetes)
 
-For environments where alien-manager can't impersonate credentials directly, install the Operator:
+For environments where alien-manager can't impersonate credentials directly, install the agent:
 
 ```bash
-helm install alien-operator alien/operator \
+helm install alien-agent alien/agent \
   --set syncUrl=$ALIEN_SERVER \
   --set token=ax_dg_... \
   --set platform=kubernetes
 ```
 
-The Operator polls alien-manager for updates and deploys locally using in-cluster credentials.
+The agent polls alien-manager for updates and deploys locally using in-cluster credentials.
 
 ## Configuration
 

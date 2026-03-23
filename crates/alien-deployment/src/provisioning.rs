@@ -15,8 +15,8 @@ use tracing::{debug, info};
 /// 4. Updates stack state with the result
 /// 5. Transitions to Running when all live resources are Running
 ///
-/// Note: This phase runs for both push=true (Agent Manager) and push=false (Operator).
-/// The only difference is who calls it - the Agent Manager or the Operator.
+/// Note: This phase runs for both push=true (Manager) and push=false (Agent).
+/// The only difference is who calls it - the Manager or the Agent.
 ///
 /// Note: Stack settings are set during Pending phase and should not change mid-deployment.
 pub async fn handle_provisioning(

@@ -17,11 +17,14 @@ pub mod test_utils;
 
 use crate::commands::{
     build_and_post_release_simple, build_command, create_initial_deployment, deploy_task,
-    deployments_task, destroy_task, ensure_server_running_with_env, link_task, login_task,
-    logout_task, onboard_task, project_task, release_command, unlink_task, vault_task, whoami_task,
-    workspace_task, BuildArgs, CliEnvVar, DeployArgs, DeploymentsArgs, DestroyArgs, LinkArgs,
-    LoginArgs, LogoutArgs, OnboardArgs, ProjectArgs, ReleaseArgs, UnlinkArgs, WhoamiArgs,
-    WorkspaceArgs,
+    deployments_task, destroy_task, ensure_server_running_with_env, onboard_task,
+    release_command, serve_task, vault_task, whoami_task, BuildArgs, CliEnvVar, DeployArgs,
+    DeploymentsArgs, DestroyArgs, OnboardArgs, ReleaseArgs, ServeArgs, WhoamiArgs,
+};
+#[cfg(feature = "platform")]
+use crate::commands::platform::{
+    link_task, login_task, logout_task, project_task, unlink_task, workspace_task, LinkArgs,
+    LoginArgs, LogoutArgs, PlatformCommand, ProjectArgs, UnlinkArgs, WorkspaceArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -75,39 +78,31 @@ pub struct Cli {
 /// CLI commands
 #[derive(Subcommand)]
 pub enum Commands {
+    // --- Core commands (always available) ---
+    /// Start the Alien manager server
+    Serve(ServeArgs),
     /// Build the Alien application
     Build(BuildArgs),
-
-    /// Local development mode
-    Dev(DevCommand),
-
-    /// Perform login & select default workspace
-    Login(LoginArgs),
-    /// Remove saved tokens & workspace
-    Logout(LogoutArgs),
-    /// Workspace commands
-    #[command(alias = "workspace")]
-    Workspaces(WorkspaceArgs),
-    /// Project commands
-    #[command(alias = "project")]
-    Projects(ProjectArgs),
     /// Create a release from built platforms
     Release(ReleaseArgs),
-    /// Link directory to an Alien project
-    Link(LinkArgs),
-    /// Unlink directory from an Alien project
-    Unlink(UnlinkArgs),
-    /// Show current authenticated user information
-    Whoami(WhoamiArgs),
+    /// Create a deployment group and generate a deployment link
+    Onboard(OnboardArgs),
     /// Deployment commands
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
-    /// Create a deployment group and generate a deployment link
-    Onboard(OnboardArgs),
     /// Deploy to a cloud platform
     Deploy(DeployArgs),
     /// Destroy resources from a deployment
     Destroy(DestroyArgs),
+    /// Local development mode
+    Dev(DevCommand),
+    /// Show current authenticated user information
+    Whoami(WhoamiArgs),
+
+    // --- Platform commands (behind "platform" feature) ---
+    #[cfg(feature = "platform")]
+    #[command(flatten)]
+    Platform(PlatformCommand),
 }
 
 /// Dev command with optional subcommands
@@ -121,7 +116,7 @@ pub struct DevCommand {
     #[arg(long, default_value = "local")]
     pub platform: String,
 
-    /// Path to configuration file (default: auto-discover alien.config.ts in current directory)
+    /// Path to configuration file (default: auto-discover alien.ts in current directory)
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
 
@@ -482,6 +477,7 @@ async fn handle_dev_command(dev_cmd: DevCommand, global_no_tui: bool) -> Result<
 }
 
 /// Run the TUI dashboard for managing platform resources
+#[cfg(feature = "platform")]
 async fn run_tui_dashboard(
     base_url: Option<String>,
     api_key: Option<String>,
@@ -766,7 +762,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     setup_tracing(global_no_tui || command_no_tui);
 
     // Construct execution context once from global flags
-    // Mode resolution: ALIEN_SERVER → self-hosted, else → platform
+    // Mode resolution: ALIEN_SERVER → self-hosted, platform feature → platform, else → error
     let ctx = if let Ok(server_url) = env::var("ALIEN_SERVER") {
         let api_key = cli
             .api_key
@@ -775,7 +771,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "ALIEN_API_KEY is required when ALIEN_SERVER is set. \
-                    Set ALIEN_API_KEY or use --api-key."
+                    Check the output of 'alien serve' for your admin token, then: \
+                    export ALIEN_API_KEY=<your-token>"
                         .to_string(),
                 })
             })?;
@@ -784,22 +781,45 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             api_key,
         }
     } else {
-        ExecutionMode::Platform {
-            base_url: cli
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.alien.dev".to_string()),
-            api_key: cli.api_key.clone(),
-            no_browser: cli.no_browser,
-            workspace: cli.workspace.clone(),
-            project: cli.project.clone(),
+        #[cfg(feature = "platform")]
+        {
+            ExecutionMode::Platform {
+                base_url: cli
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.alien.dev".to_string()),
+                api_key: cli.api_key.clone(),
+                no_browser: cli.no_browser,
+                workspace: cli.workspace.clone(),
+                project: cli.project.clone(),
+            }
+        }
+        #[cfg(not(feature = "platform"))]
+        {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "No manager URL configured. Run 'alien serve' to start a local manager, then: \
+                export ALIEN_SERVER=http://localhost:8080".to_string(),
+            }));
         }
     };
 
     match cli.command {
-        // No subcommand: launch the TUI dashboard
+        // No subcommand: launch the TUI dashboard (platform feature only)
         None => {
-            run_tui_dashboard(cli.base_url, cli.api_key, cli.workspace, cli.project).await?;
+            #[cfg(feature = "platform")]
+            {
+                run_tui_dashboard(cli.base_url, cli.api_key, cli.workspace, cli.project).await?;
+            }
+            #[cfg(not(feature = "platform"))]
+            {
+                println!("Alien CLI - use 'alien --help' to see available commands");
+                println!("Start a manager with 'alien serve', then use 'alien release' to deploy");
+            }
+        }
+
+        // --- Core commands ---
+        Some(Commands::Serve(args)) => {
+            serve_task(args).await?;
         }
         Some(Commands::Build(mut build_args)) => {
             build_args.no_tui = global_no_tui || build_args.no_tui;
@@ -808,12 +828,6 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Some(Commands::Dev(dev_cmd)) => {
             handle_dev_command(dev_cmd, global_no_tui).await?;
         }
-
-        // Platform commands — all receive ctx
-        Some(Commands::Login(args)) => login_task(args, ctx).await?,
-        Some(Commands::Workspaces(args)) => workspace_task(args, ctx).await?,
-        Some(Commands::Projects(args)) => project_task(args, ctx).await?,
-        Some(Commands::Link(args)) => link_task(args, ctx).await?,
         Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
         Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
         Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
@@ -824,9 +838,18 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             release_command(args, ctx).await?;
         }
 
-        // Local-only commands — no ctx needed
-        Some(Commands::Logout(args)) => logout_task(args).await?,
-        Some(Commands::Unlink(args)) => unlink_task(args).await?,
+        // --- Platform commands (behind feature flag) ---
+        #[cfg(feature = "platform")]
+        Some(Commands::Platform(cmd)) => {
+            match cmd {
+                PlatformCommand::Login(args) => login_task(args, ctx).await?,
+                PlatformCommand::Workspaces(args) => workspace_task(args, ctx).await?,
+                PlatformCommand::Projects(args) => project_task(args, ctx).await?,
+                PlatformCommand::Link(args) => link_task(args, ctx).await?,
+                PlatformCommand::Logout(args) => logout_task(args).await?,
+                PlatformCommand::Unlink(args) => unlink_task(args).await?,
+            }
+        }
     }
 
     Ok(())

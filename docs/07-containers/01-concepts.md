@@ -153,7 +153,7 @@ Containers reuse all existing Alien infrastructure:
 - Frozen resources (ComputePools) + Live resources (Containers)
 
 **Same Resource Model:**
-- Defined in `alien.config.ts` alongside Functions, Storage, Queue
+- Defined in `alien.ts` alongside Functions, Storage, Queue
 - Uses `.link()` to connect to other resources
 - Same permission profiles system
 

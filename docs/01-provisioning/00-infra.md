@@ -39,8 +39,8 @@ Terraform runs to completion from one place. Alien splits deployment across two 
 - Developer ships new updates, deploys new code
 - Requires only least-privilege permissions
 - Can run remotely or locally, push or pull:
-  - **Remote (push):** Agent manager in the developer's cloud pushes updates via cross-account access
-  - **Local (pull):** Controller inside the customer's Kubernetes cluster, or a daemon on their machine, pulls and applies updates
+  - **Remote (push):** alien-manager in the developer's cloud pushes updates via cross-account access
+  - **Local (pull):** Agent inside the customer's Kubernetes cluster, or a daemon on their machine, pulls and applies updates
 
 A typical flow: User runs `terraform apply` to create the initial infrastructure. Terraform exits. Later, a separate process (a Kubernetes controller, a local daemon, or a remote orchestrator) picks up and deploys application code. Different process, different machine, different permissions.
 
@@ -67,7 +67,7 @@ Because `alien-infra` is a Rust library (not a CLI), it can be embedded anywhere
 
 - **Inside Terraform providers** - We embed `alien-infra` inside a custom Terraform provider. Every `step()` runs inside `terraform apply`. The platform sees every step - even during the customer's initial setup.
 
-- **Kubernetes operators** - Run as an in-cluster controller managing resources via the K8s API.
+- **Kubernetes agents** - Run as an in-cluster controller managing resources via the K8s API.
 
 ### Scale
 
@@ -165,7 +165,7 @@ pub struct StackState {
 ManagementConfig contains identifiers (role ARNs, service account emails) - actual credentials are obtained via platform mechanisms like AssumeRole.
 
 **Push mode:** Derived from the managing account's ServiceAccount resource  
-**Pull mode:** `None` (Operator uses local credentials)
+**Pull mode:** `None` (Agent uses local credentials)
 
 ## Resource Controllers
 
@@ -333,7 +333,7 @@ Non-retryable errors (invalid configuration) immediately fail.
 
 ## The Orchestration Loop
 
-The caller drives the loop. In practice this runs inside whatever process manages the deployment — the CLI for initial setup, the Operator for ongoing operations in remote environments.
+The caller drives the loop. In practice this runs inside whatever process manages the deployment — the CLI for initial setup, the Agent for ongoing operations in remote environments.
 
 ```rust
 loop {
@@ -359,7 +359,7 @@ This loop runs in different contexts:
 - **Temporal workflow** - state in workflow history
 - **Terraform provider** - state in Terraform state file
 - **Local CLI** - state in `~/.alien-cli/<agent_id>/state.json`
-- **Kubernetes operator** - state in Custom Resource status
+- **Kubernetes agent** - state in Custom Resource status
 
 The library doesn't care where state lives or who calls `step()`.
 

@@ -55,8 +55,11 @@ pub use dev_status::*;
 pub mod presigned;
 pub use presigned::*;
 
-pub mod arc_types;
-pub use arc_types::*;
+pub mod sync;
+pub mod embedded_config;
+
+pub mod commands_types;
+pub use commands_types::*;
 
 pub mod instance_catalog;
 

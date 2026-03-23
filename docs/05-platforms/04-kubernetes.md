@@ -9,7 +9,7 @@ Use Kubernetes platform when:
 **Cloud Kubernetes (EKS/GKE/AKS)**:
 - Security team doesn't allow creating EC2/Lambda/Cloud Run directly
 - Company has existing Kubernetes platform managed by DevOps/Platform team
-- No cross-account access allowed (prefer Operator-only deployment)
+- No cross-account access allowed (prefer Agent-only deployment)
 - Standardizing all workloads on Kubernetes
 
 **On-premises**:
@@ -36,7 +36,7 @@ Use Kubernetes platform when:
 │  │  Namespace: acme-production        │                                    │  │
 │  │                                    │                                    │  │
 │  │  ┌─────────────────┐        ┌──────┴────────┐                          │  │
-│  │  │ Operator Pod    │───────►│ Functions     │                          │  │
+│  │  │ Agent Pod    │───────►│ Functions     │                          │  │
 │  │  │ (Deployment)    │        │ Containers    │                          │  │
 │  │  └─────────────────┘        │ Builds        │                          │  │
 │  │                             └───────────────┘                          │  │
@@ -61,9 +61,9 @@ Use Kubernetes platform when:
 
 **Key principles**:
 - **Namespace-scoped** — All resources created in one namespace
-- **External infrastructure** — Operator does NOT provision Storage, Queue, KV, etc.
-- **Outbound only** — Operator initiates connection to the control plane (pull model)
-- **No cluster-admin** — Operator only needs permissions in its namespace
+- **External infrastructure** — Agent does NOT provision Storage, Queue, KV, etc.
+- **Outbound only** — Agent initiates connection to the control plane (pull model)
+- **No cluster-admin** — Agent only needs permissions in its namespace
 
 ## What Gets Deployed
 
@@ -85,7 +85,7 @@ Helm creates:
 - **ServiceAccounts** — One per permission profile (e.g., `reader`, `writer`) + `build-sa`
 - **Role/RoleBinding** — RBAC permissions for operator
 - **Secret** — Deployment token, encryption key
-- **Deployment** — Operator pod (configuration via env vars)
+- **Deployment** — Agent pod (configuration via env vars)
 - **Services** — For public Functions/Containers (internal DNS + load balancer backend)
 - **Ingress** — For public resources with `type: ingress` in services config
 - **NetworkPolicy** — For build job sandboxing (restricts network access)
@@ -100,11 +100,11 @@ Helm creates:
 - Needs permissions to push to container registry
 - Sandboxed via NetworkPolicy (can only access DNS and external HTTPS)
 
-**Why Helm creates these**: They depend on `values.yaml` configuration (customer-provided hostnames, TLS certificates, cloud IAM roles) or stack analysis (which resources are public, whether builds exist). The Operator creates resources that change with each release.
+**Why Helm creates these**: They depend on `values.yaml` configuration (customer-provided hostnames, TLS certificates, cloud IAM roles) or stack analysis (which resources are public, whether builds exist). The Agent creates resources that change with each release.
 
-### By Operator (dynamic)
+### By Agent (dynamic)
 
-The Operator watches for updates and deploys:
+The Agent watches for updates and deploys:
 
 | Stack Resource | Kubernetes Resource | Notes |
 |---------------|---------------------|-------|
@@ -112,7 +112,7 @@ The Operator watches for updates and deploys:
 | Container | Deployment or StatefulSet | Stateless: Deployment. Stateful: StatefulSet. Service created by Helm if public. |
 | Build | Job | Builds and pushes images. ServiceAccount + NetworkPolicy created by Helm. |
 
-**Operator does NOT create**:
+**Agent does NOT create**:
 - Storage, Queue, KV, Postgres, Vault resources (external bindings)
 - ServiceAccounts (created by Helm based on stack analysis)
 - Services/Ingress (created by Helm based on stack + values.yaml)
@@ -277,16 +277,16 @@ alien deploy --project acme-monitoring
 
 Control plane records new release.
 
-### 2. Operator Syncs
+### 2. Agent Syncs
 
-Operator polls control plane every 30 seconds:
+Agent polls control plane every 30 seconds:
 
 ```
-Operator: "Here's my current state"
+Agent: "Here's my current state"
 Control plane: "Deploy v1.2.3"
 ```
 
-### 3. Operator Deploys
+### 3. Agent Deploys
 
 Runs `alien-deployment::step()`:
 
@@ -310,7 +310,7 @@ Each controller:
 
 For a Function resource in the stack:
 
-**Operator creates**:
+**Agent creates**:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -353,7 +353,7 @@ spec:
 
 ## Update Handling
 
-When resource configuration changes between deploys, the Operator runs Update handlers instead of Create handlers. Kubernetes handles rolling updates natively.
+When resource configuration changes between deploys, the Agent runs Update handlers instead of Create handlers. Kubernetes handles rolling updates natively.
 
 ### Container Updates
 
@@ -383,7 +383,7 @@ No-op handler — Vaults are immutable on Kubernetes. Individual secrets are cre
 
 ## Preflight Validation
 
-Before deployment, Operator validates all infrastructure resources have external bindings:
+Before deployment, Agent validates all infrastructure resources have external bindings:
 
 ```rust
 // In alien-preflights
@@ -490,7 +490,7 @@ infrastructure:
     # No additional config needed
 ```
 
-Operator creates a Secret resource for each secret env var. Functions read via `ALIEN_SECRETS` env var pointing to the Secret.
+Agent creates a Secret resource for each secret env var. Functions read via `ALIEN_SECRETS` env var pointing to the Secret.
 
 ### External Vault
 
@@ -550,23 +550,23 @@ Upgrade Helm release:
 helm upgrade acme-monitoring acme/acme-monitoring -f values.yaml
 ```
 
-Helm updates the Operator pod's environment variables:
+Helm updates the Agent pod's environment variables:
 1. Deployment template includes `checksum/config` annotation
 2. Config change triggers pod restart with new env vars
-3. Operator starts with updated `EXTERNAL_BINDINGS`
+3. Agent starts with updated `EXTERNAL_BINDINGS`
 4. Next deployment step updates Function/Container Deployments
 5. Kubernetes rolls out pods with new config
 
 ## Namespace Isolation
 
-The Operator is namespace-scoped:
+The Agent is namespace-scoped:
 
-**Operator RBAC** (created by Helm):
+**Agent RBAC** (created by Helm):
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role  # Not ClusterRole
 metadata:
-  name: acme-monitoring-operator
+  name: acme-monitoring-agent
   namespace: production
 rules:
 - apiGroups: ["apps"]
@@ -594,7 +594,7 @@ helm install acme-monitoring \
 Each namespace is completely isolated. Different:
 - ServiceAccounts
 - External bindings
-- Operator instances
+- Agent instances
 - Resources
 
 ## Cloud Identity Mapping

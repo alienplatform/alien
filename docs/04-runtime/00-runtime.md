@@ -88,8 +88,8 @@ Used in cloud platforms (Lambda, Cloud Run, Container App):
 
 **2. Embedded Library (`alien_runtime::run()`)**
 
-Used in Local Platform (Operator, `alien dev`):
-- One process (Operator/CLI) with multiple runtime tasks
+Used in Local Platform (Agent, `alien dev`):
+- One process (Agent/CLI) with multiple runtime tasks
 - Each runtime task spawns its own app subprocess
 - Configuration passed programmatically via `RuntimeConfig`
 - Bindings provided via `BindingsSource::Provider`

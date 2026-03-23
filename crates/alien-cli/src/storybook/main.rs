@@ -218,9 +218,9 @@ pub fn create_config_error() -> AlienError<alien_cli::error::ErrorData> {
     use alien_cli::error::ErrorData;
 
     // Create a realistic configuration error similar to the actual codebase
-    // Based on config.rs: "Could not find alien.config.ts, alien.config.js, or alien.config.json"
+    // Based on config.rs: "Could not find alien.ts, alien.js, or alien.json"
     AlienError::new(ErrorData::ConfigurationError {
-        message: "Could not find alien.config.ts, alien.config.js, or alien.config.json in /Users/dev/my-app".to_string(),
+        message: "Could not find alien.ts, alien.js, or alien.json in /Users/dev/my-app".to_string(),
     })
 }
 

@@ -69,7 +69,7 @@ export interface DeployOptions {
   /** Path to application directory */
   app: string
 
-  /** Optional: specific config file to use (e.g., alien.config.function.ts) */
+  /** Optional: specific config file to use (e.g., alien.function.ts) */
   config?: string
 
   /** Target platform */

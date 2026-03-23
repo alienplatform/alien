@@ -45,8 +45,8 @@ pub struct BuildJsonOutput {
     alien build --platform local
 
     # Build with custom configuration file
-    alien build --config alien.config.function.ts
-    alien build --config ../my-app/alien.config.ts
+    alien build --config alien.function.ts
+    alien build --config ../my-app/alien.ts
 
     # Build with custom configuration directory
     alien build --config ../my-app/
@@ -71,7 +71,7 @@ pub struct BuildJsonOutput {
     alien build --targets linux-arm64  # Single target"
 )]
 pub struct BuildArgs {
-    /// Path to alien.config.ts/js/json file or directory containing it
+    /// Path to alien.ts/js/json file or directory containing it
     /// If not specified, searches in current directory
     #[arg(short = 'c', long)]
     pub config: Option<String>,

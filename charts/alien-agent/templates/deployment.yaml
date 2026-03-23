@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alien-agent.fullname" . }}
+  labels:
+    {{- include "alien-agent.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "alien-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "alien-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "alien-agent.serviceAccountName" . }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --platform={{ .Values.platform }}
+            {{- if .Values.syncUrl }}
+            - --sync-url={{ .Values.syncUrl }}
+            {{- end }}
+            - --data-dir={{ .Values.dataDir }}
+            - --sync-interval={{ .Values.syncInterval }}
+            - --otlp-port={{ .Values.otlpPort }}
+            {{- if .Values.namespace }}
+            - --namespace={{ .Values.namespace }}
+            {{- end }}
+            {{- if .Values.agentName }}
+            - --agent-name={{ .Values.agentName }}
+            {{- end }}
+            {{- if .Values.externalBindings }}
+            - --external-bindings={{ .Values.externalBindings }}
+            {{- end }}
+            {{- if .Values.publicUrls }}
+            - --public-urls={{ .Values.publicUrls }}
+            {{- end }}
+            {{- if .Values.stackSettings }}
+            - --stack-settings={{ .Values.stackSettings }}
+            {{- end }}
+            {{- if .Values.verbose }}
+            - --verbose
+            {{- end }}
+          env:
+            - name: SYNC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "alien-agent.fullname" . }}
+                  key: sync-token
+            - name: AGENT_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "alien-agent.fullname" . }}
+                  key: encryption-key
+          ports:
+            - name: otlp
+              containerPort: {{ .Values.otlpPort }}
+              protocol: TCP
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.dataDir }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "alien-agent.fullname" . }}
+        {{- end }}

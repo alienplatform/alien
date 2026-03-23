@@ -85,7 +85,7 @@ The presence of `ALIEN_SERVER` is what switches the CLI to self-hosted mode.
 
 | Command | Description |
 |---------|-------------|
-| `alien build --platform <platform>` | Compile `alien.config.ts` into OCI image tarballs |
+| `alien build --platform <platform>` | Compile `alien.ts` into OCI image tarballs |
 
 `alien build` runs entirely on your machine. No server involved.
 
@@ -234,7 +234,7 @@ The developer doesn't specify a repository. The server provides the registry con
 3. **Sync loop** — calls `acquire` → runs `alien-deployment::step()` locally → calls `reconcile`
 4. **Track locally** — stores deployment ID and token in the system keyring for future deploys
 
-After initial setup, the admin's machine drives provisioning using their own cloud credentials. alien-manager records the result. Subsequent updates are handled by the deployment loop (push) or Operator (pull).
+After initial setup, the admin's machine drives provisioning using their own cloud credentials. alien-manager records the result. Subsequent updates are handled by the deployment loop (push) or Agent (pull).
 
 ## The TUI
 

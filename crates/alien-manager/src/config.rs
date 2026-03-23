@@ -21,6 +21,9 @@ pub struct ManagerConfig {
     /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
     /// Defaults to http://localhost:{port} when not set.
     pub base_url: Option<String>,
+    /// Base URL for release binary downloads (alien-deploy, alien-agent).
+    /// Defaults to https://releases.alien.dev. Configurable via ALIEN_RELEASES_URL env var.
+    pub releases_url: Option<String>,
 }
 
 impl ManagerConfig {
@@ -32,6 +35,12 @@ impl ManagerConfig {
 
     pub fn commands_base_url(&self) -> String {
         format!("{}/v1", self.base_url())
+    }
+
+    pub fn releases_url(&self) -> String {
+        self.releases_url
+            .clone()
+            .unwrap_or_else(|| "https://releases.alien.dev".to_string())
     }
 }
 
@@ -46,6 +55,7 @@ impl Default for ManagerConfig {
             otlp_endpoint: None,
             dev_mode: false,
             base_url: None,
+            releases_url: None,
         }
     }
 }

@@ -179,15 +179,14 @@ export class Function {
   }
 
   /**
-   * Enables or disables ARC (Alien Remote Call) protocol for the function.
-   * When enabled, the function can be invoked via ARC protocol from the control plane.
-   * The necessary queue infrastructure is automatically created for the target platform.
+   * Enables or disables the Commands protocol for the function.
+   * When enabled, the runtime polls the manager for pending commands and executes registered handlers.
    * Default: false.
-   * @param enabled Whether to enable ARC for this function.
+   * @param enabled Whether to enable commands for this function.
    * @returns The Function builder instance.
    */
-  public arcEnabled(enabled: boolean): this {
-    this._config.arcEnabled = enabled
+  public commandsEnabled(enabled: boolean): this {
+    this._config.commandsEnabled = enabled
     return this
   }
 

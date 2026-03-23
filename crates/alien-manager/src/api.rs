@@ -38,7 +38,7 @@ use utoipa::OpenApi;
         crate::routes::sync::acquire,
         crate::routes::sync::reconcile,
         crate::routes::sync::release,
-        crate::routes::sync::operator_sync,
+        crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
         // Credentials
         crate::routes::credentials::resolve_credentials,
@@ -68,8 +68,8 @@ use utoipa::OpenApi;
         crate::routes::sync::ReconcileRequest,
         crate::routes::sync::ReconcileResponse,
         crate::routes::sync::ReleaseRequest,
-        crate::routes::sync::OperatorSyncRequest,
-        crate::routes::sync::OperatorSyncResponse,
+        crate::routes::sync::AgentSyncRequest,
+        crate::routes::sync::AgentSyncResponse,
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
         // Credentials types
@@ -88,7 +88,7 @@ use utoipa::OpenApi;
         (name = "deployments", description = "Deployment lifecycle management"),
         (name = "releases", description = "Release management"),
         (name = "deployment-groups", description = "Deployment group management"),
-        (name = "sync", description = "Operator sync and state reconciliation"),
+        (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),
     )

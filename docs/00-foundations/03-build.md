@@ -8,7 +8,7 @@ The `alien build` command validates the stack, compiles source code, and produce
 
 The `alien build` command:
 
-1. Loads `alien.config.ts`
+1. Loads `alien.ts`
 2. **Validates** the stack with build-time preflights (see [Preflights](04-preflights.md))
 3. Builds each compute resource's source code using the appropriate toolchain
 4. Packages everything into OCI images
@@ -46,7 +46,7 @@ After building, `.alien/` contains:
 
 ### Source → Image Transformation
 
-Compute resources (Function, Container, Worker) can specify source code in `alien.config.ts`:
+Compute resources (Function, Container, Worker) can specify source code in `alien.ts`:
 
 ```json
 {

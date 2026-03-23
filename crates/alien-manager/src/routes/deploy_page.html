@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alien Deploy</title>
+<style>
+  :root { --bg: #0a0a0a; --fg: #e5e5e5; --accent: #22c55e; --muted: #737373; --border: #262626; --code-bg: #171717; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--fg); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .container { max-width: 640px; width: 100%; padding: 2rem; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .step { margin-bottom: 1.5rem; }
+  .step-header { font-size: 0.875rem; color: var(--muted); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .platforms { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .platform-btn { background: var(--code-bg); border: 1px solid var(--border); color: var(--fg); padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; transition: border-color 0.15s; }
+  .platform-btn:hover { border-color: var(--muted); }
+  .platform-btn.active { border-color: var(--accent); color: var(--accent); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; overflow-x: auto; font-size: 0.875rem; line-height: 1.5; position: relative; }
+  code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--border); border: none; color: var(--muted); padding: 0.25rem 0.5rem; border-radius: 0.25rem; cursor: pointer; font-size: 0.75rem; transition: color 0.15s; }
+  .copy-btn:hover { color: var(--fg); }
+  .no-token { color: #ef4444; padding: 2rem; text-align: center; }
+  .no-token code { background: var(--code-bg); padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+  .group-info { background: var(--code-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.875rem; }
+  .group-info dt { color: var(--muted); display: inline; }
+  .group-info dd { display: inline; margin-left: 0.25rem; margin-right: 1.5rem; }
+  .status-section { margin-top: 1.5rem; }
+  .status-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; }
+  .status-pending { background: #422006; color: #f59e0b; }
+  .status-running { background: #052e16; color: #22c55e; }
+  .status-hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <div class="no-token" id="no-token" style="display:none;">
+    <h1>Missing Token</h1>
+    <p style="margin-top:1rem;">This page expects a deployment token in the URL fragment.</p>
+    <p style="margin-top:0.5rem;">Use <code>alien onboard</code> to generate a deploy link.</p>
+  </div>
+  <div id="content" style="display:none;">
+    <h1>Deploy with Alien</h1>
+    <p class="subtitle">Follow these steps to deploy to your environment.</p>
+
+    <div class="group-info status-hidden" id="group-info">
+      <dl>
+        <dt>Group:</dt><dd id="group-name">-</dd>
+        <dt>Max deployments:</dt><dd id="group-max">-</dd>
+      </dl>
+    </div>
+
+    <div class="step">
+      <div class="step-header">1. Select platform</div>
+      <div class="platforms" id="platforms">
+        <button class="platform-btn active" data-platform="aws">AWS</button>
+        <button class="platform-btn" data-platform="gcp">GCP</button>
+        <button class="platform-btn" data-platform="azure">Azure</button>
+        <button class="platform-btn" data-platform="kubernetes">Kubernetes</button>
+        <button class="platform-btn" data-platform="local">Local</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">2. Install alien-deploy</div>
+      <pre><code id="install-cmd"></code><button class="copy-btn" data-target="install-cmd">Copy</button></pre>
+    </div>
+
+    <div class="step">
+      <div class="step-header">3. Deploy</div>
+      <pre><code id="deploy-cmd"></code><button class="copy-btn" data-target="deploy-cmd">Copy</button></pre>
+    </div>
+
+    <div class="status-section status-hidden" id="status-section">
+      <div class="step-header">Deployment Status</div>
+      <p><span class="status-badge status-pending" id="status-badge">Waiting for deployment...</span></p>
+      <p style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted);" id="status-detail"></p>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  var hash = location.hash.slice(1);
+  var params = new URLSearchParams(hash);
+  var token = params.get('token');
+  if (!token) { document.getElementById('no-token').style.display = 'block'; return; }
+  document.getElementById('content').style.display = 'block';
+
+  var platform = 'aws';
+  var managerUrl = location.origin;
+
+  function update() {
+    document.getElementById('install-cmd').textContent =
+      'curl -fsSL ' + managerUrl + '/install | bash';
+    document.getElementById('deploy-cmd').textContent =
+      'alien-deploy up \\\n  --token ' + token + ' \\\n  --platform ' + platform + ' \\\n  --manager-url ' + managerUrl;
+  }
+
+  // Platform selection
+  document.getElementById('platforms').addEventListener('click', function(e) {
+    if (e.target.dataset.platform) {
+      document.querySelectorAll('.platform-btn').forEach(function(b) { b.classList.remove('active'); });
+      e.target.classList.add('active');
+      platform = e.target.dataset.platform;
+      update();
+    }
+  });
+
+  // Copy buttons
+  document.addEventListener('click', function(e) {
+    var target = e.target.dataset && e.target.dataset.target;
+    if (!target) return;
+    var text = document.getElementById(target).textContent;
+    navigator.clipboard.writeText(text).then(function() {
+      e.target.textContent = 'Copied!';
+      setTimeout(function() { e.target.textContent = 'Copy'; }, 1500);
+    });
+  });
+
+  // Fetch deployment group info
+  fetch(managerUrl + '/v1/deployment-groups', {
+    headers: { 'Authorization': 'Bearer ' + token }
+  }).then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data || !data.length) return;
+      var group = data[0];
+      document.getElementById('group-name').textContent = group.name || '-';
+      document.getElementById('group-max').textContent = group.maxDeployments || '-';
+      document.getElementById('group-info').classList.remove('status-hidden');
+    }).catch(function() {});
+
+  // Poll deployment status after page load
+  var statusSection = document.getElementById('status-section');
+  var statusBadge = document.getElementById('status-badge');
+  var statusDetail = document.getElementById('status-detail');
+  var pollCount = 0;
+
+  function pollStatus() {
+    fetch(managerUrl + '/v1/deployments', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !data.length) return;
+        statusSection.classList.remove('status-hidden');
+        var dep = data[data.length - 1];
+        var status = dep.status || 'unknown';
+        statusBadge.textContent = status;
+        statusBadge.className = 'status-badge ' + (status === 'running' ? 'status-running' : 'status-pending');
+        statusDetail.textContent = 'Deployment: ' + dep.name + ' (' + dep.id + ')';
+      }).catch(function() {});
+
+    pollCount++;
+    if (pollCount < 120) setTimeout(pollStatus, 5000);
+  }
+
+  // Start polling after a short delay
+  setTimeout(pollStatus, 3000);
+
+  update();
+})();
+</script>
+</body>
+</html>

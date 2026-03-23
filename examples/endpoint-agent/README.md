@@ -27,7 +27,7 @@ This example demonstrates an endpoint security monitoring agent that:
 
 ```
 endpoint-agent/
-├── alien.config.ts      # Alien stack configuration
+├── alien.ts      # Alien stack configuration
 ├── Cargo.toml           # Rust dependencies
 ├── src/
 │   ├── main.rs          # Entry point and initialization

@@ -229,8 +229,8 @@ impl PreflightRegistry {
         //
         // Mutations are evaluated incrementally: each mutation's should_run() is checked
         // against the current (already-mutated) stack, not the original. This is critical
-        // because some mutations create resources (e.g., SecretsVaultMutation adds a vault,
-        // ArcRequestQueuesMutation adds queues) that later mutations need to see.
+        // because some mutations create resources (e.g., SecretsVaultMutation adds a vault)
+        // that later mutations need to see.
         //
         // The ordering follows four phases:
         //
@@ -241,8 +241,7 @@ impl PreflightRegistry {
         //
         // Phase 3 MUST run after Phase 2 so it can see all resource types, including
         // mutation-created ones. For example, GcpServiceActivationMutation needs to see the
-        // vault created by SecretsVaultMutation to add enable-secret-manager, and
-        // AzureServiceBusNamespaceMutation needs to see queues from ArcRequestQueuesMutation.
+        // vault created by SecretsVaultMutation to add enable-secret-manager.
         //
         // Within each phase, order doesn't affect correctness — provisioning order is
         // determined by the dependency graph, not mutation order.
@@ -257,11 +256,10 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::ManagementPermissionProfileMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
-        registry.add_mutation(Box::new(mutations::ArcRequestQueuesMutation));
 
         // Phase 3: Service activations and platform infrastructure
         // These scan resource types to decide what to create, so they must see all
-        // resources from Phase 2 (vault, queues, etc.)
+        // resources from Phase 2 (vault, etc.)
         registry.add_mutation(Box::new(mutations::AzureServiceActivationMutation));
         registry.add_mutation(Box::new(mutations::GcpServiceActivationMutation));
         registry.add_mutation(Box::new(mutations::AzureContainerAppsEnvironmentMutation));

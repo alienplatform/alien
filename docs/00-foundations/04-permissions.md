@@ -336,7 +336,7 @@ The `RemoteStackManagement` resource handles cross-account setup:
 1. Create Lighthouse registration definition with management permissions
 2. Create Lighthouse registration assignment
 
-For Kubernetes and Local platforms, an Operator runs inside the environment and pulls configuration. No cross-account access needed.
+For Kubernetes and Local platforms, an Agent runs inside the environment and pulls configuration. No cross-account access needed.
 
 ## Platform Differences
 

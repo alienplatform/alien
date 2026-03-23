@@ -190,12 +190,12 @@ pub struct Function {
     #[cfg_attr(feature = "openapi", schema(default = default_ingress))]
     pub ingress: Ingress,
 
-    /// Whether the function can be invoked via ARC (Alien Remote Call) protocol from the control plane.
-    /// When enabled, the necessary queue infrastructure is automatically created for the target platform.
-    #[builder(default = default_arc_enabled())]
-    #[serde(default = "default_arc_enabled")]
-    #[cfg_attr(feature = "openapi", schema(default = default_arc_enabled))]
-    pub arc_enabled: bool,
+    /// Whether the function can receive remote commands via the Commands protocol.
+    /// When enabled, the runtime polls the manager for pending commands and executes registered handlers.
+    #[builder(default = default_commands_enabled())]
+    #[serde(default = "default_commands_enabled")]
+    #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
+    pub commands_enabled: bool,
 
     /// Maximum number of concurrent executions allowed for the function.
     /// None means platform default applies.
@@ -229,7 +229,7 @@ fn default_ingress() -> Ingress {
     Ingress::Private
 }
 
-fn default_arc_enabled() -> bool {
+fn default_commands_enabled() -> bool {
     false
 }
 
@@ -669,19 +669,19 @@ mod tests {
     }
 
     #[test]
-    fn test_function_with_arc_enabled() {
-        let function = Function::new("arc-func".to_string())
+    fn test_function_with_commands_enabled() {
+        let function = Function::new("cmd-func".to_string())
             .code(FunctionCode::Image {
                 image: "test-image".to_string(),
             })
             .permissions("execution".to_string())
             .ingress(Ingress::Private)
-            .arc_enabled(true)
+            .commands_enabled(true)
             .build();
 
-        assert_eq!(function.id, "arc-func");
+        assert_eq!(function.id, "cmd-func");
         assert_eq!(function.ingress, Ingress::Private);
-        assert_eq!(function.arc_enabled, true);
+        assert_eq!(function.commands_enabled, true);
     }
 
     #[test]
@@ -695,23 +695,24 @@ mod tests {
 
         // Test that defaults are applied correctly
         assert_eq!(function.ingress, Ingress::Private);
-        assert_eq!(function.arc_enabled, false);
+        assert_eq!(function.commands_enabled, false);
         assert_eq!(function.memory_mb, 256);
         assert_eq!(function.timeout_seconds, 180);
     }
 
     #[test]
-    fn test_function_public_ingress_with_arc() {
-        let function = Function::new("public-arc-func".to_string())
+    fn test_function_public_ingress_with_commands() {
+        let function = Function::new("public-cmd-func".to_string())
             .code(FunctionCode::Image {
                 image: "test-image".to_string(),
             })
             .permissions("execution".to_string())
             .ingress(Ingress::Public)
-            .arc_enabled(true)
+            .commands_enabled(true)
             .build();
 
         assert_eq!(function.ingress, Ingress::Public);
-        assert_eq!(function.arc_enabled, true);
+        assert_eq!(function.commands_enabled, true);
     }
+
 }

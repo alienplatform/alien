@@ -37,7 +37,7 @@ expression: stack
         "timeoutSeconds": 180,
         "environment": {},
         "ingress": "private",
-        "arcEnabled": false,
+        "commandsEnabled": false,
         "concurrencyLimit": null,
         "readinessProbe": null
       },

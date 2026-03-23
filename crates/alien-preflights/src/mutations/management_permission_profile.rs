@@ -89,7 +89,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
     }
 }
 
-/// Generates the default management permission profile based on resource lifecycles, deployment model, and ARC configuration.
+/// Generates the default management permission profile based on resource lifecycles, deployment model, and commands configuration.
 fn generate_auto_management_profile(
     stack: &Stack,
     stack_state: &StackState,
@@ -135,10 +135,10 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", resource_type));
         }
 
-        // Add ARC-specific permissions for functions with arc_enabled = true
+        // Add commands-specific permissions for functions with commands_enabled = true
         if resource_type == "function" {
             if let Some(function) = resource_entry.config.downcast_ref::<Function>() {
-                if function.arc_enabled {
+                if function.commands_enabled {
                     match platform {
                         Platform::Aws => {
                             // On AWS: function/invoke for Lambda InvokeFunction API
@@ -536,14 +536,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_arc_enabled_function_permissions() {
+    async fn test_commands_enabled_function_permissions() {
         // Test AWS platform - should add function/invoke
         let arc_function = Function::new("arc-function".to_string())
             .code(FunctionCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .arc_enabled(true)
+            .commands_enabled(true)
             .build();
 
         let mut resources = IndexMap::new();
@@ -609,7 +609,7 @@ mod tests {
                         image: "test:latest".to_string(),
                     })
                     .permissions("test".to_string())
-                    .arc_enabled(true)
+                    .commands_enabled(true)
                     .build();
                 resources.insert(
                     "arc-function".to_string(),

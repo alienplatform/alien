@@ -20,7 +20,7 @@ export interface SuiteOptions {
   app: string
   /** Config file for cloud deployments */
   config: string
-  /** Config file for local dev (defaults to alien.config.dev.ts) */
+  /** Config file for local dev (defaults to alien.dev.ts) */
   devConfig?: string
   platform: Platform
 }
@@ -35,7 +35,7 @@ export function defineDeploymentSuite(options: SuiteOptions) {
     beforeAll(async () => {
       const credentials = getCredentials(options.platform)
       const appPath = path.resolve(e2eRoot, options.app)
-      const configFile = isLocal ? options.devConfig || "alien.config.dev.ts" : options.config
+      const configFile = isLocal ? options.devConfig || "alien.dev.ts" : options.config
 
       deployment = await deploy({
         app: appPath,

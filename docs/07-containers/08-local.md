@@ -652,7 +652,7 @@ fn build_host_config(config: &ContainerConfig) -> Option<HostConfig> {
 **Result:**
 
 ```typescript
-// alien.config.ts
+// alien.ts
 const api = new alien.Container("api")
   .port(3000)
   .expose("http")
@@ -666,7 +666,7 @@ const api = new alien.Container("api")
 ## Example: Multi-Container App
 
 ```typescript
-// alien.config.ts
+// alien.ts
 const db = new alien.Container("postgres")
   .code({ type: "image", image: "postgres:16" })
   .replicas(1)

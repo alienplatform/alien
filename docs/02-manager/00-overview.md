@@ -38,7 +38,7 @@ alien build --platform aws
 alien release --server http://server:8080
 ```
 
-This compiles `alien.config.ts` into OCI images, pushes them to the container registry, and creates a release record. alien-manager now knows what to deploy — but nothing is provisioned yet.
+This compiles `alien.ts` into OCI images, pushes them to the container registry, and creates a release record. alien-manager now knows what to deploy — but nothing is provisioned yet.
 
 ### Step 2: Admin sets up the remote environment
 
@@ -66,7 +66,7 @@ After initial setup, the two models diverge based on what the admin grants.
 
 Best for: AWS, GCP, Azure.
 
-**Pull mode** — instead of granting credentials, the admin installs an Operator in the remote environment. The Operator polls alien-manager for updates and runs `alien-deployment::step()` locally using its own in-cluster credentials. alien-manager never touches the remote environment directly.
+**Pull mode** — instead of granting credentials, the admin installs an Agent in the remote environment. The Agent polls alien-manager for updates and runs `alien-deployment::step()` locally using its own in-cluster credentials. alien-manager never touches the remote environment directly.
 
 Best for: Kubernetes, edge devices, or anywhere cross-account access isn't an option.
 
@@ -74,17 +74,17 @@ Both modes run the same `alien-deployment::step()` function. The difference is o
 
 | | Push | Pull |
 |---|---|---|
-| **Who runs `step()`** | alien-manager's deployment loop | Operator in the remote environment |
+| **Who runs `step()`** | alien-manager's deployment loop | Agent in the remote environment |
 | **Credentials** | Configured on alien-manager (env vars) | Local to the remote environment |
-| **Initial setup** | Admin runs `alien deploy` or equivalent | Admin installs Operator with a token |
-| **Updates** | Automatic — server pushes on new release | Automatic — Operator polls for updates |
+| **Initial setup** | Admin runs `alien deploy` or equivalent | Admin installs Agent with a token |
+| **Updates** | Automatic — server pushes on new release | Automatic — Agent polls for updates |
 | **Cross-account access** | Required | Not required |
 
 ## Data Model
 
 **Deployments** — a running instance of your application in a remote environment. Each targets one platform (AWS, GCP, Azure, Kubernetes, or Local) and tracks its provisioning state. See [Deployments](01-deployments.md).
 
-**Releases** — an immutable snapshot of your application's built stack. Contains platform-keyed stack definitions compiled from `alien.config.ts`. A release can target multiple platforms simultaneously. See [Releases](02-releases.md).
+**Releases** — an immutable snapshot of your application's built stack. Contains platform-keyed stack definitions compiled from `alien.ts`. A release can target multiple platforms simultaneously. See [Releases](02-releases.md).
 
 **Deployment groups** — logical grouping of deployments. Controls fleet size (`max_deployments`) and provides scoped tokens for deployment creation. Use one group per environment, or one per customer for fleet deployments.
 

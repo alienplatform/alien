@@ -1,16 +1,9 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::project_link::{ensure_project_linked, get_project_by_name};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::{
-    CreateDeploymentGroupRequest, CreateDeploymentGroupRequestName,
-    CreateDeploymentGroupRequestProject, CreateDeploymentGroupTokenId,
-    CreateDeploymentGroupTokenWorkspace, CreateDeploymentGroupWorkspace,
-};
-use alien_platform_api::SdkResultExt as _;
+use alien_server_sdk::types::CreateDeploymentGroupRequest;
 use clap::Parser;
 use std::io::{self, Write};
-use std::num::NonZeroU64;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -25,43 +18,16 @@ pub struct OnboardArgs {
     /// Maximum number of deployments in this deployment group
     #[arg(long, default_value = "100")]
     pub max_deployments: u64,
+
+    /// Output in JSON format (for scripting)
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
-    let http = ctx.auth_http().await?;
-    let client = http.sdk_client();
-
-    let workspace_name = ctx.resolve_workspace().await?;
-
-    // Get project: use global --project if provided, otherwise link interactively
-    let project_id = if let Some(project) = ctx.project_override() {
-        // If it looks like a project ID (starts with prj_), use it directly
-        if project.starts_with("prj_") {
-            println!("Using project: {}", project);
-            project.to_string()
-        } else {
-            // Treat as project name, resolve to ID
-            let link = get_project_by_name(&http, &workspace_name, project).await?;
-            println!("Using project: {} ({})", link.project_name, link.project_id);
-            link.project_id
-        }
-    } else {
-        let current_dir =
-            std::env::current_dir()
-                .into_alien_error()
-                .context(ErrorData::FileOperationFailed {
-                    operation: "get current directory".to_string(),
-                    file_path: ".".to_string(),
-                    reason: "Failed to get current directory".to_string(),
-                })?;
-        let project_link = ensure_project_linked(&current_dir, &http, &workspace_name).await?;
-        println!("Using linked project: {}", project_link.project_id);
-        project_link.project_id
-    };
-
     // Determine deployment group name
-    let name = if let Some(name) = args.name {
-        name
+    let name = if let Some(ref name) = args.name {
+        name.clone()
     } else {
         print!("Enter deployment group name: ");
         io::stdout()
@@ -84,109 +50,89 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
         input.trim().to_string()
     };
 
+    // Resolve project (discovers project in Platform mode, returns defaults in SelfHosted/Dev)
+    let (project_id, _project_link) = ctx.resolve_project(None).await?;
+
+    // Resolve manager (discovers URL in Platform mode, known in SelfHosted/Dev)
+    let mgr = ctx.resolve_manager(&project_id, "local").await?;
+
     println!("Creating deployment group '{}'...", name);
 
-    // Create deployment group using SDK
-    let workspace_param = CreateDeploymentGroupWorkspace::try_from(workspace_name.clone())
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "Invalid workspace name".to_string(),
-        })?;
-
-    let name_param = CreateDeploymentGroupRequestName::try_from(name.clone())
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "name".to_string(),
-            message: "Invalid deployment group name".to_string(),
-        })?;
-
-    let max_deployments = NonZeroU64::new(args.max_deployments).ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "max_deployments".to_string(),
-            message: "max_deployments must be greater than 0".to_string(),
-        })
-    })?;
-
-    let request = CreateDeploymentGroupRequest {
-        name: name_param,
-        project: CreateDeploymentGroupRequestProject::try_from(project_id.as_str())
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "project".to_string(),
-                message: "project ID format is invalid".to_string(),
-            })?,
-        max_deployments,
-    };
-
-    let response = client
+    let response = mgr
+        .client
         .create_deployment_group()
-        .workspace(&workspace_param)
-        .body(&request)
+        .body(CreateDeploymentGroupRequest {
+            name: name.clone(),
+            max_deployments: Some(args.max_deployments as i64),
+        })
         .send()
         .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create deployment group".to_string(),
-            url: None,
+        .map_err(|e| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Failed to create deployment group: {}", e),
+                url: None,
+            })
         })?;
 
-    let deployment_group = response.into_inner();
-    let deployment_group_id = deployment_group.id.to_string();
+    let deployment_group_id = response.id.clone();
 
     println!(
-        "✓ Deployment group '{}' created successfully (ID: {})",
+        "Deployment group '{}' created successfully (ID: {})",
         name, deployment_group_id
     );
 
     println!("Generating deployment token...");
 
-    // Create deployment group token using SDK
-    let token_workspace_param =
-        CreateDeploymentGroupTokenWorkspace::try_from(workspace_name.clone())
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: "Invalid workspace name".to_string(),
-            })?;
-
-    let dg_id_param = CreateDeploymentGroupTokenId::try_from(deployment_group_id.clone())
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "deployment_group_id".to_string(),
-            message: "Invalid deployment group ID".to_string(),
-        })?;
-
-    let token_request = alien_platform_api::types::CreateDeploymentGroupTokenRequest {
-        description: Some(format!("Deployment token for {}", name)),
-    };
-
-    let token_response = client
+    let token_response = mgr
+        .client
         .create_deployment_group_token()
-        .workspace(&token_workspace_param)
-        .id(&dg_id_param)
-        .body(&token_request)
+        .id(&deployment_group_id)
         .send()
         .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create deployment group token".to_string(),
-            url: None,
+        .map_err(|e| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Failed to create deployment group token: {}", e),
+                url: None,
+            })
         })?;
 
-    let token_data = token_response.into_inner();
+    let deploy_link = format!(
+        "{}/deploy#token={}",
+        mgr.manager_url.trim_end_matches('/'),
+        token_response.token
+    );
+
+    if args.json {
+        let output = serde_json::json!({
+            "deploymentGroupId": deployment_group_id,
+            "name": name,
+            "deployLink": deploy_link,
+            "token": token_response.token,
+            "maxDeployments": args.max_deployments,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        return Ok(());
+    }
 
     println!();
-    println!("✓ Deployment link generated successfully!");
+    println!("  \x1b[1;32mDeployment group created successfully!\x1b[0m");
     println!();
-    println!("🔗 Deployment Link:");
-    println!("   {}", token_data.deployment_link);
+    println!("  \x1b[1;4mDeploy Link\x1b[0m");
     println!();
-    println!("📋 Token (save securely):");
-    println!("   {}", token_data.token);
+    println!("    \x1b[36m{}\x1b[0m", deploy_link);
     println!();
-    println!("Share the deployment link with your team to deploy in this group.");
-    println!("Max deployments: {}", args.max_deployments);
+    println!("  Share this link with your team. They can open it in a browser");
+    println!("  to see install and deploy instructions for their platform.");
+    println!();
+    println!("  \x1b[1;4mDirect CLI Usage\x1b[0m");
+    println!();
+    println!("    curl -fsSL {}/install | bash", mgr.manager_url.trim_end_matches('/'));
+    println!("    alien-deploy up \\");
+    println!("      --token {} \\", token_response.token);
+    println!("      --platform <aws|gcp|azure|kubernetes|local> \\");
+    println!("      --manager-url {}", mgr.manager_url.trim_end_matches('/'));
+    println!();
+    println!("  \x1b[2mGroup: {} | Max deployments: {}\x1b[0m", name, args.max_deployments);
 
     Ok(())
 }

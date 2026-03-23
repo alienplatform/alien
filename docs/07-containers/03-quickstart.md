@@ -39,7 +39,7 @@ app.listen(PORT, () => {
 
 ## Step 2: Define the Container
 
-Create `alien.config.ts`:
+Create `alien.ts`:
 
 ```typescript
 import * as alien from "@alienplatform/core"

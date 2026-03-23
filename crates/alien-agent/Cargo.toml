@@ -1,0 +1,59 @@
+[package]
+name = "alien-agent"
+version.workspace = true
+edition = "2021"
+publish = false
+description = "Alien agent — pull-model background service that manages deployments in remote environments"
+
+[lib]
+name = "alien_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "alien-agent"
+path = "src/main.rs"
+
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-deployment = { workspace = true }
+alien-infra = { workspace = true, features = ["all-platforms", "local"] }
+alien-local = { workspace = true }
+alien-client-config = { workspace = true }
+alien-server-sdk = { package = "alien-manager-api", path = "../../client-sdks/manager/rust" }
+
+# Async & HTTP
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+axum = { workspace = true, features = ["tokio", "http2"] }
+
+# Database
+turso = { workspace = true }
+aegis = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# CLI & Logging
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# Builder
+bon = { workspace = true }
+
+# Utilities
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4"] }
+url = { workspace = true }
+hostname = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"
+fs2 = "0.4"

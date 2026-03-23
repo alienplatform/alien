@@ -19,9 +19,10 @@ path = "src/storybook/main.rs"
 required-features = ["storybook"]
 
 [features]
-default = ["storybook", "otlp"]
+default = ["storybook", "otlp", "platform"]
 storybook = ["dep:color-eyre"]
 otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
+platform = ["dep:oauth2", "dep:open", "dep:keyring"]
 
 [dependencies]
 alien-core = { workspace = true }
@@ -66,18 +67,21 @@ uuid = { workspace = true, features = ["v4"] }
 urlencoding = { workspace = true }
 futures = { workspace = true }
 
-# Platform dependencies (always enabled)
-keyring = { version = "2" }
-open = { version = "5" }
+# Platform dependencies (behind "platform" feature)
+keyring = { version = "2", optional = true }
+open = { version = "5", optional = true }
+alien-platform-api = { path = "../../client-sdks/platform/rust", default-features = false, features = ["rustls"] }
+oauth2 = { workspace = true, optional = true }
+
+# Always-on dependencies
 portpicker = { version = "0.1" }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 axum = { workspace = true, features = ["tokio", "http2", "query"] }
 sha2 = { workspace = true }
-oauth2 = { workspace = true }
+hex = { workspace = true }
 git-url-parse = { version = "0.4.4" }
-alien-platform-api = { path = "../../client-sdks/platform/rust", default-features = false, features = ["rustls"] }
 
 # Optional storybook dependency
 color-eyre = { version = "0.6.5", optional = true }

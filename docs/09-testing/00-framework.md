@@ -129,7 +129,7 @@ interface DeployOptions {
   /** Target platform: 'aws' | 'gcp' | 'azure' | 'kubernetes' | 'local' */
   platform: Platform
 
-  /** Specific config file (e.g., 'alien.config.container.ts') */
+  /** Specific config file (e.g., 'alien.container.ts') */
   config?: string
 
   /** Environment variables for the deployment */
@@ -152,14 +152,14 @@ The `config` option lets you test different deployment shapes with the same app:
 // Test as a function
 const fnDeployment = await deploy({
   app: './test-apps/comprehensive',
-  config: 'alien.config.function.ts',
+  config: 'alien.function.ts',
   platform: 'aws',
 })
 
 // Test as a container
 const containerDeployment = await deploy({
   app: './test-apps/comprehensive',
-  config: 'alien.config.container.ts',
+  config: 'alien.container.ts',
   platform: 'aws',
 })
 ```

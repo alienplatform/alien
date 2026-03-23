@@ -12,7 +12,7 @@ CREATE TABLE releases (
 )
 ```
 
-The `stack` field contains platform-keyed stack definitions — compiled `alien.config.ts` output as JSON. A release can contain stacks for multiple platforms simultaneously.
+The `stack` field contains platform-keyed stack definitions — compiled `alien.ts` output as JSON. A release can contain stacks for multiple platforms simultaneously.
 
 ## Creating a Release
 

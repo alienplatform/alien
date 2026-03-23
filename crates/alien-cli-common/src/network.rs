@@ -1,4 +1,4 @@
-//! Shared network CLI arguments and parsing for alien-cli and alien-project-cli.
+//! Shared network CLI arguments and parsing for alien-cli and alien-deploy-cli.
 //!
 //! Provides [`NetworkArgs`] (a clap `Args` struct) and [`parse_network_settings`] to convert
 //! CLI flags into [`alien_core::NetworkSettings`].

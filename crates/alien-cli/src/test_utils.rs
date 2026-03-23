@@ -49,8 +49,8 @@ pub fn create_package_json_content() -> String {
     )
 }
 
-/// Helper to create alien.config.ts content without Functions (to avoid image building)
-pub fn create_basic_alien_config_ts() -> String {
+/// Helper to create alien.ts content without Functions (to avoid image building)
+pub fn create_basic_alien_ts() -> String {
     r#"import * as alien from "@alienplatform/core";
 
 const storage = new alien.Storage("test-storage")
@@ -70,8 +70,8 @@ export default stack;
     .to_string()
 }
 
-/// Helper to create alien.config.ts content with Functions
-pub fn create_full_alien_config_ts() -> String {
+/// Helper to create alien.ts content with Functions
+pub fn create_full_alien_ts() -> String {
     r#"import * as alien from "@alienplatform/core";
 
 const storage = new alien.Storage("test-storage")
@@ -110,7 +110,7 @@ export default stack;
     .to_string()
 }
 
-/// Helper to create alien.config.js content
+/// Helper to create alien.js content
 pub fn create_javascript_config_content() -> String {
     r#"import * as alien from "@alienplatform/core";
 
@@ -207,7 +207,7 @@ pub fn create_sample_stack(stack_id: &str) -> Stack {
         .build()
 }
 
-/// Helper to create alien.config.json content
+/// Helper to create alien.json content
 pub fn create_json_config_content() -> String {
     let stack = create_sample_stack("test-stack-json");
     serde_json::to_string_pretty(&stack).unwrap()
@@ -242,8 +242,8 @@ pub fn create_temp_alien_app(config_content: &str) -> TempDir {
     let package_json = create_package_json_content();
     fs::write(temp_path.join("package.json"), package_json).unwrap();
 
-    // Create alien.config.ts
-    fs::write(temp_path.join("alien.config.ts"), config_content).unwrap();
+    // Create alien.ts
+    fs::write(temp_path.join("alien.ts"), config_content).unwrap();
 
     // Set up node_modules so bun can resolve @alienplatform/core
     setup_node_modules(temp_path);
@@ -263,16 +263,16 @@ pub fn create_temp_app_dir(config_type: &str) -> TempDir {
     // Create config file based on type
     match config_type {
         "ts" => {
-            let config_content = create_full_alien_config_ts();
-            fs::write(temp_path.join("alien.config.ts"), config_content).unwrap();
+            let config_content = create_full_alien_ts();
+            fs::write(temp_path.join("alien.ts"), config_content).unwrap();
         }
         "js" => {
             let config_content = create_javascript_config_content();
-            fs::write(temp_path.join("alien.config.js"), config_content).unwrap();
+            fs::write(temp_path.join("alien.js"), config_content).unwrap();
         }
         "json" => {
             let config_content = create_json_config_content();
-            fs::write(temp_path.join("alien.config.json"), config_content).unwrap();
+            fs::write(temp_path.join("alien.json"), config_content).unwrap();
         }
         _ => panic!("Unknown config type: {}", config_type),
     }

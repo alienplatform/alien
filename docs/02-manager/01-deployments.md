@@ -105,7 +105,7 @@ During initial setup, `step()` provisions frozen resources first (IAM roles, sto
 - **CloudFormation template** — a one-click template that provisions the necessary infrastructure
 - **Terraform provider** — runs `step()` inside `terraform apply`
 - **"Login with Google" button** — GCP OAuth flow that creates the deployment via the dashboard
-- **Operator** — a controller in the remote environment's Kubernetes cluster (see Pull Model below)
+- **Agent** — a controller in the remote environment's Kubernetes cluster (see Pull Model below)
 
 All call the same sync APIs.
 
@@ -160,10 +160,10 @@ The self-hosted alien-manager is single-instance. The deployment loop processes 
 
 For environments where alien-manager can't call cloud APIs directly — Kubernetes clusters, airgapped networks, or organizations that don't allow cross-account access.
 
-Instead of granting alien-manager credentials, the admin installs an **Operator** that lives inside the remote environment and polls alien-manager for updates:
+Instead of granting alien-manager credentials, the admin installs an **Agent** that lives inside the remote environment and polls alien-manager for updates:
 
 ```
-alien-manager                     Operator (in customer's K8s)
+alien-manager                     Agent (in customer's K8s)
      │                                │
      │◀── POST /v1/initialize ────────│  "Here's my token, create a deployment"
      │── { deploymentId, token } ────▶│
@@ -171,20 +171,20 @@ alien-manager                     Operator (in customer's K8s)
      │◀── POST /v1/sync ─────────────│  "Here's my current state"
      │── { target } ─────────────────▶│  "Here's what you should deploy"
      │                                │
-     │   (Operator runs step() locally │
+     │   (Agent runs step() locally    │
      │    with in-cluster credentials) │
      │                                │
      │◀── POST /v1/sync/reconcile ───│  "I've reached this state"
      │                                │
 ```
 
-The Operator:
+The Agent:
 1. Calls `POST /v1/initialize` on first startup to create a deployment record
 2. Periodically calls `POST /v1/sync` to check for updates
 3. Runs `alien-deployment::step()` locally with its own credentials
 4. Reports state back via `POST /v1/sync/reconcile`
 
-Same `step()` function, same state machine. The Operator runs in the remote environment and uses local credentials. alien-manager stores the target state and serves it on request.
+Same `step()` function, same state machine. The Agent runs in the remote environment and uses local credentials. alien-manager stores the target state and serves it on request.
 
 ### Credential impersonation
 
@@ -226,7 +226,7 @@ In dev mode, alien-manager uses `ClientConfig::Local { state_directory }` — no
 
 ## Updates and Deletion
 
-**Updates:** When a new release is created, alien-manager sets `desired_release_id` on eligible deployments. Deployments in `running` status transition to `update-pending`. The deployment loop (push) or Operator (pull) picks this up and runs `step()` until `current_release_id` matches `desired_release_id`.
+**Updates:** When a new release is created, alien-manager sets `desired_release_id` on eligible deployments. Deployments in `running` status transition to `update-pending`. The deployment loop (push) or Agent (pull) picks this up and runs `step()` until `current_release_id` matches `desired_release_id`.
 
 **Redeployment:** `POST /v1/deployments/{id}/redeploy` forces a re-provision of a running deployment with the same release. Sets status to `update-pending` so the deployment loop re-runs `step()`. Useful when infrastructure changes happened outside of Alien.
 

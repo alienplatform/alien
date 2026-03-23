@@ -25,7 +25,7 @@ dotenv -- cargo run --manifest-path=../alien/Cargo.toml --package alien-cli --bi
 # ===== "CUSTOMER" ======
 
 ```bash
-dotenv -- cargo run --manifest-path=../alien/Cargo.toml --package alien-project-cli -- run \
+dotenv -- cargo run --manifest-path=../alien/Cargo.toml --package alien-deploy-cli -- run \
    --name=test --base-url=http://localhost:8080 --token=<agent-token-from-above>
 ```
 

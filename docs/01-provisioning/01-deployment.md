@@ -130,10 +130,10 @@ pub struct DeploymentConfig {
 ### Key Insight
 
 alien-deployment works identically regardless of who calls it. The differences:
-- Who calls it (CLI, Terraform provider, Operator, etc.)
+- Who calls it (CLI, Terraform provider, Agent, etc.)
 - Where credentials come from (cross-account vs local)
 - Whether ManagementConfig is present (push mode) or null (pull mode)
-- Where StackSettings come from (CLI flags, Terraform attrs, Operator env vars, etc.)
+- Where StackSettings come from (CLI flags, Terraform attrs, Agent env vars, etc.)
 
 StackSettings (user's choices) flows from user input into `DeploymentConfig`, then to controllers. It is separate from `StackState`, which tracks mutable runtime state.
 
@@ -164,7 +164,7 @@ loop {
 ### Continuous deployment loop
 
 ```rust
-// Deployment loop (runs in CLI, Operator, or any other host)
+// Deployment loop (runs in CLI, Agent, or any other host)
 loop {
     for deployment in query_deployments_needing_work() {
         let result = step(deployment.current, deployment.config, credentials).await?;

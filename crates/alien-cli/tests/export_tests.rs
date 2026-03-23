@@ -58,7 +58,7 @@ fn test_export_alien_template_basic_platforms() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Test AWS platform
@@ -132,7 +132,7 @@ fn test_export_alien_template_to_file() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
     let output_file = temp_path.join("exported-stack.json");
 
@@ -169,7 +169,7 @@ fn test_export_cloudformation_template_basic() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Build first for AWS
@@ -248,7 +248,7 @@ fn test_export_cloudformation_with_all_resources() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Build first for AWS
@@ -309,7 +309,7 @@ fn test_export_cloudformation_with_managing_account() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
 
     // Build first for AWS
@@ -363,7 +363,7 @@ fn test_export_cloudformation_to_file() {
         return;
     }
 
-    let temp_app = create_temp_alien_app(&create_basic_alien_config_ts());
+    let temp_app = create_temp_alien_app(&create_basic_alien_ts());
     let temp_path = temp_app.path();
     let output_file = temp_path.join("template.yaml");
 

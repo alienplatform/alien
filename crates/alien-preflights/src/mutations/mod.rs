@@ -1,7 +1,6 @@
 //! Stack mutations that modify the stack to ensure successful deployment.
 //! These mutations run at deployment time but do NOT query cloud state.
 
-pub mod arc_request_queues;
 pub mod azure_container_apps_environment;
 pub mod azure_resource_group;
 pub mod azure_service_activation;
@@ -17,7 +16,6 @@ pub mod secrets_vault;
 pub mod service_account;
 pub mod service_account_dependencies;
 
-pub use arc_request_queues::ArcRequestQueuesMutation;
 pub use azure_container_apps_environment::AzureContainerAppsEnvironmentMutation;
 pub use azure_resource_group::AzureResourceGroupMutation;
 pub use azure_service_activation::AzureServiceActivationMutation;

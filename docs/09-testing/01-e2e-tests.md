@@ -32,7 +32,7 @@ Each cell runs the same set of checks — health, bindings (storage, KV, vault, 
 
 ## What Remains Platform-Only
 
-- CloudFormation, Terraform, Helm, Operator Image deployment methods (platform-generated artifacts)
+- CloudFormation, Terraform, Helm, Agent Image deployment methods (platform-generated artifacts)
 - Multi-tenant workspace/project isolation
 - DeepStore telemetry pipeline
 - Dashboard/OAuth integration
@@ -73,9 +73,9 @@ Rust HTTP server that exposes endpoints for every binding and runtime feature:
 
 ```
 test-apps/comprehensive-rust/
-├── alien.config.function.ts    # Function deployment: all bindings
-├── alien.config.container.ts   # Container deployment: all bindings
-├── alien.config.dev.ts         # Local dev (no build/queue)
+├── alien.function.ts    # Function deployment: all bindings
+├── alien.container.ts   # Container deployment: all bindings
+├── alien.dev.ts         # Local dev (no build/queue)
 ├── src/                        # Rust HTTP server
 └── Cargo.toml
 ```
@@ -88,8 +88,8 @@ TypeScript HTTP server (Hono) with the same endpoint structure:
 
 ```
 test-apps/comprehensive-typescript/
-├── alien.config.function.ts    # Function deployment
-├── alien.config.container.ts   # Container deployment
+├── alien.function.ts    # Function deployment
+├── alien.container.ts   # Container deployment
 ├── src/index.ts                # Hono HTTP server
 ├── package.json
 └── tsdown.config.ts
@@ -225,7 +225,7 @@ describe('Rust function - AWS', () => {
   beforeAll(async () => {
     deployment = await deploy({
       app: '../../test-apps/comprehensive-rust',
-      config: 'alien.config.function.ts',
+      config: 'alien.function.ts',
       platform: 'aws',
     })
   }, 900_000)
@@ -259,7 +259,7 @@ A container test looks identical — just swap the config:
 ```typescript
 deployment = await deploy({
   app: '../../test-apps/comprehensive-rust',
-  config: 'alien.config.container.ts',  // ← only difference
+  config: 'alien.container.ts',  // ← only difference
   platform: 'aws',
 })
 ```

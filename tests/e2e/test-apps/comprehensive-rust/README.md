@@ -17,11 +17,11 @@ cargo build --release --target aarch64-unknown-linux-musl --bin alien-test-serve
 cargo build --release --bin alien-test-server
 ```
 
-The `alien.config.ts` automatically determines the correct binary path based on your platform.
+The `alien.ts` automatically determines the correct binary path based on your platform.
 
 ## Configuration
 
-The server configuration is defined in `alien.config.ts`. It includes:
+The server configuration is defined in `alien.ts`. It includes:
 - A storage resource (`test-alien-storage`)
 - A management role with full stack permissions
 - A function role with storage read/write permissions

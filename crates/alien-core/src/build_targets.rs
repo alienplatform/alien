@@ -12,21 +12,21 @@ use utoipa::ToSchema;
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceBinaryType {
-    /// alien-project-cli binary
+    /// alien-deploy binary
     Cli,
     /// alien-terraform binary
     Terraform,
-    /// alien-operator binary
-    Operator,
+    /// alien-agent binary
+    Agent,
 }
 
 impl SourceBinaryType {
     /// Returns the binary filename (without extension)
     pub fn binary_name(&self) -> &'static str {
         match self {
-            SourceBinaryType::Cli => "alien-project-cli",
+            SourceBinaryType::Cli => "alien-deploy",
             SourceBinaryType::Terraform => "alien-terraform",
-            SourceBinaryType::Operator => "alien-operator",
+            SourceBinaryType::Agent => "alien-agent",
         }
     }
 }
@@ -36,7 +36,7 @@ impl std::fmt::Display for SourceBinaryType {
         match self {
             SourceBinaryType::Cli => write!(f, "cli"),
             SourceBinaryType::Terraform => write!(f, "terraform"),
-            SourceBinaryType::Operator => write!(f, "operator"),
+            SourceBinaryType::Agent => write!(f, "agent"),
         }
     }
 }

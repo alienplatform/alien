@@ -19,7 +19,7 @@ Let's trace a binding from definition to use.
 **Step 1: Developer defines resources**
 
 ```typescript
-// alien.config.ts
+// alien.ts
 const storage = new alien.Storage("data-storage").build()
 
 const fn = new alien.Function("processor")
@@ -384,7 +384,7 @@ So far, bindings run inside the compute resource (Function, Container, etc.) via
 By default, binding params stay local to prevent sensitive data in synced state. To enable remote access for a resource, set `remoteAccess: true`:
 
 ```typescript
-// alien.config.ts
+// alien.ts
 const customerStorage = new alien.Storage("customer-data").build()
 
 export default new alien.Stack("my-stack")

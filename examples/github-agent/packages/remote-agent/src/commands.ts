@@ -1,12 +1,7 @@
-import { command as arcCommand } from "@alienplatform/bindings"
+import { command } from "@alienplatform/bindings"
 import { applyLabels, classifyPullRequests, computeMetrics, fetchPullRequests } from "./github.js"
 import { loadIntegrationConfig, saveIntegrationConfig } from "./integrations.js"
 import type { IntegrationConfig, LabelResult } from "./types.js"
-
-const command = arcCommand as unknown as <TParams, TResponse>(
-  name: string,
-  handler: (params: TParams) => Promise<TResponse> | TResponse,
-) => void
 
 type SetIntegrationParams = {
   integrationId: string

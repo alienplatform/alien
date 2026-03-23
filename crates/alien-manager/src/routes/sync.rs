@@ -9,7 +9,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use alien_core::{DeploymentState, Platform};
+use alien_core::{
+    sync::TargetDeployment, DeploymentConfig, DeploymentState, EnvironmentVariable,
+    EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
+};
 
 use crate::error::ErrorData;
 use crate::ids;
@@ -84,14 +87,14 @@ pub struct ReleaseRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct OperatorSyncRequest {
+pub struct AgentSyncRequest {
     pub deployment_id: String,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct OperatorSyncResponse {
+pub struct AgentSyncResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<serde_json::Value>,
 }
@@ -120,7 +123,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/sync/acquire", post(acquire))
         .route("/v1/sync/reconcile", post(reconcile))
         .route("/v1/sync/release", post(release))
-        .route("/v1/sync", post(operator_sync))
+        .route("/v1/sync", post(agent_sync))
 }
 
 /// Router for the `/v1/initialize` endpoint only.
@@ -273,18 +276,18 @@ async fn release(
     post,
     path = "/v1/sync",
     tag = "sync",
-    request_body = OperatorSyncRequest,
+    request_body = AgentSyncRequest,
     responses(
-        (status = 200, description = "Operator sync response with optional target state", body = OperatorSyncResponse)
+        (status = 200, description = "Agent sync response with optional target state", body = AgentSyncResponse)
     ),
     security(
         ("bearer" = [])
     )
 ))]
-async fn operator_sync(
+async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<OperatorSyncRequest>,
+    Json(req): Json<AgentSyncRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -310,30 +313,49 @@ async fn operator_sync(
     let target = if deployment.desired_release_id.is_some()
         && deployment.desired_release_id != deployment.current_release_id
     {
-        // Build target info for the operator
-        let release_info = if let Some(ref release_id) = deployment.desired_release_id {
+        let release = if let Some(ref release_id) = deployment.desired_release_id {
             match state.release_store.get_release(release_id).await {
-                Ok(Some(r)) => Some(serde_json::json!({
-                    "releaseId": r.id,
-                    "stack": serde_json::to_value(&r.stack).unwrap_or_default(),
-                })),
+                Ok(Some(r)) => Some(r),
                 _ => None,
             }
         } else {
             None
         };
 
-        release_info.map(|ri| {
-            serde_json::json!({
-                "releaseInfo": ri,
-                "config": serde_json::to_value(&deployment.stack_settings).unwrap_or_default(),
+        release.and_then(|r| {
+            let stack = serde_json::from_value(
+                serde_json::to_value(&r.stack).ok()?,
+            ).ok()?;
+
+            let env_vars: Vec<EnvironmentVariable> = deployment
+                .user_environment_variables
+                .clone()
+                .unwrap_or_default();
+
+            Some(TargetDeployment {
+                release_info: ReleaseInfo {
+                    release_id: r.id,
+                    version: None,
+                    description: None,
+                    stack,
+                },
+                config: DeploymentConfig::builder()
+                    .stack_settings(deployment.stack_settings.clone())
+                    .environment_variables(EnvironmentVariablesSnapshot {
+                        variables: env_vars,
+                        hash: String::new(),
+                        created_at: String::new(),
+                    })
+                    .allow_frozen_changes(false)
+                    .external_bindings(Default::default())
+                    .build(),
             })
         })
     } else {
         None
     };
 
-    Json(OperatorSyncResponse { target }).into_response()
+    Json(AgentSyncResponse { target: target.map(|t| serde_json::to_value(&t).unwrap_or_default()) }).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -375,7 +397,7 @@ async fn initialize(
 
             let name = req
                 .name
-                .unwrap_or_else(|| format!("operator-{}", &ids::deployment_id()[3..9]));
+                .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
             let platform = req.platform.unwrap_or(Platform::Kubernetes);
 
             let mut settings = alien_core::StackSettings::default();
@@ -395,6 +417,14 @@ async fn initialize(
                 Ok(d) => d,
                 Err(e) => return e.into_response(),
             };
+
+            // Auto-assign latest release if available
+            if let Ok(Some(release)) = state.release_store.get_latest_release().await {
+                let _ = state
+                    .deployment_store
+                    .set_deployment_desired_release(&deployment.id, &release.id)
+                    .await;
+            }
 
             // Create a deployment token for the new deployment
             let (raw_token, key_prefix, key_hash) =

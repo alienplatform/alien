@@ -16,7 +16,7 @@ const agent = new alien.Function("agent")
     },
   })
   .link(events)
-  .arcEnabled(true)
+  .commandsEnabled(true)
   .permissions("execution")
   .build()
 

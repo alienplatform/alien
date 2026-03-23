@@ -374,7 +374,7 @@ Revokes a remote account's pull access to a repository. Called when a deployment
 
 ## State Sync
 
-Endpoints used by `alien deploy`, Operators, and other deployment tooling to coordinate deployment state. See [Deployments — The Deployment Lifecycle](01-deployments.md#the-deployment-lifecycle) for protocol details.
+Endpoints used by `alien deploy`, Agents, and other deployment tooling to coordinate deployment state. See [Deployments — The Deployment Lifecycle](01-deployments.md#the-deployment-lifecycle) for protocol details.
 
 ### Acquire
 
@@ -419,7 +419,7 @@ POST /v1/sync/release
 
 Clears `locked_by`. Always called after processing — even on failure — to prevent stuck locks.
 
-### Operator Sync
+### Agent Sync
 
 ```
 POST /v1/sync
@@ -427,13 +427,13 @@ POST /v1/sync
 
 Pull-mode deployments call this to get their target state. Returns `{ target: { releaseInfo, config } }` or null if already up to date.
 
-### Operator Initialize
+### Agent Initialize
 
 ```
 POST /v1/initialize
 ```
 
-First-time bootstrap. The Operator sends its token, and alien-manager creates a deployment record:
+First-time bootstrap. The Agent sends its token, and alien-manager creates a deployment record:
 - Deployment group token → creates a new pull-mode deployment, returns `{ deploymentId, token }`
 - Deployment token → returns `{ deploymentId }` (already exists)
 

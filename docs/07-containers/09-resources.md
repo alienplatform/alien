@@ -7,8 +7,8 @@ This document describes the resources needed for Alien Containers.
 | Resource | User-Defined? | Auto-Generated? | Notes |
 |----------|--------------|-----------------|-------|
 | Network | ❌ | ✅ | Generated from `StackSettings.network` |
-| ContainerCluster | ✅ | ❌ | User defines in `alien.config.ts` |
-| Container | ✅ | ❌ | User defines in `alien.config.ts` |
+| ContainerCluster | ✅ | ❌ | User defines in `alien.ts` |
+| Container | ✅ | ❌ | User defines in `alien.ts` |
 | ServiceAccount | ❌ | ✅ | **Existing**. Generated from permission profiles |
 | KubernetesNamespace | ❌ | ✅ | **Existing**. Generated for K8s platform |
 | AzureResourceGroup | ❌ | ✅ | **Existing**. Generated for Azure platform |
@@ -19,7 +19,7 @@ This document describes the resources needed for Alien Containers.
 
 See [NETWORK.md](../NETWORK.md) for full details.
 
-**Generated automatically** from `StackSettings.network`. Users configure network in stack settings, not as a resource in `alien.config.ts`.
+**Generated automatically** from `StackSettings.network`. Users configure network in stack settings, not as a resource in `alien.ts`.
 
 Three modes:
 1. **None** — No network (valid for serverless-only stacks)
@@ -42,7 +42,7 @@ Three modes:
 
 ## ContainerCluster
 
-**User-defined** in `alien.config.ts`. Represents the compute infrastructure that runs containers.
+**User-defined** in `alien.ts`. Represents the compute infrastructure that runs containers.
 
 ### Properties
 
@@ -107,7 +107,7 @@ ContainerCluster({
 
 ## Container
 
-**User-defined** in `alien.config.ts`. Represents a container workload.
+**User-defined** in `alien.ts`. Represents a container workload.
 
 ### Properties
 

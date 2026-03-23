@@ -1,7 +1,7 @@
 /**
  * GitHub Agent - Remote Agent Entrypoint
  *
- * Registers ARC commands for GitHub analysis and exposes HTTP endpoints
+ * Registers commands for GitHub analysis and exposes HTTP endpoints
  * for direct PR access.
  */
 import { Hono } from "hono"

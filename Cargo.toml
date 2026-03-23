@@ -23,6 +23,8 @@ members = [
   "crates/alien-deployment",
   "crates/alien-local",
   "crates/alien-manager",
+  "crates/alien-agent",
+  "crates/alien-deploy-cli",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
   "examples/byoc-database",

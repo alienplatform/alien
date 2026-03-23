@@ -175,7 +175,7 @@ pub enum DeploymentModel {
     /// Available for AWS, GCP, Azure only.
     #[default]
     Push,
-    /// Operator in remote environment pulls updates.
+    /// Agent in remote environment pulls updates.
     /// Available for all platforms (AWS, GCP, Azure, Kubernetes, Local).
     Pull,
 }
@@ -318,7 +318,7 @@ pub struct StackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domains: Option<DomainSettings>,
 
-    /// Deployment model: push (Manager) or pull (Operator).
+    /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push for cloud platforms.
     /// Kubernetes and Local platforms only support Pull.
     #[serde(default, skip_serializing_if = "is_default_deployment_model")]

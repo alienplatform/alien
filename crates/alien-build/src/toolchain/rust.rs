@@ -400,7 +400,7 @@ impl Toolchain for RustToolchain {
         info!("Successfully built Rust binary: {}", binary_path.display());
 
         // Determine if we need alien-runtime in the image
-        // Functions on local platform use embedded runtime in operator (no runtime in image)
+        // Functions on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
         let needs_runtime_in_image = context.is_container || context.platform_name != "local";
 

@@ -17,7 +17,7 @@ use std::fmt::Debug;
 /// Represents cloud-agnostic networking infrastructure (VPC, VNet, subnets, etc.).
 ///
 /// This resource is **always auto-generated** by the NetworkMutation preflight based on
-/// `StackSettings.network`. Users don't define Network resources directly in `alien.config.ts`.
+/// `StackSettings.network`. Users don't define Network resources directly in `alien.ts`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

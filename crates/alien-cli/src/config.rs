@@ -9,9 +9,9 @@
 //!
 //! When a directory is provided as the config path, the module will search for configuration files
 //! in the following priority order:
-//! 1. `alien.config.ts` - TypeScript configuration file
-//! 2. `alien.config.js` - JavaScript configuration file
-//! 3. `alien.config.json` - JSON configuration file
+//! 1. `alien.ts` - TypeScript configuration file
+//! 2. `alien.js` - JavaScript configuration file
+//! 3. `alien.json` - JSON configuration file
 //!
 //! ## TypeScript and JavaScript Configuration Loading
 //!
@@ -25,12 +25,12 @@
 //! use std::path::PathBuf;
 //! use alien_cli::config::load_configuration;
 //!
-//! // Load from a directory (will search for alien.config.ts, alien.config.js, or alien.config.json)
+//! // Load from a directory (will search for alien.ts, alien.js, or alien.json)
 //! let stack = load_configuration(PathBuf::from("./my-app")).await?;
 //!
 //! // Load from a specific file
-//! let stack = load_configuration(PathBuf::from("./my-app/alien.config.ts")).await?;
-//! let stack = load_configuration(PathBuf::from("./my-app/alien.config.js")).await?;
+//! let stack = load_configuration(PathBuf::from("./my-app/alien.ts")).await?;
+//! let stack = load_configuration(PathBuf::from("./my-app/alien.js")).await?;
 //! ```
 
 use crate::{ErrorData, Result};
@@ -66,7 +66,7 @@ impl JavaScriptRuntime {
 }
 
 /// Load an Alien stack configuration from a file or directory.
-/// Searches for `alien.config.ts`, `alien.config.js`, or `alien.config.json` in directories.
+/// Searches for `alien.ts`, `alien.js`, or `alien.json` in directories.
 #[alien_event(AlienEvent::LoadingConfiguration)]
 pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
     info!("Loading configuration from: {}", config_path.display());
@@ -76,10 +76,10 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             "Searching for configuration files in directory: {}",
             config_path.display()
         );
-        // Look for alien.config.ts first, then alien.config.js, then alien.config.json
-        let ts_config = config_path.join("alien.config.ts");
-        let js_config = config_path.join("alien.config.js");
-        let json_config = config_path.join("alien.config.json");
+        // Look for alien.ts first, then alien.js, then alien.json
+        let ts_config = config_path.join("alien.ts");
+        let js_config = config_path.join("alien.js");
+        let json_config = config_path.join("alien.json");
 
         if ts_config.exists() {
             info!("Found TypeScript configuration: {}", ts_config.display());
@@ -98,7 +98,7 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             return Err(alien_error::AlienError::new(
                 ErrorData::ConfigurationError {
                     message: format!(
-                    "Could not find alien.config.ts, alien.config.js, or alien.config.json in {}", 
+                    "Could not find alien.ts, alien.js, or alien.json in {}",
                     config_path.display()
                 ),
                 },
@@ -172,6 +172,119 @@ async fn load_javascript_config(config_file: PathBuf) -> Result<Stack> {
     load_javascript_or_typescript_config(config_file).await
 }
 
+/// Check if `@alienplatform/core` is resolvable from the config directory.
+fn is_core_resolvable(config_dir: &Path) -> bool {
+    config_dir
+        .join("node_modules/@alienplatform/core")
+        .exists()
+}
+
+/// Ensure `@alienplatform/core` is available for config execution.
+///
+/// If the config directory has a `package.json` and `node_modules`, we assume
+/// the user manages their own dependencies. Otherwise, we create a cached
+/// installation in `~/.cache/alien/core-modules/{version}/` so that standalone
+/// `alien.ts` files work without a package.json.
+async fn ensure_core_available(
+    config_dir: &Path,
+    runtime: &JavaScriptRuntime,
+) -> Result<Option<PathBuf>> {
+    // If already resolvable (user has node_modules), nothing to do
+    if is_core_resolvable(config_dir) {
+        return Ok(None);
+    }
+
+    // If there's a package.json, try installing dependencies normally first
+    if config_dir.join("package.json").exists() {
+        install_dependencies(config_dir)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to install dependencies in {}", config_dir.display()),
+            })?;
+        if is_core_resolvable(config_dir) {
+            return Ok(None);
+        }
+    }
+
+    // No package.json or core still not resolvable — use cached install
+    let version = alien_core::VERSION;
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("alien")
+        .join("core-modules")
+        .join(version);
+
+    let cache_node_modules = cache_dir.join("node_modules");
+
+    if cache_node_modules
+        .join("@alienplatform/core")
+        .exists()
+    {
+        debug!(
+            "Using cached @alienplatform/core from {}",
+            cache_dir.display()
+        );
+        return Ok(Some(cache_node_modules));
+    }
+
+    info!(
+        "Installing @alienplatform/core v{} to cache at {}",
+        version,
+        cache_dir.display()
+    );
+
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: cache_dir.display().to_string(),
+            reason: "Failed to create cache directory".to_string(),
+        })?;
+
+    // Write a minimal package.json
+    let package_json = format!(
+        r#"{{"name":"alien-core-cache","type":"module","dependencies":{{"@alienplatform/core":"{}"}}}}"#,
+        version
+    );
+    tokio::fs::write(cache_dir.join("package.json"), &package_json)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: cache_dir.join("package.json").display().to_string(),
+            reason: "Failed to write cache package.json".to_string(),
+        })?;
+
+    // Install using the runtime (bun install)
+    let install_output = tokio::process::Command::new(runtime.executable())
+        .arg("install")
+        .current_dir(&cache_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to install @alienplatform/core".to_string(),
+        })?;
+
+    if !install_output.status.success() {
+        let stderr = String::from_utf8_lossy(&install_output.stderr);
+        return Err(alien_error::AlienError::new(
+            ErrorData::ConfigurationError {
+                message: format!(
+                    "Failed to install @alienplatform/core: {}",
+                    stderr
+                ),
+            },
+        ));
+    }
+
+    info!("Cached @alienplatform/core installed successfully");
+    Ok(Some(cache_node_modules))
+}
+
 /// Load a TypeScript or JavaScript configuration file using Bun or Node.js.
 async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<Stack> {
     info!(
@@ -185,13 +298,9 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
         runtime.name()
     );
 
-    // Install dependencies in the directory containing the config file
+    // Ensure @alienplatform/core is available (either from user's node_modules or cache)
     let config_dir = config_file.parent().unwrap_or_else(|| Path::new("."));
-    install_dependencies(config_dir)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to install dependencies in {}", config_dir.display()),
-        })?;
+    let extra_node_path = ensure_core_available(config_dir, &runtime).await?;
 
     debug!("Creating temporary script file...");
     let temp_file =
@@ -249,8 +358,22 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
         "Executing {} script to load configuration...",
         runtime.name()
     );
-    let output = tokio::process::Command::new(runtime.executable())
-        .arg(temp_path)
+    let mut cmd = tokio::process::Command::new(runtime.executable());
+    cmd.arg(temp_path);
+
+    // If we're using a cached core installation, add it to NODE_PATH
+    if let Some(ref node_path) = extra_node_path {
+        let existing = std::env::var("NODE_PATH").unwrap_or_default();
+        let new_path = if existing.is_empty() {
+            node_path.display().to_string()
+        } else {
+            format!("{}:{}", node_path.display(), existing)
+        };
+        cmd.env("NODE_PATH", &new_path);
+        debug!("Set NODE_PATH={}", new_path);
+    }
+
+    let output = cmd
         .output()
         .await
         .into_alien_error()
@@ -435,9 +558,9 @@ mod tests {
     // Re-use the shared test utilities
     use crate::test_utils::*;
 
-    /// Helper to create alien.config.ts content for config tests (different from shared version)
+    /// Helper to create alien.ts content for config tests (different from shared version)
     fn create_typescript_config_content() -> String {
-        create_full_alien_config_ts()
+        create_full_alien_ts()
     }
 
     #[tokio::test]
@@ -504,7 +627,7 @@ mod tests {
         let temp_dir = create_temp_app_dir("ts");
         let shared_nm = shared_node_modules_path().await;
         std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
-        let config_path = temp_dir.path().join("alien.config.ts");
+        let config_path = temp_dir.path().join("alien.ts");
         let result = load_configuration(config_path).await;
 
         match result {
@@ -527,7 +650,7 @@ mod tests {
         let temp_dir = create_temp_app_dir("js");
         let shared_nm = shared_node_modules_path().await;
         std::os::unix::fs::symlink(shared_nm, temp_dir.path().join("node_modules")).unwrap();
-        let config_path = temp_dir.path().join("alien.config.js");
+        let config_path = temp_dir.path().join("alien.js");
         let result = load_configuration(config_path).await;
 
         match result {
@@ -548,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_specific_json_file() {
         let temp_dir = create_temp_app_dir("json");
-        let config_path = temp_dir.path().join("alien.config.json");
+        let config_path = temp_dir.path().join("alien.json");
         let result = load_configuration(config_path).await;
 
         assert!(result.is_ok());
@@ -567,17 +690,17 @@ mod tests {
 
         // Create all three config files
         fs::write(
-            temp_path.join("alien.config.ts"),
+            temp_path.join("alien.ts"),
             create_typescript_config_content(),
         )
         .unwrap();
         fs::write(
-            temp_path.join("alien.config.js"),
+            temp_path.join("alien.js"),
             create_javascript_config_content(),
         )
         .unwrap();
         fs::write(
-            temp_path.join("alien.config.json"),
+            temp_path.join("alien.json"),
             create_json_config_content(),
         )
         .unwrap();
@@ -614,12 +737,12 @@ mod tests {
 
         // Create JavaScript and JSON config files (no TypeScript)
         fs::write(
-            temp_path.join("alien.config.js"),
+            temp_path.join("alien.js"),
             create_javascript_config_content(),
         )
         .unwrap();
         fs::write(
-            temp_path.join("alien.config.json"),
+            temp_path.join("alien.json"),
             create_json_config_content(),
         )
         .unwrap();
@@ -652,7 +775,7 @@ mod tests {
 
         // Create only JSON config file
         fs::write(
-            temp_path.join("alien.config.json"),
+            temp_path.join("alien.json"),
             create_json_config_content(),
         )
         .unwrap();
@@ -673,7 +796,7 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg
-            .contains("Could not find alien.config.ts, alien.config.js, or alien.config.json"));
+            .contains("Could not find alien.ts, alien.js, or alien.json"));
     }
 
     #[tokio::test]
@@ -717,7 +840,7 @@ mod tests {
         // Check if Bun is available
         if let Ok(bun_path) = which::which("bun") {
             let temp_dir = create_temp_app_dir("ts");
-            let config_path = temp_dir.path().join("alien.config.ts");
+            let config_path = temp_dir.path().join("alien.ts");
             let runtime = JavaScriptRuntime::Bun(bun_path);
 
             match test_with_specific_runtime(config_path, runtime).await {
@@ -740,7 +863,7 @@ mod tests {
         // Check if Node.js is available
         if let Ok(node_path) = which::which("node") {
             let temp_dir = create_temp_app_dir("ts");
-            let config_path = temp_dir.path().join("alien.config.ts");
+            let config_path = temp_dir.path().join("alien.ts");
             let runtime = JavaScriptRuntime::Node(node_path);
 
             match test_with_specific_runtime(config_path, runtime).await {
@@ -764,7 +887,7 @@ mod tests {
         let temp_path = temp_dir.path();
 
         // Create malformed JSON config
-        fs::write(temp_path.join("alien.config.json"), "{ invalid json }").unwrap();
+        fs::write(temp_path.join("alien.json"), "{ invalid json }").unwrap();
 
         let result = load_configuration(temp_path.to_path_buf()).await;
 
@@ -788,7 +911,7 @@ mod tests {
 
         // Create TypeScript config with syntax error
         fs::write(
-            temp_path.join("alien.config.ts"),
+            temp_path.join("alien.ts"),
             "import * alien from '@alienplatform/core'; // missing {",
         )
         .unwrap();

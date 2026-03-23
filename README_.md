@@ -74,13 +74,13 @@ alien-server impersonates a service account in the target AWS account and provis
 For environments where alien-server can't reach cloud APIs directly:
 
 ```bash
-helm install alien-operator alien/operator \
+helm install alien-agent alien/agent \
   --set syncUrl=https://alien.example.com \
   --set token=ax_dg_... \
   --set platform=kubernetes
 ```
 
-The Operator polls alien-server for updates and deploys using in-cluster credentials.
+The agent polls alien-server for updates and deploys using in-cluster credentials.
 
 ---
 
@@ -88,7 +88,7 @@ The Operator polls alien-server for updates and deploys using in-cluster credent
 
 ### Build Your App
 
-Define your stack in `alien.config.ts`. Use any framework — **Next.js**, **Hono**, **FastAPI**, **Axum**. Bring existing containers or use cloud-agnostic bindings:
+Define your stack in `alien.ts`. Use any framework — **Next.js**, **Hono**, **FastAPI**, **Axum**. Bring existing containers or use cloud-agnostic bindings:
 
 ```typescript
 import { ai } from "@alienplatform/sdk"

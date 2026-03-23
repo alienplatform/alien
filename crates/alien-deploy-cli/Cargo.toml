@@ -1,0 +1,53 @@
+[package]
+name = "alien-deploy-cli"
+version.workspace = true
+edition = "2021"
+publish = false
+description = "Alien Deploy CLI — deploy and manage applications in remote environments"
+
+[lib]
+name = "alien_deploy_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "alien-deploy"
+path = "src/main.rs"
+
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-deployment = { workspace = true }
+alien-infra = { workspace = true, features = ["all-platforms", "local"] }
+alien-local = { workspace = true }
+alien-agent = { path = "../alien-agent" }
+alien-server-sdk = { package = "alien-manager-api", path = "../../client-sdks/manager/rust" }
+
+# Async & HTTP
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# CLI & Logging
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Utilities
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4"] }
+url = { workspace = true }
+hostname = { workspace = true }
+dirs = "6"
+service-manager = "0.10"
+which = "7"
+getrandom = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+fs2 = "0.4"

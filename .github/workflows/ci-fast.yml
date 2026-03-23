@@ -105,6 +105,16 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: depot cargo build -p alien-cli --bin alien
 
+      - name: Build alien-deploy CLI
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: depot cargo build -p alien-deploy-cli --bin alien-deploy
+
+      - name: Build alien-agent
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: depot cargo build -p alien-agent --bin alien-agent
+
       - name: Build TypeScript packages
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"

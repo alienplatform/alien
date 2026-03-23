@@ -2,7 +2,7 @@
 
 ## The Basics
 
-An `alien.config.ts` defines a **Stack**. A Stack is a list of **Resources** to deploy.
+An `alien.ts` defines a **Stack**. A Stack is a list of **Resources** to deploy.
 
 ```typescript
 new alien.Stack("my-stack")

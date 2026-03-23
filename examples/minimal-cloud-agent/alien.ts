@@ -1,14 +1,14 @@
 /**
- * Minimal Cloud Agent - alien.config.ts
+ * Minimal Cloud Agent - alien.ts
  *
  * The smallest possible Alien agent configuration.
- * One Function, one ARC command, demo mode built-in.
+ * One Function, one command handler, demo mode built-in.
  */
 import * as alien from "@alienplatform/core"
 
 const agent = new alien.Function("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
-  .arcEnabled(true)
+  .commandsEnabled(true)
   .ingress("public")
   .permissions("execution")
   .build()

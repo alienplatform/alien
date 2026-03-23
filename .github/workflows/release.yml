@@ -190,7 +190,7 @@ jobs:
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
           pnpm --filter @alienplatform/commands-client publish --access public --no-git-checks
 
-  build-cli:
+  build-binaries-linux:
     needs: prepare
     if: ${{ !inputs.dry_run }}
     strategy:
@@ -246,14 +246,92 @@ jobs:
           depot cargo zigbuild -p alien-cli --release \
             --target ${{ matrix.target }}
 
-      - name: Upload binary
+      - name: Build alien-deploy CLI
+        run: |
+          depot cargo zigbuild -p alien-deploy-cli --release \
+            --target ${{ matrix.target }}
+
+      - name: Build alien-agent
+        run: |
+          depot cargo zigbuild -p alien-agent --release \
+            --target ${{ matrix.target }}
+
+      - name: Upload alien-cli binary
         uses: actions/upload-artifact@v4
         with:
           name: alien-cli-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/alien
 
-  upload-cli:
-    needs: [prepare, build-cli]
+      - name: Upload alien-deploy binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-deploy-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien-deploy
+
+      - name: Upload alien-agent binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien-agent
+
+  build-binaries-macos:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install protoc
+        run: brew install protobuf
+
+      - name: Build alien CLI
+        run: cargo build -p alien-cli --release --target ${{ matrix.target }}
+
+      - name: Build alien-deploy CLI
+        run: cargo build -p alien-deploy-cli --release --target ${{ matrix.target }}
+
+      - name: Build alien-agent
+        run: cargo build -p alien-agent --release --target ${{ matrix.target }}
+
+      - name: Upload alien-cli binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien
+
+      - name: Upload alien-deploy binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-deploy-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien-deploy
+
+      - name: Upload alien-agent binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/alien-agent
+
+  upload-binaries:
+    needs: [prepare, build-binaries-linux, build-binaries-macos]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
@@ -261,17 +339,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Download x86_64 binary
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: alien-cli-x86_64-unknown-linux-musl
-          path: ./x86_64
-
-      - name: Download aarch64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: alien-cli-aarch64-unknown-linux-musl
-          path: ./aarch64
+          path: ./artifacts
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -283,13 +354,26 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
 
-          aws s3 cp ./x86_64/alien "s3://alien-releases-prod/alien/v${VERSION}/linux-x86_64/alien"
-          aws s3 cp ./aarch64/alien "s3://alien-releases-prod/alien/v${VERSION}/linux-aarch64/alien"
-          aws s3 cp ./x86_64/alien "s3://alien-releases-prod/alien/latest/linux-x86_64/alien"
-          aws s3 cp ./aarch64/alien "s3://alien-releases-prod/alien/latest/linux-aarch64/alien"
+          upload() {
+            local binary=$1 target=$2 os=$3 arch=$4
+            aws s3 cp "./artifacts/${binary}-${target}/${binary}" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
+            aws s3 cp "./artifacts/${binary}-${target}/${binary}" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
+          }
+
+          # Linux
+          for binary in alien alien-deploy alien-agent; do
+            upload "$binary" x86_64-unknown-linux-musl linux x86_64
+            upload "$binary" aarch64-unknown-linux-musl linux aarch64
+          done
+
+          # macOS
+          for binary in alien alien-deploy alien-agent; do
+            upload "$binary" x86_64-apple-darwin darwin x86_64
+            upload "$binary" aarch64-apple-darwin darwin aarch64
+          done
 
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/alien/latest/*"
+            --paths "/alien/latest/*" "/alien-deploy/latest/*" "/alien-agent/latest/*"

@@ -2,10 +2,10 @@
 
 Alien is a framework for deploying and running managed software in remote environments. This document explains how the codebase fits together and where to start reading.
 
-An Alien application starts with an `alien.config.ts` file. It looks like this:
+An Alien application starts with an `alien.ts` file. It looks like this:
 
 ```typescript
-// alien.config.ts
+// alien.ts
 import * as alien from "@alienplatform/core"
 
 const storage = new alien.Storage("uploads").build()
@@ -25,7 +25,7 @@ This file — combined with your application code — is everything Alien needs 
 
 ## How the Pieces Fit Together
 
-**Defining resources.** The `alien.config.ts` above produces a `Stack` — a description of cloud-agnostic resources (Functions, Storage, KV, Queues, etc.) defined using `@alienplatform/core`.
+**Defining resources.** The `alien.ts` above produces a `Stack` — a description of cloud-agnostic resources (Functions, Storage, KV, Queues, etc.) defined using `@alienplatform/core`.
 
 **Building.** `alien-build` reads the Stack, compiles source code with the right toolchain (TypeScript via Bun, Rust via cargo-zigbuild), and packages each compute resource as an OCI image containing `alien-runtime` + the app binary.
 
@@ -87,12 +87,12 @@ Developer                    alien-manager                   Customer's AWS
                                   │◀── response ────────────────│
 ```
 
-1. **Build** — `alien build` compiles your `alien.config.ts` into OCI images locally
+1. **Build** — `alien build` compiles your `alien.ts` into OCI images locally
 2. **Release** — `alien release` pushes images to a platform-specific registry (ECR for AWS) using your local cloud credentials, and creates a release record on alien-manager
 3. **Deploy** — `alien deploy` creates a deployment record. alien-manager's deployment loop picks it up, impersonates a service account in the customer's AWS account, and calls `alien-deployment::step()` repeatedly until everything is provisioned
 4. **Running** — The deployment is running in the customer's cloud. alien-manager monitors it, dispatches commands, and ships updates when you push new releases
 
-For environments where alien-manager can't call cloud APIs directly (Kubernetes, airgapped), an Operator in the remote environment polls alien-manager for updates and deploys locally. Same `step()` function, different caller.
+For environments where alien-manager can't call cloud APIs directly (Kubernetes, airgapped), an Agent in the remote environment polls alien-manager for updates and deploys locally. Same `step()` function, different caller.
 
 ## Reading Order
 

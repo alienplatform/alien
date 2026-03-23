@@ -16,7 +16,7 @@ const db = new alien.Container("postgres").code({ type: "image", image: "postgre
 
 ## Configuration
 
-Network settings live in `StackSettings`, not as a resource in `alien.config.ts`:
+Network settings live in `StackSettings`, not as a resource in `alien.ts`:
 
 ```json
 {

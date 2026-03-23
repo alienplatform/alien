@@ -145,6 +145,8 @@ fn find_workspace_root(src_dir: &Path) -> (PathBuf, PackageManager) {
 /// - package-lock.json -> npm
 ///
 /// If the package is part of a workspace, install is run from the workspace root.
+/// If no `package.json` exists, returns Ok(()) — the config loader handles
+/// auto-installing `@alienplatform/core` via its cached modules mechanism.
 pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
     debug!(
         "Installing dependencies in directory: {}",
@@ -153,6 +155,19 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
 
     if std::env::var("ALIEN_SKIP_DEPENDENCY_INSTALL").is_ok() {
         info!("Skipping dependency installation (ALIEN_SKIP_DEPENDENCY_INSTALL set)");
+        return Ok(());
+    }
+
+    // If there's no package.json at all, skip — the config loader will use
+    // its cached @alienplatform/core installation instead.
+    let canonical = src_dir
+        .canonicalize()
+        .unwrap_or_else(|_| src_dir.to_path_buf());
+    if !canonical.join("package.json").exists() {
+        debug!(
+            "No package.json found in {}, skipping dependency install",
+            src_dir.display()
+        );
         return Ok(());
     }
 
