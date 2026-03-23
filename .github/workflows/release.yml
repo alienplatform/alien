@@ -286,7 +286,7 @@ jobs:
   build-binaries-darwin:
     needs: prepare
     if: ${{ !inputs.dry_run }}
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: macos-14
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -316,54 +316,27 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
       - name: Run sccache-cache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y protobuf-compiler
+        run: brew install protobuf
 
-      - name: Install zig
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        run: depot cargo install cargo-zigbuild --locked
-
-      - name: Install macOS SDK for cross-compilation
+      - name: Build aarch64 darwin binaries
         if: steps.binary-cache.outputs.cache-hit != 'true'
         run: |
-          SDK_VERSION="14.5"
-          SDK_ARCHIVE="MacOSX${SDK_VERSION}.sdk.tar.xz"
-          SDK_URL="https://github.com/joseluisq/macosx-sdks/releases/download/${SDK_VERSION}/${SDK_ARCHIVE}"
-          SDK_DIR="${RUNNER_TEMP}/macos-sdk"
-          mkdir -p "$SDK_DIR"
-          curl -fsSL "$SDK_URL" -o "${SDK_DIR}/${SDK_ARCHIVE}"
-          tar -xJf "${SDK_DIR}/${SDK_ARCHIVE}" -C "$SDK_DIR"
-          echo "SDKROOT=${SDK_DIR}/MacOSX${SDK_VERSION}.sdk" >> "$GITHUB_ENV"
-
-      - name: Build all darwin binaries (both targets)
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          RUSTC_WRAPPER: ""
-          CFLAGS_aarch64_apple_darwin: -isysroot ${{ env.SDKROOT }}
-          CXXFLAGS_aarch64_apple_darwin: -isysroot ${{ env.SDKROOT }}
-          CFLAGS_x86_64_apple_darwin: -isysroot ${{ env.SDKROOT }}
-          CXXFLAGS_x86_64_apple_darwin: -isysroot ${{ env.SDKROOT }}
-        run: |
-          cargo zigbuild --release \
+          cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent \
-            --target x86_64-apple-darwin \
             --target aarch64-apple-darwin
+
+      - name: Build x86_64 darwin binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo build --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent \
+            --target x86_64-apple-darwin
 
       - name: Upload x86_64 darwin binaries
         uses: actions/upload-artifact@v4
