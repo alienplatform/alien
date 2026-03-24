@@ -358,6 +358,7 @@ mod windows_entry {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+    use tracing::error;
     use windows_service::{
         define_windows_service,
         service::{

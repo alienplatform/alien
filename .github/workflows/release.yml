@@ -493,7 +493,7 @@ jobs:
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
   publish-images:
-    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64]
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
