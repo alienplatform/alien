@@ -55,7 +55,7 @@ impl StackResourceStateExt for StackResourceState {
     fn get_internal_controller(&self) -> Result<Option<Box<dyn ResourceController>>> {
         match &self.internal_state {
             Some(value) => {
-                let controller: Box<dyn ResourceController> = serde_json::from_value(value.clone())
+                let controller: Box<dyn ResourceController> = crate::core::deserialize_controller(value.clone())
                     .into_alien_error()
                     .context(ErrorData::ResourceStateSerializationFailed {
                         resource_id: self.config.id().to_string(),
@@ -90,7 +90,7 @@ impl StackResourceStateExt for StackResourceState {
     fn get_last_failed_controller(&self) -> Result<Option<Box<dyn ResourceController>>> {
         match &self.last_failed_state {
             Some(value) => {
-                let controller: Box<dyn ResourceController> = serde_json::from_value(value.clone())
+                let controller: Box<dyn ResourceController> = crate::core::deserialize_controller(value.clone())
                     .into_alien_error()
                     .context(ErrorData::ResourceStateSerializationFailed {
                         resource_id: self.config.id().to_string(),
@@ -107,15 +107,10 @@ impl StackResourceStateExt for StackResourceState {
         controller: Option<Box<dyn ResourceController>>,
     ) -> Result<()> {
         self.internal_state = match controller {
-            Some(c) => {
-                let value = serde_json::to_value(c).into_alien_error().context(
-                    ErrorData::ResourceStateSerializationFailed {
-                        resource_id: self.config.id().to_string(),
-                        message: "Failed to serialize internal state".to_string(),
-                    },
-                )?;
-                Some(value)
-            }
+            Some(c) => Some(crate::core::serialize_controller(&*c).into_alien_error().context(ErrorData::ResourceStateSerializationFailed {
+                resource_id: self.config.id().to_string(),
+                message: "Failed to serialize controller state".to_string(),
+            })?),
             None => None,
         };
         Ok(())
@@ -126,15 +121,10 @@ impl StackResourceStateExt for StackResourceState {
         controller: Option<Box<dyn ResourceController>>,
     ) -> Result<()> {
         self.last_failed_state = match controller {
-            Some(c) => {
-                let value = serde_json::to_value(c).into_alien_error().context(
-                    ErrorData::ResourceStateSerializationFailed {
-                        resource_id: self.config.id().to_string(),
-                        message: "Failed to serialize last failed state".to_string(),
-                    },
-                )?;
-                Some(value)
-            }
+            Some(c) => Some(crate::core::serialize_controller(&*c).into_alien_error().context(ErrorData::ResourceStateSerializationFailed {
+                resource_id: self.config.id().to_string(),
+                message: "Failed to serialize last failed controller state".to_string(),
+            })?),
             None => None,
         };
         Ok(())
@@ -151,7 +141,7 @@ impl StackResourceStateExt for StackResourceState {
     fn take_last_failed_controller(&mut self) -> Result<Option<Box<dyn ResourceController>>> {
         match self.last_failed_state.take() {
             Some(value) => {
-                let controller: Box<dyn ResourceController> = serde_json::from_value(value)
+                let controller: Box<dyn ResourceController> = crate::core::deserialize_controller(value)
                     .into_alien_error()
                     .context(ErrorData::ResourceStateSerializationFailed {
                         resource_id: self.config.id().to_string(),

@@ -166,7 +166,6 @@ hostname = "0.4"
 walkdir = "2"
 workspace_root = "0.1"
 pem = "3.0"
-typetag = "0.2"
 oci-tar-builder = "0.4"
 sha2 = "0.10"
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
@@ -221,8 +220,9 @@ panic = "abort"
 [profile.release]
 strip = true
 opt-level = "z"
-lto = "thin"
+lto = true
 panic = "abort"
+codegen-units = 1
 
 [profile.dev.build-override]
 opt-level = 0

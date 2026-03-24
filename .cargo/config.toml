@@ -1,5 +1,3 @@
-# NOTE: "-Z", "threads=8" removed due to parallel frontend bug in nightly Rust.
-# turso_core hits query depth limit. Re-enable when rust-lang/rust#146616 is fixed.
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
 rustdocflags = ["--cfg", "tokio_unstable"]

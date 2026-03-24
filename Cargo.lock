@@ -458,7 +458,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "typetag",
  "url",
  "utoipa",
  "uuid",
@@ -628,7 +627,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "typetag",
  "utoipa",
  "uuid",
  "wasm-bindgen",
@@ -4605,15 +4603,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "189d0897e4cbe8c75efedf3502c18c887b05046e59d28404d4d8e46cbc4d1e86"
 dependencies = [
  "memoffset 0.9.1",
-]
-
-[[package]]
-name = "inventory"
-version = "0.3.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009ae045c87e7082cb72dab0ccd01ae075dd00141ddc108f43a0ea150a9e7227"
-dependencies = [
- "rustversion",
 ]
 
 [[package]]
@@ -9518,30 +9507,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "typetag"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be2212c8a9b9bcfca32024de14998494cf9a5dfa59ea1b829de98bac374b86bf"
-dependencies = [
- "erased-serde",
- "inventory",
- "once_cell",
- "serde",
- "typetag-impl",
-]
-
-[[package]]
-name = "typetag-impl"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27a7a9b72ba121f6f1f6c3632b85604cac41aedb5ddc70accbebb6cac83de846"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "typify"

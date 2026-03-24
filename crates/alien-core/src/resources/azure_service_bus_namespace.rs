@@ -44,9 +44,8 @@ pub struct AzureServiceBusNamespaceOutputs {
     pub endpoint: String,
 }
 
-#[typetag::serde(name = "azure_service_bus_namespace")]
 impl ResourceOutputsDefinition for AzureServiceBusNamespaceOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         AzureServiceBusNamespace::RESOURCE_TYPE.clone()
     }
 
@@ -64,17 +63,16 @@ impl ResourceOutputsDefinition for AzureServiceBusNamespaceOutputs {
             .downcast_ref::<AzureServiceBusNamespaceOutputs>()
             == Some(self)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
 // Implementation of ResourceDefinition trait for AzureServiceBusNamespace
-#[typetag::serde(name = "azure_service_bus_namespace")]
 impl ResourceDefinition for AzureServiceBusNamespace {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -106,6 +104,10 @@ impl ResourceDefinition for AzureServiceBusNamespace {
 
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool {
         other.as_any().downcast_ref::<AzureServiceBusNamespace>() == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }
 

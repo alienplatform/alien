@@ -46,9 +46,8 @@ pub struct VaultOutputs {
     pub vault_id: String,
 }
 
-#[typetag::serde(name = "vault")]
 impl ResourceOutputsDefinition for VaultOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         Vault::RESOURCE_TYPE.clone()
     }
 
@@ -63,17 +62,16 @@ impl ResourceOutputsDefinition for VaultOutputs {
     fn outputs_eq(&self, other: &dyn ResourceOutputsDefinition) -> bool {
         other.as_any().downcast_ref::<VaultOutputs>() == Some(self)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
 // Implementation of ResourceDefinition trait for Vault
-#[typetag::serde(name = "vault")]
 impl ResourceDefinition for Vault {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -117,6 +115,10 @@ impl ResourceDefinition for Vault {
 
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool {
         other.as_any().downcast_ref::<Vault>() == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }
 

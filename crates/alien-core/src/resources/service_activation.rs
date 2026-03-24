@@ -46,9 +46,8 @@ pub struct ServiceActivationOutputs {
     pub activated: bool,
 }
 
-#[typetag::serde(name = "service_activation")]
 impl ResourceOutputsDefinition for ServiceActivationOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         ServiceActivation::RESOURCE_TYPE.clone()
     }
 
@@ -63,17 +62,16 @@ impl ResourceOutputsDefinition for ServiceActivationOutputs {
     fn outputs_eq(&self, other: &dyn ResourceOutputsDefinition) -> bool {
         other.as_any().downcast_ref::<ServiceActivationOutputs>() == Some(self)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
 // Implementation of ResourceDefinition trait for ServiceActivation
-#[typetag::serde(name = "service_activation")]
 impl ResourceDefinition for ServiceActivation {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -105,6 +103,10 @@ impl ResourceDefinition for ServiceActivation {
 
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool {
         other.as_any().downcast_ref::<ServiceActivation>() == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }
 
