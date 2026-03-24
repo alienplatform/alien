@@ -410,6 +410,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           AWS_LC_SYS_CMAKE_BUILDER: "1"
+          RUST_MIN_STACK: "8388608"
         run: |
           export PATH="/c/Program Files/NASM:$PATH"
           cargo build --release \
