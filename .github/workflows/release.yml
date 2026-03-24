@@ -394,10 +394,7 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Setup Depot
-        if: steps.binary-cache.outputs.cache-hit != 'true'
-        uses: depot/setup-action@v1
-
+      # depot cargo is Linux/macOS only — use sccache directly on Windows
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -414,9 +411,8 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           AWS_LC_SYS_CMAKE_BUILDER: "1"
         run: |
-          # Add nasm to PATH for aws-lc-sys assembly
           export PATH="/c/Program Files/NASM:$PATH"
-          depot cargo build --release \
+          cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-agent \
             --target x86_64-pc-windows-msvc
 
