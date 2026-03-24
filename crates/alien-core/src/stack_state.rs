@@ -5,7 +5,7 @@
 
 use crate::{
     Platform, Resource, ResourceLifecycle, ResourceOutputs, ResourceOutputsDefinition, ResourceRef,
-    ResourceStatus,
+    ResourceStatus, ResourceType,
 };
 
 use alien_error::AlienError;
@@ -206,7 +206,7 @@ impl StackState {
         outputs.downcast_ref::<T>().ok_or_else(|| {
             AlienError::new(ErrorData::UnexpectedResourceType {
                 resource_id: resource_id.to_string(),
-                expected: T::resource_type(),
+                expected: ResourceType::from_static(std::any::type_name::<T>()),
                 actual: resource_state.resource_type.clone().into(),
             })
         })
@@ -506,7 +506,7 @@ mod tests {
         }) = error_data
         {
             assert_eq!(resource_id, "test-storage");
-            assert_eq!(*expected, ResourceType::from_static("function"));
+            assert!(expected.0.contains("FunctionOutputs"), "expected should reference FunctionOutputs, got: {}", expected.0);
             assert_eq!(*actual, ResourceType::from_static("storage"));
         } else {
             panic!(

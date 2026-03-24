@@ -434,8 +434,15 @@ fn generate_controller_impl(
     quote! {
         #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
         #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-        #[typetag::serde]
         impl crate::core::ResourceController for #struct_name {
+            fn controller_type(&self) -> &'static str {
+                stringify!(#struct_name)
+            }
+
+            fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+                serde_json::to_value(self)
+            }
+
             async fn step(
                 &mut self,
                 ctx: &crate::core::ResourceControllerContext,

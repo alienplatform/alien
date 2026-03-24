@@ -612,8 +612,13 @@ pub struct ResourceControllerStepResult {
 // Make Send + Sync + Debug for potential multi-threading and easier debugging
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[typetag::serde(tag = "type")]
 pub trait ResourceController: Send + Sync + Debug {
+    /// Returns the controller type name, used as a discriminator for polymorphic serialization
+    fn controller_type(&self) -> &'static str;
+
+    /// Serializes this controller's fields to a JSON Value (without the "type" tag)
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value>;
+
     /// Attempts to advance the resource's state by one step.
     /// Returns optional suggested delay before the next step for this resource.
     async fn step(
@@ -682,6 +687,193 @@ pub trait ResourceController: Send + Sync + Debug {
 impl Clone for Box<dyn ResourceController> {
     fn clone(&self) -> Self {
         self.box_clone()
+    }
+}
+
+/// Serializes a controller to a JSON Value, injecting its type tag.
+pub fn serialize_controller(controller: &dyn ResourceController) -> serde_json::Result<serde_json::Value> {
+    let mut v = controller.to_json_value()?;
+    v.as_object_mut()
+        .ok_or_else(|| serde::ser::Error::custom("controller must serialize as object"))?
+        .insert("type".into(), serde_json::Value::String(controller.controller_type().into()));
+    Ok(v)
+}
+
+/// Deserializes a JSON value into a boxed ResourceController by reading the "type" tag
+/// and dispatching to the correct concrete type.
+pub fn deserialize_controller(value: serde_json::Value) -> std::result::Result<Box<dyn ResourceController>, serde_json::Error> {
+    use serde::de::Error as _;
+    let mut value = value;
+    let type_tag = value.get("type").and_then(|v| v.as_str())
+        .ok_or_else(|| serde_json::Error::custom("missing 'type' field in controller state"))?
+        .to_string();
+
+    // Remove the "type" tag before passing to concrete deserializer
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("type");
+    }
+
+    deserialize_controller_by_tag(&type_tag, value)
+}
+
+fn deserialize_controller_by_tag(type_tag: &str, value: serde_json::Value) -> std::result::Result<Box<dyn ResourceController>, serde_json::Error> {
+    use serde::de::Error as _;
+
+    // This macro reduces boilerplate for each controller type
+    macro_rules! deser {
+        ($t:ty) => {
+            Ok(Box::new(serde_json::from_value::<$t>(value)?))
+        };
+    }
+
+    match type_tag {
+        // Function controllers
+        #[cfg(feature = "aws")]
+        "AwsFunctionController" => deser!(crate::function::AwsFunctionController),
+        #[cfg(feature = "gcp")]
+        "GcpFunctionController" => deser!(crate::function::GcpFunctionController),
+        #[cfg(feature = "azure")]
+        "AzureFunctionController" => deser!(crate::function::AzureFunctionController),
+        #[cfg(feature = "kubernetes")]
+        "KubernetesFunctionController" => deser!(crate::function::KubernetesFunctionController),
+        #[cfg(feature = "local")]
+        "LocalFunctionController" => deser!(crate::function::LocalFunctionController),
+        #[cfg(feature = "test")]
+        "TestFunctionController" => deser!(crate::function::TestFunctionController),
+
+        // Container controllers
+        #[cfg(feature = "aws")]
+        "AwsContainerController" => deser!(crate::container::AwsContainerController),
+        #[cfg(feature = "gcp")]
+        "GcpContainerController" => deser!(crate::container::GcpContainerController),
+        #[cfg(feature = "azure")]
+        "AzureContainerController" => deser!(crate::container::AzureContainerController),
+        #[cfg(feature = "kubernetes")]
+        "KubernetesContainerController" => deser!(crate::container::KubernetesContainerController),
+        #[cfg(feature = "local")]
+        "LocalContainerController" => deser!(crate::container::LocalContainerController),
+
+        // Container cluster controllers
+        #[cfg(feature = "aws")]
+        "AwsContainerClusterController" => deser!(crate::container_cluster::AwsContainerClusterController),
+        #[cfg(feature = "gcp")]
+        "GcpContainerClusterController" => deser!(crate::container_cluster::GcpContainerClusterController),
+        #[cfg(feature = "azure")]
+        "AzureContainerClusterController" => deser!(crate::container_cluster::AzureContainerClusterController),
+        #[cfg(feature = "local")]
+        "LocalContainerClusterController" => deser!(crate::container_cluster::LocalContainerClusterController),
+
+        // Storage controllers
+        #[cfg(feature = "aws")]
+        "AwsStorageController" => deser!(crate::storage::AwsStorageController),
+        #[cfg(feature = "gcp")]
+        "GcpStorageController" => deser!(crate::storage::GcpStorageController),
+        #[cfg(feature = "azure")]
+        "AzureStorageController" => deser!(crate::storage::AzureStorageController),
+        #[cfg(feature = "local")]
+        "LocalStorageController" => deser!(crate::storage::LocalStorageController),
+        #[cfg(feature = "test")]
+        "TestStorageController" => deser!(crate::storage::TestStorageController),
+
+        // Vault controllers
+        #[cfg(feature = "aws")]
+        "AwsVaultController" => deser!(crate::vault::AwsVaultController),
+        #[cfg(feature = "gcp")]
+        "GcpVaultController" => deser!(crate::vault::GcpVaultController),
+        #[cfg(feature = "azure")]
+        "AzureVaultController" => deser!(crate::vault::AzureVaultController),
+        #[cfg(feature = "kubernetes")]
+        "KubernetesVaultController" => deser!(crate::vault::KubernetesVaultController),
+        #[cfg(feature = "local")]
+        "LocalVaultController" => deser!(crate::vault::LocalVaultController),
+        #[cfg(feature = "test")]
+        "TestVaultController" => deser!(crate::vault::TestVaultController),
+
+        // KV controllers
+        #[cfg(feature = "aws")]
+        "AwsKvController" => deser!(crate::kv::AwsKvController),
+        #[cfg(feature = "gcp")]
+        "GcpKvController" => deser!(crate::kv::GcpKvController),
+        #[cfg(feature = "azure")]
+        "AzureKvController" => deser!(crate::kv::AzureKvController),
+        #[cfg(feature = "local")]
+        "LocalKvController" => deser!(crate::kv::LocalKvController),
+
+        // Queue controllers
+        #[cfg(feature = "aws")]
+        "AwsQueueController" => deser!(crate::queue::aws::AwsQueueController),
+        #[cfg(feature = "gcp")]
+        "GcpQueueController" => deser!(crate::queue::gcp::GcpQueueController),
+        #[cfg(feature = "azure")]
+        "AzureQueueController" => deser!(crate::queue::azure::AzureQueueController),
+
+        // Network controllers
+        #[cfg(feature = "aws")]
+        "AwsNetworkController" => deser!(crate::network::AwsNetworkController),
+        #[cfg(feature = "gcp")]
+        "GcpNetworkController" => deser!(crate::network::GcpNetworkController),
+        #[cfg(feature = "azure")]
+        "AzureNetworkController" => deser!(crate::network::AzureNetworkController),
+
+        // Build controllers
+        #[cfg(feature = "aws")]
+        "AwsBuildController" => deser!(crate::build::AwsBuildController),
+        #[cfg(feature = "gcp")]
+        "GcpBuildController" => deser!(crate::build::GcpBuildController),
+        #[cfg(feature = "azure")]
+        "AzureBuildController" => deser!(crate::build::AzureBuildController),
+        #[cfg(feature = "kubernetes")]
+        "KubernetesBuildController" => deser!(crate::build::KubernetesBuildController),
+
+        // Service account controllers
+        #[cfg(feature = "aws")]
+        "AwsServiceAccountController" => deser!(crate::service_account::AwsServiceAccountController),
+        #[cfg(feature = "gcp")]
+        "GcpServiceAccountController" => deser!(crate::service_account::GcpServiceAccountController),
+        #[cfg(feature = "azure")]
+        "AzureServiceAccountController" => deser!(crate::service_account::AzureServiceAccountController),
+        #[cfg(feature = "local")]
+        "LocalServiceAccountController" => deser!(crate::service_account::LocalServiceAccountController),
+        #[cfg(feature = "test")]
+        "TestServiceAccountController" => deser!(crate::service_account::TestServiceAccountController),
+
+        // Artifact registry controllers
+        #[cfg(feature = "aws")]
+        "AwsArtifactRegistryController" => deser!(crate::artifact_registry::AwsArtifactRegistryController),
+        #[cfg(feature = "gcp")]
+        "GcpArtifactRegistryController" => deser!(crate::artifact_registry::GcpArtifactRegistryController),
+        #[cfg(feature = "azure")]
+        "AzureArtifactRegistryController" => deser!(crate::artifact_registry::AzureArtifactRegistryController),
+        #[cfg(feature = "local")]
+        "LocalArtifactRegistryController" => deser!(crate::artifact_registry::LocalArtifactRegistryController),
+
+        // Remote stack management controllers
+        #[cfg(feature = "aws")]
+        "AwsRemoteStackManagementController" => deser!(crate::remote_stack_management::AwsRemoteStackManagementController),
+        #[cfg(feature = "gcp")]
+        "GcpRemoteStackManagementController" => deser!(crate::remote_stack_management::GcpRemoteStackManagementController),
+        #[cfg(feature = "azure")]
+        "AzureRemoteStackManagementController" => deser!(crate::remote_stack_management::AzureRemoteStackManagementController),
+        #[cfg(feature = "test")]
+        "TestRemoteStackManagementController" => deser!(crate::remote_stack_management::TestRemoteStackManagementController),
+
+        // Service activation controllers
+        #[cfg(feature = "gcp")]
+        "GcpServiceActivationController" => deser!(crate::service_activation::GcpServiceActivationController),
+        #[cfg(feature = "azure")]
+        "AzureServiceActivationController" => deser!(crate::service_activation::AzureServiceActivationController),
+
+        // Azure infra requirement controllers
+        #[cfg(feature = "azure")]
+        "AzureResourceGroupController" => deser!(crate::infra_requirements::AzureResourceGroupController),
+        #[cfg(feature = "azure")]
+        "AzureStorageAccountController" => deser!(crate::infra_requirements::AzureStorageAccountController),
+        #[cfg(feature = "azure")]
+        "AzureContainerAppsEnvironmentController" => deser!(crate::infra_requirements::AzureContainerAppsEnvironmentController),
+        #[cfg(feature = "azure")]
+        "AzureServiceBusNamespaceController" => deser!(crate::infra_requirements::AzureServiceBusNamespaceController),
+
+        other => Err(serde_json::Error::custom(format!("unknown controller type: {}", other))),
     }
 }
 
@@ -839,7 +1031,7 @@ impl ResourceControllerContext<'_> {
 
         previous_config.downcast_ref::<T>().ok_or_else(|| {
             AlienError::new(ErrorData::ControllerResourceTypeMismatch {
-                expected: T::resource_type(),
+                expected: alien_core::ResourceType::from_static(std::any::type_name::<T>()),
                 actual: previous_config.resource_type(),
                 resource_id: self.desired_config.id().to_string(),
             })
@@ -855,7 +1047,7 @@ impl ResourceControllerContext<'_> {
     {
         self.desired_config.downcast_ref::<T>().ok_or_else(|| {
             AlienError::new(ErrorData::ControllerResourceTypeMismatch {
-                expected: T::resource_type(),
+                expected: alien_core::ResourceType::from_static(std::any::type_name::<T>()),
                 actual: self.desired_config.resource_type(),
                 resource_id: self.desired_config.id().to_string(),
             })

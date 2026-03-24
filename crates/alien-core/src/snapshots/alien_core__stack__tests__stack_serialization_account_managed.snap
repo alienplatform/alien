@@ -7,11 +7,11 @@ expression: stack
   "resources": {
     "my-bucket": {
       "config": {
-        "type": "storage",
         "id": "my-bucket",
         "publicRead": true,
         "versioning": false,
-        "lifecycleRules": []
+        "lifecycleRules": [],
+        "type": "storage"
       },
       "lifecycle": "frozen",
       "dependencies": [],
@@ -19,7 +19,6 @@ expression: stack
     },
     "my-function": {
       "config": {
-        "type": "function",
         "id": "my-function",
         "links": [
           {
@@ -39,7 +38,8 @@ expression: stack
         "ingress": "private",
         "commandsEnabled": false,
         "concurrencyLimit": null,
-        "readinessProbe": null
+        "readinessProbe": null,
+        "type": "function"
       },
       "lifecycle": "live",
       "dependencies": [],

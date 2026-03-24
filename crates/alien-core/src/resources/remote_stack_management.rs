@@ -58,14 +58,9 @@ pub struct RemoteStackManagementOutputs {
 }
 
 // Implementation of ResourceDefinition trait for RemoteStackManagement
-#[typetag::serde(name = "remote-stack-management")]
 impl ResourceDefinition for RemoteStackManagement {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -123,11 +118,14 @@ impl ResourceDefinition for RemoteStackManagement {
             .map(|other_remote_mgmt| self == other_remote_mgmt)
             .unwrap_or(false)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
-#[typetag::serde(name = "remote-stack-management")]
 impl ResourceOutputsDefinition for RemoteStackManagementOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         RemoteStackManagement::RESOURCE_TYPE.clone()
     }
 
@@ -144,5 +142,9 @@ impl ResourceOutputsDefinition for RemoteStackManagementOutputs {
             .as_any()
             .downcast_ref::<RemoteStackManagementOutputs>()
             == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }

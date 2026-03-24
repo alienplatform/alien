@@ -66,9 +66,8 @@ pub struct NetworkOutputs {
     pub cidr: Option<String>,
 }
 
-#[typetag::serde(name = "network")]
 impl ResourceOutputsDefinition for NetworkOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         Network::RESOURCE_TYPE.clone()
     }
 
@@ -83,16 +82,15 @@ impl ResourceOutputsDefinition for NetworkOutputs {
     fn outputs_eq(&self, other: &dyn ResourceOutputsDefinition) -> bool {
         other.as_any().downcast_ref::<NetworkOutputs>() == Some(self)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
-#[typetag::serde(name = "network")]
 impl ResourceDefinition for Network {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -152,6 +150,10 @@ impl ResourceDefinition for Network {
 
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool {
         other.as_any().downcast_ref::<Network>() == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }
 

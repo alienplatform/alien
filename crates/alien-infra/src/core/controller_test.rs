@@ -391,7 +391,7 @@ impl SingleControllerExecutor {
             resource_state.status = self.controller.get_status();
             resource_state.outputs = self.controller.get_outputs();
             resource_state.internal_state =
-                Some(serde_json::to_value(&*self.controller).unwrap_or(serde_json::Value::Null));
+                Some(crate::core::serialize_controller(&*self.controller).expect("controller serialization"));
         }
 
         Ok(step_result)
@@ -826,8 +826,7 @@ impl SingleControllerExecutorBuilder {
                 None
             } else {
                 Some(
-                    serde_json::to_value(&**dep_controller)
-                        .unwrap_or_else(|_| serde_json::Value::Null),
+                    crate::core::serialize_controller(&**dep_controller).expect("controller serialization"),
                 )
             };
 
@@ -868,7 +867,7 @@ impl SingleControllerExecutorBuilder {
         let internal_state = if status == ResourceStatus::Pending {
             None
         } else {
-            Some(serde_json::to_value(&*controller).unwrap_or_else(|_| serde_json::Value::Null))
+            Some(crate::core::serialize_controller(&*controller).expect("controller serialization"))
         };
 
         // Add to StackState
@@ -976,8 +975,7 @@ impl SingleControllerExecutorBuilder {
                     None
                 } else {
                     Some(
-                        serde_json::to_value(&*mock_controller)
-                            .unwrap_or_else(|_| serde_json::Value::Null),
+                        crate::core::serialize_controller(&*mock_controller).expect("controller serialization"),
                     )
                 };
 

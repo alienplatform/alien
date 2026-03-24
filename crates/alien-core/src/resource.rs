@@ -60,10 +60,10 @@ impl PartialSchema for ResourceType {
                 .schema_type(Type::String)
                 .description(Some("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior."))
                 .examples([
-                    "function", 
-                    "storage", 
-                    "queue", 
-                    "redis", 
+                    "function",
+                    "storage",
+                    "queue",
+                    "redis",
                     "postgres"
                 ])
                 .build()
@@ -81,14 +81,8 @@ impl ToSchema for ResourceType {
 /// Trait that defines the interface for all resource types in the Alien system.
 /// This trait enables extensibility by allowing new resource types to be registered
 /// and managed alongside built-in resources.
-#[typetag::serde(tag = "type")]
 pub trait ResourceDefinition: Debug + Send + Sync + 'static {
-    /// Returns the static type identifier for this resource type (e.g., "Function", "Storage")
-    fn resource_type() -> ResourceType
-    where
-        Self: Sized;
-
-    /// Returns the resource type for this instance (calls the static method)
+    /// Returns the resource type for this instance
     fn get_resource_type(&self) -> ResourceType;
 
     /// Returns the unique identifier for this specific resource instance
@@ -122,6 +116,9 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
 
     /// For equality comparison between resource definitions
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool;
+
+    /// Serialize this resource to a JSON value (without the "type" tag - that's added by Resource)
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value>;
 }
 
 /// Clone implementation for boxed ResourceDefinition trait objects
@@ -131,10 +128,62 @@ impl Clone for Box<dyn ResourceDefinition> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Resource {
-    #[serde(flatten)]
     inner: Box<dyn ResourceDefinition>,
+}
+
+impl Serialize for Resource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut v = self.inner.to_json_value().map_err(serde::ser::Error::custom)?;
+        v.as_object_mut()
+            .ok_or_else(|| serde::ser::Error::custom("resource must serialize as object"))?
+            .insert("type".into(), serde_json::Value::String(self.inner.get_resource_type().0.into_owned()));
+        v.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Resource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let type_tag = value.get("type").and_then(|v| v.as_str())
+            .ok_or_else(|| serde::de::Error::missing_field("type"))?
+            .to_string();
+
+        // Remove the "type" tag before passing to concrete deserializer
+        // (structs with deny_unknown_fields would reject it)
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("type");
+        }
+
+        let inner: Box<dyn ResourceDefinition> = match type_tag.as_str() {
+            "vault" => Box::new(serde_json::from_value::<crate::resources::Vault>(value).map_err(serde::de::Error::custom)?),
+            "function" => Box::new(serde_json::from_value::<crate::resources::Function>(value).map_err(serde::de::Error::custom)?),
+            "container" => Box::new(serde_json::from_value::<crate::resources::Container>(value).map_err(serde::de::Error::custom)?),
+            "container-cluster" => Box::new(serde_json::from_value::<crate::resources::ContainerCluster>(value).map_err(serde::de::Error::custom)?),
+            "storage" => Box::new(serde_json::from_value::<crate::resources::Storage>(value).map_err(serde::de::Error::custom)?),
+            "queue" => Box::new(serde_json::from_value::<crate::resources::Queue>(value).map_err(serde::de::Error::custom)?),
+            "kv" => Box::new(serde_json::from_value::<crate::resources::Kv>(value).map_err(serde::de::Error::custom)?),
+            "network" => Box::new(serde_json::from_value::<crate::resources::Network>(value).map_err(serde::de::Error::custom)?),
+            "build" => Box::new(serde_json::from_value::<crate::resources::Build>(value).map_err(serde::de::Error::custom)?),
+            "service-account" => Box::new(serde_json::from_value::<crate::resources::ServiceAccount>(value).map_err(serde::de::Error::custom)?),
+            "artifact-registry" => Box::new(serde_json::from_value::<crate::resources::ArtifactRegistry>(value).map_err(serde::de::Error::custom)?),
+            "service_activation" => Box::new(serde_json::from_value::<crate::resources::ServiceActivation>(value).map_err(serde::de::Error::custom)?),
+            "remote-stack-management" => Box::new(serde_json::from_value::<crate::resources::RemoteStackManagement>(value).map_err(serde::de::Error::custom)?),
+            "azure_resource_group" => Box::new(serde_json::from_value::<crate::resources::AzureResourceGroup>(value).map_err(serde::de::Error::custom)?),
+            "azure_storage_account" => Box::new(serde_json::from_value::<crate::resources::AzureStorageAccount>(value).map_err(serde::de::Error::custom)?),
+            "azure_container_apps_environment" => Box::new(serde_json::from_value::<crate::resources::AzureContainerAppsEnvironment>(value).map_err(serde::de::Error::custom)?),
+            "azure_service_bus_namespace" => Box::new(serde_json::from_value::<crate::resources::AzureServiceBusNamespace>(value).map_err(serde::de::Error::custom)?),
+            other => return Err(serde::de::Error::unknown_variant(other, &[
+                "vault", "function", "container", "container-cluster", "storage", "queue", "kv",
+                "network", "build", "service-account", "artifact-registry", "service_activation",
+                "remote-stack-management", "azure_resource_group", "azure_storage_account",
+                "azure_container_apps_environment", "azure_service_bus_namespace",
+            ])),
+        };
+
+        Ok(Resource { inner })
+    }
 }
 
 impl Resource {
@@ -209,7 +258,7 @@ impl Eq for Resource {}
 ///
 /// # Schema Structure
 /// - `type` (required): The resource type identifier (e.g., "function", "storage", "queue")
-/// - `id` (required): The unique identifier for this specific resource instance  
+/// - `id` (required): The unique identifier for this specific resource instance
 /// - Additional properties: Type-specific fields that vary by resource type (e.g., Function has `code`, `memory_mb`, etc.)
 ///
 /// # Example JSON
@@ -229,7 +278,7 @@ impl PartialSchema for Resource {
             ObjectBuilder::new()
                 .schema_type(Type::Object)
                 .property("type", Ref::from_schema_name("ResourceType"))
-                .property("id", 
+                .property("id",
                     ObjectBuilder::new()
                         .schema_type(Type::String)
                         .description(Some("The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."))
@@ -284,7 +333,7 @@ impl ResourceRef {
 
 impl<T: ResourceDefinition> From<&T> for ResourceRef {
     fn from(resource: &T) -> Self {
-        Self::new(T::resource_type(), resource.id())
+        Self::new(resource.get_resource_type(), resource.id())
     }
 }
 
@@ -297,12 +346,9 @@ impl From<&Resource> for ResourceRef {
 /// Trait that defines the interface for all resource output types in the Alien system.
 /// This trait enables extensibility by allowing new resource output types to be registered
 /// and managed alongside built-in resource outputs.
-#[typetag::serde(tag = "type")]
 pub trait ResourceOutputsDefinition: Debug + Send + Sync + 'static {
-    /// Returns the resource type this output corresponds to
-    fn resource_type() -> ResourceType
-    where
-        Self: Sized;
+    /// Returns the resource type for this instance
+    fn get_resource_type(&self) -> ResourceType;
 
     /// Provides access to the underlying concrete type for downcasting
     fn as_any(&self) -> &dyn Any;
@@ -312,6 +358,9 @@ pub trait ResourceOutputsDefinition: Debug + Send + Sync + 'static {
 
     /// For equality comparison between resource outputs
     fn outputs_eq(&self, other: &dyn ResourceOutputsDefinition) -> bool;
+
+    /// Serialize this resource outputs to a JSON value (without the "type" tag - that's added by ResourceOutputs)
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value>;
 }
 
 /// Clone implementation for boxed ResourceOutputsDefinition trait objects
@@ -323,10 +372,62 @@ impl Clone for Box<dyn ResourceOutputsDefinition> {
 
 /// New Resource outputs wrapper that can hold any ResourceOutputsDefinition.
 /// This replaces the old ResourceOutputs enum to enable runtime extensibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ResourceOutputs {
-    #[serde(flatten)]
     inner: Box<dyn ResourceOutputsDefinition>,
+}
+
+impl Serialize for ResourceOutputs {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut v = self.inner.to_json_value().map_err(serde::ser::Error::custom)?;
+        v.as_object_mut()
+            .ok_or_else(|| serde::ser::Error::custom("resource outputs must serialize as object"))?
+            .insert("type".into(), serde_json::Value::String(self.inner.get_resource_type().0.into_owned()));
+        v.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceOutputs {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let type_tag = value.get("type").and_then(|v| v.as_str())
+            .ok_or_else(|| serde::de::Error::missing_field("type"))?
+            .to_string();
+
+        // Remove the "type" tag before passing to concrete deserializer
+        // (structs with deny_unknown_fields would reject it)
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("type");
+        }
+
+        let inner: Box<dyn ResourceOutputsDefinition> = match type_tag.as_str() {
+            "vault" => Box::new(serde_json::from_value::<crate::resources::VaultOutputs>(value).map_err(serde::de::Error::custom)?),
+            "function" => Box::new(serde_json::from_value::<crate::resources::FunctionOutputs>(value).map_err(serde::de::Error::custom)?),
+            "container" => Box::new(serde_json::from_value::<crate::resources::ContainerOutputs>(value).map_err(serde::de::Error::custom)?),
+            "container-cluster" => Box::new(serde_json::from_value::<crate::resources::ContainerClusterOutputs>(value).map_err(serde::de::Error::custom)?),
+            "storage" => Box::new(serde_json::from_value::<crate::resources::StorageOutputs>(value).map_err(serde::de::Error::custom)?),
+            "queue" => Box::new(serde_json::from_value::<crate::resources::QueueOutputs>(value).map_err(serde::de::Error::custom)?),
+            "kv" => Box::new(serde_json::from_value::<crate::resources::KvOutputs>(value).map_err(serde::de::Error::custom)?),
+            "network" => Box::new(serde_json::from_value::<crate::resources::NetworkOutputs>(value).map_err(serde::de::Error::custom)?),
+            "build" => Box::new(serde_json::from_value::<crate::resources::BuildOutputs>(value).map_err(serde::de::Error::custom)?),
+            "service-account" => Box::new(serde_json::from_value::<crate::resources::ServiceAccountOutputs>(value).map_err(serde::de::Error::custom)?),
+            "artifact-registry" => Box::new(serde_json::from_value::<crate::resources::ArtifactRegistryOutputs>(value).map_err(serde::de::Error::custom)?),
+            "service_activation" => Box::new(serde_json::from_value::<crate::resources::ServiceActivationOutputs>(value).map_err(serde::de::Error::custom)?),
+            "remote-stack-management" => Box::new(serde_json::from_value::<crate::resources::RemoteStackManagementOutputs>(value).map_err(serde::de::Error::custom)?),
+            "azure_resource_group" => Box::new(serde_json::from_value::<crate::resources::AzureResourceGroupOutputs>(value).map_err(serde::de::Error::custom)?),
+            "azure_storage_account" => Box::new(serde_json::from_value::<crate::resources::AzureStorageAccountOutputs>(value).map_err(serde::de::Error::custom)?),
+            "azure_container_apps_environment" => Box::new(serde_json::from_value::<crate::resources::AzureContainerAppsEnvironmentOutputs>(value).map_err(serde::de::Error::custom)?),
+            "azure_service_bus_namespace" => Box::new(serde_json::from_value::<crate::resources::AzureServiceBusNamespaceOutputs>(value).map_err(serde::de::Error::custom)?),
+            other => return Err(serde::de::Error::unknown_variant(other, &[
+                "vault", "function", "container", "container-cluster", "storage", "queue", "kv",
+                "network", "build", "service-account", "artifact-registry", "service_activation",
+                "remote-stack-management", "azure_resource_group", "azure_storage_account",
+                "azure_container_apps_environment", "azure_service_bus_namespace",
+            ])),
+        };
+
+        Ok(ResourceOutputs { inner })
+    }
 }
 
 impl ResourceOutputs {

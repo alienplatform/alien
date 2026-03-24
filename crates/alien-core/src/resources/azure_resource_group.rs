@@ -41,9 +41,8 @@ pub struct AzureResourceGroupOutputs {
     pub location: String,
 }
 
-#[typetag::serde(name = "azure_resource_group")]
 impl ResourceOutputsDefinition for AzureResourceGroupOutputs {
-    fn resource_type() -> ResourceType {
+    fn get_resource_type(&self) -> ResourceType {
         AzureResourceGroup::RESOURCE_TYPE.clone()
     }
 
@@ -58,17 +57,16 @@ impl ResourceOutputsDefinition for AzureResourceGroupOutputs {
     fn outputs_eq(&self, other: &dyn ResourceOutputsDefinition) -> bool {
         other.as_any().downcast_ref::<AzureResourceGroupOutputs>() == Some(self)
     }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
+    }
 }
 
 // Implementation of ResourceDefinition trait for AzureResourceGroup
-#[typetag::serde(name = "azure_resource_group")]
 impl ResourceDefinition for AzureResourceGroup {
-    fn resource_type() -> ResourceType {
-        Self::RESOURCE_TYPE.clone()
-    }
-
     fn get_resource_type(&self) -> ResourceType {
-        Self::resource_type()
+        Self::RESOURCE_TYPE
     }
 
     fn id(&self) -> &str {
@@ -100,6 +98,10 @@ impl ResourceDefinition for AzureResourceGroup {
 
     fn resource_eq(&self, other: &dyn ResourceDefinition) -> bool {
         other.as_any().downcast_ref::<AzureResourceGroup>() == Some(self)
+    }
+
+    fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self)
     }
 }
 

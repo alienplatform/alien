@@ -22,7 +22,6 @@ indexmap = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"], optional = true }
 utoipa = { workspace = true, features = ["indexmap", "chrono"], optional = true }
 schemars = { workspace = true, features = ["indexmap", "chrono"], optional = true }
-typetag = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 regex = { workspace = true }
 nanoid = { workspace = true }
