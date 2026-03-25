@@ -32,6 +32,7 @@ const fn = new alien.Function("test-alien-function")
   .link(vault)
   .link(kv)
   .link(queue)
+  .commandsEnabled(true)
   .build()
 
 // Storage event subscription for testing storage events

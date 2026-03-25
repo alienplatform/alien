@@ -24,6 +24,7 @@ const fn = new alien.Function("test-alien-ts-function")
   .link(vault)
   .link(kv)
   .link(queue)
+  .commandsEnabled(true)
   .build()
 
 // Event subscriptions (uncomment when supported by @alienplatform/core)
