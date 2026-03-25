@@ -33,3 +33,11 @@ output "lambda_image_uri" {
 output "lambda_execution_role_arn" {
   value = aws_iam_role.lambda_execution.arn
 }
+
+output "ecr_push_role_arn" {
+  value = aws_iam_role.ecr_push.arn
+}
+
+output "ecr_pull_role_arn" {
+  value = aws_iam_role.ecr_pull.arn
+}

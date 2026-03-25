@@ -336,8 +336,14 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         let account_id = std::env::var("AWS_MANAGEMENT_ACCOUNT_ID")
             .expect("AWS_MANAGEMENT_ACCOUNT_ID must be set in .env.test");
 
-        let binding =
-            alien_core::bindings::ArtifactRegistryBinding::ecr("test".to_string(), None, None);
+        let pull_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok();
+        let push_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok();
+
+        let binding = alien_core::bindings::ArtifactRegistryBinding::ecr(
+            "test".to_string(),
+            pull_role_arn,
+            push_role_arn,
+        );
 
         // Set up environment for the provider
         let mut env_map: HashMap<String, String> = HashMap::new();

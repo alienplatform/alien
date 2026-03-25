@@ -77,6 +77,94 @@ resource "aws_iam_role_policy_attachment" "lambda_sqs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
 }
 
+# ── Management: ECR push/pull roles ────────────────────────────────────────────
+# Required by the artifact registry tests — the ECR provider assumes these roles
+# to create/manage repositories and generate pull credentials.
+
+data "aws_caller_identity" "management" {
+  provider = aws.management
+}
+
+resource "aws_iam_role" "ecr_push" {
+  provider = aws.management
+  name     = "alien-test-ecr-push"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.management.account_id}:root" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ecr_push" {
+  provider = aws.management
+  name     = "ecr-push"
+  role     = aws_iam_role.ecr_push.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:GetRepositoryPolicy",
+        "ecr:SetRepositoryPolicy",
+        "ecr:DeleteRepositoryPolicy",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetAuthorizationToken",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role" "ecr_pull" {
+  provider = aws.management
+  name     = "alien-test-ecr-pull"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.management.account_id}:root" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ecr_pull" {
+  provider = aws.management
+  name     = "ecr-pull"
+  role     = aws_iam_role.ecr_pull.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:DescribeRepositories",
+        "ecr:GetRepositoryPolicy",
+        "ecr:GetAuthorizationToken",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # ── Target: IAM user ──────────────────────────────────────────────────────────
 # Dedicated test account — AdministratorAccess is safe here.
 

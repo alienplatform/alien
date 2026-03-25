@@ -49,6 +49,9 @@ jobs:
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
+      - name: Install zig (needed by cargo-zigbuild for example builds)
+        run: pip3 install ziglang
+
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 

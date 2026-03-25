@@ -99,6 +99,7 @@ impl DeploymentLoop {
                 .map(String::from)
                 .collect(),
             ),
+            platforms: if self.config.targets.is_empty() { None } else { Some(self.config.targets.clone()) },
             ..Default::default()
         };
 
@@ -392,7 +393,7 @@ impl DeploymentLoop {
         // 2. OTLP telemetry configuration — if an OTLP endpoint is configured or dev mode.
         let base_url = self.config.base_url();
 
-        if self.config.otlp_endpoint.is_some() || self.config.dev_mode {
+        if self.config.otlp_endpoint.is_some() || self.config.dev_mode() {
             vars.push(EnvironmentVariable {
                 name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
                 value: format!("{}/v1/logs", base_url),

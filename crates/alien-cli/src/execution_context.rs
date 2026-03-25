@@ -557,7 +557,7 @@ async fn start_dev_server(port: u16) -> Result<()> {
         port,
         db_path: Some(db_path),
         state_dir: Some(state_dir.clone()),
-        dev_mode: true,
+        mode: alien_manager::config::ManagerMode::Dev,
         ..Default::default()
     };
 

@@ -48,24 +48,32 @@ impl AlienManager {
     /// tasks, then runs the axum HTTP server. It blocks until the server shuts down.
     pub async fn start(self, addr: SocketAddr) -> crate::error::Result<()> {
         // Spawn the deployment loop
-        let deployment_loop = DeploymentLoop::new(
-            self.config.clone(),
-            self.deployment_store.clone(),
-            self.release_store.clone(),
-            self.credential_resolver.clone(),
-            self.telemetry_backend.clone(),
-            self.server_bindings.clone(),
-            self.dev_status_tx,
-        );
-        tokio::spawn(async move {
-            deployment_loop.run().await;
-        });
+        if !self.config.disable_deployment_loop {
+            let deployment_loop = DeploymentLoop::new(
+                self.config.clone(),
+                self.deployment_store.clone(),
+                self.release_store.clone(),
+                self.credential_resolver.clone(),
+                self.telemetry_backend.clone(),
+                self.server_bindings.clone(),
+                self.dev_status_tx,
+            );
+            tokio::spawn(async move {
+                deployment_loop.run().await;
+            });
+        } else {
+            info!("Deployment loop disabled");
+        }
 
         // Spawn the heartbeat loop
-        let heartbeat_loop = HeartbeatLoop::new(self.config.clone(), self.deployment_store.clone());
-        tokio::spawn(async move {
-            heartbeat_loop.run().await;
-        });
+        if !self.config.disable_heartbeat_loop {
+            let heartbeat_loop = HeartbeatLoop::new(self.config.clone(), self.deployment_store.clone());
+            tokio::spawn(async move {
+                heartbeat_loop.run().await;
+            });
+        } else {
+            info!("Heartbeat loop disabled");
+        }
 
         // Start the HTTP server
         let listener = TcpListener::bind(addr).await.into_alien_error().context(

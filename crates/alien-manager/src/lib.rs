@@ -23,7 +23,7 @@
 
 pub mod config;
 pub mod error;
-pub mod ids;
+pub(crate) mod ids;
 pub mod traits;
 
 #[cfg(feature = "sqlite")]
@@ -32,7 +32,7 @@ pub mod stores;
 #[cfg(feature = "openapi")]
 pub mod api;
 pub mod builder;
-pub mod dev;
+pub(crate) mod dev;
 pub mod loops;
 pub mod providers;
 pub mod routes;
@@ -40,6 +40,8 @@ pub mod server;
 
 // Re-export key types
 pub use builder::AlienManagerBuilder;
-pub use config::ManagerConfig;
+pub use config::{DeepStoreConfig, GcpOAuthConfig, ManagerConfig, PlatformConfig};
+pub use dev::LogBuffer;
+pub use routes::RouterOptions;
 pub use server::AlienManager;
 pub use traits::*;

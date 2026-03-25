@@ -29,6 +29,8 @@ aws_target_account_id=$(jq_val target_aws_account_id)
 aws_s3_bucket=$(jq_val aws_s3_bucket)
 aws_lambda_image=$(jq_val aws_lambda_image_uri)
 aws_lambda_execution_role_arn=$(jq_val aws_lambda_execution_role_arn)
+aws_ecr_push_role_arn=$(jq_val aws_ecr_push_role_arn)
+aws_ecr_pull_role_arn=$(jq_val aws_ecr_pull_role_arn)
 
 gcp_management_sa_key=$(jq_val management_gcp_service_account_key)
 gcp_management_project_id=$(jq_val management_gcp_project_id)
@@ -76,6 +78,8 @@ AWS_TARGET_ACCOUNT_ID='${aws_target_account_id}'
 ALIEN_TEST_AWS_S3_BUCKET='${aws_s3_bucket}'
 ALIEN_TEST_AWS_LAMBDA_IMAGE='${aws_lambda_image}'
 ALIEN_TEST_AWS_LAMBDA_EXECUTION_ROLE_ARN='${aws_lambda_execution_role_arn}'
+ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN='${aws_ecr_push_role_arn}'
+ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN='${aws_ecr_pull_role_arn}'
 
 # GCP - Management
 GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY='${gcp_management_sa_key}'

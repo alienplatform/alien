@@ -19,19 +19,24 @@ path = "src/bin/schema_exporter.rs"
 required-features = ["openapi"]
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "platform"]
 sqlite = ["turso", "sea-query", "aegis"]
+platform = ["alien-platform-api", "alien-client-config", "jwt-simple", "urlencoding"]
 openapi = ["utoipa", "alien-core/openapi", "alien-error/openapi", "alien-commands/openapi"]
 
 [dependencies]
 # Core Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
-alien-commands = { workspace = true, features = ["server"] }
-alien-bindings = { workspace = true, features = ["local"] }
+alien-commands = { workspace = true, features = ["server", "test-utils"] }
+alien-bindings = { workspace = true, features = ["local", "all-platforms"] }
 alien-deployment = { workspace = true }
-alien-infra = { workspace = true }
+alien-infra = { workspace = true, features = ["test-utils"] }
 alien-local = { workspace = true }
+
+# Platform API (optional, default)
+alien-platform-api = { workspace = true, optional = true }
+alien-client-config = { workspace = true, optional = true }
 
 # Web framework
 axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }
@@ -86,7 +91,13 @@ bytes = { workspace = true }
 utoipa = { workspace = true, features = ["axum_extras", "chrono"], optional = true }
 
 # CLI (for schema exporter binary)
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
+
+# JWT (optional, for platform DeepStore query validation)
+jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"], optional = true }
+
+# URL encoding (optional, for platform GCP OAuth)
+urlencoding = { version = "2.1", optional = true }
 
 # Misc
 futures = { workspace = true }

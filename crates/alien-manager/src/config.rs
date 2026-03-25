@@ -1,10 +1,84 @@
 use std::path::PathBuf;
 
+use alien_core::Platform;
+
+/// DeepStore configuration for telemetry query and forwarding.
+#[derive(Debug, Clone, Default)]
+pub struct DeepStoreConfig {
+    /// DeepStore OTLP endpoint URL for telemetry forwarding.
+    pub otlp_url: Option<String>,
+    /// DeepStore query endpoint URL for searching logs.
+    pub query_url: Option<String>,
+    /// DeepStore JWT public key (PEM) for validating Query JWTs.
+    pub jwt_public_key: Option<String>,
+    /// DeepStore database ID for telemetry.
+    pub database_id: Option<String>,
+}
+
+/// GCP OAuth configuration for onboarding flow.
+#[derive(Debug, Clone, Default)]
+pub struct GcpOAuthConfig {
+    /// GCP OAuth Client ID.
+    pub client_id: Option<String>,
+    /// GCP OAuth Client Secret.
+    pub client_secret: Option<String>,
+}
+
+/// Configuration for the Platform (SaaS) operating mode.
+#[derive(Debug, Clone)]
+pub struct PlatformConfig {
+    /// Alien API base URL (default: https://api.alien.dev).
+    pub api_url: String,
+    /// Manager-scoped API key for authenticating with the Platform API.
+    pub api_key: String,
+    /// Primary platform for standalone mode (manager's own KV/Storage infrastructure).
+    pub primary_platform: Platform,
+    /// DeepStore configuration.
+    pub deepstore: DeepStoreConfig,
+    /// GCP OAuth configuration.
+    pub gcp_oauth: GcpOAuthConfig,
+}
+
+/// Operating mode for alien-manager.
+#[derive(Debug, Clone)]
+pub enum ManagerMode {
+    /// Platform API providers. Requires ALIEN_API_KEY / MANAGER_API_KEY.
+    Platform(PlatformConfig),
+    /// SQLite providers, no external dependency.
+    Standalone,
+    /// Dev mode: SQLite + permissive auth + local credentials.
+    Dev,
+}
+
+impl ManagerMode {
+    pub fn is_dev(&self) -> bool {
+        matches!(self, ManagerMode::Dev)
+    }
+
+    pub fn is_standalone(&self) -> bool {
+        matches!(self, ManagerMode::Standalone)
+    }
+
+    pub fn is_platform(&self) -> bool {
+        matches!(self, ManagerMode::Platform(_))
+    }
+
+    /// Returns a reference to the platform config if in Platform mode.
+    pub fn platform_config(&self) -> Option<&PlatformConfig> {
+        match self {
+            ManagerMode::Platform(pc) => Some(pc),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration for alien-manager.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
     /// HTTP server port.
     pub port: u16,
+    /// HTTP server host/bind address.
+    pub host: String,
     /// Path to SQLite database file. Required when using the default sqlite providers.
     pub db_path: Option<PathBuf>,
     /// Directory for local state (KV, storage, etc.).
@@ -14,19 +88,32 @@ pub struct ManagerConfig {
     pub deployment_interval_secs: u64,
     /// Heartbeat interval in seconds.
     pub heartbeat_interval_secs: u64,
+    /// Self-heartbeat interval in seconds (platform mode).
+    pub self_heartbeat_interval_secs: u64,
     /// OTLP endpoint for telemetry forwarding.
     pub otlp_endpoint: Option<String>,
-    /// Whether this is dev mode (permissive auth, local credentials, in-memory telemetry).
-    pub dev_mode: bool,
     /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
     /// Defaults to http://localhost:{port} when not set.
     pub base_url: Option<String>,
     /// Base URL for release binary downloads (alien-deploy, alien-agent).
     /// Defaults to https://releases.alien.dev. Configurable via ALIEN_RELEASES_URL env var.
     pub releases_url: Option<String>,
+    /// Target platforms this manager handles (platform mode).
+    pub targets: Vec<Platform>,
+    /// Disable the deployment loop.
+    pub disable_deployment_loop: bool,
+    /// Disable the heartbeat loop.
+    pub disable_heartbeat_loop: bool,
+    /// Operating mode. Determines which providers are used.
+    pub mode: ManagerMode,
 }
 
 impl ManagerConfig {
+    /// Whether this manager is running in dev mode.
+    pub fn dev_mode(&self) -> bool {
+        self.mode.is_dev()
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url
             .clone()
@@ -48,14 +135,19 @@ impl Default for ManagerConfig {
     fn default() -> Self {
         Self {
             port: 8080,
+            host: "0.0.0.0".to_string(),
             db_path: Some(PathBuf::from("alien-manager.db")),
             state_dir: Some(PathBuf::from(".alien-manager")),
             deployment_interval_secs: 10,
             heartbeat_interval_secs: 60,
+            self_heartbeat_interval_secs: 60,
             otlp_endpoint: None,
-            dev_mode: false,
             base_url: None,
             releases_url: None,
+            targets: Vec::new(),
+            disable_deployment_loop: false,
+            disable_heartbeat_loop: false,
+            mode: ManagerMode::Standalone,
         }
     }
 }

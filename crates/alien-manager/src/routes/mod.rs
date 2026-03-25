@@ -7,6 +7,8 @@ pub mod deployment_groups;
 pub mod deployments;
 pub mod health;
 pub mod install;
+#[cfg(feature = "platform")]
+pub mod platform;
 pub mod releases;
 pub mod sync;
 pub mod telemetry;
@@ -57,7 +59,7 @@ pub fn create_router(state: AppState) -> Router {
 }
 
 /// Route inclusion options for embedding alien-manager in another process.
-pub(crate) struct RouterOptions {
+pub struct RouterOptions {
     pub include_initialize: bool,
     pub include_deploy_page: bool,
     pub include_install: bool,
@@ -67,7 +69,7 @@ pub(crate) struct RouterOptions {
 ///
 /// Use `RouterOptions` to control which routes are included when embedding alien-manager
 /// in a process that overrides certain routes via `extra_routes`.
-pub(crate) fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
+pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     // Command server routes (nested under /v1)
     let commands_router: Router<AppState> = create_axum_router();
 

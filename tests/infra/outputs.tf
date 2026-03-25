@@ -49,6 +49,14 @@ output "aws_lambda_execution_role_arn" {
   value = module.aws.lambda_execution_role_arn
 }
 
+output "aws_ecr_push_role_arn" {
+  value = module.aws.ecr_push_role_arn
+}
+
+output "aws_ecr_pull_role_arn" {
+  value = module.aws.ecr_pull_role_arn
+}
+
 # GCP - Management
 output "management_gcp_service_account_key" {
   value     = module.gcp.management_service_account_key

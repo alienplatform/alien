@@ -713,7 +713,7 @@ async fn run_dev_server_only(
         port,
         db_path: Some(db_path),
         state_dir: Some(state_dir.clone()),
-        dev_mode: true,
+        mode: alien_manager::config::ManagerMode::Dev,
         ..Default::default()
     };
 
