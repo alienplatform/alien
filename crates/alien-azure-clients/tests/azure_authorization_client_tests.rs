@@ -8,6 +8,7 @@ use alien_azure_clients::models::authorization_role_definitions::{
     Permission, RoleDefinition, RoleDefinitionProperties,
 };
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -68,7 +69,7 @@ impl AsyncTestContext for AuthorizationTestContext {
 
         let client = Client::new();
         AuthorizationTestContext {
-            authorization_client: AzureAuthorizationClient::new(client, client_config),
+            authorization_client: AzureAuthorizationClient::new(client, AzureTokenCache::new(client_config)),
             subscription_id,
             resource_group_name,
             created_role_definitions: Mutex::new(Vec::new()),
@@ -112,7 +113,7 @@ impl AuthorizationTestContext {
         let mut definitions = self.created_role_definitions.lock().unwrap();
         definitions.push(tracked.clone());
 
-        let scope_string = scope.to_scope_string(&self.authorization_client.client_config);
+        let scope_string = scope.to_scope_string(self.authorization_client.token_cache.config());
         let full_id = format!(
             "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
             scope_string.trim_start_matches('/'),
@@ -126,12 +127,12 @@ impl AuthorizationTestContext {
         definitions.retain(|tracked| {
             !(tracked
                 .scope
-                .to_scope_string(&self.authorization_client.client_config)
-                == scope.to_scope_string(&self.authorization_client.client_config)
+                .to_scope_string(self.authorization_client.token_cache.config())
+                == scope.to_scope_string(self.authorization_client.token_cache.config())
                 && tracked.role_definition_id == role_definition_id)
         });
 
-        let scope_string = scope.to_scope_string(&self.authorization_client.client_config);
+        let scope_string = scope.to_scope_string(self.authorization_client.token_cache.config());
         let full_id = format!(
             "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
             scope_string.trim_start_matches('/'),
@@ -164,7 +165,7 @@ impl AuthorizationTestContext {
     async fn cleanup_role_definition(&self, tracked: &TrackedRoleDefinition) {
         let scope_string = tracked
             .scope
-            .to_scope_string(&self.authorization_client.client_config);
+            .to_scope_string(self.authorization_client.token_cache.config());
         let full_id = format!(
             "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
             scope_string.trim_start_matches('/'),
@@ -245,7 +246,7 @@ impl AuthorizationTestContext {
         role_definition_id: &str,
         role_name: &str,
     ) -> Result<RoleDefinition, Error> {
-        let scope_string = scope.to_scope_string(&self.authorization_client.client_config);
+        let scope_string = scope.to_scope_string(self.authorization_client.token_cache.config());
         let role_definition = RoleDefinition {
             id: None,
             name: None,
@@ -291,7 +292,7 @@ impl AuthorizationTestContext {
         role_definition_id: &str,
         scope: &Scope,
     ) -> Result<RoleAssignment, Error> {
-        let scope_string = scope.to_scope_string(&self.authorization_client.client_config);
+        let scope_string = scope.to_scope_string(self.authorization_client.token_cache.config());
         let role_assignment = RoleAssignment {
             id: None,
             name: None,
@@ -482,7 +483,7 @@ async fn test_create_role_definition_already_exists(ctx: &mut AuthorizationTestC
     );
 
     // Attempt to create the same role definition again (should succeed as it's an update)
-    let scope_string = scope.to_scope_string(&ctx.authorization_client.client_config);
+    let scope_string = scope.to_scope_string(ctx.authorization_client.token_cache.config());
     let role_definition = RoleDefinition {
         id: None,
         name: None,
@@ -595,9 +596,9 @@ async fn test_role_definition_with_complex_permissions(ctx: &mut AuthorizationTe
     let rg_scope = ctx.resource_group_scope();
     let resource_scope = ctx.test_resource_scope();
 
-    let rg_scope_string = rg_scope.to_scope_string(&ctx.authorization_client.client_config);
+    let rg_scope_string = rg_scope.to_scope_string(ctx.authorization_client.token_cache.config());
     let resource_scope_string =
-        resource_scope.to_scope_string(&ctx.authorization_client.client_config);
+        resource_scope.to_scope_string(ctx.authorization_client.token_cache.config());
 
     let role_definition = RoleDefinition {
         id: None,
@@ -859,7 +860,7 @@ async fn test_invalid_scope_format(ctx: &mut AuthorizationTestContext) {
         resource_group_name: "invalid-scope-format-with-invalid-chars!@#$%".to_string(),
     };
 
-    let scope_string = invalid_scope.to_scope_string(&ctx.authorization_client.client_config);
+    let scope_string = invalid_scope.to_scope_string(ctx.authorization_client.token_cache.config());
     let role_definition = RoleDefinition {
         id: None,
         name: None,
@@ -913,7 +914,7 @@ async fn test_role_definition_with_invalid_permissions(ctx: &mut AuthorizationTe
     );
     let scope = ctx.resource_group_scope();
 
-    let scope_string = scope.to_scope_string(&ctx.authorization_client.client_config);
+    let scope_string = scope.to_scope_string(ctx.authorization_client.token_cache.config());
     let role_definition = RoleDefinition {
         id: None,
         name: None,
@@ -974,7 +975,7 @@ async fn test_role_definition_options_validation(ctx: &mut AuthorizationTestCont
 
     // This test is no longer applicable since we removed client_request_id validation
     // We can test some other validation scenario or remove this test
-    let scope_string = scope.to_scope_string(&ctx.authorization_client.client_config);
+    let scope_string = scope.to_scope_string(ctx.authorization_client.token_cache.config());
     let role_definition = RoleDefinition {
         id: None,
         name: None,

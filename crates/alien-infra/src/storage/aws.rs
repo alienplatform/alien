@@ -41,7 +41,7 @@ impl AwsStorageController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
 
         // Compute bucket name if not already set (for initial creation or retry)
@@ -81,7 +81,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
 
         let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
@@ -127,7 +127,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let storage_config = ctx.desired_resource_config::<Storage>()?;
 
         let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
@@ -180,7 +180,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
 
         let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
@@ -238,7 +238,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
 
         let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
@@ -336,7 +336,7 @@ impl AwsStorageController {
 
         if let Some(bucket_name) = &self.bucket_name {
             let aws_cfg = ctx.get_aws_config()?;
-            let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
             // Check if bucket still exists
             client
@@ -366,7 +366,7 @@ impl AwsStorageController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
@@ -422,7 +422,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let storage_config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
@@ -500,7 +500,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
@@ -586,7 +586,7 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
@@ -731,7 +731,7 @@ impl AwsStorageController {
 
         // Only get the S3 client if we actually have a bucket to delete
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
         info!(bucket=%bucket_name, "Starting bucket deletion");
 
@@ -937,7 +937,7 @@ impl AwsStorageController {
                 permission_set.id.replace('/', "-")
             );
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
                 .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
                 .await

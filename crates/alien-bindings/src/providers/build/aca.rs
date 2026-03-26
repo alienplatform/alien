@@ -21,7 +21,7 @@ use alien_azure_clients::{
         JobTemplate, ManagedServiceIdentity, ManagedServiceIdentityType, Parallelism,
         ReplicaCompletionCount, UserAssignedIdentities, UserAssignedIdentity,
     },
-    AzureClientConfig,
+    AzureClientConfig, AzureTokenCache,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 
@@ -50,7 +50,7 @@ impl AcaBuild {
     ) -> Result<Self, Error> {
         let client = AzureContainerAppsClient::new(
             crate::http_client::create_http_client(),
-            azure_config.clone(),
+            AzureTokenCache::new(azure_config.clone()),
         );
 
         // Extract values from binding

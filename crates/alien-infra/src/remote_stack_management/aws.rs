@@ -49,7 +49,7 @@ impl AwsRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         let role_name = get_aws_management_role_name(ctx.resource_prefix);
 
@@ -119,7 +119,7 @@ impl AwsRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         info!(
@@ -166,7 +166,7 @@ impl AwsRemoteStackManagementController {
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         // Heartbeat check: verify role still exists
@@ -216,7 +216,7 @@ impl AwsRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         info!(
@@ -286,7 +286,7 @@ impl AwsRemoteStackManagementController {
         };
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         info!(
             role_name = %role_name,
@@ -339,7 +339,7 @@ impl AwsRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let role_name = self.role_name.as_ref().unwrap();
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         info!(
             role_name = %role_name,

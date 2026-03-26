@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::{Queue, Resource};
 use alien_error::{AlienError, Context};
 
@@ -40,7 +41,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
 
         info!(queue_name=%physical_name, "Importing SQS queue state from CloudFormation");
 
-        let client = SqsClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = SqsClient::new(reqwest::Client::new(), credentials);
         let url = client
             .get_queue_url(
                 GetQueueUrlRequest::builder()

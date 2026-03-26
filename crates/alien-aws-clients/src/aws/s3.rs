@@ -1,6 +1,5 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 
@@ -69,29 +68,29 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct S3Client {
     pub client: Client,
-    pub config: AwsClientConfig,
+    pub credentials: AwsCredentialProvider,
 }
 
 impl S3Client {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     /// Get the region for this S3 client (used by tests)
     pub fn region(&self) -> &str {
-        &self.config.region
+        self.credentials.region()
     }
 
     /// Get the credentials for this S3 client (used by tests)
     pub fn credentials(&self) -> aws_credential_types::Credentials {
-        self.config.get_credentials()
+        self.credentials.get_credentials()
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "s3".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
@@ -106,30 +105,30 @@ impl S3Client {
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("s3") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("s3") {
             override_url.to_string()
         } else {
-            format!("https://s3.{}.amazonaws.com", self.config.region)
+            format!("https://s3.{}.amazonaws.com", self.credentials.region())
         }
     }
 
     fn host(&self, bucket: &str) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("s3") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("s3") {
             // For override URLs, we use the bucket as a path component instead of subdomain
             // This is common for local S3-compatible services like LocalStack
             override_url.trim_end_matches('/').to_string()
         } else {
-            format!("{}.s3.{}.amazonaws.com", bucket, self.config.region)
+            format!("{}.s3.{}.amazonaws.com", bucket, self.credentials.region())
         }
     }
 
     fn url(&self, bucket: &str, path: &str) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("s3") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("s3") {
             format!("{}/{}{}", override_url.trim_end_matches('/'), bucket, path)
         } else {
             format!(
                 "https://{}.s3.{}.amazonaws.com{}",
-                bucket, self.config.region, path
+                bucket, self.credentials.region(), path
             )
         }
     }
@@ -142,6 +141,7 @@ impl S3Client {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let builder = self
             .client
             .request(method, &url)
@@ -164,6 +164,7 @@ impl S3Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let body_clone = body.clone();
         let builder = self
             .client
@@ -188,6 +189,7 @@ impl S3Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let body_clone = body.clone();
         let builder = self
             .client
@@ -400,8 +402,8 @@ impl S3Client {
 impl S3Api for S3Client {
     async fn create_bucket(&self, bucket: &str) -> Result<()> {
         let host = self.host(bucket);
-        let body = if self.config.region != "us-east-1" {
-            Some(format!("<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>{}</LocationConstraint></CreateBucketConfiguration>", self.config.region))
+        let body = if self.credentials.region() != "us-east-1" {
+            Some(format!("<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>{}</LocationConstraint></CreateBucketConfiguration>", self.credentials.region()))
         } else {
             None
         };

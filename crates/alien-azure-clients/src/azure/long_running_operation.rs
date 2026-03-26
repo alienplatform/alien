@@ -1,6 +1,5 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{Error, ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -141,18 +140,18 @@ pub trait LongRunningOperationApi: Send + Sync + Debug {
 #[derive(Debug)]
 pub struct LongRunningOperationClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl LongRunningOperationClient {
     /// Creates a new LongRunningOperationClient
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -168,7 +167,7 @@ impl LongRunningOperationApi for LongRunningOperationClient {
     ) -> Result<Option<String>> {
         debug!(operation = %operation_name, resource = %resource_name, url = %operation.url, "Checking Azure async operation status");
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 

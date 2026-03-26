@@ -3,8 +3,7 @@
 //! Provides minimal ACM operations needed for importing and managing certificates.
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
@@ -61,28 +60,28 @@ pub trait AcmApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct AcmClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl AcmClient {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "acm".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("acm") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("acm") {
             override_url.to_string()
         } else {
-            format!("https://acm.{}.amazonaws.com", self.config.region)
+            format!("https://acm.{}.amazonaws.com", self.credentials.region())
         }
     }
 
@@ -93,13 +92,14 @@ impl AcmClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .request(Method::POST, &url)
-            .host(&format!("acm.{}.amazonaws.com", self.config.region))
+            .host(&format!("acm.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("CertificateManager.{}", target))
             .content_type_amz_json()
             .content_sha256(&body)
@@ -118,13 +118,14 @@ impl AcmClient {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .request(Method::POST, &url)
-            .host(&format!("acm.{}.amazonaws.com", self.config.region))
+            .host(&format!("acm.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("CertificateManager.{}", target))
             .content_type_amz_json()
             .content_sha256(&body)

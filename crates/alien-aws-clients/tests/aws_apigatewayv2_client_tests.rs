@@ -34,6 +34,7 @@ ALIEN_TEST_APIGW_CERT_ARN=arn:aws:acm:us-east-1:123456789012:certificate/...
 
 use alien_aws_clients::apigatewayv2::*;
 use alien_aws_clients::lambda::*;
+use alien_aws_clients::AwsCredentialProvider;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::path::PathBuf as StdPathBuf;
@@ -77,8 +78,8 @@ impl AsyncTestContext for ApiGatewayV2TestContext {
             service_overrides: None,
         };
 
-        let client = ApiGatewayV2Client::new(Client::new(), aws_config.clone());
-        let lambda_client = LambdaClient::new(Client::new(), aws_config);
+        let client = ApiGatewayV2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
+        let lambda_client = LambdaClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         let (lambda_arn, created_lambda) = match std::env::var("ALIEN_TEST_APIGW_LAMBDA_ARN") {
             Ok(value) => (value, None),

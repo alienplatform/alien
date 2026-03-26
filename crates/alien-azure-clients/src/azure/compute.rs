@@ -5,8 +5,7 @@ use crate::azure::models::compute_rp::{
     RetrieveBootDiagnosticsDataResult, RunCommandInput, RunCommandResult, VirtualMachineScaleSet,
     VirtualMachineScaleSetVm, VirtualMachineScaleSetVmListResult,
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -178,20 +177,20 @@ pub trait VirtualMachineScaleSetsApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureVmssClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureVmssClient {
     /// API version for Azure Compute resources
     const API_VERSION: &'static str = "2024-07-01";
 
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -210,13 +209,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss: &VirtualMachineScaleSet,
     ) -> Result<VmssOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -245,13 +244,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss_name: &str,
     ) -> Result<VirtualMachineScaleSet> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -298,13 +297,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -328,13 +327,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss_name: &str,
     ) -> Result<VirtualMachineScaleSetVmListResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -382,13 +381,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         instance_id: &str,
     ) -> Result<VirtualMachineScaleSetVm> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -439,13 +438,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         instance_id: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -467,13 +466,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         command: &RunCommandInput,
     ) -> Result<OperationResult<RunCommandResult>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}/runCommand", 
-                     &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -508,7 +507,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         lun: i32,
     ) -> Result<OperationResult<VirtualMachineScaleSetVm>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -558,7 +557,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         // Update the VM with the new disk attached
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}",
-                     &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -592,7 +591,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         lun: i32,
     ) -> Result<OperationResult<VirtualMachineScaleSetVm>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -611,7 +610,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         // Update the VM with the disk removed
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}",
-                     &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id),
+                     &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -644,7 +643,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         instance_id: &str,
     ) -> Result<String> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -652,7 +651,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}/retrieveBootDiagnosticsData",
-                &self.client_config.subscription_id, resource_group_name, vmss_name, instance_id
+                &self.token_cache.config().subscription_id, resource_group_name, vmss_name, instance_id
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -732,13 +731,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/osRollingUpgrade",
-                &self.client_config.subscription_id, resource_group_name, vmss_name
+                &self.token_cache.config().subscription_id, resource_group_name, vmss_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -756,13 +755,13 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         vmss_name: &str,
     ) -> Result<RollingUpgradeLatestStatus> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/rollingUpgrades/latest",
-                &self.client_config.subscription_id, resource_group_name, vmss_name
+                &self.token_cache.config().subscription_id, resource_group_name, vmss_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );

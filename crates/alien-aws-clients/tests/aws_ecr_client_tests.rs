@@ -36,6 +36,7 @@ cargo test --package alien-aws-clients --test aws_ecr_client_tests test_create_a
 
 use alien_aws_clients::ecr::*;
 use alien_aws_clients::AwsClientConfig;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
 use reqwest::Client;
@@ -76,7 +77,7 @@ impl AsyncTestContext for EcrTestContext {
             },
             service_overrides: None,
         };
-        let client = EcrClient::new(Client::new(), aws_config);
+        let client = EcrClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         EcrTestContext {
             client,
@@ -748,7 +749,7 @@ async fn test_ecr_client_with_invalid_credentials(ctx: &mut EcrTestContext) {
         },
         service_overrides: None,
     };
-    let ecr_client = EcrClient::new(client_invalid, aws_config);
+    let ecr_client = EcrClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
 
     info!("🔐 Testing ECR client with invalid credentials");
 

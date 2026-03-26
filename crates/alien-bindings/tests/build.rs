@@ -30,7 +30,7 @@ use alien_aws_clients::{
         ProjectArtifacts, ProjectEnvironment, ProjectSource,
     },
     iam::{CreateRoleRequest, IamApi, IamClient},
-    AwsClientConfig,
+    AwsClientConfig, AwsCredentialProvider,
 };
 #[cfg(feature = "aws")]
 use {reqwest::Client, std::sync::Mutex, uuid::Uuid};
@@ -247,8 +247,8 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             service_overrides: None,
         };
 
-        let codebuild_client = CodeBuildClient::new(Client::new(), aws_config.clone());
-        let iam_client = IamClient::new(Client::new(), aws_config.clone());
+        let codebuild_client = CodeBuildClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
+        let iam_client = IamClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
 
         // Create IAM role for CodeBuild
         let role_name = format!("alien-test-build-role-{}", Uuid::new_v4().simple());

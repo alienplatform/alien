@@ -193,10 +193,17 @@ impl ManagedCommandDispatcher {
                     deployment_id = deployment.id.as_str(),
                     "Creating AWS Lambda dispatcher for push deployment"
                 );
-                Ok(Arc::new(LambdaCommandDispatcher::new(
+                let dispatcher = LambdaCommandDispatcher::new(
                     self.http_client.clone(),
                     *aws_config,
-                )) as Arc<dyn CommandDispatcher>)
+                )
+                .await
+                .map_err(|e| {
+                    AlienError::new(ArcErrorData::Other {
+                        message: format!("Failed to create Lambda dispatcher: {}", e),
+                    })
+                })?;
+                Ok(Arc::new(dispatcher) as Arc<dyn CommandDispatcher>)
             }
             ClientConfig::Gcp(gcp_config) => {
                 info!(

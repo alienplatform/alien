@@ -1,4 +1,5 @@
 use alien_aws_clients::CodeBuildApi as _;
+use alien_aws_clients::AwsCredentialProvider;
 use async_trait::async_trait;
 use tracing::info;
 
@@ -45,7 +46,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
 
         let project_name = physical_id.as_str();
 
-        let client = CodeBuildClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = CodeBuildClient::new(reqwest::Client::new(), credentials);
 
         info!(name=%project_name, "Importing CodeBuild project state from CloudFormation");
 

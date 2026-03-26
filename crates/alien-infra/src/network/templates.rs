@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::{Network, NetworkSettings, Resource};
 use alien_error::{AlienError, Context};
 
@@ -125,7 +126,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
                 })?;
 
                 // Query VPC details to get CIDR block
-                let ec2_client = Ec2Client::new(reqwest::Client::new(), context.aws_config.clone());
+                let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to create AWS credential provider".to_string(),
+                        resource_id: None,
+                    })?;
+                let ec2_client = Ec2Client::new(reqwest::Client::new(), credentials);
 
                 let vpc_response = ec2_client
                     .describe_vpcs(

@@ -8,8 +8,7 @@ use crate::azure::models::{
         DaprComponent, DaprComponentsCollection, DaprSecretsCollection,
     },
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -166,17 +165,17 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureContainerAppsClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureContainerAppsClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -203,14 +202,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         container_app: &ContainerApp,
     ) -> Result<OperationResult<ContainerApp>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.client_config.subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -264,14 +263,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         container_app: &ContainerApp,
     ) -> Result<OperationResult<ContainerApp>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.client_config.subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -307,14 +306,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         container_app_name: &str,
     ) -> Result<ContainerApp> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.client_config.subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -371,14 +370,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         container_app_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.client_config.subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -417,13 +416,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         managed_environment: &ManagedEnvironment,
     ) -> Result<ManagedEnvironmentOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -479,13 +478,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         managed_environment: &ManagedEnvironment,
     ) -> Result<ManagedEnvironmentOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -523,13 +522,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         environment_name: &str,
     ) -> Result<ManagedEnvironment> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -586,13 +585,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         environment_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -634,14 +633,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         job: &Job,
     ) -> Result<JobOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.client_config.subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id, resource_group_name, job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -669,14 +668,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
     /// Get a Container Apps Job by name
     async fn get_job(&self, resource_group_name: &str, job_name: &str) -> Result<Job> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.client_config.subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id, resource_group_name, job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -730,14 +729,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         job_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.client_config.subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id, resource_group_name, job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -767,14 +766,14 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         job_name: &str,
     ) -> Result<JobExecutionOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/start",
-                &self.client_config.subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id, resource_group_name, job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -805,13 +804,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         job_execution_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/executions/{}/stop", 
-                     &self.client_config.subscription_id, resource_group_name, job_name, job_execution_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, job_name, job_execution_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -855,13 +854,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         dapr_component: &DaprComponent,
     ) -> Result<DaprComponentOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name, component_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -897,13 +896,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         component_name: &str,
     ) -> Result<DaprComponent> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name, component_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -954,13 +953,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         environment_name: &str,
     ) -> Result<DaprComponentsCollection> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 
@@ -1015,13 +1014,13 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         component_name: &str,
     ) -> Result<DaprSecretsCollection> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/daprComponents/{}/listSecrets", 
-                     &self.client_config.subscription_id, resource_group_name, environment_name, component_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, environment_name, component_name),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
 

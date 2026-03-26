@@ -4,6 +4,7 @@ use tracing::{debug, warn};
 use crate::error::{ErrorData, Result};
 use crate::{AwsFunctionController, AwsFunctionState, ResourceController};
 use alien_aws_clients::lambda::{LambdaApi, LambdaClient};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Function, Ingress, Resource, ResourceDefinition};
 use alien_error::{AlienError, Context, ContextError};
@@ -46,7 +47,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
         let function_name = physical_id.as_str();
 
         // Create our custom Lambda client using the AWS config from context
-        let client = LambdaClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = LambdaClient::new(reqwest::Client::new(), credentials);
 
         info!(name=%function_name, "Importing Lambda function state from CloudFormation");
         let function_result = client

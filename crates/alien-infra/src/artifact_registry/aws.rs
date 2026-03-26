@@ -79,7 +79,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
 
@@ -131,7 +131,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
         let policy_name = "ECRPullPolicy";
@@ -169,7 +169,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
 
@@ -221,7 +221,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
         let policy_name = "ECRPushPolicy";
@@ -307,7 +307,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
 
@@ -347,7 +347,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
         let policy_name = "ECRPullPolicy";
@@ -385,7 +385,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
 
@@ -425,7 +425,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
         let policy_name = "ECRPushPolicy";
@@ -484,7 +484,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
         let policy_name = "ECRPullPolicy";
@@ -530,7 +530,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
 
@@ -574,7 +574,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
         let policy_name = "ECRPushPolicy";
@@ -620,7 +620,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
 
@@ -866,7 +866,7 @@ impl AwsArtifactRegistryController {
                 permission_set.id.replace('/', "-")
             );
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
                 .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
                 .await

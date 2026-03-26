@@ -2,8 +2,7 @@ use crate::azure::common::{
     create_azure_http_error_with_context, AzureClientBase, AzureRequestBuilder,
 };
 use crate::azure::models::table::*;
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -202,17 +201,17 @@ pub trait TableStorageApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureTableManagementClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureTableManagementClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 
@@ -224,7 +223,7 @@ impl AzureTableManagementClient {
     ) -> String {
         format!(
             "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/tableServices/default/tables/{}",
-            self.client_config.subscription_id,
+            self.token_cache.config().subscription_id,
             resource_group_name,
             storage_account_name,
             table_name
@@ -242,7 +241,7 @@ impl TableManagementApi for AzureTableManagementClient {
         table_name: &str,
     ) -> Result<Table> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -310,7 +309,7 @@ impl TableManagementApi for AzureTableManagementClient {
         table_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -338,7 +337,7 @@ impl TableManagementApi for AzureTableManagementClient {
         table_name: &str,
     ) -> Result<Vec<TableSignedIdentifier>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -388,7 +387,7 @@ impl TableManagementApi for AzureTableManagementClient {
         signed_identifiers: &[TableSignedIdentifier],
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -438,19 +437,19 @@ impl TableManagementApi for AzureTableManagementClient {
 #[derive(Debug)]
 pub struct AzureTableStorageClient {
     pub client: Client,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
     pub storage_account_key: String,
 }
 
 impl AzureTableStorageClient {
     pub fn new(
         client: Client,
-        client_config: AzureClientConfig,
+        token_cache: AzureTokenCache,
         storage_account_key: String,
     ) -> Self {
         Self {
             client,
-            client_config,
+            token_cache,
             storage_account_key,
         }
     }
@@ -462,7 +461,7 @@ impl AzureTableStorageClient {
         path: &str,
         query_params: Option<Vec<(&str, String)>>,
     ) -> Result<url::Url> {
-        let base_url = if let Some(override_url) = self.client_config.get_service_endpoint("table")
+        let base_url = if let Some(override_url) = self.token_cache.get_service_endpoint("table")
         {
             override_url.trim_end_matches('/').to_string()
         } else {

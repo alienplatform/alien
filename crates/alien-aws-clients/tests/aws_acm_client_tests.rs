@@ -20,6 +20,7 @@ ALIEN_TEST_ACM_DOMAIN=example.com
 */
 
 use alien_aws_clients::acm::*;
+use alien_aws_clients::AwsCredentialProvider;
 use reqwest::Client;
 use std::collections::HashSet;
 use std::path::PathBuf as StdPathBuf;
@@ -62,7 +63,7 @@ impl AsyncTestContext for AcmTestContext {
             service_overrides: None,
         };
 
-        let client = AcmClient::new(Client::new(), aws_config);
+        let client = AcmClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         AcmTestContext {
             client,

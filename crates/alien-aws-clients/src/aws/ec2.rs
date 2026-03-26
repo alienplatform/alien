@@ -19,8 +19,7 @@
 //! ```
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -229,34 +228,34 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct Ec2Client {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl Ec2Client {
     /// Create a new EC2 client.
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "ec2".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("ec2") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("ec2") {
             override_url.to_string()
         } else {
-            format!("https://ec2.{}.amazonaws.com", self.config.region)
+            format!("https://ec2.{}.amazonaws.com", self.credentials.region())
         }
     }
 
     fn get_host(&self) -> String {
-        format!("ec2.{}.amazonaws.com", self.config.region)
+        format!("ec2.{}.amazonaws.com", self.credentials.region())
     }
 
     // ------------------------- Internal Helpers -------------------------
@@ -267,6 +266,7 @@ impl Ec2Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let form_body = form_urlencoded::Serializer::new(String::new())
@@ -293,6 +293,7 @@ impl Ec2Client {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let form_body = form_urlencoded::Serializer::new(String::new())

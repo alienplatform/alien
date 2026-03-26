@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::Resource;
 use alien_core::ServiceAccount;
 use alien_error::{AlienError, Context};
@@ -59,7 +60,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
         };
 
         // Create IAM client to verify the role exists and get its ARN
-        let client = IamClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = IamClient::new(reqwest::Client::new(), credentials);
 
         info!(role_name=%role_name, service_account_id=%service_account.id, "Importing ServiceAccount IAM role state from CloudFormation");
         let role_result =

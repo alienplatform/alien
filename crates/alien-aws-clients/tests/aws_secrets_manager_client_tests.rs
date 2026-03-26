@@ -39,6 +39,7 @@ use alien_aws_clients::secrets_manager::{
     PutSecretValueRequest, SecretsManagerApi, SecretsManagerClient, Tag, UpdateSecretRequest,
 };
 use alien_aws_clients::AwsClientConfig;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData};
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use reqwest::Client;
@@ -80,7 +81,7 @@ impl AsyncTestContext for SecretsManagerTestContext {
             service_overrides: None,
         };
 
-        let client = SecretsManagerClient::new(Client::new(), aws_config);
+        let client = SecretsManagerClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         SecretsManagerTestContext {
             client,
@@ -617,7 +618,7 @@ async fn test_secrets_manager_with_invalid_credentials(_ctx: &mut SecretsManager
         },
         service_overrides: None,
     };
-    let invalid_client = SecretsManagerClient::new(Client::new(), invalid_config);
+    let invalid_client = SecretsManagerClient::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
 
     info!("🔐 Testing Secrets Manager client with invalid credentials");
 

@@ -93,7 +93,7 @@ impl AwsNetworkController {
         stack_id: &str,
     ) -> Result<String> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Get all existing VPC CIDRs in the account
         let existing_vpcs = client
@@ -249,7 +249,7 @@ impl AwsNetworkController {
             NetworkSettings::UseDefault => {
                 // Discover the account's default VPC — no provisioning needed
                 let aws_config = ctx.get_aws_config()?;
-                let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config)?;
+                let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
 
                 info!("Discovering AWS default VPC");
 
@@ -385,7 +385,7 @@ impl AwsNetworkController {
     )]
     async fn creating_vpc(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let (cidr, availability_zones) = match &config.settings {
@@ -507,7 +507,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
@@ -578,7 +578,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
@@ -718,7 +718,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
@@ -895,7 +895,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let public_subnet_id = self.public_subnet_ids.first().ok_or_else(|| {
@@ -978,7 +978,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let nat_gateway_id = self.nat_gateway_id.as_ref().ok_or_else(|| {
@@ -1075,7 +1075,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
@@ -1198,7 +1198,7 @@ impl AwsNetworkController {
         // For created VPCs, verify VPC still exists
         if let Some(vpc_id) = &self.vpc_id {
             let aws_cfg = ctx.get_aws_config()?;
-            let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
             let vpc_response = client
                 .describe_vpcs(
@@ -1325,7 +1325,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
         // Delete NAT Gateway if it exists
@@ -1392,7 +1392,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Delete security group if it exists
         if let Some(sg_id) = &self.security_group_id {
@@ -1434,7 +1434,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Delete all subnets
         for subnet_id in self
@@ -1478,7 +1478,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Disassociate and delete route tables
         for assoc_id in self.route_table_association_ids.drain(..) {
@@ -1554,7 +1554,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Detach and delete Internet Gateway
         if let Some(igw_id) = &self.internet_gateway_id {
@@ -1614,7 +1614,7 @@ impl AwsNetworkController {
     )]
     async fn deleting_vpc(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         // Delete VPC
         if let Some(vpc_id) = &self.vpc_id {

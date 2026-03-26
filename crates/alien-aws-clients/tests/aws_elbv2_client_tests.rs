@@ -54,6 +54,7 @@ cargo test --package alien-aws-clients --test aws_elbv2_client_tests test_elbv2_
 use alien_aws_clients::ec2::*;
 use alien_aws_clients::elbv2::*;
 use alien_aws_clients::AwsClientConfig;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -100,8 +101,8 @@ impl AsyncTestContext for Elbv2TestContext {
             service_overrides: None,
         };
 
-        let elbv2_client = Elbv2Client::new(Client::new(), aws_config.clone());
-        let ec2_client = Ec2Client::new(Client::new(), aws_config);
+        let elbv2_client = Elbv2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
+        let ec2_client = Ec2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         // Find default VPC and subnets
         let (default_vpc_id, default_subnet_ids) =
@@ -850,7 +851,7 @@ async fn test_elbv2_client_with_invalid_credentials(_ctx: &mut Elbv2TestContext)
         },
         service_overrides: None,
     };
-    let invalid_client = Elbv2Client::new(Client::new(), invalid_config);
+    let invalid_client = Elbv2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
 
     info!("🔐 Testing ELBv2 client with invalid credentials");
 

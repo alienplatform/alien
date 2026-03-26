@@ -36,6 +36,7 @@ alien-cli-common = { workspace = true }
 # Local development dependencies (always enabled)
 alien-local = { workspace = true }
 alien-deployment = { workspace = true }
+alien-aws-clients = { workspace = true }
 alien-bindings = { workspace = true }
 alien-commands = { workspace = true, features = ["server"] }
 alien-manager = { workspace = true }

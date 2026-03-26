@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::traits::{Binding, Function, FunctionInvokeRequest, FunctionInvokeResponse};
 use alien_azure_clients::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
-use alien_azure_clients::AzureClientConfig;
+use alien_azure_clients::{AzureClientConfig, AzureTokenCache};
 use alien_core::bindings::ContainerAppFunctionBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ impl ContainerAppFunction {
         config: AzureClientConfig,
         binding: ContainerAppFunctionBinding,
     ) -> Self {
-        let container_apps_client = AzureContainerAppsClient::new(client.clone(), config);
+        let container_apps_client = AzureContainerAppsClient::new(client.clone(), AzureTokenCache::new(config));
         Self {
             client,
             container_apps_client,

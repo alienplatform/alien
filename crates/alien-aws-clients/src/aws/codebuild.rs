@@ -1,10 +1,8 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use aws_credential_types::Credentials;
 use bon::Builder;
 use form_urlencoded;
 use reqwest::{Client, Method, StatusCode};
@@ -45,33 +43,33 @@ pub trait CodeBuildApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct CodeBuildClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl CodeBuildClient {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     /// Get the region for this CodeBuild client
     pub fn region(&self) -> &str {
-        &self.config.region
+        self.credentials.region()
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "codebuild".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("codebuild") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("codebuild") {
             override_url.to_string()
         } else {
-            format!("https://codebuild.{}.amazonaws.com", self.config.region)
+            format!("https://codebuild.{}.amazonaws.com", self.credentials.region())
         }
     }
 
@@ -83,13 +81,14 @@ impl CodeBuildClient {
         body: String,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .post(&url)
-            .host(&format!("codebuild.{}.amazonaws.com", self.config.region))
+            .host(&format!("codebuild.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("CodeBuild_20161006.{}", action))
             .header("Content-Type", "application/x-amz-json-1.1")
             .body(body.clone());
@@ -101,13 +100,14 @@ impl CodeBuildClient {
     }
 
     async fn post_empty_response(&self, action: &str, body: String, resource: &str) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .post(&url)
-            .host(&format!("codebuild.{}.amazonaws.com", self.config.region))
+            .host(&format!("codebuild.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("CodeBuild_20161006.{}", action))
             .header("Content-Type", "application/x-amz-json-1.1")
             .body(body.clone());

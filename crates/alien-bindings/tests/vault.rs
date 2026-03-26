@@ -36,7 +36,7 @@ use alien_azure_clients::models::keyvault::{
     VaultCreateOrUpdateParameters, VaultProperties,
 };
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
 #[cfg(feature = "azure")]
 use alien_error::{AlienError, Context};
 #[cfg(feature = "azure")]
@@ -480,8 +480,8 @@ impl AsyncTestContext for AzureProviderTestContext {
             subscription_id, resource_group_name
         );
 
-        let management_client = AzureKeyVaultManagementClient::new(Client::new(), config.clone());
-        let secrets_client = AzureKeyVaultSecretsClient::new(Client::new(), config.clone());
+        let management_client = AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let secrets_client = AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
 
         // Create the actual Azure Key Vault
         Self::create_azure_key_vault(&management_client, &resource_group_name, &test_vault_name)
@@ -656,13 +656,11 @@ impl AzureProviderTestContext {
     async fn resolve_service_principal_object_id(
         management_client: &AzureKeyVaultManagementClient,
     ) -> Result<String, alien_client_core::Error> {
-        use alien_azure_clients::AzureClientConfigExt as _;
-
         info!("🔍 Auto-resolving object ID from JWT token...");
 
         // Get a bearer token for Azure Resource Manager (this will contain the oid claim)
         let bearer_token = management_client
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await
             .context(alien_client_core::ErrorData::HttpRequestFailed {

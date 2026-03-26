@@ -217,7 +217,13 @@ async fn make_push_settings(
                     message: "Expected AWS client config".to_string(),
                 })
             })?;
-            let registry = EcrArtifactRegistry::new(binding_name, binding, aws_config)
+            let credentials =
+                alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to create AWS credential provider".to_string(),
+                    })?;
+            let registry = EcrArtifactRegistry::new(binding_name, binding, &credentials)
                 .await
                 .context(ErrorData::ConfigurationError {
                     message: "Failed to initialize ECR binding".to_string(),

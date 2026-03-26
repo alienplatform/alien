@@ -483,7 +483,7 @@ systemctl start horizond
         config: &ContainerCluster,
     ) -> Result<()> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let instance_profile_arn = self.instance_profile_arn.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Instance profile ARN not set".to_string(),
@@ -598,7 +598,7 @@ systemctl start horizond
         config: &ContainerCluster,
     ) -> Result<()> {
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
         let network_ref = ResourceRef::new(Network::RESOURCE_TYPE, "default-network".to_string());
         let network = ctx.require_dependency::<AwsNetworkController>(&network_ref)?;
         let subnet_ids = if !network.private_subnet_ids.is_empty()
@@ -698,8 +698,8 @@ systemctl start horizond
         resource_id: &str,
     ) -> Result<()> {
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         if let Some(state) = self.asg_states.remove(group_id) {
             if let Some(asg_name) = state.asg_name {
                 let _ = asg_client
@@ -836,7 +836,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         let role_name = format!("{}-{}-role", ctx.resource_prefix, config.id);
@@ -1004,7 +1004,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         let role_name = self.role_name.as_ref().ok_or_else(|| {
@@ -1067,7 +1067,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         // Get VPC from network dependency
@@ -1170,7 +1170,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         let instance_profile_arn = self.instance_profile_arn.as_ref().ok_or_else(|| {
@@ -1293,7 +1293,7 @@ impl AwsContainerClusterController {
         if let Some(monitoring) = &ctx.deployment_config.monitoring {
             let secrets_client = ctx
                 .service_provider
-                .get_aws_secrets_manager_client(aws_cfg)?;
+                .get_aws_secrets_manager_client(aws_cfg).await?;
 
             let logs_secret_id = Self::otlp_auth_secret_name_for(ctx.resource_prefix);
             Self::aws_upsert_secret(
@@ -1423,7 +1423,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
+        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         let network_ref = ResourceRef::new(Network::RESOURCE_TYPE, "default-network".to_string());
@@ -1500,7 +1500,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         // Get subnets from network dependency
@@ -1642,7 +1642,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
 
         let asg_names: Vec<String> = self
@@ -1732,7 +1732,7 @@ impl AwsContainerClusterController {
 
                 if self.boot_check_iterations >= BOOT_DIAG_TIMEOUT_ITERATIONS {
                     let boot_log = Self::collect_console_output(
-                        &*ctx.service_provider.get_aws_ec2_client(aws_cfg)?,
+                        &*ctx.service_provider.get_aws_ec2_client(aws_cfg).await?,
                         &self.asg_states,
                     )
                     .await;
@@ -1757,7 +1757,7 @@ impl AwsContainerClusterController {
 
             if self.boot_check_iterations >= BOOT_DIAG_TIMEOUT_ITERATIONS {
                 let boot_log = Self::collect_console_output(
-                    &*ctx.service_provider.get_aws_ec2_client(aws_cfg)?,
+                    &*ctx.service_provider.get_aws_ec2_client(aws_cfg).await?,
                     &self.asg_states,
                 )
                 .await;
@@ -1797,7 +1797,7 @@ impl AwsContainerClusterController {
 
         // Periodic health check - verify ASGs exist and update instance counts
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
 
         let asg_names: Vec<String> = self
             .asg_states
@@ -1880,7 +1880,7 @@ impl AwsContainerClusterController {
         let aws_cfg = ctx.get_aws_config()?;
         let secrets_client = ctx
             .service_provider
-            .get_aws_secrets_manager_client(aws_cfg)?;
+            .get_aws_secrets_manager_client(aws_cfg).await?;
 
         if let Some(monitoring) = &ctx.deployment_config.monitoring {
             let logs_secret_id = Self::otlp_auth_secret_name_for(ctx.resource_prefix);
@@ -1999,7 +1999,7 @@ impl AwsContainerClusterController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
 
         for group in &config.capacity_groups {
             if let Some(state) = self.asg_states.get_mut(&group.group_id) {
@@ -2155,7 +2155,7 @@ impl AwsContainerClusterController {
         }
 
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
         let new_asg_names: Vec<String> = self
             .new_groups_pending_ready
             .iter()
@@ -2226,7 +2226,7 @@ impl AwsContainerClusterController {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             let boot_log = Self::collect_console_output(
-                &*ctx.service_provider.get_aws_ec2_client(aws_cfg)?,
+                &*ctx.service_provider.get_aws_ec2_client(aws_cfg).await?,
                 &new_states,
             )
             .await;
@@ -2276,7 +2276,7 @@ impl AwsContainerClusterController {
         self.rolling_update_poll_iterations = 0;
 
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let cluster_id = self.horizon_cluster_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Horizon cluster ID not set".to_string(),
@@ -2360,7 +2360,7 @@ impl AwsContainerClusterController {
 
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
 
         self.instance_refresh_ids.clear();
 
@@ -2428,7 +2428,7 @@ impl AwsContainerClusterController {
 
         let config = ctx.desired_resource_config::<ContainerCluster>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
 
         const ROLLING_UPDATE_TIMEOUT: u32 = 60;
 
@@ -2492,7 +2492,7 @@ impl AwsContainerClusterController {
 
         self.rolling_update_poll_iterations += 1;
         if self.rolling_update_poll_iterations >= ROLLING_UPDATE_TIMEOUT {
-            let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+            let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
             let boot_log = Self::collect_console_output(&*ec2_client, &self.asg_states).await;
             return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
@@ -2539,7 +2539,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg)?;
+        let asg_client = ctx.service_provider.get_aws_autoscaling_client(aws_cfg).await?;
 
         for state in self.asg_states.values() {
             if let Some(asg_name) = &state.asg_name {
@@ -2589,7 +2589,7 @@ impl AwsContainerClusterController {
     ) -> Result<HandlerAction> {
         if let Some(tg_arn) = &self.target_group_arn {
             let aws_cfg = ctx.get_aws_config()?;
-            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
+            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
 
             info!(target_group_arn = %tg_arn, "Deleting health check target group");
 
@@ -2627,7 +2627,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         for template in self.launch_templates.values() {
             let template_id = &template.template_id;
@@ -2661,7 +2661,7 @@ impl AwsContainerClusterController {
         // Delete OTLP auth header secrets if they were created
         let secrets_client = ctx
             .service_provider
-            .get_aws_secrets_manager_client(aws_cfg)?;
+            .get_aws_secrets_manager_client(aws_cfg).await?;
         for otlp_secret_name in [
             self.otlp_auth_secret_name.take(),
             self.otlp_metrics_auth_secret_name.take(),
@@ -2710,7 +2710,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         if let Some(sg_id) = &self.security_group_id {
             info!(sg_id = %sg_id, "Deleting security group");
@@ -2749,7 +2749,7 @@ impl AwsContainerClusterController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg)?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         // Remove role from instance profile
         if let (Some(profile_name), Some(role_name)) =

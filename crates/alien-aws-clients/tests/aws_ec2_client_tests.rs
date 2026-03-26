@@ -44,6 +44,7 @@ cargo test --package alien-aws-clients --test aws_ec2_client_tests test_vpc_netw
 */
 
 use alien_aws_clients::ec2::*;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -102,7 +103,7 @@ impl AsyncTestContext for Ec2TestContext {
             },
             service_overrides: None,
         };
-        let client = Ec2Client::new(Client::new(), aws_config);
+        let client = Ec2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         Ec2TestContext {
             client,
@@ -1383,7 +1384,7 @@ async fn test_ec2_client_with_invalid_credentials(_ctx: &mut Ec2TestContext) {
         service_overrides: None,
     };
 
-    let invalid_client = Ec2Client::new(Client::new(), aws_config);
+    let invalid_client = Ec2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
     let result = invalid_client
         .describe_vpcs(DescribeVpcsRequest::builder().build())

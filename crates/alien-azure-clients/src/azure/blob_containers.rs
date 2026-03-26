@@ -1,7 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::blob::BlobContainer;
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -58,17 +57,17 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureBlobContainerClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureBlobContainerClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -85,14 +84,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         blob_container: &BlobContainer,
     ) -> Result<BlobContainer> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}",
-                self.client_config.subscription_id, resource_group_name, storage_account_name, container_name
+                self.token_cache.config().subscription_id, resource_group_name, storage_account_name, container_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -148,14 +147,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         container_name: &str,
     ) -> Result<BlobContainer> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}",
-                self.client_config.subscription_id, resource_group_name, storage_account_name, container_name
+                self.token_cache.config().subscription_id, resource_group_name, storage_account_name, container_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -198,14 +197,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         container_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}",
-                self.client_config.subscription_id, resource_group_name, storage_account_name, container_name
+                self.token_cache.config().subscription_id, resource_group_name, storage_account_name, container_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -231,14 +230,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         blob_container: &BlobContainer,
     ) -> Result<BlobContainer> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}",
-                self.client_config.subscription_id, resource_group_name, storage_account_name, container_name
+                self.token_cache.config().subscription_id, resource_group_name, storage_account_name, container_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );

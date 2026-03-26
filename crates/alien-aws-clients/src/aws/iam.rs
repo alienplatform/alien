@@ -1,13 +1,11 @@
-use crate::aws::AwsClientConfigExt;
 use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, ContextError};
 use async_trait::async_trait;
-use aws_credential_types::Credentials;
 use bon::Builder;
 use form_urlencoded;
 
@@ -78,26 +76,26 @@ pub trait IamApi: Send + Sync + Debug {
 #[derive(Debug, Clone)]
 pub struct IamClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl IamClient {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "iam".into(),
             // IAM is *always* signed in us-east-1 regardless of the target region.
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: Some("us-east-1".into()),
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("iam") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("iam") {
             override_url.to_string()
         } else {
             "https://iam.amazonaws.com".to_string()
@@ -130,6 +128,7 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
         let builder = self
@@ -174,6 +173,7 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
         let builder = self

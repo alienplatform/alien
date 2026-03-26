@@ -108,6 +108,7 @@ aws iam attach-role-policy \
 
 use alien_aws_clients::lambda::*;
 use alien_aws_clients::sqs::SqsApi as _;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
 use anyhow;
@@ -157,7 +158,7 @@ impl AsyncTestContext for LambdaTestContext {
             },
             service_overrides: None,
         };
-        let client = LambdaClient::new(Client::new(), aws_config);
+        let client = LambdaClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         let image_uri = std::env::var("ALIEN_TEST_AWS_LAMBDA_IMAGE")
             .expect("ALIEN_TEST_AWS_LAMBDA_IMAGE must be set in .env.test");
@@ -658,7 +659,7 @@ async fn test_lambda_client_with_invalid_credentials(ctx: &mut LambdaTestContext
         },
         service_overrides: None,
     };
-    let lambda_client = LambdaClient::new(client_invalid, aws_config);
+    let lambda_client = LambdaClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
 
     info!("🔐 Testing Lambda client with invalid credentials");
 
@@ -1283,7 +1284,7 @@ async fn test_sqs_lambda_event_source_mapping_e2e(ctx: &mut LambdaTestContext) {
     // Step 1: Create SQS client
     let sqs_client = alien_aws_clients::sqs::SqsClient::new(
         Client::new(),
-        alien_aws_clients::AwsClientConfig {
+        AwsCredentialProvider::from_config_sync(alien_aws_clients::AwsClientConfig {
             account_id: std::env::var("AWS_MANAGEMENT_ACCOUNT_ID")
                 .expect("AWS_MANAGEMENT_ACCOUNT_ID must be set"),
             region: std::env::var("AWS_MANAGEMENT_REGION")
@@ -1296,7 +1297,7 @@ async fn test_sqs_lambda_event_source_mapping_e2e(ctx: &mut LambdaTestContext) {
                 session_token: None,
             },
             service_overrides: None,
-        },
+        }),
     );
 
     // Step 2: Create SQS Queue

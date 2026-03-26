@@ -19,8 +19,7 @@
 //! ```
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::ContextError;
 use async_trait::async_trait;
@@ -119,40 +118,40 @@ pub trait Elbv2Api: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct Elbv2Client {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl Elbv2Client {
     /// Create a new ELBv2 client.
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "elasticloadbalancing".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
         if let Some(override_url) = self
-            .config
+            .credentials
             .get_service_endpoint_option("elasticloadbalancing")
         {
             override_url.to_string()
         } else {
             format!(
                 "https://elasticloadbalancing.{}.amazonaws.com",
-                self.config.region
+                self.credentials.region()
             )
         }
     }
 
     fn get_host(&self) -> String {
-        format!("elasticloadbalancing.{}.amazonaws.com", self.config.region)
+        format!("elasticloadbalancing.{}.amazonaws.com", self.credentials.region())
     }
 
     // ------------------------- Internal Helpers -------------------------
@@ -163,6 +162,7 @@ impl Elbv2Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let form_body = form_urlencoded::Serializer::new(String::new())
@@ -189,6 +189,7 @@ impl Elbv2Client {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let form_body = form_urlencoded::Serializer::new(String::new())

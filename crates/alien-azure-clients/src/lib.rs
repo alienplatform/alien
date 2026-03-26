@@ -31,6 +31,7 @@ pub use azure::storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi
 pub use azure::tables::{
     AzureTableManagementClient, AzureTableStorageClient, TableManagementApi, TableStorageApi,
 };
+pub use azure::token_cache::AzureTokenCache;
 
 // Re-export error types from alien-client-core
 pub use alien_client_core::{Error, ErrorData, Result};

@@ -154,7 +154,7 @@ impl AwsFunctionController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let cfg = ctx.desired_resource_config::<Function>()?;
         info!(name=%cfg.id, code=?cfg.code, "Initiating creation");
 
@@ -290,7 +290,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
         debug!(name=%aws_function_name, "Checking function state");
@@ -413,7 +413,7 @@ impl AwsFunctionController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
 
         let aws_cfg = ctx.get_aws_config()?;
-        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg)?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
         let response = acm_client
             .import_certificate(
                 alien_aws_clients::acm::ImportCertificateRequest::builder()
@@ -449,7 +449,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api = client
@@ -493,7 +493,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -550,7 +550,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -599,7 +599,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -641,7 +641,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let fqdn = self.fqdn.clone().ok_or_else(|| {
@@ -706,7 +706,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -760,7 +760,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
 
@@ -921,7 +921,7 @@ impl AwsFunctionController {
         }
 
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &config.id);
 
         // Now that we have the URL, update the environment variables
@@ -1059,7 +1059,7 @@ impl AwsFunctionController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Function>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &config.id);
 
         if let Some(limit) = config.concurrency_limit {
@@ -1089,7 +1089,7 @@ impl AwsFunctionController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
 
@@ -1165,7 +1165,7 @@ impl AwsFunctionController {
         // UpdateStart only handles code updates if needed
         if code_changed {
             let aws_cfg = ctx.get_aws_config()?;
-            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
             let image_uri = match &current_config.code {
                 alien_core::FunctionCode::Image { image } => image,
@@ -1214,7 +1214,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let current_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &current_config.id);
         let arn = self.arn.as_ref().ok_or_else(|| {
@@ -1268,7 +1268,7 @@ impl AwsFunctionController {
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Function>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &current_config.id);
 
         // Get the ServiceAccount for this function's permission profile
@@ -1353,7 +1353,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let current_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &current_config.id);
         let arn = self.arn.as_ref().ok_or_else(|| {
@@ -1471,7 +1471,7 @@ impl AwsFunctionController {
             // For simplicity, we'll delete old mappings and create new ones
             // In a production system, you might want to do a more sophisticated diff
             let aws_cfg = ctx.get_aws_config()?;
-            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
             // Delete existing mappings
             for uuid in &self.event_source_mappings.clone() {
@@ -1529,7 +1529,7 @@ impl AwsFunctionController {
         let config = ctx.desired_resource_config::<Function>()?;
         let prev_config = ctx.previous_resource_config::<Function>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &config.id);
 
         if config.concurrency_limit != prev_config.concurrency_limit {
@@ -1574,7 +1574,7 @@ impl AwsFunctionController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
 
@@ -1629,7 +1629,7 @@ impl AwsFunctionController {
         if let (Some(domain_name), Some(api_mapping_id)) =
             (self.domain_name.as_ref(), self.api_mapping_id.as_ref())
         {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
             match client.delete_api_mapping(domain_name, api_mapping_id).await {
                 Ok(()) => info!(function=%function_config.id, "API mapping deleted"),
                 Err(e)
@@ -1651,7 +1651,7 @@ impl AwsFunctionController {
         self.api_mapping_id = None;
 
         if let Some(domain_name) = self.domain_name.as_ref() {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
             match client.delete_domain_name(domain_name).await {
                 Ok(()) => {
                     info!(function=%function_config.id, domain=%domain_name, "Custom domain deleted")
@@ -1676,7 +1676,7 @@ impl AwsFunctionController {
 
         // Deleting the API cascades to routes, integrations, and stages.
         if let Some(api_id) = self.api_id.as_ref() {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg)?;
+            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
             match client.delete_api(api_id).await {
                 Ok(()) => {
                     info!(function=%function_config.id, api_id=%api_id, "API Gateway deleted")
@@ -1718,7 +1718,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         // Linear flow principle: Always perform this state, even if no event source mappings
@@ -1771,7 +1771,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
         info!(name=%aws_function_name, "Deleting function itself: {}", aws_function_name);
@@ -1812,7 +1812,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let arn = self.arn.as_ref();
         let function_config = ctx.desired_resource_config::<Function>()?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &function_config.id);
@@ -1861,7 +1861,7 @@ impl AwsFunctionController {
 
         if let Some(certificate_arn) = self.certificate_arn.as_ref() {
             let aws_cfg = ctx.get_aws_config()?;
-            let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg)?;
+            let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
             match acm_client.delete_certificate(certificate_arn).await {
                 Ok(()) => info!(function=%function_config.id, "ACM certificate deleted"),
                 Err(e)
@@ -2075,7 +2075,7 @@ impl AwsFunctionController {
                 permission_set.id.replace('/', "-")
             );
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
                 .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
                 .await
@@ -2139,7 +2139,7 @@ impl AwsFunctionController {
         function_config: &alien_core::Function,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<()> {
-        let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg)?;
+        let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
         // Get queue controller to access outputs
         let queue_controller =

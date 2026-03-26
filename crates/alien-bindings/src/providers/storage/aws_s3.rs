@@ -5,6 +5,7 @@ use crate::{
     presigned::{PresignedOperation, PresignedRequest, PresignedRequestBackend},
     traits::{Binding, Storage},
 };
+use alien_aws_clients::AwsCredentialProvider;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -38,7 +39,7 @@ impl S3Storage {
     /// Uses AWS config for credentials.
     pub fn new(
         bucket_name: String,
-        aws_config: &alien_core::AwsClientConfig,
+        credentials: AwsCredentialProvider,
     ) -> Result<Self, Error> {
         let s3_url = format!("s3://{}", bucket_name);
         let url =
@@ -49,12 +50,13 @@ impl S3Storage {
                     reason: "Invalid S3 URL format".to_string(),
                 })?;
 
-        // Build the store with credentials bridged from AwsClientConfig
-        let credentials = AwsCredentialBridge::new(aws_config.clone());
+        // Build the store with credentials bridged from AwsCredentialProvider
+        let region = credentials.region().to_string();
+        let cred_bridge = AwsCredentialBridge::new(credentials);
         let store = AmazonS3Builder::new()
             .with_bucket_name(&bucket_name)
-            .with_region(&aws_config.region)
-            .with_credentials(Arc::new(credentials))
+            .with_region(&region)
+            .with_credentials(Arc::new(cred_bridge))
             .build()
             .into_alien_error()
             .context(ErrorData::BindingSetupFailed {

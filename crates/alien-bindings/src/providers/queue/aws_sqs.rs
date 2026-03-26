@@ -23,14 +23,8 @@ impl Debug for AwsSqsQueue {
 }
 
 impl AwsSqsQueue {
-    pub async fn new(
-        queue_url: String,
-        aws_config: alien_aws_clients::AwsClientConfig,
-    ) -> Result<Self> {
-        Ok(Self {
-            queue_url,
-            client: SqsClient::new(crate::http_client::create_http_client(), aws_config),
-        })
+    pub fn new(queue_url: String, client: SqsClient) -> Self {
+        Self { queue_url, client }
     }
 }
 

@@ -1,7 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::managedservices::{RegistrationAssignment, RegistrationDefinition};
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -75,17 +74,17 @@ pub trait ManagedServicesApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureManagedServicesClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureManagedServicesClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -100,7 +99,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_definition_id: &str,
     ) -> Result<RegistrationDefinition> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -158,7 +157,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_definition: &RegistrationDefinition,
     ) -> Result<RegistrationDefinition> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -225,7 +224,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_definition_id: &str,
     ) -> Result<Option<RegistrationDefinition>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -293,7 +292,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_assignment_id: &str,
     ) -> Result<RegistrationAssignment> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -351,7 +350,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_assignment: &RegistrationAssignment,
     ) -> Result<RegistrationAssignment> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -421,7 +420,7 @@ impl ManagedServicesApi for AzureManagedServicesClient {
         registration_assignment_id: &str,
     ) -> Result<Option<RegistrationAssignment>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 

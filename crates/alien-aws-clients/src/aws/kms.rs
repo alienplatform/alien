@@ -1,10 +1,8 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use aws_credential_types::Credentials;
 use bon::Builder;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -35,28 +33,28 @@ pub trait KmsApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct KmsClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl KmsClient {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "kms".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("kms") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("kms") {
             override_url.to_string()
         } else {
-            format!("https://kms.{}.amazonaws.com", self.config.region)
+            format!("https://kms.{}.amazonaws.com", self.credentials.region())
         }
     }
 
@@ -69,13 +67,14 @@ impl KmsClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .request(Method::POST, &url)
-            .host(&format!("kms.{}.amazonaws.com", self.config.region))
+            .host(&format!("kms.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("TrentService.{}", target))
             .content_type_amz_json()
             .content_sha256(&body)
@@ -94,13 +93,14 @@ impl KmsClient {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
 
         let builder = self
             .client
             .request(Method::POST, &url)
-            .host(&format!("kms.{}.amazonaws.com", self.config.region))
+            .host(&format!("kms.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", format!("TrentService.{}", target))
             .content_type_amz_json()
             .content_sha256(&body)

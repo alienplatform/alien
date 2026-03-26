@@ -4,8 +4,7 @@ use crate::azure::models::storage::{
     CheckNameAvailabilityResult, StorageAccount, StorageAccountCheckNameAvailabilityParameters,
     StorageAccountCreateParameters, StorageAccountListKeysResult, StorageAccountUpdateParameters,
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -76,15 +75,15 @@ pub trait StorageAccountsApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureStorageAccountsClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureStorageAccountsClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
-        let endpoint = client_config.management_endpoint().to_string();
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -100,14 +99,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         parameters: &StorageAccountCreateParameters,
     ) -> Result<StorageAccountOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-                &self.client_config.subscription_id, resource_group_name, account_name
+                &self.token_cache.config().subscription_id, resource_group_name, account_name
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );
@@ -142,14 +141,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         account_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-                &self.client_config.subscription_id, resource_group_name, account_name
+                &self.token_cache.config().subscription_id, resource_group_name, account_name
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );
@@ -174,14 +173,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         parameters: &StorageAccountUpdateParameters,
     ) -> Result<StorageAccountOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-                &self.client_config.subscription_id, resource_group_name, account_name
+                &self.token_cache.config().subscription_id, resource_group_name, account_name
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );
@@ -216,14 +215,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         account_name: &str,
     ) -> Result<StorageAccount> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-                &self.client_config.subscription_id, resource_group_name, account_name
+                &self.token_cache.config().subscription_id, resource_group_name, account_name
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );
@@ -274,14 +273,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         parameters: &StorageAccountCheckNameAvailabilityParameters,
     ) -> Result<CheckNameAvailabilityResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/providers/Microsoft.Storage/checkNameAvailability",
-                &self.client_config.subscription_id
+                &self.token_cache.config().subscription_id
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );
@@ -344,14 +343,14 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
         account_name: &str,
     ) -> Result<StorageAccountListKeysResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/listKeys",
-                &self.client_config.subscription_id, resource_group_name, account_name
+                &self.token_cache.config().subscription_id, resource_group_name, account_name
             ),
             Some(vec![("api-version", "2023-01-01".into())]),
         );

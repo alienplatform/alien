@@ -1,6 +1,5 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 
@@ -31,28 +30,28 @@ pub trait CloudWatchLogsApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct CloudWatchLogsClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl CloudWatchLogsClient {
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "logs".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("logs") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("logs") {
             override_url.to_string()
         } else {
-            format!("https://logs.{}.amazonaws.com", self.config.region)
+            format!("https://logs.{}.amazonaws.com", self.credentials.region())
         }
     }
 
@@ -195,6 +194,7 @@ impl CloudWatchLogsClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl CloudWatchLogsApi for CloudWatchLogsClient {
     async fn create_log_group(&self, request: CreateLogGroupRequest) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::SerializationError {
                 message: format!(
@@ -207,7 +207,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.CreateLogGroup")
             .content_type_amz_json()
             .content_sha256(&body)
@@ -227,6 +227,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
     }
 
     async fn delete_log_group(&self, log_group_name: &str) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let request = DeleteLogGroupRequest {
             log_group_name: log_group_name.to_string(),
         };
@@ -242,7 +243,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.DeleteLogGroup")
             .content_type_amz_json()
             .content_sha256(&body)
@@ -257,6 +258,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
     }
 
     async fn create_log_stream(&self, request: CreateLogStreamRequest) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::SerializationError {
                 message: format!(
@@ -269,7 +271,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.CreateLogStream")
             .content_type_amz_json()
             .content_sha256(&body)
@@ -289,6 +291,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
     }
 
     async fn delete_log_stream(&self, log_group_name: &str, log_stream_name: &str) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let request = DeleteLogStreamRequest {
             log_group_name: log_group_name.to_string(),
             log_stream_name: log_stream_name.to_string(),
@@ -305,7 +308,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.DeleteLogStream")
             .content_type_amz_json()
             .content_sha256(&body)
@@ -320,6 +323,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
     }
 
     async fn put_log_events(&self, request: PutLogEventsRequest) -> Result<PutLogEventsResponse> {
+        self.credentials.ensure_fresh().await?;
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::SerializationError {
                 message: format!(
@@ -332,7 +336,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.PutLogEvents")
             .content_type_amz_json()
             .content_sha256(&body)
@@ -352,6 +356,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
     }
 
     async fn get_log_events(&self, request: GetLogEventsRequest) -> Result<GetLogEventsResponse> {
+        self.credentials.ensure_fresh().await?;
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::SerializationError {
                 message: format!(
@@ -364,7 +369,7 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         let builder = self
             .client
             .request(Method::POST, &self.get_base_url())
-            .host(&format!("logs.{}.amazonaws.com", self.config.region))
+            .host(&format!("logs.{}.amazonaws.com", self.credentials.region()))
             .header("X-Amz-Target", "Logs_20140328.GetLogEvents")
             .content_type_amz_json()
             .content_sha256(&body)

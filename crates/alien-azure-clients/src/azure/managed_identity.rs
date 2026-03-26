@@ -1,7 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::managed_identity::{CloudError, Identity, IdentityUpdate};
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -60,15 +59,15 @@ pub trait ManagedIdentityApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureManagedIdentityClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureManagedIdentityClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
-        let endpoint = client_config.management_endpoint().to_string();
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -84,14 +83,14 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
         identity: &Identity,
     ) -> Result<Identity> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.client_config.subscription_id, 
+                &self.token_cache.config().subscription_id, 
                 resource_group_name, 
                 resource_name
             ),
@@ -158,14 +157,14 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
         resource_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.client_config.subscription_id, 
+                &self.token_cache.config().subscription_id, 
                 resource_group_name, 
                 resource_name
             ),
@@ -191,14 +190,14 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
         resource_name: &str,
     ) -> Result<Identity> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.client_config.subscription_id, 
+                &self.token_cache.config().subscription_id, 
                 resource_group_name, 
                 resource_name
             ),
@@ -253,14 +252,14 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
         identity_update: &IdentityUpdate,
     ) -> Result<Identity> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.client_config.subscription_id, 
+                &self.token_cache.config().subscription_id, 
                 resource_group_name, 
                 resource_name
             ),
@@ -328,7 +327,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
     ) -> String {
         format!(
             "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-            &self.client_config.subscription_id, 
+            &self.token_cache.config().subscription_id, 
             resource_group_name, 
             resource_name
         )

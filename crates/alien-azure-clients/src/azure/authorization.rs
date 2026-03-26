@@ -1,8 +1,8 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::authorization_role_assignments::RoleAssignment;
 use crate::azure::models::authorization_role_definitions::RoleDefinition;
+use crate::azure::token_cache::AzureTokenCache;
 use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -140,17 +140,17 @@ impl Scope {
 #[derive(Debug)]
 pub struct AzureAuthorizationClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureAuthorizationClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -166,11 +166,11 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_definition: &RoleDefinition,
     ) -> Result<RoleDefinition> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let scope_string = scope.to_scope_string(&self.client_config);
+        let scope_string = scope.to_scope_string(self.token_cache.config());
         let url = self.base.build_url(
             &format!(
                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
@@ -230,11 +230,11 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_definition_id: String,
     ) -> Result<Option<RoleDefinition>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let scope_string = scope.to_scope_string(&self.client_config);
+        let scope_string = scope.to_scope_string(self.token_cache.config());
         let url = self.base.build_url(
             &format!(
                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
@@ -296,11 +296,11 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_definition_id: String,
     ) -> Result<RoleDefinition> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let scope_string = scope.to_scope_string(&self.client_config);
+        let scope_string = scope.to_scope_string(self.token_cache.config());
         let url = self.base.build_url(
             &format!(
                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
@@ -349,7 +349,7 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_assignment: &RoleAssignment,
     ) -> Result<RoleAssignment> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -411,7 +411,7 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_assignment_id: String,
     ) -> Result<Option<RoleAssignment>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -472,7 +472,7 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_assignment_id: String,
     ) -> Result<RoleAssignment> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
@@ -528,11 +528,11 @@ impl AuthorizationApi for AzureAuthorizationClient {
         role_definition_id: Option<String>,
     ) -> Result<Vec<RoleAssignment>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let scope_string = scope.to_scope_string(&self.client_config);
+        let scope_string = scope.to_scope_string(self.token_cache.config());
 
         // Build query parameters
         let query_params = vec![
@@ -611,7 +611,7 @@ impl AuthorizationApi for AzureAuthorizationClient {
     /// # Returns
     /// Full role assignment ID in the format: /{scope}/providers/Microsoft.Authorization/roleAssignments/{roleAssignmentName}
     fn build_role_assignment_id(&self, scope: &Scope, role_assignment_name: String) -> String {
-        let scope_string = scope.to_scope_string(&self.client_config);
+        let scope_string = scope.to_scope_string(self.token_cache.config());
         format!(
             "/{}/providers/Microsoft.Authorization/roleAssignments/{}",
             scope_string, role_assignment_name

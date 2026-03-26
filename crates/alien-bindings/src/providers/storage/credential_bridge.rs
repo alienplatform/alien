@@ -98,27 +98,21 @@ pub(crate) use gcp::GcpCredentialBridge;
 #[cfg(feature = "aws")]
 mod aws {
     use super::*;
-    use alien_aws_clients::AwsClientConfigExt;
-    use alien_core::AwsCredentials;
+    use alien_aws_clients::AwsCredentialProvider;
     use object_store::aws::AwsCredential;
 
-    /// Bridges `AwsClientConfig` to `object_store::CredentialProvider<Credential = AwsCredential>`.
+    /// Bridges `AwsCredentialProvider` to `object_store::CredentialProvider<Credential = AwsCredential>`.
     ///
-    /// The original config is kept immutable so that WebIdentity credentials can always
-    /// perform a fresh STS exchange when the cache expires. Temporary STS credentials
-    /// have their own expiry (~1 hour), so we must re-exchange rather than reuse stale keys.
+    /// Delegates credential refresh to `AwsCredentialProvider` which handles WebIdentity/IRSA
+    /// token exchange and caching. This bridge only converts the credential format for `object_store`.
     #[derive(Debug)]
     pub(crate) struct AwsCredentialBridge {
-        config: alien_core::AwsClientConfig,
-        cache: Mutex<Option<CachedCredential<AwsCredential>>>,
+        provider: AwsCredentialProvider,
     }
 
     impl AwsCredentialBridge {
-        pub(crate) fn new(config: alien_core::AwsClientConfig) -> Self {
-            Self {
-                config,
-                cache: Mutex::new(None),
-            }
+        pub(crate) fn new(provider: AwsCredentialProvider) -> Self {
+            Self { provider }
         }
     }
 
@@ -127,48 +121,16 @@ mod aws {
         type Credential = AwsCredential;
 
         async fn get_credential(&self) -> object_store::Result<Arc<AwsCredential>> {
-            let mut cache = self.cache.lock().await;
-            if let Some(ref cached) = *cache {
-                if Instant::now() < cached.expires_at {
-                    return Ok(Arc::clone(&cached.credential));
-                }
-            }
+            self.provider
+                .ensure_fresh()
+                .await
+                .map_err(|e| to_object_store_error("S3", e))?;
 
-            let credential = match &self.config.credentials {
-                AwsCredentials::AccessKeys {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                } => Arc::new(AwsCredential {
-                    key_id: access_key_id.clone(),
-                    secret_key: secret_access_key.clone(),
-                    token: session_token.clone(),
-                }),
-                AwsCredentials::WebIdentity { .. } => {
-                    let resolved = self
-                        .config
-                        .get_web_identity_credentials()
-                        .await
-                        .map_err(|e| to_object_store_error("S3", e))?;
-
-                    match resolved.credentials {
-                        AwsCredentials::AccessKeys {
-                            access_key_id,
-                            secret_access_key,
-                            session_token,
-                        } => Arc::new(AwsCredential {
-                            key_id: access_key_id,
-                            secret_key: secret_access_key,
-                            token: session_token,
-                        }),
-                        _ => unreachable!("get_web_identity_credentials always returns AccessKeys"),
-                    }
-                }
-            };
-
-            *cache = Some(CachedCredential {
-                credential: Arc::clone(&credential),
-                expires_at: Instant::now() + CACHE_TTL,
+            let creds = self.provider.get_credentials();
+            let credential = Arc::new(AwsCredential {
+                key_id: creds.access_key_id().to_string(),
+                secret_key: creds.secret_access_key().to_string(),
+                token: creds.session_token().map(|s| s.to_string()),
             });
             Ok(credential)
         }

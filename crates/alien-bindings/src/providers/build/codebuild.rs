@@ -16,7 +16,7 @@ use alien_aws_clients::{
         BatchGetBuildsRequest, CodeBuildApi, CodeBuildClient, EnvironmentVariable,
         StartBuildRequest, StopBuildRequest,
     },
-    AwsClientConfig,
+    AwsCredentialProvider,
 };
 
 /// AWS implementation of the `Build` trait using CodeBuild.
@@ -34,10 +34,10 @@ impl CodebuildBuild {
     pub async fn new(
         binding_name: String,
         binding: BuildBinding,
-        aws_config: &AwsClientConfig,
+        credentials: &AwsCredentialProvider,
     ) -> Result<Self, Error> {
         let client =
-            CodeBuildClient::new(crate::http_client::create_http_client(), aws_config.clone());
+            CodeBuildClient::new(crate::http_client::create_http_client(), credentials.clone());
 
         // Extract values from binding
         let config = match binding {

@@ -7,7 +7,16 @@ use alien_error::AlienError;
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::time::{Duration, Instant};
 use url::Url;
+
+/// How long a cached bearer token is considered valid before re-fetching.
+const TOKEN_CACHE_TTL: Duration = Duration::from_secs(45 * 60);
+
+struct CachedToken {
+    token: String,
+    expires_at: Instant,
+}
 
 pub trait GcpServiceConfig: Send + Sync + std::fmt::Debug {
     fn base_url(&self) -> &'static str;
@@ -18,16 +27,31 @@ pub trait GcpServiceConfig: Send + Sync + std::fmt::Debug {
 
 /// Lightweight client that relies on the cloud-agnostic helpers defined in
 /// `gcp_request_utils.rs` and `request_utils.rs`.
-#[derive(Debug)]
 pub struct GcpClientBase {
     http: Client,
     cfg: GcpClientConfig,
     svc_cfg: Box<dyn GcpServiceConfig>,
+    token_cache: tokio::sync::Mutex<Option<CachedToken>>,
+}
+
+impl std::fmt::Debug for GcpClientBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpClientBase")
+            .field("http", &self.http)
+            .field("cfg", &self.cfg)
+            .field("svc_cfg", &self.svc_cfg)
+            .finish()
+    }
 }
 
 impl GcpClientBase {
     pub fn new(http: Client, cfg: GcpClientConfig, svc_cfg: Box<dyn GcpServiceConfig>) -> Self {
-        Self { http, cfg, svc_cfg }
+        Self {
+            http,
+            cfg,
+            svc_cfg,
+            token_cache: tokio::sync::Mutex::new(None),
+        }
     }
 
     pub fn http_client(&self) -> &Client {
@@ -39,11 +63,51 @@ impl GcpClientBase {
     }
 
     /// Helper to obtain an auth config (Bearer token) for the current service.
+    ///
+    /// Caches the token for [`TOKEN_CACHE_TTL`] to avoid repeated token
+    /// generation/exchange on every request.  Caching is skipped for the
+    /// `AccessToken` credential variant because it is already a static,
+    /// pre-minted token.
     pub(crate) async fn auth(&self) -> Result<GcpAuthConfig> {
+        use alien_core::GcpCredentials;
+
+        // AccessToken is already a ready-to-use token – no caching needed.
+        if matches!(&self.cfg.credentials, GcpCredentials::AccessToken { .. }) {
+            let token = self
+                .cfg
+                .get_bearer_token(self.svc_cfg.default_audience())
+                .await?;
+            return Ok(GcpAuthConfig {
+                bearer_token: token,
+            });
+        }
+
+        // Check the cache first.
+        {
+            let cache = self.token_cache.lock().await;
+            if let Some(ref cached) = *cache {
+                if Instant::now() < cached.expires_at {
+                    return Ok(GcpAuthConfig {
+                        bearer_token: cached.token.clone(),
+                    });
+                }
+            }
+        }
+
+        // Cache miss or expired – fetch a fresh token.
         let token = self
             .cfg
             .get_bearer_token(self.svc_cfg.default_audience())
             .await?;
+
+        {
+            let mut cache = self.token_cache.lock().await;
+            *cache = Some(CachedToken {
+                token: token.clone(),
+                expires_at: Instant::now() + TOKEN_CACHE_TTL,
+            });
+        }
+
         Ok(GcpAuthConfig {
             bearer_token: token,
         })

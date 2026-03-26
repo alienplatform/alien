@@ -10,6 +10,7 @@ use alien_azure_clients::models::containerregistry::{
     TokenUpdatePropertiesStatus,
 };
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::env;
@@ -84,9 +85,9 @@ impl AsyncTestContext for ContainerRegistryTestContext {
         ContainerRegistryTestContext {
             container_registry_client: AzureContainerRegistryClient::new(
                 client.clone(),
-                client_config.clone(),
+                AzureTokenCache::new(client_config.clone()),
             ),
-            long_running_operation_client: LongRunningOperationClient::new(client, client_config),
+            long_running_operation_client: LongRunningOperationClient::new(client, AzureTokenCache::new(client_config)),
             subscription_id,
             resource_group_name,
             created_registries: Mutex::new(Vec::new()),

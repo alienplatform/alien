@@ -35,6 +35,7 @@ cargo test --package alien-aws-clients --test aws_ssm_client_tests test_paramete
 
 use alien_aws_clients::ssm::*;
 use alien_aws_clients::AwsClientConfig;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -75,7 +76,7 @@ impl AsyncTestContext for SsmTestContext {
             service_overrides: None,
         };
 
-        let client = SsmClient::new(Client::new(), aws_config);
+        let client = SsmClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         SsmTestContext {
             client,
@@ -494,7 +495,7 @@ async fn test_ssm_client_with_invalid_credentials(_ctx: &mut SsmTestContext) {
         },
         service_overrides: None,
     };
-    let invalid_client = SsmClient::new(Client::new(), invalid_config);
+    let invalid_client = SsmClient::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
 
     info!("🔐 Testing SSM client with invalid credentials");
 

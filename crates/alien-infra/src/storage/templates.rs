@@ -5,6 +5,7 @@ use tracing::info;
 use crate::error::{ErrorData, Result};
 use crate::{AwsStorageController, AwsStorageState, ResourceController};
 use alien_aws_clients::s3::S3Client;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::{Resource, Storage};
 use alien_error::{AlienError, Context};
 
@@ -46,7 +47,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
         info!(bucket=%physical_id, "Importing S3 bucket state from CloudFormation");
 
         // Create our custom S3 client using the AWS config from context
-        let client = S3Client::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = S3Client::new(reqwest::Client::new(), credentials);
 
         // Verify the bucket exists using get_bucket_location.
         // This AWS API call is used because it requires s3:GetBucketLocation permission,

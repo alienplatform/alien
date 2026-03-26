@@ -12,7 +12,7 @@ use alien_aws_clients::{
         GetAuthorizationTokenRequest, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
     },
     sts::{AssumeRoleRequest, StsApi, StsClient},
-    AwsClientConfig, AwsClientConfigExt as _,
+    AwsClientConfigExt as _, AwsCredentialProvider,
 };
 use alien_core::bindings::{ArtifactRegistryBinding, EcrArtifactRegistryBinding};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -26,7 +26,7 @@ use tracing::{info, warn};
 /// AWS ECR implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
 pub struct EcrArtifactRegistry {
-    aws_config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
     ecr_client: EcrClient,
     binding_name: String,
     repository_prefix: String,
@@ -39,7 +39,7 @@ impl EcrArtifactRegistry {
     pub async fn new(
         binding_name: String,
         binding: ArtifactRegistryBinding,
-        aws_config: &AwsClientConfig,
+        credentials: &AwsCredentialProvider,
     ) -> Result<Self> {
         info!(
             binding_name = %binding_name,
@@ -47,7 +47,7 @@ impl EcrArtifactRegistry {
         );
 
         let client = crate::http_client::create_http_client();
-        let ecr_client = EcrClient::new(client, aws_config.clone());
+        let ecr_client = EcrClient::new(client, credentials.clone());
 
         // Extract values from binding
         let config = match binding {
@@ -85,7 +85,7 @@ impl EcrArtifactRegistry {
             })?;
 
         Ok(Self {
-            aws_config: aws_config.clone(),
+            credentials: credentials.clone(),
             ecr_client,
             binding_name,
             repository_prefix,
@@ -214,7 +214,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             })
         })?;
         let impersonated = self
-            .aws_config
+            .credentials
+            .config()
             .impersonate(alien_aws_clients::AwsImpersonationConfig {
                 role_arn: push_role_arn.clone(),
                 session_name: Some("alien-ecr-create".to_string()),
@@ -225,7 +226,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR push role".to_string(), Some(repo_name.to_string())))?;
         let ecr_client = alien_aws_clients::ecr::EcrClient::new(
             crate::http_client::create_http_client(),
-            impersonated,
+            AwsCredentialProvider::from_config(impersonated)
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifact_registry.ecr".to_string(),
+                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                })?,
         );
 
         let request = CreateRepositoryRequest::builder()
@@ -281,7 +287,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             })
         })?;
         let impersonated = self
-            .aws_config
+            .credentials
+            .config()
             .impersonate(alien_aws_clients::AwsImpersonationConfig {
                 role_arn: pull_role_arn.clone(),
                 session_name: Some("alien-ecr-describe".to_string()),
@@ -292,7 +299,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR pull role".to_string(), Some(repo_id.to_string())))?;
         let ecr_client = alien_aws_clients::ecr::EcrClient::new(
             crate::http_client::create_http_client(),
-            impersonated,
+            AwsCredentialProvider::from_config(impersonated)
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifact_registry.ecr".to_string(),
+                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                })?,
         );
 
         let request = DescribeRepositoriesRequest::builder()
@@ -642,7 +654,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
         // Assume the role
         let impersonated_config = self
-            .aws_config
+            .credentials
+            .config()
             .impersonate(impersonation_config)
             .await
             .map_err(|e| {
@@ -656,7 +669,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         // Create ECR client with impersonated credentials
         let ecr_client = alien_aws_clients::ecr::EcrClient::new(
             crate::http_client::create_http_client(),
-            impersonated_config,
+            AwsCredentialProvider::from_config(impersonated_config)
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifact_registry.ecr".to_string(),
+                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                })?,
         );
 
         // Get ECR authorization token

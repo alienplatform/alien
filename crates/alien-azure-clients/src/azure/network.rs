@@ -6,8 +6,7 @@ use crate::azure::models::{
     public_ip_address::PublicIpAddress,
     virtual_network::{Subnet, VirtualNetwork},
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -205,20 +204,20 @@ pub trait NetworkApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureNetworkClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureNetworkClient {
     /// API version for Azure Network resources
     const API_VERSION: &'static str = "2024-05-01";
 
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -237,13 +236,13 @@ impl NetworkApi for AzureNetworkClient {
         virtual_network: &VirtualNetwork,
     ) -> Result<VirtualNetworkOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -279,13 +278,13 @@ impl NetworkApi for AzureNetworkClient {
         virtual_network_name: &str,
     ) -> Result<VirtualNetwork> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -335,13 +334,13 @@ impl NetworkApi for AzureNetworkClient {
         virtual_network_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -371,13 +370,13 @@ impl NetworkApi for AzureNetworkClient {
         subnet: &Subnet,
     ) -> Result<SubnetOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name, subnet_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -407,13 +406,13 @@ impl NetworkApi for AzureNetworkClient {
         subnet_name: &str,
     ) -> Result<Subnet> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name, subnet_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -461,13 +460,13 @@ impl NetworkApi for AzureNetworkClient {
         subnet_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
-                     &self.client_config.subscription_id, resource_group_name, virtual_network_name, subnet_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -492,14 +491,14 @@ impl NetworkApi for AzureNetworkClient {
         nat_gateway: &NatGateway,
     ) -> Result<NatGatewayOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.client_config.subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -533,14 +532,14 @@ impl NetworkApi for AzureNetworkClient {
         nat_gateway_name: &str,
     ) -> Result<NatGateway> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.client_config.subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -591,14 +590,14 @@ impl NetworkApi for AzureNetworkClient {
         nat_gateway_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.client_config.subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -624,13 +623,13 @@ impl NetworkApi for AzureNetworkClient {
         public_ip_address: &PublicIpAddress,
     ) -> Result<PublicIpAddressOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
-                     &self.client_config.subscription_id, resource_group_name, public_ip_address_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -666,13 +665,13 @@ impl NetworkApi for AzureNetworkClient {
         public_ip_address_name: &str,
     ) -> Result<PublicIpAddress> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
-                     &self.client_config.subscription_id, resource_group_name, public_ip_address_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -722,13 +721,13 @@ impl NetworkApi for AzureNetworkClient {
         public_ip_address_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
-                     &self.client_config.subscription_id, resource_group_name, public_ip_address_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -757,13 +756,13 @@ impl NetworkApi for AzureNetworkClient {
         network_security_group: &NetworkSecurityGroup,
     ) -> Result<NetworkSecurityGroupOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
-                     &self.client_config.subscription_id, resource_group_name, network_security_group_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -799,13 +798,13 @@ impl NetworkApi for AzureNetworkClient {
         network_security_group_name: &str,
     ) -> Result<NetworkSecurityGroup> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
-                     &self.client_config.subscription_id, resource_group_name, network_security_group_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 
@@ -859,13 +858,13 @@ impl NetworkApi for AzureNetworkClient {
         network_security_group_name: &str,
     ) -> Result<OperationResult<()>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
-                     &self.client_config.subscription_id, resource_group_name, network_security_group_name),
+                     &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
 

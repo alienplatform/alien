@@ -30,7 +30,8 @@ use alien_azure_clients::service_bus::{
     AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, BrokerProperties,
     SendMessageParameters, ServiceBusDataPlaneApi, ServiceBusManagementApi,
 };
-use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt as _, AzureCredentials};
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose, Engine as _};
@@ -88,9 +89,9 @@ impl AsyncTestContext for ServiceBusTestContext {
             subscription_id, resource_group_name
         );
 
-        let management_client = AzureServiceBusManagementClient::new(Client::new(), config.clone());
-        let data_plane_client = AzureServiceBusDataPlaneClient::new(Client::new(), config.clone());
-        let authorization_client = AzureAuthorizationClient::new(Client::new(), config);
+        let management_client = AzureServiceBusManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let data_plane_client = AzureServiceBusDataPlaneClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let authorization_client = AzureAuthorizationClient::new(Client::new(), AzureTokenCache::new(config));
 
         ServiceBusTestContext {
             management_client,
@@ -351,7 +352,7 @@ impl ServiceBusTestContext {
         // Get a bearer token for Azure Resource Manager (this will contain the oid claim)
         let bearer_token = self
             .management_client
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await
             .context(ErrorData::HttpRequestFailed {
@@ -419,7 +420,7 @@ impl ServiceBusTestContext {
         };
 
         let scope_string =
-            service_bus_scope.to_scope_string(&self.authorization_client.client_config);
+            service_bus_scope.to_scope_string(self.authorization_client.token_cache.config());
         info!("   Role assignment scope: {}", scope_string);
 
         // Create role assignment with Service Bus Data Owner role
@@ -427,7 +428,7 @@ impl ServiceBusTestContext {
         let service_bus_data_owner_role_id = "090c5cfd-751d-490a-894a-3ce6f1109419"; // Azure Service Bus Data Owner built-in role
         let role_definition_full_id = format!(
             "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-            self.authorization_client.client_config.subscription_id, service_bus_data_owner_role_id
+            self.authorization_client.token_cache.config().subscription_id, service_bus_data_owner_role_id
         );
 
         info!("   Assignment ID: {}", assignment_id);
@@ -440,7 +441,7 @@ impl ServiceBusTestContext {
                 role_definition_id: role_definition_full_id,
                 principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                 scope: Some(
-                    service_bus_scope.to_scope_string(&self.authorization_client.client_config),
+                    service_bus_scope.to_scope_string(self.authorization_client.token_cache.config()),
                 ),
                 condition: None,
                 condition_version: None,

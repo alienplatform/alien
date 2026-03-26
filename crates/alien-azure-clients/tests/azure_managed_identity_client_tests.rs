@@ -5,6 +5,7 @@ use alien_azure_clients::models::managed_identity::{
     Identity, IdentityUpdate, UserAssignedIdentityProperties,
 };
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -59,7 +60,7 @@ impl AsyncTestContext for ManagedIdentityTestContext {
 
         let client = Client::new();
         ManagedIdentityTestContext {
-            identity_client: AzureManagedIdentityClient::new(client, client_config),
+            identity_client: AzureManagedIdentityClient::new(client, AzureTokenCache::new(client_config)),
             subscription_id,
             resource_group_name,
             created_identities: Mutex::new(HashSet::new()),

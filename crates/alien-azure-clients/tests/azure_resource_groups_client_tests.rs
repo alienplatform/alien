@@ -6,6 +6,7 @@ use alien_azure_clients::long_running_operation::{
 use alien_azure_clients::models::resources::{ResourceGroup, ResourceGroupPatchable};
 use alien_azure_clients::resources::{AzureResourcesClient, ResourcesApi};
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -51,8 +52,8 @@ impl AsyncTestContext for ResourceGroupTestContext {
 
         let client = Client::new();
         ResourceGroupTestContext {
-            resources_client: AzureResourcesClient::new(client.clone(), client_config.clone()),
-            long_running_operation_client: LongRunningOperationClient::new(client, client_config),
+            resources_client: AzureResourcesClient::new(client.clone(), AzureTokenCache::new(client_config.clone())),
+            long_running_operation_client: LongRunningOperationClient::new(client, AzureTokenCache::new(client_config)),
             subscription_id,
             created_resource_groups: Mutex::new(HashSet::new()),
         }

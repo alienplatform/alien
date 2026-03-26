@@ -35,7 +35,7 @@ impl AzureServiceBusQueue {
             queue_name,
             client: AzureServiceBusDataPlaneClient::new(
                 crate::http_client::create_http_client(),
-                azure_config,
+                alien_azure_clients::AzureTokenCache::new(azure_config),
             ),
         })
     }

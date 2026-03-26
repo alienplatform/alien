@@ -27,6 +27,7 @@ pub mod resources;
 pub mod service_bus;
 pub mod storage_accounts;
 pub mod tables;
+pub mod token_cache;
 
 /// Get a bearer token using Azure AD Workload Identity (federated identity)
 async fn get_workload_identity_token(

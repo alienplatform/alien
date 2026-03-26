@@ -3,8 +3,7 @@ use crate::azure::models::queue::{SbQueue, SbQueueListResult, SbQueueProperties}
 use crate::azure::models::queue_namespace::{
     SbNamespace, SbNamespaceListResult, SbNamespaceProperties,
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -268,17 +267,17 @@ pub trait ServiceBusDataPlaneApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureServiceBusManagementClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureServiceBusManagementClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         // Azure Resource Manager endpoint
-        let endpoint = client_config.management_endpoint().to_string();
+        let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -294,21 +293,22 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         parameters: SbNamespaceProperties,
     ) -> Result<SbNamespace> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
 
         // Get location from platform config, defaulting to "eastus" if not specified
         let location = self
-            .client_config
+            .token_cache
+            .config()
             .region
             .as_ref()
             .cloned()
@@ -374,14 +374,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         namespace_name: String,
     ) -> Result<SbNamespace> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -425,14 +425,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         resource_group_name: String,
     ) -> Result<SbNamespaceListResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces",
-                self.client_config.subscription_id, resource_group_name
+                self.token_cache.config().subscription_id, resource_group_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -483,14 +483,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         namespace_name: String,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -516,14 +516,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         parameters: SbQueueProperties,
     ) -> Result<SbQueue> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name, queue_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name, queue_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -585,14 +585,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         queue_name: String,
     ) -> Result<SbQueue> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name, queue_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name, queue_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -637,14 +637,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         namespace_name: String,
     ) -> Result<SbQueueListResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues",
-                self.client_config.subscription_id, resource_group_name, namespace_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -690,14 +690,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         queue_name: String,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
-                self.client_config.subscription_id, resource_group_name, namespace_name, queue_name
+                self.token_cache.config().subscription_id, resource_group_name, namespace_name, queue_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -722,14 +722,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
 #[derive(Debug)]
 pub struct AzureServiceBusDataPlaneClient {
     pub client: Client,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureServiceBusDataPlaneClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         Self {
             client,
-            client_config,
+            token_cache,
         }
     }
 
@@ -741,7 +741,7 @@ impl AzureServiceBusDataPlaneClient {
         query_params: Option<Vec<(&str, String)>>,
     ) -> Result<Url> {
         let base_url =
-            if let Some(override_url) = self.client_config.get_service_endpoint("servicebus") {
+            if let Some(override_url) = self.token_cache.get_service_endpoint("servicebus") {
                 override_url.trim_end_matches('/').to_string()
             } else {
                 format!("https://{}.servicebus.windows.net", namespace_name)
@@ -776,7 +776,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         message: SendMessageParameters,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 
@@ -845,7 +845,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         timeout_seconds: Option<i32>,
     ) -> Result<Option<ReceivedMessage>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 
@@ -951,7 +951,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         timeout_seconds: Option<i32>,
     ) -> Result<Option<ReceivedMessage>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 
@@ -1059,7 +1059,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         lock_token: String,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 
@@ -1110,7 +1110,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         lock_token: String,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 
@@ -1161,7 +1161,7 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         lock_token: String,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
             .await?;
 

@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::traits::{Binding, Function, FunctionInvokeRequest, FunctionInvokeResponse};
 use alien_aws_clients::lambda::{InvocationType, InvokeRequest, LambdaApi, LambdaClient};
-use alien_aws_clients::AwsClientConfig;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::bindings::LambdaFunctionBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -17,8 +17,8 @@ pub struct LambdaFunction {
 }
 
 impl LambdaFunction {
-    pub fn new(client: Client, config: AwsClientConfig, binding: LambdaFunctionBinding) -> Self {
-        let lambda_client = LambdaClient::new(client, config);
+    pub fn new(client: Client, credentials: AwsCredentialProvider, binding: LambdaFunctionBinding) -> Self {
+        let lambda_client = LambdaClient::new(client, credentials);
         Self {
             client: lambda_client,
             binding,

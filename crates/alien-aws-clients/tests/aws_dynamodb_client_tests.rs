@@ -53,6 +53,7 @@ All tests work with real AWS resources and will fail if operations don't succeed
 */
 
 use alien_aws_clients::dynamodb::*;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
 use base64::prelude::*;
@@ -97,7 +98,7 @@ impl AsyncTestContext for DynamoDbTestContext {
             },
             service_overrides: None,
         };
-        let client = DynamoDbClient::new(Client::new(), aws_config);
+        let client = DynamoDbClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         DynamoDbTestContext {
             client,
@@ -576,7 +577,7 @@ async fn test_error_scenarios(ctx: &mut DynamoDbTestContext) {
         },
         service_overrides: None,
     };
-    let dynamodb_client = DynamoDbClient::new(client_invalid, aws_config);
+    let dynamodb_client = DynamoDbClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
 
     let auth_test_key = ctx.get_test_key("auth");
     let auth_get_request = GetItemRequest::builder()

@@ -23,6 +23,7 @@ cargo test --package alien-aws-clients --test aws_codebuild_client_tests -- --no
 
 use alien_aws_clients::codebuild::*;
 use alien_aws_clients::iam::{CreateRoleRequest, IamApi, IamClient};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData, Result};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -136,8 +137,8 @@ impl AsyncTestContext for CodeBuildTestContext {
             service_overrides: None,
         };
 
-        let codebuild_client = CodeBuildClient::new(Client::new(), aws_config.clone());
-        let iam_client = IamClient::new(Client::new(), aws_config);
+        let codebuild_client = CodeBuildClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
+        let iam_client = IamClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         // Create IAM role for CodeBuild
         let role_name = format!("alien-test-codebuild-role-{}", Uuid::new_v4().simple());

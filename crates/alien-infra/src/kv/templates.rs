@@ -1,4 +1,5 @@
 use alien_aws_clients::DynamoDbApi as _;
+use alien_aws_clients::AwsCredentialProvider;
 use async_trait::async_trait;
 use tracing::info;
 
@@ -44,7 +45,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter for AwsKvClou
         info!(table_name=%physical_id, "Importing DynamoDB table state from CloudFormation");
 
         // Create our custom DynamoDB client using the AWS config from context
-        let client = DynamoDbClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let client = DynamoDbClient::new(reqwest::Client::new(), credentials);
 
         // Verify the table exists using describe_table.
         // This AWS API call is used because it provides detailed table information

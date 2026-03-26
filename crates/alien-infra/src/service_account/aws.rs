@@ -52,7 +52,7 @@ impl AwsServiceAccountController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         let role_name = get_aws_role_name(ctx.resource_prefix, &config.id);
         let assume_role_policy =
@@ -110,7 +110,7 @@ impl AwsServiceAccountController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         info!(
@@ -158,7 +158,7 @@ impl AwsServiceAccountController {
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         // Heartbeat check: verify role still exists
@@ -200,7 +200,7 @@ impl AwsServiceAccountController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
 
         info!(
@@ -270,7 +270,7 @@ impl AwsServiceAccountController {
         };
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         info!(
             role_name = %role_name,
@@ -443,7 +443,7 @@ impl AwsServiceAccountController {
     ) -> Result<HandlerAction> {
         let role_name = self.role_name.as_ref().unwrap();
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config)?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         info!(
             role_name = %role_name,

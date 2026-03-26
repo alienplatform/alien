@@ -6,7 +6,7 @@ use crate::error::{ErrorData, Result};
 use crate::ResourceController;
 use alien_aws_clients::{
     cloudformation::{CloudFormationClient, DescribeStacksRequest},
-    AwsClientConfig,
+    AwsClientConfig, AwsCredentialProvider,
 };
 use alien_core::{ArtifactRegistry, Resource};
 use alien_error::AlienError;
@@ -84,7 +84,8 @@ async fn extract_account_id_from_stack_name(
     aws_config: &AwsClientConfig,
     stack_name: &str,
 ) -> Option<String> {
-    let cfn_client = CloudFormationClient::new(reqwest::Client::new(), aws_config.clone());
+    let credentials = AwsCredentialProvider::from_config(aws_config.clone()).await.ok()?;
+    let cfn_client = CloudFormationClient::new(reqwest::Client::new(), credentials);
 
     let describe_request = DescribeStacksRequest::builder()
         .stack_name(stack_name.to_string())

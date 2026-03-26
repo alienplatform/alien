@@ -43,6 +43,7 @@ pub trait AwsClientConfigExt {
     fn mock() -> Self;
 }
 
+pub mod credential_provider;
 pub mod acm;
 pub mod apigatewayv2;
 pub mod autoscaling;
@@ -134,12 +135,6 @@ impl AwsClientConfigExt for AwsClientConfig {
                 None
             },
         };
-
-        // If using WebIdentity (IRSA), resolve the token to real AccessKeys immediately.
-        // This avoids every downstream client needing to handle WebIdentity specially.
-        if matches!(config.credentials, AwsCredentials::WebIdentity { .. }) {
-            return config.get_web_identity_credentials().await;
-        }
 
         Ok(config)
     }

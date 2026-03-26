@@ -15,6 +15,8 @@ use alien_aws_clients::lambda::{
     AddPermissionRequest, Cors, CreateFunctionRequest, CreateFunctionUrlConfigRequest,
     FunctionCode, LambdaApi, LambdaClient,
 };
+#[cfg(feature = "aws")]
+use alien_aws_clients::AwsCredentialProvider;
 #[cfg(feature = "azure")]
 use alien_azure_clients::authorization::{AuthorizationApi, AzureAuthorizationClient, Scope};
 #[cfg(feature = "azure")]
@@ -35,6 +37,7 @@ use alien_azure_clients::models::container_apps::{
 };
 #[cfg(feature = "azure")]
 use alien_azure_clients::models::managed_identity::Identity;
+use alien_azure_clients::AzureTokenCache;
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::cloudrun::{
     CloudRunApi, CloudRunClient, Container, ContainerPort, RevisionTemplate, Service,
@@ -218,7 +221,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             },
             service_overrides: None,
         };
-        let lambda_client = LambdaClient::new(reqwest::Client::new(), aws_config);
+        let lambda_client = LambdaClient::new(reqwest::Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         let image_uri = env::var("ALIEN_TEST_AWS_LAMBDA_IMAGE")
             .expect("ALIEN_TEST_AWS_LAMBDA_IMAGE must be set in .env.test");
@@ -711,16 +714,16 @@ impl AsyncTestContext for AzureProviderTestContext {
         };
 
         let container_apps_client =
-            AzureContainerAppsClient::new(reqwest::Client::new(), client_config.clone());
+            AzureContainerAppsClient::new(reqwest::Client::new(), AzureTokenCache::new(client_config.clone()));
 
         let authorization_client =
-            AzureAuthorizationClient::new(reqwest::Client::new(), client_config.clone());
+            AzureAuthorizationClient::new(reqwest::Client::new(), AzureTokenCache::new(client_config.clone()));
 
         let managed_identity_client =
-            AzureManagedIdentityClient::new(reqwest::Client::new(), client_config.clone());
+            AzureManagedIdentityClient::new(reqwest::Client::new(), AzureTokenCache::new(client_config.clone()));
 
         let long_running_operation_client =
-            LongRunningOperationClient::new(reqwest::Client::new(), client_config.clone());
+            LongRunningOperationClient::new(reqwest::Client::new(), AzureTokenCache::new(client_config.clone()));
 
         // Get the existing managed environment to retrieve its ID
         let managed_environment = container_apps_client.get_managed_environment(&resource_group_name, &managed_environment_name).await
@@ -824,7 +827,7 @@ impl AsyncTestContext for AzureProviderTestContext {
                     principal_id: principal_id.to_string(),
                     role_definition_id: role_definition_full_id,
                     principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                    scope: Some(acr_scope.to_scope_string(&authorization_client.client_config)),
+                    scope: Some(acr_scope.to_scope_string(authorization_client.token_cache.config())),
                     condition: None,
                     condition_version: None,
                     delegated_managed_identity_resource_id: None,

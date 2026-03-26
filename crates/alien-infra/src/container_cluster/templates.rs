@@ -16,6 +16,7 @@ use crate::error::{ErrorData, Result};
 use crate::{AwsContainerClusterController, AwsContainerClusterState, ResourceController};
 use alien_aws_clients::iam::IamClient;
 use alien_aws_clients::IamApi;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::{ContainerCluster, Resource};
 use alien_error::{AlienError, Context};
 
@@ -61,7 +62,13 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
         info!(role=%role_physical_id, "Importing ContainerCluster IAM role from CloudFormation");
 
         // Verify the role exists and get its ARN
-        let iam_client = IamClient::new(reqwest::Client::new(), context.aws_config.clone());
+        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        let iam_client = IamClient::new(reqwest::Client::new(), credentials);
         let role_response = iam_client.get_role(role_physical_id).await.context(
             ErrorData::InfrastructureImportFailed {
                 message: format!("Failed to verify IAM role '{}' exists", role_physical_id),

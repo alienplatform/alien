@@ -26,14 +26,14 @@ use alien_aws_clients::dynamodb::{
     DynamoDbClient, KeySchemaElement,
 };
 #[cfg(feature = "aws")]
-use alien_aws_clients::{AwsClientConfig, AwsCredentials};
+use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
 #[cfg(feature = "aws")]
 use alien_client_core::{Error as CloudError, ErrorData as CloudErrorData};
 
 #[cfg(feature = "azure")]
 use alien_azure_clients::tables::{AzureTableManagementClient, TableManagementApi};
 #[cfg(feature = "azure")]
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
 
 use async_trait::async_trait;
 use rstest::rstest;
@@ -323,7 +323,7 @@ impl AsyncTestContext for AwsProviderTestContext {
             service_overrides: None,
         };
 
-        let dynamodb_client = DynamoDbClient::new(Client::new(), aws_config);
+        let dynamodb_client = DynamoDbClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         info!("🚀 Creating DynamoDB table for KV test: {}", table_name);
 
@@ -884,7 +884,7 @@ impl AsyncTestContext for AzureProviderTestContext {
         };
 
         let management_client =
-            AzureTableManagementClient::new(Client::new(), client_config.clone());
+            AzureTableManagementClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         info!("🚀 Creating Azure table for KV test: {}", table_name);
 

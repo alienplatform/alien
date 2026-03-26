@@ -22,6 +22,7 @@ use alien_azure_clients::models::managed_environments::{
 };
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+use alien_azure_clients::AzureTokenCache;
 use alien_client_core::{Error, ErrorData};
 use anyhow::{bail, Result};
 use reqwest::Client;
@@ -109,13 +110,13 @@ impl AsyncTestContext for ContainerAppsTestContext {
             service_overrides: None,
         };
 
-        let client = AzureContainerAppsClient::new(Client::new(), client_config.clone());
+        let client = AzureContainerAppsClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         let authorization_client =
-            AzureAuthorizationClient::new(Client::new(), client_config.clone());
+            AzureAuthorizationClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         let managed_identity_client =
-            AzureManagedIdentityClient::new(Client::new(), client_config.clone());
+            AzureManagedIdentityClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         // Get the existing managed environment to retrieve its ID
         let managed_environment = client.get_managed_environment(&resource_group_name, &managed_environment_name).await
@@ -134,7 +135,7 @@ impl AsyncTestContext for ContainerAppsTestContext {
             managed_identity_client,
             long_running_operation_client: LongRunningOperationClient::new(
                 Client::new(),
-                client_config,
+                AzureTokenCache::new(client_config),
             ),
             resource_group_name,
             container_image,
@@ -550,7 +551,7 @@ impl ContainerAppsTestContext {
                 resource_name: acr_name.to_string(),
             };
 
-            let scope_string = acr_scope.to_scope_string(&self.authorization_client.client_config);
+            let scope_string = acr_scope.to_scope_string(self.authorization_client.token_cache.config());
             info!("   Role assignment scope: {}", scope_string);
 
             // Create role assignment
@@ -558,7 +559,7 @@ impl ContainerAppsTestContext {
             let acr_pull_role_definition_id = "7f951dda-4ed3-4680-a7ca-43fe172d538d"; // AcrPull built-in role
             let role_definition_full_id = format!(
                 "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                self.authorization_client.client_config.subscription_id,
+                self.authorization_client.token_cache.config().subscription_id,
                 acr_pull_role_definition_id
             );
 
@@ -572,7 +573,7 @@ impl ContainerAppsTestContext {
                     role_definition_id: role_definition_full_id,
                     principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                     scope: Some(
-                        acr_scope.to_scope_string(&self.authorization_client.client_config),
+                        acr_scope.to_scope_string(self.authorization_client.token_cache.config()),
                     ),
                     condition: None,
                     condition_version: None,

@@ -6,6 +6,7 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceRegistry};
 use crate::error::{ErrorData, Result};
 use crate::ResourceController;
 use alien_aws_clients::cloudformation::{CloudFormationApi, CloudFormationClient};
+use alien_aws_clients::AwsCredentialProvider;
 use alien_core::ClientConfig;
 use alien_core::{
     alien_event, AlienEvent, AwsManagementConfig, ManagementConfig, Platform, ResourceType, Stack,
@@ -52,7 +53,13 @@ pub async fn import_stack_state_from_cloudformation_with_registry(
     };
 
     // Create our custom CloudFormation client
-    let cfn_client = CloudFormationClient::new(reqwest::Client::new(), aws_client_config.clone());
+    let credentials = AwsCredentialProvider::from_config(aws_client_config.clone())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to create AWS credential provider".to_string(),
+            resource_id: None,
+        })?;
+    let cfn_client = CloudFormationClient::new(reqwest::Client::new(), credentials);
 
     // Describe CloudFormation stack to get parameters
     let describe_stacks_resp = cfn_client

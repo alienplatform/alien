@@ -21,8 +21,7 @@
 //! ```
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
-use crate::aws::AwsClientConfigExt;
+use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
@@ -72,34 +71,34 @@ pub trait SsmApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub struct SsmClient {
     client: Client,
-    config: AwsClientConfig,
+    credentials: AwsCredentialProvider,
 }
 
 impl SsmClient {
     /// Create a new SSM client.
-    pub fn new(client: Client, config: AwsClientConfig) -> Self {
-        Self { client, config }
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self { client, credentials }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
         AwsSignConfig {
             service_name: "ssm".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: self.credentials.region().to_string(),
+            credentials: self.credentials.get_credentials(),
             signing_region: None,
         }
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.config.get_service_endpoint_option("ssm") {
+        if let Some(override_url) = self.credentials.get_service_endpoint_option("ssm") {
             override_url.to_string()
         } else {
-            format!("https://ssm.{}.amazonaws.com", self.config.region)
+            format!("https://ssm.{}.amazonaws.com", self.credentials.region())
         }
     }
 
     fn get_host(&self) -> String {
-        format!("ssm.{}.amazonaws.com", self.config.region)
+        format!("ssm.{}.amazonaws.com", self.credentials.region())
     }
 
     // ------------------------- Internal Helpers -------------------------
@@ -111,6 +110,7 @@ impl SsmClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let builder = self
@@ -135,6 +135,7 @@ impl SsmClient {
         operation: &str,
         resource: &str,
     ) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
         let builder = self

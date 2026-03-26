@@ -2,8 +2,7 @@ use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::resources::{
     Provider, ProviderRegistrationRequest, ResourceGroup, ResourceGroupPatchable,
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -56,16 +55,16 @@ pub trait ResourcesApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureResourcesClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureResourcesClient {
     /// Create a new Azure Resources client.
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
-        let endpoint = client_config.management_endpoint().to_string();
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -88,7 +87,7 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.client_config.subscription_id, resource_group_name
+            self.token_cache.config().subscription_id, resource_group_name
         );
         let url = self
             .base
@@ -107,7 +106,7 @@ impl ResourcesApi for AzureResourcesClient {
             .build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -171,7 +170,7 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<crate::azure::long_running_operation::OperationResult<()>> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.client_config.subscription_id, resource_group_name
+            self.token_cache.config().subscription_id, resource_group_name
         );
         let url = self
             .base
@@ -180,7 +179,7 @@ impl ResourcesApi for AzureResourcesClient {
         let req = AzureRequestBuilder::new(Method::DELETE, url.clone()).build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -213,7 +212,7 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.client_config.subscription_id, resource_group_name
+            self.token_cache.config().subscription_id, resource_group_name
         );
         let url = self
             .base
@@ -235,7 +234,7 @@ impl ResourcesApi for AzureResourcesClient {
             .build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -292,7 +291,7 @@ impl ResourcesApi for AzureResourcesClient {
     async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.client_config.subscription_id, resource_group_name
+            self.token_cache.config().subscription_id, resource_group_name
         );
         let url = self
             .base
@@ -301,7 +300,7 @@ impl ResourcesApi for AzureResourcesClient {
         let req = AzureRequestBuilder::new(Method::GET, url.clone()).build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -358,7 +357,7 @@ impl ResourcesApi for AzureResourcesClient {
     async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}",
-            self.client_config.subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id, resource_provider_namespace
         );
         let url = self
             .base
@@ -367,7 +366,7 @@ impl ResourcesApi for AzureResourcesClient {
         let req = AzureRequestBuilder::new(Method::GET, url.clone()).build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -429,7 +428,7 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}/register",
-            self.client_config.subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id, resource_provider_namespace
         );
         let url = self
             .base
@@ -455,7 +454,7 @@ impl ResourcesApi for AzureResourcesClient {
             .build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;
@@ -512,7 +511,7 @@ impl ResourcesApi for AzureResourcesClient {
     async fn unregister_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}/unregister",
-            self.client_config.subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id, resource_provider_namespace
         );
         let url = self
             .base
@@ -521,7 +520,7 @@ impl ResourcesApi for AzureResourcesClient {
         let req = AzureRequestBuilder::new(Method::POST, url.clone()).build()?;
 
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
         let signed_req = self.base.sign_request(req, &bearer_token).await?;

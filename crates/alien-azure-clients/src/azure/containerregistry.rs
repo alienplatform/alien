@@ -5,8 +5,7 @@ use crate::azure::models::containerregistry::{
     ScopeMapProperties, ScopeMapUpdateParameters, Token, TokenListResult, TokenProperties,
     TokenUpdateParameters,
 };
-use crate::azure::AzureClientConfig;
-use crate::azure::AzureClientConfigExt;
+use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
@@ -144,15 +143,15 @@ pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AzureContainerRegistryClient {
     pub base: AzureClientBase,
-    pub client_config: AzureClientConfig,
+    pub token_cache: AzureTokenCache,
 }
 
 impl AzureContainerRegistryClient {
-    pub fn new(client: Client, client_config: AzureClientConfig) -> Self {
-        let endpoint = client_config.management_endpoint().to_string();
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, client_config.clone()),
-            client_config,
+            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            token_cache,
         }
     }
 }
@@ -168,14 +167,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &Registry,
     ) -> Result<RegistryOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -206,14 +205,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
     /// Delete a container registry
     async fn delete_registry(&self, resource_group_name: &str, registry_name: &str) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -238,14 +237,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &RegistryUpdateParameters,
     ) -> Result<RegistryOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -280,14 +279,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         registry_name: &str,
     ) -> Result<Registry> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -328,19 +327,19 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
     /// List container registries
     async fn list_registries(&self, resource_group_name: Option<String>) -> Result<Vec<Registry>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let path = if let Some(rg_name) = resource_group_name {
             format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries",
-                &self.client_config.subscription_id, rg_name
+                &self.token_cache.config().subscription_id, rg_name
             )
         } else {
             format!(
                 "/subscriptions/{}/providers/Microsoft.ContainerRegistry/registries",
-                &self.client_config.subscription_id
+                &self.token_cache.config().subscription_id
             )
         };
 
@@ -390,14 +389,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &ScopeMapProperties,
     ) -> Result<ScopeMapOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/scopeMaps/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, scope_map_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, scope_map_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -442,14 +441,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         scope_map_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/scopeMaps/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, scope_map_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, scope_map_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -475,14 +474,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &ScopeMapUpdateParameters,
     ) -> Result<ScopeMapOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/scopeMaps/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, scope_map_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, scope_map_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -518,14 +517,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         scope_map_name: &str,
     ) -> Result<ScopeMap> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/scopeMaps/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, scope_map_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, scope_map_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -570,14 +569,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         registry_name: &str,
     ) -> Result<Vec<ScopeMap>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/scopeMaps",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -624,14 +623,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &TokenProperties,
     ) -> Result<TokenOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/tokens/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, token_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, token_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -676,14 +675,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         token_name: &str,
     ) -> Result<()> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/tokens/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, token_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, token_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -709,14 +708,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         parameters: &TokenUpdateParameters,
     ) -> Result<TokenOperationResult> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/tokens/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, token_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, token_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -752,14 +751,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         token_name: &str,
     ) -> Result<Token> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/tokens/{}",
-                &self.client_config.subscription_id, resource_group_name, registry_name, token_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name, token_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );
@@ -801,14 +800,14 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         registry_name: &str,
     ) -> Result<Vec<Token>> {
         let bearer_token = self
-            .client_config
+            .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/tokens",
-                &self.client_config.subscription_id, resource_group_name, registry_name
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
             ),
             Some(vec![("api-version", "2025-04-01".into())]),
         );

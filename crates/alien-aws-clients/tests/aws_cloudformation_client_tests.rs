@@ -38,6 +38,7 @@ cargo test --package alien-infra --test cloudformation_client_tests test_create_
 */
 
 use alien_aws_clients::cloudformation::*;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::{Error, ErrorData};
 use aws_credential_types::Credentials;
 use reqwest::Client;
@@ -80,7 +81,7 @@ impl AsyncTestContext for CloudFormationTestContext {
             },
             service_overrides: None,
         };
-        let client = CloudFormationClient::new(Client::new(), aws_config);
+        let client = CloudFormationClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         CloudFormationTestContext {
             client,
@@ -833,7 +834,7 @@ async fn test_cloudformation_client_with_invalid_credentials(ctx: &mut CloudForm
         },
         service_overrides: None,
     };
-    let cf_client = CloudFormationClient::new(Client::new(), aws_config);
+    let cf_client = CloudFormationClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
     info!("🔐 Testing CloudFormation client with invalid credentials");
 

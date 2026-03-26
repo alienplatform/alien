@@ -43,11 +43,13 @@ mod platform_dispatchers {
         lambda::{InvocationType, InvokeRequest, LambdaApi, LambdaClient},
         AwsClientConfig,
     };
+    use alien_aws_clients::AwsCredentialProvider;
     use alien_azure_clients::azure::{
         service_bus::{
             AzureServiceBusDataPlaneClient, SendMessageParameters, ServiceBusDataPlaneApi,
         },
         AzureClientConfig,
+        token_cache::AzureTokenCache,
     };
     use alien_gcp_clients::gcp::{
         pubsub::{PubSubApi, PubSubClient, PublishRequest, PubsubMessage},
@@ -64,10 +66,18 @@ mod platform_dispatchers {
     }
 
     impl LambdaCommandDispatcher {
-        pub fn new(client: Client, config: AwsClientConfig) -> Self {
-            Self {
-                lambda_client: LambdaClient::new(client, config),
-            }
+        pub async fn new(client: Client, config: AwsClientConfig) -> Result<Self> {
+            let credentials = AwsCredentialProvider::from_config(config)
+                .await
+                .into_alien_error()
+                .context(crate::ErrorData::TransportDispatchFailed {
+                    message: "Failed to create AWS credential provider".to_string(),
+                    transport_type: Some("lambda".to_string()),
+                    target: None,
+                })?;
+            Ok(Self {
+                lambda_client: LambdaClient::new(client, credentials),
+            })
         }
     }
 
@@ -202,7 +212,7 @@ mod platform_dispatchers {
     impl ServiceBusCommandDispatcher {
         pub fn new(client: Client, config: AzureClientConfig) -> Self {
             Self {
-                servicebus_client: AzureServiceBusDataPlaneClient::new(client, config),
+                servicebus_client: AzureServiceBusDataPlaneClient::new(client, AzureTokenCache::new(config)),
             }
         }
     }

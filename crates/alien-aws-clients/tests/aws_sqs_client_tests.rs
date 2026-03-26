@@ -56,6 +56,7 @@ All tests work with real AWS resources and will fail if operations don't succeed
 */
 
 use alien_aws_clients::sqs::*;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::ErrorData;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
@@ -98,7 +99,7 @@ impl AsyncTestContext for SqsTestContext {
             },
             service_overrides: None,
         };
-        let client = SqsClient::new(Client::new(), aws_config);
+        let client = SqsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         SqsTestContext {
             client,

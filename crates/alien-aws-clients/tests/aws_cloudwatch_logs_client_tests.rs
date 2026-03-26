@@ -36,6 +36,7 @@ cargo test --package alien-aws-clients --test aws_cloudwatch_logs_client_tests t
 */
 
 use alien_aws_clients::cloudwatch_logs::*;
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
 use aws_credential_types::Credentials;
@@ -81,7 +82,7 @@ impl AsyncTestContext for CloudWatchLogsTestContext {
             },
             service_overrides: None,
         };
-        let client = CloudWatchLogsClient::new(Client::new(), aws_config);
+        let client = CloudWatchLogsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         CloudWatchLogsTestContext {
             client,

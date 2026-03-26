@@ -33,7 +33,7 @@ impl AwsQueueController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Queue>()?;
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg).await?;
 
         let queue_name = get_aws_queue_name(ctx.resource_prefix, &config.id);
         info!(id=%config.id, name=%queue_name, "Creating SQS queue");
@@ -72,7 +72,7 @@ impl AwsQueueController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Queue>()?;
 
         let queue_url = self.queue_url.as_ref().ok_or_else(|| {
@@ -154,7 +154,7 @@ impl AwsQueueController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         // Heartbeat: poll attributes to ensure queue exists
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Queue>()?;
         let queue_url = match &self.queue_url {
             Some(u) => u,
@@ -213,7 +213,7 @@ impl AwsQueueController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg)?;
+        let client = ctx.service_provider.get_aws_sqs_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Queue>()?;
 
         if let Some(queue_url) = &self.queue_url {

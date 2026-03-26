@@ -3,6 +3,7 @@ pub use aws::*;
 
 // Re-export commonly used types for convenience
 pub use aws::{AwsClientConfig, AwsClientConfigExt, AwsImpersonationConfig};
+pub use aws::credential_provider::AwsCredentialProvider;
 
 // Re-export all client APIs
 pub use aws::acm::{AcmApi, AcmClient};

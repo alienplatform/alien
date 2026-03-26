@@ -5,6 +5,7 @@ use alien_aws_clients::s3::{
     LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus, ObjectIdentifier,
     PublicAccessBlockConfiguration, PutObjectRequest, S3Api, S3Client, VersioningStatus,
 };
+use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
 use reqwest::Client;
@@ -67,7 +68,7 @@ impl AsyncTestContext for S3TestContext {
             service_overrides: None,
         };
 
-        let client = S3Client::new(Client::new(), aws_config);
+        let client = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
         S3TestContext {
             client,
@@ -1142,7 +1143,7 @@ async fn test_concurrent_object_operations(ctx: &mut S3TestContext) {
             },
             service_overrides: None,
         };
-        let client_clone = S3Client::new(Client::new(), aws_config);
+        let client_clone = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
         let bucket_name_clone = bucket_name.clone();
 
         let handle = tokio::spawn(async move {
@@ -1332,7 +1333,27 @@ async fn test_get_bucket_location_basic(ctx: &mut S3TestContext) {
 #[test_context(S3TestContext)]
 #[tokio::test]
 async fn test_get_bucket_location_us_east_1_special_case(ctx: &mut S3TestContext) {
-    ctx.client.config.region = "us-east-1".to_string();
+    // Rebuild client with us-east-1 region
+    let root: StdPathBuf = workspace_root::get_workspace_root();
+    dotenvy::from_path(root.join(".env.test")).expect("Failed to load .env.test");
+    let access_key_id =
+        env::var("AWS_MANAGEMENT_ACCESS_KEY_ID").expect("AWS_MANAGEMENT_ACCESS_KEY_ID not set");
+    let secret_access_key = env::var("AWS_MANAGEMENT_SECRET_ACCESS_KEY")
+        .expect("AWS_MANAGEMENT_SECRET_ACCESS_KEY not set");
+    let session_token = env::var("AWS_SESSION_TOKEN").ok();
+    let account_id =
+        env::var("AWS_MANAGEMENT_ACCOUNT_ID").unwrap_or_else(|_| "123456789012".to_string());
+    let aws_config = alien_aws_clients::AwsClientConfig {
+        account_id,
+        region: "us-east-1".to_string(),
+        credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+            access_key_id,
+            secret_access_key,
+            session_token,
+        },
+        service_overrides: None,
+    };
+    ctx.client = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
     let bucket_name = ctx.generate_unique_bucket_name();
     ctx.create_test_bucket(&bucket_name)
@@ -1418,9 +1439,9 @@ async fn test_get_bucket_location_multiple_buckets(ctx: &mut S3TestContext) {
         let region = location_output.region();
 
         assert_eq!(
-            region, ctx.client.config.region,
+            region, ctx.client.region(),
             "Bucket {} region '{}' doesn't match client region '{}'",
-            bucket_name, region, ctx.client.config.region
+            bucket_name, region, ctx.client.region()
         );
     }
 }
@@ -1458,7 +1479,7 @@ async fn test_get_bucket_location_concurrent_requests(ctx: &mut S3TestContext) {
             },
             service_overrides: None,
         };
-        let client_clone = S3Client::new(Client::new(), aws_config);
+        let client_clone = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
         let bucket_name_clone = bucket_name.clone();
 
         let handle = tokio::spawn(async move {
@@ -1481,7 +1502,7 @@ async fn test_get_bucket_location_concurrent_requests(ctx: &mut S3TestContext) {
         let location_output = result.unwrap();
         assert_eq!(
             location_output.region(),
-            ctx.client.config.region,
+            ctx.client.region(),
             "Request {} returned wrong region",
             request_id
         );

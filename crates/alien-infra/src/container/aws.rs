@@ -343,7 +343,7 @@ impl AwsContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
+        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Container>()?;
 
         // Get VPC from network dependency
@@ -449,7 +449,7 @@ impl AwsContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Container>()?;
 
         let persistent_storage = match &config.persistent_storage {
@@ -603,7 +603,7 @@ impl AwsContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Container>()?;
 
         if self.ebs_volumes.is_empty() {
@@ -1168,7 +1168,7 @@ impl AwsContainerController {
         let (leaf, chain) = crate::core::split_certificate_chain(certificate_chain);
 
         let aws_cfg = ctx.get_aws_config()?;
-        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg)?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
         let response = acm_client
             .import_certificate(
                 alien_aws_clients::acm::ImportCertificateRequest::builder()
@@ -1204,8 +1204,8 @@ impl AwsContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Container>()?;
 
         let network_ref = ResourceRef::new(
@@ -1854,8 +1854,8 @@ impl AwsContainerController {
 
         if let Some(load_balancer) = &self.load_balancer {
             let aws_cfg = ctx.get_aws_config()?;
-            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
-            let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
+            let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
             if let Some(listener_arn) = &load_balancer.listener_arn {
                 let _ = elbv2_client.delete_listener(listener_arn).await;
@@ -1890,7 +1890,7 @@ impl AwsContainerController {
         if !self.uses_custom_domain {
             if let Some(cert_arn) = &self.certificate_arn {
                 let aws_cfg = ctx.get_aws_config()?;
-                let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg)?;
+                let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
                 let _ = acm_client.delete_certificate(cert_arn).await;
             }
         }
@@ -1916,7 +1916,7 @@ impl AwsContainerController {
 
         if let Some(target_group_arn) = &self.target_group_arn {
             let aws_cfg = ctx.get_aws_config()?;
-            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg)?;
+            let elbv2_client = ctx.service_provider.get_aws_elbv2_client(aws_cfg).await?;
 
             info!(
                 container_id = %config.id,
@@ -1979,7 +1979,7 @@ impl AwsContainerController {
         }
 
         let aws_cfg = ctx.get_aws_config()?;
-        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg)?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         info!(
             container_id = %config.id,
