@@ -438,7 +438,6 @@ pub async fn deploy_test_app(
         "Deploying test app"
     );
 
-    let http = manager.http_client();
     let config = TestConfig::from_env();
 
     // Step 1: Evaluate config file to get Stack JSON (StackByPlatform wrapper)
@@ -468,59 +467,37 @@ pub async fn deploy_test_app(
         platform_key: pushed_stack_json,
     });
 
-    let release_body = serde_json::json!({
-        "stack": stack_by_platform,
-    });
+    let stack_by_platform_sdk: alien_manager_api::types::StackByPlatform =
+        serde_json::from_value(stack_by_platform)
+            .context("Failed to convert stack to SDK StackByPlatform")?;
 
-    let release_resp = http
-        .post(format!("{}/v1/releases", manager.url))
-        .json(&release_body)
+    let release = manager
+        .client()
+        .create_release()
+        .body(alien_manager_api::types::CreateReleaseRequest {
+            stack: stack_by_platform_sdk,
+            git_metadata: None,
+        })
         .send()
         .await
-        .context("Failed to create release")?;
-
-    if !release_resp.status().is_success() {
-        let status = release_resp.status();
-        let body = release_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to create release ({}): {}", status, body);
-    }
-
-    let release: serde_json::Value = release_resp
-        .json()
-        .await
-        .context("Failed to parse release response")?;
-    let release_id = release
-        .get("id")
-        .and_then(|v| v.as_str())
-        .context("Release response missing 'id'")?;
+        .map_err(|e| anyhow::anyhow!("Failed to create release: {}", e))?
+        .into_inner();
+    let release_id = &release.id;
     info!(%release_id, "Release created");
 
     // Step 4: Create a deployment group
-    let group_body = serde_json::json!({
-        "name": format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-    });
-
-    let group_resp = http
-        .post(format!("{}/v1/deployment-groups", manager.url))
-        .json(&group_body)
+    let group = manager
+        .client()
+        .create_deployment_group()
+        .body(alien_manager_api::types::CreateDeploymentGroupRequest {
+            name: format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+            max_deployments: None,
+        })
         .send()
         .await
-        .context("Failed to create deployment group")?;
-
-    if !group_resp.status().is_success() {
-        let status = group_resp.status();
-        let body = group_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to create deployment group ({}): {}", status, body);
-    }
-
-    let group: serde_json::Value = group_resp
-        .json()
-        .await
-        .context("Failed to parse deployment group response")?;
-    let group_id = group
-        .get("id")
-        .and_then(|v| v.as_str())
-        .context("Deployment group response missing 'id'")?;
+        .map_err(|e| anyhow::anyhow!("Failed to create deployment group: {}", e))?
+        .into_inner();
+    let group_id = &group.id;
     info!(%group_id, "Deployment group created");
 
     // Step 5: Create a deployment in the group via SDK
@@ -705,10 +682,13 @@ pub async fn setup(
 
     // Cross-account registry access: ensure the management account's container
     // registry allows the target account to pull images. Must happen before
-    // function deployment (Provisioning phase).
-    if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
-    }
+    // function deployment (Provisioning phase). Returns image pull credentials
+    // for platforms that need explicit registry auth (Azure).
+    let image_pull_credentials = if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?
+    } else {
+        None
+    };
 
     // Cross-account setup: if management + target credentials are both
     // configured, run InitialSetup with target credentials (mirrors the
@@ -722,7 +702,7 @@ pub async fn setup(
             has_management_config = management_config.is_some(),
             "Running setup_target for cross-account deployment"
         );
-        crate::setup::setup_target(&config, platform, &deployment, &manager, management_config).await?;
+        crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
     }
 
     // Wait for the deployment to be running (populates URL)

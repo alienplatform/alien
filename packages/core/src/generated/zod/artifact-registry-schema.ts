@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description Represents an artifact registry for storing container images and other build artifacts.\nThis is a high-level wrapper resource that provides a cloud-agnostic interface over\nAWS ECR, GCP Artifact Registry, and Azure Container Registry.\n\n# Platform Mapping\n- **AWS**: Implicitly exists as the AWS account and region\n- **GCP**: Explicitly configured per project and location (Artifact Registry API enabled)\n- **Azure**: Explicitly provisioned Azure Container Registry instance\n\nThe actual repository management and permissions are handled through the bindings API.
  */
 export const ArtifactRegistrySchema = z.object({
-    "id": z.string().describe("Identifier for the artifact registry. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
+    "id": z.string().describe("Identifier for the artifact registry. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
+    "replicationRegions": z.array(z.string()).optional().describe("AWS-only: regions to replicate container images to. ECR private image replication ensures images pushed in the registry's home region are automatically available in these additional regions.")
     }).describe("Represents an artifact registry for storing container images and other build artifacts.\nThis is a high-level wrapper resource that provides a cloud-agnostic interface over\nAWS ECR, GCP Artifact Registry, and Azure Container Registry.\n\n# Platform Mapping\n- **AWS**: Implicitly exists as the AWS account and region\n- **GCP**: Explicitly configured per project and location (Artifact Registry API enabled)\n- **Azure**: Explicitly provisioned Azure Container Registry instance\n\nThe actual repository management and permissions are handled through the bindings API.")
 
 export type ArtifactRegistry = z.infer<typeof ArtifactRegistrySchema>

@@ -25,6 +25,14 @@ pub struct ArtifactRegistry {
     /// Maximum 64 characters.
     #[builder(start_fn)]
     pub id: String,
+
+    /// AWS-only: regions to replicate container images to.
+    /// ECR private image replication ensures images pushed in the registry's home region
+    /// are automatically available in these additional regions (required when Lambda or
+    /// other compute runs in a different region from the registry).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub replication_regions: Vec<String>,
 }
 
 impl ArtifactRegistry {

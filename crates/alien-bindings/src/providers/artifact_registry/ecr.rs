@@ -221,6 +221,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 session_name: Some("alien-ecr-create".to_string()),
                 duration_seconds: None,
                 external_id: None,
+                target_region: None,
             })
             .await
             .map_err(|e| {
@@ -298,6 +299,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 session_name: Some("alien-ecr-describe".to_string()),
                 duration_seconds: None,
                 external_id: None,
+                target_region: None,
             })
             .await
             .map_err(|e| {
@@ -661,6 +663,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             )),
             duration_seconds: ttl_seconds.map(|ttl| ttl.min(43200) as i32), // Max 12 hours
             external_id: None,
+            target_region: None,
         };
 
         // Assume the role

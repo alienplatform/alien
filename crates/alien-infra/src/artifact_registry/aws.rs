@@ -9,6 +9,11 @@ use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::CreateRoleRequest;
 use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
 
+use alien_aws_clients::aws::ecr::{
+    PutReplicationConfigurationRequest, ReplicationConfiguration, ReplicationDestination,
+    ReplicationRule,
+};
+
 /// AWS Artifact Registry controller.
 ///
 /// AWS ECR implicitly exists in every AWS account and region, but this controller
@@ -277,6 +282,48 @@ impl AwsArtifactRegistryController {
         info!(registry=%config.id, "Successfully applied resource-scoped permissions");
 
         Ok(HandlerAction::Continue {
+            state: ConfiguringReplication,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ConfiguringReplication,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn configuring_replication(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+
+        if config.replication_regions.is_empty() {
+            info!(registry=%config.id, "No replication regions configured, skipping");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+        let account_id = self
+            .account_id
+            .as_deref()
+            .unwrap_or(&aws_cfg.account_id.to_string())
+            .to_string();
+
+        self.apply_replication_config(
+            &*ecr_client,
+            &account_id,
+            &aws_cfg.region,
+            &config.replication_regions,
+            &config.id,
+        )
+        .await?;
+
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -454,6 +501,48 @@ impl AwsArtifactRegistryController {
             role_name = %push_role_name,
             "Push role policy updated successfully"
         );
+
+        Ok(HandlerAction::Continue {
+            state: UpdatingReplication,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdatingReplication,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_replication(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+
+        if config.replication_regions.is_empty() {
+            info!(registry=%config.id, "No replication regions configured, skipping");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+        let account_id = self
+            .account_id
+            .as_deref()
+            .unwrap_or(&aws_cfg.account_id.to_string())
+            .to_string();
+
+        self.apply_replication_config(
+            &*ecr_client,
+            &account_id,
+            &aws_cfg.region,
+            &config.replication_regions,
+            &config.id,
+        )
+        .await?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -757,6 +846,82 @@ impl AwsArtifactRegistryController {
 }
 
 impl AwsArtifactRegistryController {
+    /// Configure ECR private image replication to the specified destination regions.
+    ///
+    /// ECR replication is configured at the registry level (per account). This method
+    /// reads the current replication configuration, merges the desired destination
+    /// regions, and writes back the updated configuration.
+    async fn apply_replication_config(
+        &self,
+        ecr_client: &dyn alien_aws_clients::aws::ecr::EcrApi,
+        account_id: &str,
+        home_region: &str,
+        replication_regions: &[String],
+        registry_id: &str,
+    ) -> Result<()> {
+        // Build the set of desired destinations (same account, different regions)
+        let desired_destinations: Vec<ReplicationDestination> = replication_regions
+            .iter()
+            .filter(|r| r.as_str() != home_region)
+            .map(|region| ReplicationDestination {
+                region: region.clone(),
+                registry_id: account_id.to_string(),
+            })
+            .collect();
+
+        if desired_destinations.is_empty() {
+            info!(
+                registry = %registry_id,
+                "All replication regions match the home region, skipping"
+            );
+            return Ok(());
+        }
+
+        // Read the current replication configuration so we don't clobber existing rules
+        let current = ecr_client
+            .describe_registry()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to describe ECR registry for replication config".to_string(),
+                resource_id: Some(registry_id.to_string()),
+            })?;
+
+        // Merge: find or create a rule whose destinations include ours
+        let mut rules = current.replication_configuration.rules;
+        if rules.is_empty() {
+            rules.push(ReplicationRule {
+                destinations: desired_destinations.clone(),
+                repository_filters: vec![],
+            });
+        } else {
+            // Merge into the first rule's destinations
+            let first_rule = &mut rules[0];
+            for dest in &desired_destinations {
+                if !first_rule.destinations.contains(dest) {
+                    first_rule.destinations.push(dest.clone());
+                }
+            }
+        }
+
+        ecr_client
+            .put_replication_configuration(PutReplicationConfigurationRequest {
+                replication_configuration: ReplicationConfiguration { rules },
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to configure ECR replication".to_string(),
+                resource_id: Some(registry_id.to_string()),
+            })?;
+
+        info!(
+            registry = %registry_id,
+            destinations = ?desired_destinations,
+            "ECR replication configured successfully"
+        );
+
+        Ok(())
+    }
+
     /// Generates an assume role policy that allows service account roles in the stack to assume this role
     /// In the new permission system, service accounts are created from permission profiles,
     /// and the artifact registry roles can be assumed by any service account role in the stack

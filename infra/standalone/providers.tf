@@ -28,14 +28,6 @@ provider "aws" {
   region     = var.aws_target_region
 }
 
-# Management account credentials in the target region — needed for ECR
-# because Lambda requires images in the same region as the function.
-provider "aws" {
-  alias      = "management_target_region"
-  access_key = var.aws_management_access_key_id
-  secret_key = var.aws_management_secret_access_key
-  region     = var.aws_target_region
-}
 
 provider "google" {
   alias       = "management"

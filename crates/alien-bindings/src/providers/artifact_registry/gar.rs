@@ -590,6 +590,8 @@ impl ArtifactRegistry for GarArtifactRegistry {
             scopes,
             delegates: None,
             lifetime,
+            target_project_id: None,
+            target_region: None,
         };
 
         // Impersonate the service account

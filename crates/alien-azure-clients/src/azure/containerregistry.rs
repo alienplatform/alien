@@ -1,9 +1,9 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::long_running_operation::OperationResult;
 use crate::azure::models::containerregistry::{
-    Registry, RegistryListResult, RegistryUpdateParameters, ScopeMap, ScopeMapListResult,
-    ScopeMapProperties, ScopeMapUpdateParameters, Token, TokenListResult, TokenProperties,
-    TokenUpdateParameters,
+    GenerateCredentialsParameters, GenerateCredentialsResult, Registry, RegistryListResult,
+    RegistryUpdateParameters, ScopeMap, ScopeMapListResult, ScopeMapProperties,
+    ScopeMapUpdateParameters, Token, TokenListResult, TokenProperties, TokenUpdateParameters,
 };
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
@@ -27,6 +27,9 @@ pub type ScopeMapOperationResult = OperationResult<ScopeMap>;
 
 /// Type alias for Token operations that can be either completed or long-running
 pub type TokenOperationResult = OperationResult<Token>;
+
+/// Type alias for GenerateCredentials operations that can be either completed or long-running
+pub type GenerateCredentialsOperationResult = OperationResult<GenerateCredentialsResult>;
 
 // -------------------------------------------------------------------------
 // Container Registry API trait
@@ -134,6 +137,14 @@ pub trait ContainerRegistryApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         registry_name: &str,
     ) -> Result<Vec<Token>>;
+
+    // Credential generation
+    async fn generate_credentials(
+        &self,
+        resource_group_name: &str,
+        registry_name: &str,
+        parameters: &GenerateCredentialsParameters,
+    ) -> Result<GenerateCredentialsOperationResult>;
 }
 
 // -------------------------------------------------------------------------
@@ -844,5 +855,54 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
             })?;
 
         Ok(list_result.value)
+    }
+
+    /// Generate credentials for a registry token.
+    ///
+    /// Calls `POST /registries/{registryName}/generateCredentials` to create
+    /// a username/password pair tied to a token's scope map.
+    async fn generate_credentials(
+        &self,
+        resource_group_name: &str,
+        registry_name: &str,
+        parameters: &GenerateCredentialsParameters,
+    ) -> Result<GenerateCredentialsOperationResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}/generateCredentials",
+                &self.token_cache.config().subscription_id, resource_group_name, registry_name
+            ),
+            Some(vec![("api-version", "2025-04-01".into())]),
+        );
+
+        let body = serde_json::to_string(parameters)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize generateCredentials parameters for registry: {}",
+                    registry_name
+                ),
+            })?;
+
+        let builder = AzureRequestBuilder::new(Method::POST, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "GenerateCredentials",
+                registry_name,
+            )
+            .await
     }
 }

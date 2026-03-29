@@ -32,6 +32,11 @@ pub struct AwsImpersonationConfig {
     pub duration_seconds: Option<i32>,
     /// Optional external ID for the assume role operation
     pub external_id: Option<String>,
+    /// Optional target region override. When provided, the impersonated config
+    /// uses this region instead of inheriting the caller's region. Required for
+    /// cross-region impersonation (e.g., management in us-east-1 targeting us-east-2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_region: Option<String>,
 }
 
 /// Configuration for AWS Web Identity Token authentication
@@ -144,6 +149,14 @@ pub struct GcpImpersonationConfig {
     pub delegates: Option<Vec<String>>,
     /// Optional desired lifetime duration of the access token (max 3600s)
     pub lifetime: Option<String>,
+    /// Optional target project ID override. When provided, the impersonated config
+    /// uses this project ID instead of inheriting the caller's project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_project_id: Option<String>,
+    /// Optional target region override. When provided, the impersonated config
+    /// uses this region instead of inheriting the caller's region.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_region: Option<String>,
 }
 
 impl Default for GcpImpersonationConfig {
@@ -153,6 +166,8 @@ impl Default for GcpImpersonationConfig {
             scopes: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
             delegates: None,
             lifetime: Some("3600s".to_string()),
+            target_project_id: None,
+            target_region: None,
         }
     }
 }
@@ -238,6 +253,14 @@ pub struct AzureImpersonationConfig {
     pub scope: String,
     /// Optional tenant ID for cross-tenant impersonation
     pub tenant_id: Option<String>,
+    /// Optional target subscription ID override. When provided, the impersonated config
+    /// uses this subscription instead of inheriting the caller's subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_subscription_id: Option<String>,
+    /// Optional target region override. When provided, the impersonated config
+    /// uses this region instead of inheriting the caller's region.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_region: Option<String>,
 }
 
 impl Default for AzureImpersonationConfig {
@@ -246,6 +269,8 @@ impl Default for AzureImpersonationConfig {
             client_id: String::new(),
             scope: "https://management.azure.com/.default".to_string(),
             tenant_id: None,
+            target_subscription_id: None,
+            target_region: None,
         }
     }
 }

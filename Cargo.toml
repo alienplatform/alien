@@ -70,6 +70,7 @@ alien-deployment = { path = "crates/alien-deployment", version = "1.3.1" }
 alien-cli-common = { path = "crates/alien-cli-common", version = "1.3.1" }
 alien-local = { path = "crates/alien-local", version = "1.3.1" }
 alien-manager = { path = "crates/alien-manager", version = "1.3.1" }
+alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "1.3.1", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "1.3.1", default-features = false, features = ["rustls"] }
 horizon-client-sdk = { git = "https://github.com/alienplatform/horizon" }

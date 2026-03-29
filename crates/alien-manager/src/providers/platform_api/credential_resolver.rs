@@ -79,12 +79,18 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 })?;
 
             let resolver = alien_infra::RemoteAccessResolver::new(std::env::vars().collect());
-            return resolver
-                .resolve(base_config, stack_state)
+            let resolved = resolver
+                .resolve(
+                    base_config,
+                    stack_state,
+                    deployment.environment_info.as_ref(),
+                )
                 .await
                 .context(GenericError {
                     message: "Failed to resolve remote access from stack state".to_string(),
-                });
+                })?;
+
+            return Ok(resolved);
         }
 
         let provider = self.provider_for_target(platform);

@@ -253,6 +253,14 @@ impl GcpClientConfigExt for GcpClientConfig {
     async fn impersonate(&self, config: GcpImpersonationConfig) -> Result<GcpClientConfig> {
         use crate::gcp::iam::{GenerateAccessTokenRequest, IamApi, IamClient};
 
+        let has_target_project = config.target_project_id.is_some();
+        let target_project_id = config
+            .target_project_id
+            .unwrap_or_else(|| self.project_id.clone());
+        let target_region = config
+            .target_region
+            .unwrap_or_else(|| self.region.clone());
+
         let iam_client = IamClient::new(Client::new(), self.clone());
 
         let token_request = GenerateAccessTokenRequest::builder()
@@ -265,15 +273,20 @@ impl GcpClientConfigExt for GcpClientConfig {
             .generate_access_token(config.service_account_email.clone(), token_request)
             .await?;
 
-        // Create new platform config with impersonated access token
+        // Use target overrides when provided (cross-project impersonation).
         Ok(GcpClientConfig {
-            project_id: self.project_id.clone(),
-            region: self.region.clone(),
+            project_id: target_project_id,
+            region: target_region,
             credentials: GcpCredentials::AccessToken {
                 token: token_response.access_token,
             },
             service_overrides: self.service_overrides.clone(),
-            project_number: self.project_number.clone(),
+            // Reset project_number when switching projects — it must be re-resolved.
+            project_number: if has_target_project {
+                None
+            } else {
+                self.project_number.clone()
+            },
         })
     }
 

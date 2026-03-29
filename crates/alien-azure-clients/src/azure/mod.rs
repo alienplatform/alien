@@ -411,11 +411,15 @@ impl AzureClientConfigExt for AzureClientConfig {
 
         let token = get_impersonated_token(self, &config).await?;
 
-        // Create new platform config with impersonated access token
+        // Use target overrides when provided (cross-subscription impersonation).
         Ok(AzureClientConfig {
-            subscription_id: self.subscription_id.clone(),
+            subscription_id: config
+                .target_subscription_id
+                .unwrap_or_else(|| self.subscription_id.clone()),
             tenant_id: config.tenant_id.unwrap_or_else(|| self.tenant_id.clone()),
-            region: self.region.clone(),
+            region: config
+                .target_region
+                .or_else(|| self.region.clone()),
             credentials: AzureCredentials::AccessToken { token },
             service_overrides: self.service_overrides.clone(),
         })

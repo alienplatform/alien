@@ -3,7 +3,7 @@ terraform {
     aws = {
       source                = "hashicorp/aws"
       version               = "~> 5.0"
-      configuration_aliases = [aws.management, aws.target, aws.management_target_region]
+      configuration_aliases = [aws.management, aws.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
@@ -65,15 +65,33 @@ resource "aws_s3_bucket" "test" {
   force_destroy = true
 }
 
-# ── Management: ECR repository (in target region) ────────────────────────────
-# Lambda requires container images in the same region as the function.
-# The ECR repo lives in the management account but in the target region.
+# ── Management: ECR repository ────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "lambda_test" {
-  provider             = aws.management_target_region
+  provider             = aws.management
   name                 = "alien-test-lambda"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
+}
+
+# ── Management: ECR replication to target region ─────────────────────────────
+# Lambda requires container images in the same region as the function.
+# Rather than placing the ECR repo in the target region, we keep it in the
+# management region and configure private image replication to the target region.
+# This mirrors the production flow where the manager's artifact registry
+# controller configures replication via the ECR API.
+
+resource "aws_ecr_replication_configuration" "cross_region" {
+  provider = aws.management
+
+  replication_configuration {
+    rule {
+      destination {
+        region      = var.target_region
+        registry_id = data.aws_caller_identity.management.account_id
+      }
+    }
+  }
 }
 
 # ── Management: Lambda execution role ────────────────────────────────────────

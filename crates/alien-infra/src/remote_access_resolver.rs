@@ -8,7 +8,7 @@ use crate::ClientConfigExt as _;
 #[cfg(feature = "aws")]
 use alien_aws_clients::AwsImpersonationConfig;
 use alien_core::{
-    ClientConfig, ImpersonationConfig, Platform, RemoteStackManagement,
+    ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteStackManagement,
     RemoteStackManagementOutputs, ResourceOutputsDefinition, StackState,
 };
 use alien_error::{AlienError, Context};
@@ -42,6 +42,9 @@ impl RemoteAccessResolver {
     ///
     /// * `base_config` - The Agent Manager's ServiceAccount configuration
     /// * `stack_state` - The stack state containing RemoteStackManagement outputs
+    /// * `target_environment` - Optional target environment info. When provided, the
+    ///   impersonated config will use the target's region/account/project instead of
+    ///   inheriting from the management configuration.
     ///
     /// # Returns
     ///
@@ -50,6 +53,7 @@ impl RemoteAccessResolver {
         &self,
         base_config: ClientConfig,
         stack_state: &StackState,
+        target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
         // Find RemoteStackManagement resource outputs
         let remote_mgmt_outputs = self.find_remote_stack_management_outputs(stack_state)?;
@@ -57,16 +61,28 @@ impl RemoteAccessResolver {
         // Determine platform and perform appropriate impersonation
         match base_config.platform() {
             Platform::Aws => {
-                self.resolve_aws_impersonation(base_config, &remote_mgmt_outputs)
-                    .await
+                self.resolve_aws_impersonation(
+                    base_config,
+                    &remote_mgmt_outputs,
+                    target_environment,
+                )
+                .await
             }
             Platform::Gcp => {
-                self.resolve_gcp_impersonation(base_config, &remote_mgmt_outputs)
-                    .await
+                self.resolve_gcp_impersonation(
+                    base_config,
+                    &remote_mgmt_outputs,
+                    target_environment,
+                )
+                .await
             }
             Platform::Azure => {
-                self.resolve_azure_impersonation(base_config, &remote_mgmt_outputs)
-                    .await
+                self.resolve_azure_impersonation(
+                    base_config,
+                    &remote_mgmt_outputs,
+                    target_environment,
+                )
+                .await
             }
             _ => Err(AlienError::new(ErrorData::RemoteAccessInvalid {
                 message: format!(
@@ -110,19 +126,25 @@ impl RemoteAccessResolver {
         &self,
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
+        target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
         let role_arn = &outputs.access_configuration;
         info!("Resolving AWS impersonation for role: {}", role_arn);
 
-        // Create impersonation config
+        // Extract target region from environment info if available.
+        let target_region = target_environment.and_then(|env| match env {
+            EnvironmentInfo::Aws(info) => Some(info.region.clone()),
+            _ => None,
+        });
+
         let impersonation_config = ImpersonationConfig::Aws(AwsImpersonationConfig {
             role_arn: role_arn.clone(),
             session_name: Some(format!("alien-remote-access-{}", Uuid::new_v4().simple())),
             duration_seconds: Some(3600),
-            external_id: None, // External ID is configured in the trust policy, not needed here
+            external_id: None,
+            target_region,
         });
 
-        // Perform impersonation
         base_config.impersonate(impersonation_config).await.context(
             ErrorData::AuthenticationFailed {
                 message: format!("Failed to assume AWS role: {}", role_arn),
@@ -136,6 +158,7 @@ impl RemoteAccessResolver {
         &self,
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
+        target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
         let service_account_email = &outputs.access_configuration;
         info!(
@@ -143,15 +166,23 @@ impl RemoteAccessResolver {
             service_account_email
         );
 
-        // Create impersonation config
+        // Extract target project/region from environment info if available.
+        let (target_project_id, target_region) = match target_environment {
+            Some(EnvironmentInfo::Gcp(info)) => {
+                (Some(info.project_id.clone()), Some(info.region.clone()))
+            }
+            _ => (None, None),
+        };
+
         let impersonation_config = ImpersonationConfig::Gcp(GcpImpersonationConfig {
             service_account_email: service_account_email.clone(),
             scopes: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
             delegates: None,
             lifetime: Some("3600s".to_string()),
+            target_project_id,
+            target_region,
         });
 
-        // Perform impersonation
         base_config.impersonate(impersonation_config).await.context(
             ErrorData::AuthenticationFailed {
                 message: format!(
@@ -168,6 +199,7 @@ impl RemoteAccessResolver {
         &self,
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
+        target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
         // For Azure Lighthouse, the access_configuration contains the registration assignment ID
         // We don't need to do additional impersonation as Lighthouse handles the delegation
@@ -177,9 +209,16 @@ impl RemoteAccessResolver {
         );
 
         // Azure Lighthouse works differently - once the registration is set up,
-        // the managing tenant's identity automatically has access
-        // So we just return the base config as-is
-        Ok(base_config)
+        // the managing tenant's identity automatically has access.
+        // Apply target environment overrides if provided.
+        match (base_config, target_environment) {
+            (ClientConfig::Azure(mut azure_config), Some(EnvironmentInfo::Azure(info))) => {
+                azure_config.subscription_id = info.subscription_id.clone();
+                azure_config.region = Some(info.location.clone());
+                Ok(ClientConfig::Azure(azure_config))
+            }
+            (config, _) => Ok(config),
+        }
     }
 
     /// Create a base client configuration for the specified platform

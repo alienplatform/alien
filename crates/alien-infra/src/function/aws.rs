@@ -210,6 +210,12 @@ impl AwsFunctionController {
             }
         };
 
+        // Lambda requires container images in the same region as the function.
+        // If the image URI points to ECR in a different region (e.g., the management
+        // region), rewrite it to reference the local region where the replicated copy
+        // lives. ECR private image replication must be configured separately.
+        let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
+
         let code = FunctionCode::builder().image_uri(image_uri).build();
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &cfg.id);
 
@@ -1235,7 +1241,7 @@ impl AwsFunctionController {
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
             let image_uri = match &current_config.code {
-                alien_core::FunctionCode::Image { image } => image,
+                alien_core::FunctionCode::Image { image } => image.clone(),
                 alien_core::FunctionCode::Source { .. } => {
                     return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: "Function is configured with source code for update, but only pre-built images are supported".to_string(),
@@ -1244,8 +1250,10 @@ impl AwsFunctionController {
                 }
             };
 
+            let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
+
             let request = UpdateFunctionCodeRequest::builder()
-                .image_uri(image_uri.clone())
+                .image_uri(image_uri)
                 .publish(true)
                 .build();
 
@@ -2034,6 +2042,38 @@ impl AwsFunctionController {
 
 // Separate impl block for helper methods
 impl AwsFunctionController {
+    /// Rewrite an ECR image URI to use the given region if it points to a different one.
+    ///
+    /// Lambda requires container images in the same region as the function.
+    /// When the management account's ECR is in a different region and private
+    /// image replication copies images to the target region, the image URI must
+    /// reference the replicated copy.
+    ///
+    /// Only rewrites URIs matching the ECR format: `{account}.dkr.ecr.{region}.amazonaws.com/...`
+    fn rewrite_ecr_region_if_needed(image_uri: &str, target_region: &str) -> String {
+        // ECR URI format: {account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}
+        let Some(host_end) = image_uri.find('/') else {
+            return image_uri.to_string();
+        };
+        let host = &image_uri[..host_end];
+        let parts: Vec<&str> = host.split('.').collect();
+        // parts: [account_id, "dkr", "ecr", region, "amazonaws", "com"]
+        if parts.len() >= 6
+            && parts[1] == "dkr"
+            && parts[2] == "ecr"
+            && parts[4] == "amazonaws"
+            && parts[3] != target_region
+        {
+            let new_host = format!(
+                "{}.dkr.ecr.{}.amazonaws.com",
+                parts[0], target_region
+            );
+            format!("{}{}", new_host, &image_uri[host_end..])
+        } else {
+            image_uri.to_string()
+        }
+    }
+
     /// Creates an SQS event source mapping for a queue trigger
     async fn create_queue_event_source_mapping(
         &mut self,

@@ -256,16 +256,204 @@ fn extract_ecr_region(ecr_url: &str) -> anyhow::Result<String> {
 /// Ensure the management account's container registry allows the target
 /// account to pull images. This mirrors production infrastructure setup
 /// where cross-account access is configured before deploying functions.
+///
+/// Returns `Some(ImagePullCredentials)` when the platform requires explicit
+/// registry credentials for cross-account image pulls (Azure), or `None`
+/// when IAM-based access is sufficient (AWS, GCP).
 pub async fn ensure_cross_account_registry_access(
     platform: Platform,
     config: &TestConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<alien_core::ImagePullCredentials>> {
     match platform {
-        Platform::Aws => ensure_aws_ecr_cross_account_access(config).await,
-        Platform::Gcp => ensure_gcp_gar_cross_account_access(config).await,
-        // Azure ACR uses admin credentials configured in the test infra
-        _ => Ok(()),
+        Platform::Aws => {
+            ensure_aws_ecr_cross_account_access(config).await?;
+            Ok(None)
+        }
+        Platform::Gcp => {
+            ensure_gcp_gar_cross_account_access(config).await?;
+            Ok(None)
+        }
+        Platform::Azure => ensure_azure_acr_cross_account_access(config).await,
+        _ => Ok(None),
     }
+}
+
+/// Azure ACR cross-subscription access: create a repository-scoped pull
+/// token on the management ACR and return its credentials.
+///
+/// In cross-subscription deployments, the managed identity created in the
+/// target subscription cannot pull from the management subscription's ACR
+/// (AcrPull role is scoped to the target subscription). Instead, we create
+/// a narrowly-scoped ACR token that can only read images from this registry,
+/// and pass it as `ImagePullCredentials` to the Container App.
+async fn ensure_azure_acr_cross_account_access(
+    config: &TestConfig,
+) -> anyhow::Result<Option<alien_core::ImagePullCredentials>> {
+    use alien_azure_clients::containerregistry::{
+        AzureContainerRegistryClient, ContainerRegistryApi,
+    };
+    use alien_azure_clients::long_running_operation::LongRunningOperationClient;
+    use alien_azure_clients::models::containerregistry::{
+        GenerateCredentialsParameters, ScopeMapProperties, TokenProperties,
+        TokenPropertiesStatus,
+    };
+    use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
+
+    let mgmt = config
+        .azure_mgmt
+        .as_ref()
+        .context("Azure management credentials required for cross-subscription ACR access")?;
+    let resource_group = config
+        .azure_resources
+        .resource_group
+        .as_ref()
+        .context("ALIEN_TEST_AZURE_RESOURCE_GROUP required for ACR token creation")?;
+    let registry_name = config
+        .azure_resources
+        .registry_name
+        .as_ref()
+        .context("ALIEN_TEST_AZURE_REGISTRY_NAME required for ACR token creation")?;
+
+    let azure_config = AzureClientConfig {
+        subscription_id: mgmt.subscription_id.clone(),
+        tenant_id: mgmt.tenant_id.clone(),
+        region: Some(mgmt.region.clone()),
+        credentials: AzureCredentials::ServicePrincipal {
+            client_id: mgmt.client_id.clone(),
+            client_secret: mgmt.client_secret.clone(),
+        },
+        service_overrides: None,
+    };
+
+    let http_client = reqwest::Client::new();
+    let acr_client = AzureContainerRegistryClient::new(
+        http_client.clone(),
+        AzureTokenCache::new(azure_config.clone()),
+    );
+    let lro_client = LongRunningOperationClient::new(
+        http_client,
+        AzureTokenCache::new(azure_config),
+    );
+
+    // Use a deterministic name so repeated runs reuse the same token.
+    let scope_map_name = "alien-e2e-pull-scope";
+    let token_name = "alien-e2e-pull-token";
+
+    // 1. Create (or update) a scope map allowing pull from all repositories.
+    info!(
+        registry = %registry_name,
+        scope_map = scope_map_name,
+        "Creating ACR pull scope map"
+    );
+    let scope_map_result = acr_client
+        .create_scope_map(
+            resource_group,
+            registry_name,
+            scope_map_name,
+            &ScopeMapProperties {
+                description: Some(
+                    "E2E test pull-only scope map for cross-subscription access".to_string(),
+                ),
+                actions: vec!["repositories/*/content/read".to_string()],
+                creation_date: None,
+                provisioning_state: None,
+                type_: None,
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create ACR scope map: {}", e))?;
+
+    scope_map_result
+        .wait_for_operation_completion(&lro_client, "CreateScopeMap", scope_map_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed waiting for scope map creation: {}", e))?;
+
+    // Get the scope map ID.
+    let scope_map = acr_client
+        .get_scope_map(resource_group, registry_name, scope_map_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get scope map: {}", e))?;
+    let scope_map_id = scope_map.id.context("Scope map missing ID")?;
+
+    // 2. Create (or update) a token linked to the scope map.
+    info!(
+        registry = %registry_name,
+        token = token_name,
+        "Creating ACR pull token"
+    );
+    let token_result = acr_client
+        .create_token(
+            resource_group,
+            registry_name,
+            token_name,
+            &TokenProperties {
+                scope_map_id: Some(scope_map_id.clone()),
+                status: Some(TokenPropertiesStatus::Enabled),
+                credentials: None,
+                creation_date: None,
+                provisioning_state: None,
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create ACR token: {}", e))?;
+
+    token_result
+        .wait_for_operation_completion(&lro_client, "CreateToken", token_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed waiting for token creation: {}", e))?;
+
+    // Get the token to retrieve its resource ID.
+    let token = acr_client
+        .get_token(resource_group, registry_name, token_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get token: {}", e))?;
+    let token_id = token.id.context("Token missing ID")?;
+
+    // 3. Generate credentials (username + password) for the token.
+    info!(
+        registry = %registry_name,
+        token = token_name,
+        "Generating ACR token credentials"
+    );
+    let cred_op = acr_client
+        .generate_credentials(
+            resource_group,
+            registry_name,
+            &GenerateCredentialsParameters {
+                token_id: Some(token_id),
+                expiry: None,
+                name: None,
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to generate ACR credentials: {}", e))?;
+
+    cred_op
+        .wait_for_operation_completion(&lro_client, "GenerateCredentials", token_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed waiting for credential generation: {}", e))?;
+
+    // Re-fetch the token to read the generated credentials from its properties.
+    let updated_token = acr_client
+        .get_token(resource_group, registry_name, token_name)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to re-fetch token after credential generation: {}", e))?;
+
+    let password = updated_token
+        .properties
+        .and_then(|p| p.credentials)
+        .and_then(|c| c.passwords.into_iter().find_map(|p| p.value))
+        .context("Token has no password after credential generation")?;
+
+    let username = token_name.to_string();
+
+    info!(
+        registry = %registry_name,
+        token = token_name,
+        "ACR repository-scoped pull token created successfully"
+    );
+
+    Ok(Some(alien_core::ImagePullCredentials { username, password }))
 }
 
 /// Set an ECR repository policy allowing Lambda in the target account to

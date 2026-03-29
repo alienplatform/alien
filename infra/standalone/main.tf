@@ -2,9 +2,8 @@ module "aws" {
   source = "./modules/aws"
 
   providers = {
-    aws.management              = aws.management
-    aws.target                  = aws.target
-    aws.management_target_region = aws.management_target_region
+    aws.management = aws.management
+    aws.target     = aws.target
   }
 
   management_region = var.aws_management_region

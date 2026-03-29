@@ -61,7 +61,7 @@ async fn resolve_client_config_from_stack_state(
 
     let resolver = RemoteAccessResolver::new(std::env::vars().collect());
     resolver
-        .resolve(base_config, stack_state)
+        .resolve(base_config, stack_state, None)
         .await
         .context(ErrorData::ClientConfigError {
             message: "Failed to resolve remote access from stack state".to_string(),

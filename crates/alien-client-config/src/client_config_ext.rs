@@ -70,6 +70,7 @@ pub trait ClientConfigExt {
     ///     session_name: None,
     ///     duration_seconds: Some(3600),
     ///     external_id: None,
+    ///     target_region: None,
     /// });
     ///
     /// let impersonated_config = aws_config.impersonate(impersonation).await?;

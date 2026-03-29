@@ -516,6 +516,24 @@ async fn run_push_model(
             ),
         })?;
 
+    push_initial_setup(client, deployment_id, platform, client_config, None, None).await
+}
+
+/// Run the push-model initial setup flow for a deployment.
+///
+/// Fetches deployment and release state from the manager, acquires a sync lock,
+/// steps the deployment through InitialSetup until it reaches Provisioning (or a
+/// terminal state), reconciles state back to the manager, and releases the lock.
+///
+/// This is used by both `alien-deploy up` (push model) and `alien-test` (e2e setup).
+pub async fn push_initial_setup(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    client_config: ClientConfig,
+    management_config: Option<alien_core::ManagementConfig>,
+    image_pull_credentials: Option<alien_core::ImagePullCredentials>,
+) -> Result<()> {
     // Get deployment from manager
     let deployment = client
         .get_deployment()
@@ -594,8 +612,9 @@ async fn run_push_model(
         .unwrap_or_default();
 
     // Build a minimal config JSON and deserialize to get proper defaults
-    let config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
+        "managementConfig": serde_json::to_value(&management_config).unwrap_or_default(),
         "environmentVariables": {
             "variables": [],
             "hash": "",
@@ -607,7 +626,72 @@ async fn run_push_model(
         message: "Failed to construct deployment config".to_string(),
     })?;
 
-    // Run initial setup steps only
+    config.image_pull_credentials = image_pull_credentials;
+
+    // Acquire sync lock
+    let session = format!("push-setup-{}", uuid::Uuid::new_v4());
+    client
+        .acquire()
+        .body(alien_manager_api::types::AcquireRequest {
+            session: session.clone(),
+            deployment_ids: Some(vec![deployment_id.to_string()]),
+            statuses: None,
+            platforms: None,
+            limit: None,
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::DeploymentFailed {
+            operation: "acquire sync lock".to_string(),
+        })?;
+
+    // Step loop with lock release guard
+    let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;
+
+    // Always reconcile + release, even on error
+    let sdk_state: alien_manager_api::types::DeploymentState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap_or_default())
+            .unwrap_or_else(|_| {
+                // Fallback: use a minimal state so reconcile doesn't fail
+                serde_json::from_value(serde_json::json!({
+                    "status": "initial-setup-failed",
+                    "platform": platform.as_str(),
+                }))
+                .unwrap()
+            });
+
+    let _ = client
+        .reconcile()
+        .body(alien_manager_api::types::ReconcileRequest {
+            deployment_id: deployment_id.to_string(),
+            session: session.clone(),
+            state: sdk_state,
+            update_heartbeat: None,
+        })
+        .send()
+        .await;
+
+    let _ = client
+        .release()
+        .body(alien_manager_api::types::ReleaseRequest {
+            deployment_id: deployment_id.to_string(),
+            session: session.clone(),
+        })
+        .send()
+        .await;
+
+    result
+}
+
+/// Inner step loop for push_initial_setup. Separated so the caller can
+/// always reconcile + release regardless of the outcome.
+async fn run_step_loop(
+    state: &mut DeploymentState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+) -> Result<()> {
     let max_steps = 100;
 
     for step_count in 1..=max_steps {
@@ -621,15 +705,15 @@ async fn run_push_model(
                     operation: "initial setup".to_string(),
                 })?;
 
-        state = step_result.state;
+        *state = step_result.state;
 
-        // For push model, we only do initial setup then return
-        // The manager continues reconciliation
+        // Synced or Running — done
         if state.status.is_synced() || matches!(state.status, DeploymentStatus::Running) {
             output::success("Initial setup complete. Manager will continue deployment.");
-            break;
+            return Ok(());
         }
 
+        // Failed — report error
         if state.status.is_failed() {
             if let Some(err) = step_result.error {
                 return Err(AlienError::new(ErrorData::DeploymentFailed {
@@ -641,13 +725,13 @@ async fn run_push_model(
             }));
         }
 
-        // After initial setup phases, return control to manager
+        // Provisioning/Updating — hand off to manager
         if matches!(
             state.status,
             DeploymentStatus::Provisioning | DeploymentStatus::Updating
         ) {
             output::success("Initial setup complete. Manager will continue provisioning.");
-            break;
+            return Ok(());
         }
 
         if let Some(delay_ms) = step_result.suggested_delay_ms {
@@ -655,7 +739,10 @@ async fn run_push_model(
         }
     }
 
-    output::info("Push model deployment handed off to manager.");
-
-    Ok(())
+    Err(AlienError::new(ErrorData::DeploymentFailed {
+        operation: format!(
+            "initial setup exceeded {} steps for deployment {}",
+            max_steps, deployment_id
+        ),
+    }))
 }

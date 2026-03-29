@@ -17,6 +17,7 @@ alien-error = { workspace = true }
 alien-manager-api = { workspace = true }
 alien-build = { workspace = true }
 alien-aws-clients = { workspace = true }
+alien-azure-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 
 # OCI registry push
@@ -49,9 +50,8 @@ uuid = { workspace = true, features = ["v4"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
-# Deployment stepping (for setup_target cross-account flow)
-alien-deployment = { workspace = true }
-alien-infra = { workspace = true }
+# Deploy CLI (for push_initial_setup cross-account flow)
+alien-deploy-cli = { workspace = true }
 
 # Error handling (for e2e orchestration)
 anyhow = { workspace = true }

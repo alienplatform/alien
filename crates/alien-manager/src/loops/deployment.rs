@@ -87,8 +87,6 @@ impl DeploymentLoop {
         let filter = DeploymentFilter {
             statuses: Some(
                 vec![
-                    "pending",
-                    "initial-setup",
                     "provisioning",
                     "update-pending",
                     "updating",

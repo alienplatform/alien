@@ -37,6 +37,18 @@ export class ArtifactRegistry {
   }
 
   /**
+   * AWS-only: Configure ECR private image replication to additional regions.
+   * Ensures images pushed in the registry's home region are automatically
+   * available in these destination regions (required when Lambda or other
+   * compute runs in a different region).
+   * @param regions - AWS region codes to replicate to (e.g., ["us-east-2", "eu-west-1"])
+   */
+  public replicationRegions(regions: string[]): this {
+    this._config.replicationRegions = regions
+    return this
+  }
+
+  /**
    * Builds and validates the artifact registry configuration.
    * @returns An immutable Resource representing the configured artifact registry.
    * @throws Error if the artifact registry configuration is invalid.

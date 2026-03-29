@@ -151,6 +151,13 @@ impl AwsClientConfigExt for AwsClientConfig {
         use reqwest::Client;
         use uuid::Uuid;
 
+        // Extract the target account ID from the role ARN (arn:aws:iam::{account_id}:role/...).
+        // This ensures cross-account impersonation produces a config with the correct account.
+        let target_account_id = extract_account_id_from_role_arn(&config.role_arn)
+            .unwrap_or_else(|| self.account_id.clone());
+
+        let target_region = config.target_region.unwrap_or_else(|| self.region.clone());
+
         // If using WebIdentity (IRSA), first exchange the token for real temporary credentials
         // before calling AssumeRole, which requires valid signed credentials.
         let base_config = self.get_web_identity_credentials().await?;
@@ -171,10 +178,9 @@ impl AwsClientConfigExt for AwsClientConfig {
 
         let credentials = response.assume_role_result.credentials;
 
-        // Create new platform config with assumed credentials
         Ok(AwsClientConfig {
-            account_id: self.account_id.clone(),
-            region: self.region.clone(),
+            account_id: target_account_id,
+            region: target_region,
             credentials: AwsCredentials::AccessKeys {
                 access_key_id: credentials.access_key_id,
                 secret_access_key: credentials.secret_access_key,
@@ -322,5 +328,37 @@ impl AwsClientConfigExt for AwsClientConfig {
             },
             service_overrides: None,
         }
+    }
+}
+
+/// Extract the AWS account ID from a role ARN.
+///
+/// Role ARNs follow the format `arn:aws:iam::{account_id}:role/{role_name}`.
+/// Returns `None` if the ARN doesn't match the expected format.
+fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
+    let parts: Vec<&str> = role_arn.split(':').collect();
+    if parts.len() >= 5 && !parts[4].is_empty() {
+        Some(parts[4].to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_account_id_from_role_arn() {
+        assert_eq!(
+            extract_account_id_from_role_arn("arn:aws:iam::123456789012:role/MyRole"),
+            Some("123456789012".to_string())
+        );
+        assert_eq!(
+            extract_account_id_from_role_arn("arn:aws:iam::987654321098:role/cross-account-role"),
+            Some("987654321098".to_string())
+        );
+        assert_eq!(extract_account_id_from_role_arn("invalid-arn"), None);
+        assert_eq!(extract_account_id_from_role_arn("arn:aws:iam:::role/NoAccount"), None);
     }
 }

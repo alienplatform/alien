@@ -44,6 +44,11 @@ pub trait EcrApi: Send + Sync + Debug {
         &self,
         request: GetAuthorizationTokenRequest,
     ) -> Result<GetAuthorizationTokenResponse>;
+    async fn describe_registry(&self) -> Result<DescribeRegistryResponse>;
+    async fn put_replication_configuration(
+        &self,
+        request: PutReplicationConfigurationRequest,
+    ) -> Result<PutReplicationConfigurationResponse>;
 }
 
 /// AWS ECR client using the new request/error abstractions.
@@ -404,6 +409,25 @@ impl EcrApi for EcrClient {
         self.post_json("GetAuthorizationToken", body, "authorization-token")
             .await
     }
+
+    async fn describe_registry(&self) -> Result<DescribeRegistryResponse> {
+        self.post_json("DescribeRegistry", "{}".to_string(), "registry")
+            .await
+    }
+
+    async fn put_replication_configuration(
+        &self,
+        request: PutReplicationConfigurationRequest,
+    ) -> Result<PutReplicationConfigurationResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: "Failed to serialize PutReplicationConfigurationRequest".to_string(),
+            },
+        )?;
+
+        self.post_json("PutReplicationConfiguration", body, "replication-configuration")
+            .await
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -602,4 +626,55 @@ pub struct AuthorizationData {
     pub authorization_token: String,
     pub expires_at: f64,
     pub proxy_endpoint: String,
+}
+
+// -------------------------------------------------------------------------
+// Registry replication
+// -------------------------------------------------------------------------
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeRegistryResponse {
+    pub registry_id: String,
+    pub replication_configuration: ReplicationConfiguration,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicationConfiguration {
+    pub rules: Vec<ReplicationRule>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicationRule {
+    pub destinations: Vec<ReplicationDestination>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repository_filters: Vec<RepositoryFilter>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicationDestination {
+    pub region: String,
+    pub registry_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryFilter {
+    pub filter: String,
+    pub filter_type: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PutReplicationConfigurationRequest {
+    pub replication_configuration: ReplicationConfiguration,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PutReplicationConfigurationResponse {
+    pub replication_configuration: ReplicationConfiguration,
 }
