@@ -17,6 +17,7 @@ alien-error = { workspace = true }
 alien-manager-api = { workspace = true }
 alien-build = { workspace = true }
 alien-aws-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
 
 # OCI registry push
 dockdash = { workspace = true }

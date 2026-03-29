@@ -703,6 +703,13 @@ pub async fn setup(
         "Deployment created, waiting for running status"
     );
 
+    // Cross-account registry access: ensure the management account's container
+    // registry allows the target account to pull images. Must happen before
+    // function deployment (Provisioning phase).
+    if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
+    }
+
     // Cross-account setup: if management + target credentials are both
     // configured, run InitialSetup with target credentials (mirrors the
     // production alien-deploy-cli push model flow). The manager's

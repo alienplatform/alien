@@ -904,8 +904,14 @@ impl AzureRemoteStackManagementController {
             ctx.resource_prefix
         );
 
-        // Set assignable scopes to the subscription level for Lighthouse
-        let assignable_scopes = vec![format!("/subscriptions/{}", azure_config.subscription_id)];
+        // Set assignable scopes to the resource group level. Azure requires
+        // assignableScopes to be at or below the scope where the role definition
+        // is created (which is the resource group scope for our deployment).
+        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
+        let assignable_scopes = vec![format!(
+            "/subscriptions/{}/resourceGroups/{}",
+            azure_config.subscription_id, resource_group_name
+        )];
 
         let permission = Permission {
             actions: combined_actions,

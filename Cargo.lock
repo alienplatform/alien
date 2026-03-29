@@ -876,6 +876,7 @@ dependencies = [
  "alien-core",
  "alien-deployment",
  "alien-error",
+ "alien-gcp-clients",
  "alien-infra",
  "alien-manager",
  "alien-manager-api",

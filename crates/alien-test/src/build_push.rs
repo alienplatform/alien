@@ -228,6 +228,263 @@ fn create_gcp_push_settings(config: &TestConfig) -> anyhow::Result<PushSettings>
     })
 }
 
+// ---------------------------------------------------------------------------
+// Cross-account registry access
+// ---------------------------------------------------------------------------
+
+/// Ensure the management account's container registry allows the target
+/// account to pull images. This mirrors production infrastructure setup
+/// where cross-account access is configured before deploying functions.
+pub async fn ensure_cross_account_registry_access(
+    platform: Platform,
+    config: &TestConfig,
+) -> anyhow::Result<()> {
+    match platform {
+        Platform::Aws => ensure_aws_ecr_cross_account_access(config).await,
+        Platform::Gcp => ensure_gcp_gar_cross_account_access(config).await,
+        // Azure ACR uses admin credentials configured in the test infra
+        _ => Ok(()),
+    }
+}
+
+/// Set an ECR repository policy allowing Lambda in the target account to
+/// pull images from the management account's ECR repository.
+async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Result<()> {
+    use alien_aws_clients::aws::ecr::SetRepositoryPolicyRequest;
+    use alien_aws_clients::{EcrApi, EcrClient};
+    use alien_core::{AwsClientConfig, AwsCredentials};
+
+    let mgmt = config
+        .aws_mgmt
+        .as_ref()
+        .context("AWS management credentials required for cross-account ECR access")?;
+    let target = config
+        .aws_target
+        .as_ref()
+        .context("AWS target credentials required for cross-account ECR access")?;
+    let target_account_id = target
+        .account_id
+        .as_ref()
+        .context("AWS_TARGET_ACCOUNT_ID required for cross-account ECR access")?;
+    let ecr_repo_url = config
+        .aws_resources
+        .ecr_repository
+        .as_ref()
+        .context("ALIEN_TEST_AWS_ECR_REPOSITORY required for cross-account ECR access")?;
+
+    // Extract repository name from URL:
+    // "219193354193.dkr.ecr.us-east-1.amazonaws.com/alien-test-lambda" -> "alien-test-lambda"
+    let repo_name = ecr_repo_url
+        .split('/')
+        .last()
+        .context("Invalid ECR repository URL format")?;
+
+    let account_id = mgmt
+        .account_id
+        .as_ref()
+        .context("AWS_MANAGEMENT_ACCOUNT_ID required")?
+        .clone();
+
+    let aws_config = AwsClientConfig {
+        region: mgmt.region.clone(),
+        account_id,
+        credentials: AwsCredentials::AccessKeys {
+            access_key_id: mgmt.access_key_id.clone(),
+            secret_access_key: mgmt.secret_access_key.clone(),
+            session_token: mgmt.session_token.clone(),
+        },
+        service_overrides: None,
+    };
+
+    let cred_provider = alien_aws_clients::AwsCredentialProvider::from_config(aws_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create AWS credential provider: {}", e))?;
+
+    let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
+
+    // Policy: allow Lambda service in the target account to pull images
+    let policy = serde_json::json!({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "AllowLambdaCrossAccountPull",
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "lambda.amazonaws.com"
+                },
+                "Action": [
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer"
+                ],
+                "Condition": {
+                    "StringLike": {
+                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                    }
+                }
+            }
+        ]
+    });
+
+    ecr_client
+        .set_repository_policy(SetRepositoryPolicyRequest {
+            repository_name: repo_name.to_string(),
+            policy_text: policy.to_string(),
+            registry_id: None,
+            force: Some(true),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to set ECR repository policy: {}", e))?;
+
+    info!(
+        repo = %repo_name,
+        target_account = %target_account_id,
+        "ECR cross-account pull policy set"
+    );
+
+    Ok(())
+}
+
+/// Add an IAM binding on the management project's GAR repository allowing
+/// the target project's Cloud Run service agent to pull images.
+async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Result<()> {
+    use alien_gcp_clients::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
+    use alien_gcp_clients::resource_manager::{ResourceManagerApi, ResourceManagerClient};
+    use alien_gcp_clients::Binding;
+
+    let mgmt = config
+        .gcp_mgmt
+        .as_ref()
+        .context("GCP management credentials required for cross-account GAR access")?;
+    let target = config
+        .gcp_target
+        .as_ref()
+        .context("GCP target credentials required for cross-account GAR access")?;
+    let gar_repo_url = config
+        .gcp_resources
+        .gar_repository
+        .as_ref()
+        .context("ALIEN_TEST_GCP_GAR_REPOSITORY required for cross-account GAR access")?;
+
+    // Parse GAR URL: "us-central1-docker.pkg.dev/alien-test-mgmt/alien-test/http-server"
+    // -> location=us-central1, project=alien-test-mgmt, repo=alien-test
+    let parts: Vec<&str> = gar_repo_url.split('/').collect();
+    if parts.len() < 3 {
+        anyhow::bail!("Invalid GAR repository URL format: {}", gar_repo_url);
+    }
+    // parts[0] = "us-central1-docker.pkg.dev"
+    // parts[1] = "alien-test-mgmt" (project)
+    // parts[2] = "alien-test" (repository)
+    let location_host = parts[0]; // "us-central1-docker.pkg.dev"
+    let location = location_host
+        .strip_suffix("-docker.pkg.dev")
+        .context("Invalid GAR host format")?;
+    let repo_id = parts[2];
+
+    let sa_key = mgmt
+        .credentials_json
+        .as_ref()
+        .context("GCP management service account key required")?;
+
+    // Build GcpClientConfig for management project
+    let gcp_config = alien_core::GcpClientConfig {
+        project_id: mgmt.project_id.clone(),
+        region: mgmt.region.clone(),
+        credentials: alien_core::GcpCredentials::ServiceAccountKey {
+            json: sa_key.clone(),
+        },
+        service_overrides: None,
+        project_number: None,
+    };
+
+    let http = reqwest::Client::new();
+
+    // Step 1: Get the target project number
+    let target_sa_key = target
+        .credentials_json
+        .as_ref()
+        .context("GCP target service account key required")?;
+    let target_gcp_config = alien_core::GcpClientConfig {
+        project_id: target.project_id.clone(),
+        region: target.region.clone(),
+        credentials: alien_core::GcpCredentials::ServiceAccountKey {
+            json: target_sa_key.clone(),
+        },
+        service_overrides: None,
+        project_number: None,
+    };
+
+    let rm_client = ResourceManagerClient::new(http.clone(), target_gcp_config);
+    let project_meta = rm_client
+        .get_project_metadata(target.project_id.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get target project metadata: {}", e))?;
+    let project_number = project_meta
+        .project_number
+        .context("Target project metadata missing project_number")?;
+
+    info!(
+        target_project = %target.project_id,
+        target_project_number = %project_number,
+        "Retrieved target project number"
+    );
+
+    // Step 2: Get the current IAM policy on the GAR repository
+    let ar_client = ArtifactRegistryClient::new(http, gcp_config);
+    let mut policy = ar_client
+        .get_repository_iam_policy(
+            mgmt.project_id.clone(),
+            location.to_string(),
+            repo_id.to_string(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get GAR repository IAM policy: {}", e))?;
+
+    // Step 3: Add binding for the target project's Cloud Run service agent
+    let service_agent_member = format!(
+        "serviceAccount:service-{}@serverless-robot-prod.iam.gserviceaccount.com",
+        project_number
+    );
+    let reader_role = "roles/artifactregistry.reader";
+
+    // Check if binding already exists
+    let mut found = false;
+    for binding in &mut policy.bindings {
+        if binding.role == reader_role {
+            if !binding.members.contains(&service_agent_member) {
+                binding.members.push(service_agent_member.clone());
+            }
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        policy.bindings.push(Binding {
+            role: reader_role.to_string(),
+            members: vec![service_agent_member.clone()],
+            condition: None,
+        });
+    }
+
+    // Step 4: Set the updated policy
+    ar_client
+        .set_repository_iam_policy(
+            mgmt.project_id.clone(),
+            location.to_string(),
+            repo_id.to_string(),
+            policy,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to set GAR repository IAM policy: {}", e))?;
+
+    info!(
+        repo = %repo_id,
+        member = %service_agent_member,
+        "GAR cross-project reader binding set"
+    );
+
+    Ok(())
+}
+
 /// Azure Container Registry push settings: use service principal
 /// client_id/client_secret as basic auth credentials.
 fn create_azure_push_settings(config: &TestConfig) -> anyhow::Result<PushSettings> {
