@@ -522,9 +522,12 @@ impl ResourcePermissionsHelper {
         resource_name: &str,
     ) -> Result<PermissionContext> {
         let azure_config = ctx.get_azure_config()?;
+        let resource_group =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
 
         Ok(PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
+            .with_resource_group(resource_group)
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(resource_name.to_string()))
     }
