@@ -85,10 +85,7 @@ pub async fn handle_provisioning(
     // Create executor for live resources only
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
-        .lifecycle_filter(vec![
-            ResourceLifecycle::Live,
-            ResourceLifecycle::LiveOnSetup,
-        ])
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {

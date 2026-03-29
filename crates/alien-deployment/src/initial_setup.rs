@@ -1,24 +1,18 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ResourceLifecycle, Stack, StackStatus};
+use alien_core::{Stack, StackStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::info;
 
-/// Handle InitialSetup status (deploy frozen resources only)
+/// Handle InitialSetup status (deploy ALL resources)
 ///
 /// This step:
 /// 1. Uses the prepared stack from runtime_metadata (mutated in Pending phase)
-/// 2. Executes one deployment step for frozen resources only
+/// 2. Executes one deployment step for all resources (Frozen + Live)
 /// 3. Updates stack state with the result
-/// 4. Transitions to Provisioning when frozen resources are deployed
-///
-/// Note: Regardless of auto_updates setting, InitialSetup ALWAYS deploys only frozen resources.
-/// Live resources are deployed in the Provisioning phase. This ensures:
-/// - Clean separation of concerns (frozen vs live)
-/// - Proper secret sync timing (after vault is ready, before functions)
-/// - Consistent flow for both CLI and controller modes
+/// 4. Transitions to Provisioning when all resources are deployed
 ///
 /// Note: Stack settings are set during Pending phase and should not change mid-deployment.
 pub async fn handle_initial_setup(
@@ -53,16 +47,14 @@ pub async fn handle_initial_setup(
         })
     })?;
 
-    // Always deploy only frozen resources in InitialSetup phase
-    // Live resources will be deployed in the Provisioning phase
-    info!("Deploying frozen resources only (live resources will be deployed in Provisioning)");
+    // Deploy all resources (Frozen + Live) during initial setup
+    info!("Deploying all resources in initial setup");
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
-        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {
-            message: "Failed to create stack executor for frozen resources".to_string(),
+            message: "Failed to create stack executor for initial setup".to_string(),
         })?;
 
     // Execute one step
@@ -83,9 +75,9 @@ pub async fn handle_initial_setup(
                 message: "Failed to compute stack status".to_string(),
             })?;
 
-    // Check if all frozen resources are deployed
+    // Check if all resources are deployed
     let result = if stack_status == StackStatus::Running {
-        info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
+        info!("Initial setup complete (all resources deployed), transitioning to Provisioning");
 
         // Note: Secrets sync happens at the start of Provisioning phase
         // Note: Cross-account access setup happens in the manager after this step

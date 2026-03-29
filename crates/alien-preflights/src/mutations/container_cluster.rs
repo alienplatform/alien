@@ -148,13 +148,13 @@ impl ContainerClusterMutation {
             _ => Vec::new(),
         };
 
-        // Add cluster to stack as LiveOnSetup resource.
+        // Add cluster to stack as Live resource.
         // In CF: only IAM Role + Instance Profile + Security Group are in the template.
         // The controller creates Launch Template + ASG during Provisioning phase.
         // In imperative mode: controller creates everything during Provisioning.
         let cluster_entry = ResourceEntry {
             config: alien_core::Resource::new(cluster),
-            lifecycle: ResourceLifecycle::LiveOnSetup,
+            lifecycle: ResourceLifecycle::Live,
             dependencies,
             remote_access: false,
         };

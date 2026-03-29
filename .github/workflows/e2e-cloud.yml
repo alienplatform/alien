@@ -132,68 +132,8 @@ jobs:
           path: .env.test
           retention-days: 1
 
-  build:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'merge_group' ||
-      (github.event_name == 'pull_request' &&
-        !github.event.pull_request.head.repo.fork &&
-        contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
-    runs-on: depot-ubuntu-24.04-arm-16
-    timeout-minutes: 30
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.11.0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: depot/setup-action@v1
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Configure git credentials
-        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build TypeScript packages
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
-
-      - name: Build alien CLI
-        run: depot cargo build -p alien-cli --bin alien
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-e2e
-          path: |
-            target/debug/alien
-            node_modules/
-            packages/*/dist/
-            tests/e2e/node_modules/
-          retention-days: 1
-
   test:
-    needs: [setup, build]
+    needs: [setup]
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'merge_group' ||
@@ -203,46 +143,51 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite:
-          - rust-function
-          - rust-container
-          - typescript-function
-          - typescript-container
-        platform:
-          - aws
-          - gcp
-          - azure
-    runs-on: depot-ubuntu-24.04-arm-4
+        include:
+          - name: push-aws-rust
+            test_filter: push_aws_rust
+          - name: push-aws-typescript
+            test_filter: push_aws_typescript
+          - name: push-gcp-rust
+            test_filter: push_gcp_rust
+          - name: push-gcp-typescript
+            test_filter: push_gcp_typescript
+          - name: push-azure-rust
+            test_filter: push_azure_rust
+          - name: push-azure-typescript
+            test_filter: push_azure_typescript
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.11.0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - uses: oven-sh/setup-bun@v2
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Download .env.test
         uses: actions/download-artifact@v4
         with:
           name: env-test-e2e
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-e2e
+      - uses: dtolnay/rust-toolchain@nightly
 
-      - name: Make alien CLI executable
-        run: chmod +x target/debug/alien
+      - uses: depot/setup-action@v1
 
-      - name: Run E2E test
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
           set -a && source .env.test && set +a
-          pnpm -C tests/e2e test tests/${{ matrix.suite }}/${{ matrix.platform }}.test.ts
+          depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} --no-capture

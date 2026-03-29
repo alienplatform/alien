@@ -5,7 +5,7 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::sqs::SetQueueAttributesRequest;
 use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 
 /// Generates the full, prefixed AWS queue name.
@@ -55,6 +55,40 @@ impl AwsQueueController {
         self.queue_name = Some(queue_name.clone());
 
         info!(url=%queue_url, "SQS queue created successfully");
+
+        Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Queue>()?;
+
+        info!(queue=%config.id, "Applying resource-scoped permissions for SQS queue");
+
+        // Apply resource-scoped permissions from the stack using the centralized helper.
+        // This handles wildcard ("*") permissions and management SA permissions.
+        if let Some(queue_name) = &self.queue_name {
+            use crate::core::ResourcePermissionsHelper;
+            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+                ctx,
+                &config.id,
+                queue_name,
+                "queue",
+            )
+            .await?;
+        }
+
+        info!(queue=%config.id, "Successfully applied resource-scoped permissions");
 
         Ok(HandlerAction::Continue {
             state: ConfigureVisibilityTimeout,
@@ -269,13 +303,18 @@ impl AwsQueueController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, QueueBinding};
         if let Some(url) = &self.queue_url {
             let binding = QueueBinding::sqs(BindingValue::value(url.clone()));
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

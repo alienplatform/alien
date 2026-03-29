@@ -67,18 +67,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Build logs and artifacts access",
-              "expression": "(resource.type == 'logging.googleapis.com/Log') || (resource.type == 'storage.googleapis.com/Bucket' && resource.name.endsWith('build-artifacts'))"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Build logs and artifacts access",
-              "expression": "(resource.type == 'logging.googleapis.com/Log') || (resource.type == 'storage.googleapis.com/Bucket' && resource.name.endsWith('build-artifacts'))"
-            }
+            "scope": "projects/${projectName}"
           }
         }
       }

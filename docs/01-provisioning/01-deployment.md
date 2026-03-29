@@ -4,7 +4,7 @@ The `alien-deployment` crate orchestrates the full deployment lifecycle.
 
 ## What It Does
 
-If `alien-infra` is the engine that creates individual cloud resources, `alien-deployment` is the gearbox that sequences the whole process — preflights first, frozen resources next, then live resources, then ongoing health checks.
+If `alien-infra` is the engine that creates individual cloud resources, `alien-deployment` is the gearbox that sequences the whole process — preflights first, then all resources (frozen and live), then ongoing health checks.
 
 `alien-infra` provisions cloud resources. But a deployment needs more:
 
@@ -57,23 +57,15 @@ Transitions to `InitialSetup`.
 
 ### InitialSetup
 
-Deploys frozen resources using elevated credentials.
+Deploys all resources (both frozen and live) using elevated credentials.
 
-Each `step()` calls `alien-infra` with a filter: only `Frozen` lifecycle resources. Multiple calls may be needed - `alien-infra` does one thing per step too.
+Each `step()` calls `alien-infra` to create resources. Multiple calls may be needed - `alien-infra` does one thing per step too. Frozen resources are created first (they have no dependencies on live resources), then live resources.
 
-When all frozen resources are running, transitions to `Provisioning`.
-
-### Provisioning
-
-Deploys live resources.
-
-Before calling `alien-infra`, each `step()`:
+Before creating live resources, each `step()`:
 1. Syncs secrets to vault (skips if already synced, tracked by hash)
 2. Injects plain environment variables into function configs
 
-Then calls `alien-infra` with filter: only `Live` lifecycle resources.
-
-When all live resources are running, transitions to `Running`.
+When all resources are running, transitions to `Running`.
 
 ### Running
 
@@ -89,11 +81,11 @@ Running → UpdatePending → Updating → Running
 
 **UpdatePending** runs preflights with compatibility checks - compares old and new prepared stacks for breaking changes.
 
-**Updating** works like Provisioning. Frozen resources are never updated.
+**Updating** updates only live resources. Frozen resources are not modified after initial setup.
 
 ## Failures
 
-Each phase has a failed state: `InitialSetupFailed`, `ProvisioningFailed`, `RefreshFailed`, etc.
+Each phase has a failed state: `InitialSetupFailed`, `RefreshFailed`, etc.
 
 On failure, the deployment pauses. When `retry_requested` is set, `step()` retries failed resources and returns to the active state.
 
@@ -183,15 +175,15 @@ Same `step()` function, different callers.
 One deployment phase spans many infra steps:
 
 ```
-Provisioning (deployment status)
+InitialSetup (deployment status)
+  → storage-a: Pending → Provisioning (infra step)
+  → storage-a: Provisioning → Running (infra step)
   → function-a: Pending → Provisioning (infra step)
   → function-a: Provisioning → Running (infra step)
-  → function-b: Pending → Provisioning (infra step)
-  → function-b: Provisioning → Running (infra step)
   → all Running → transition to Running (deployment status)
 ```
 
-alien-deployment tracks the overall lifecycle (Provisioning). alien-infra tracks individual resources (function-a, function-b).
+alien-deployment tracks the overall lifecycle (InitialSetup). alien-infra tracks individual resources (storage-a, function-a).
 
 See `01-provisioning/00-infra.md` for how alien-infra provisions resources.
 

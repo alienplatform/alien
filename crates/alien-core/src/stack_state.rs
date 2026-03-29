@@ -258,7 +258,7 @@ pub struct StackResourceState {
     #[builder(default)]
     pub is_externally_provisioned: bool,
 
-    /// The lifecycle of the resource (Frozen, Live, LiveOnSetup).
+    /// The lifecycle of the resource (Frozen or Live).
     /// Defaults to Live if not specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ResourceLifecycle>,

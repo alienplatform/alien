@@ -113,13 +113,14 @@
             "resourcemanager.projects.get"
           ]
         },
+        // Compute/VPC/Network does not support resource-level IAM.
+        // Resource binding is the same as stack (project-level).
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed network provision",
-              "expression": "(resource.type == 'compute.googleapis.com/Network' && resource.name.startsWith('projects/${projectName}/global/networks/${stackPrefix}-')) || (resource.type == 'compute.googleapis.com/Subnetwork' && resource.name.startsWith('projects/${projectName}/regions/${region}/subnetworks/${stackPrefix}-')) || (resource.type == 'compute.googleapis.com/Router' && resource.name.startsWith('projects/${projectName}/regions/${region}/routers/${stackPrefix}-')) || (resource.type == 'compute.googleapis.com/Firewall' && resource.name.startsWith('projects/${projectName}/global/firewalls/${stackPrefix}-'))"
-            }
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
           }
         }
       }

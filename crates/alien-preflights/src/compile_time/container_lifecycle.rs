@@ -138,34 +138,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_container_liveonsetup_fails() {
-        let container = create_container("my-container");
-
-        let mut resources = IndexMap::new();
-        resources.insert(
-            "my-container".to_string(),
-            ResourceEntry {
-                config: Resource::new(container),
-                lifecycle: ResourceLifecycle::LiveOnSetup, // Wrong
-                dependencies: Vec::new(),
-                remote_access: false,
-            },
-        );
-
-        let stack = Stack {
-            id: "test-stack".to_string(),
-            resources,
-            permissions: alien_core::permissions::PermissionsConfig::default(),
-        };
-
-        let check = ContainerLifecycleCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
-
-        assert!(!result.success);
-        assert!(result.errors[0].contains("containers must be Live"));
-    }
-
-    #[tokio::test]
     async fn test_should_run_returns_false_for_no_containers() {
         let resources = IndexMap::new();
 

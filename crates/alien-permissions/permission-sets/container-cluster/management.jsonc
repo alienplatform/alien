@@ -56,11 +56,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed container cluster management",
-              "expression": "(resource.type == 'compute.googleapis.com/InstanceGroupManager' || resource.type == 'compute.googleapis.com/Instance') && resource.name.startsWith('projects/${projectName}/')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}"

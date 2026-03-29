@@ -1,6 +1,6 @@
 //! CloudFormation state importer for ContainerCluster resources.
 //!
-//! ContainerCluster is a `LiveOnSetup` resource where CloudFormation creates only
+//! ContainerCluster is a `Live` resource where CloudFormation creates only
 //! the IAM Role, Instance Profile, and Security Group. The imperative controller
 //! creates Launch Templates and ASGs during the Provisioning phase.
 //!

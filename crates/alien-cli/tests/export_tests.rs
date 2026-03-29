@@ -287,7 +287,7 @@ fn test_export_cloudformation_with_all_resources() {
         "Should contain ManagingAccountId parameter"
     );
 
-    // Should include resources from all lifecycles (Frozen, LiveOnSetup, Live)
+    // Should include resources from all lifecycles (Frozen, Live)
     assert!(
         stdout.contains("TestStorage"),
         "Should contain test storage resource"

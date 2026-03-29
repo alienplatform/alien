@@ -14,7 +14,7 @@ Each call does ONE incremental step based on `current.status` and returns the co
 ## Status Flow
 
 ```
-Pending → InitialSetup → Provisioning → Running
+Pending → InitialSetup → Running
 Running → UpdatePending → Updating → Running
 Running → DeletePending → Deleting → Deleted
 *Failed states retry into their active counterpart*
@@ -24,8 +24,7 @@ Running → DeletePending → Deleting → Deleted
 
 - `lib.rs` — `step()` dispatcher, status-to-handler routing
 - `pending.rs` — Applies preflight mutations, stores prepared stack, validates env vars
-- `initial_setup.rs` — Deploys frozen resources (IAM, VPCs, vault) without env vars
-- `provisioning.rs` — Deploys remaining resources with env var injection
+- `initial_setup.rs` — Deploys all resources (frozen first, then live with env var injection)
 - `running.rs` — Health checks (read-only, no config changes)
 - `updating.rs` — Handles `UpdatePending`/`Updating` for stack changes
 - `deleting.rs` — Handles `DeletePending`/`Deleting` for teardown
@@ -34,8 +33,7 @@ Running → DeletePending → Deleting → Deleted
 ## Mutation Strategy
 
 - **Pending/UpdatePending**: Apply preflight mutations, store `prepared_stack` in runtime metadata
-- **InitialSetup**: Use prepared stack, deploy frozen resources only
-- **Provisioning/Updating**: Use prepared stack, inject env vars for functions/services
+- **InitialSetup**: Use prepared stack, deploy all resources (frozen first, then live with env var injection)
 - **Running**: Use prepared stack for health checks (read-only)
 - **Delete phases**: Use prepared stack for deletion (no env var injection)
 

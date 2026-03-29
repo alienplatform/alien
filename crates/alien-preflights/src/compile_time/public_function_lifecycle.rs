@@ -8,7 +8,7 @@ use alien_core::{Function, Ingress, Platform, Resource, ResourceLifecycle, Stack
 /// we need to be able to update them. Frozen resources cannot be updated, creating
 /// a fundamental conflict.
 ///
-/// **Rule:** Public functions must have `Live` or `LiveOnSetup` lifecycle.
+/// **Rule:** Public functions must have `Live` lifecycle.
 ///
 /// Private functions can be any lifecycle since they don't need certificates.
 pub struct PublicFunctionLifecycleCheck;
@@ -38,7 +38,7 @@ impl CompileTimeCheck for PublicFunctionLifecycleCheck {
                 errors.push(format!(
                     "Function '{}' has public ingress but Frozen lifecycle. \
                     Public functions require certificate renewal every 90 days, which requires updating the function. \
-                    Change the lifecycle to Live or LiveOnSetup, or remove public ingress.",
+                    Change the lifecycle to Live, or remove public ingress.",
                     resource_id
                 ));
             }
@@ -124,33 +124,6 @@ mod tests {
             ResourceEntry {
                 config: Resource::new(function),
                 lifecycle: ResourceLifecycle::Live, // Correct
-                dependencies: Vec::new(),
-                remote_access: false,
-            },
-        );
-
-        let stack = Stack {
-            id: "test-stack".to_string(),
-            resources,
-            permissions: alien_core::permissions::PermissionsConfig::default(),
-        };
-
-        let check = PublicFunctionLifecycleCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
-
-        assert!(result.success);
-    }
-
-    #[tokio::test]
-    async fn test_public_function_liveonsetup_succeeds() {
-        let function = create_public_function("my-function");
-
-        let mut resources = IndexMap::new();
-        resources.insert(
-            "my-function".to_string(),
-            ResourceEntry {
-                config: Resource::new(function),
-                lifecycle: ResourceLifecycle::LiveOnSetup, // Correct
                 dependencies: Vec::new(),
                 remote_access: false,
             },

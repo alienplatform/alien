@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 /// Automatically adds management permission profile with necessary permissions for all resources in the stack.
 ///
 /// This mutation generates management permissions based on resource lifecycles and feature policies:
-/// - Frozen resources get `<resourceType>/management` permission sets (when push model)
-/// - Live/LiveOnSetup resources get `<resourceType>/provision` permission sets (when push model)
+/// - Frozen resources: no management permissions (heartbeat-only, added separately)
+/// - Live resources get `<resourceType>/management` permission sets (when push model)
 /// - Resources get `<resourceType>/heartbeat` permission sets (when heartbeat is not Disabled)
 /// - Resources get `<resourceType>/telemetry` permission sets (when telemetry is not Disabled)
 pub struct ManagementPermissionProfileMutation;
@@ -113,12 +113,11 @@ fn generate_auto_management_profile(
         if is_push {
             match resource_entry.lifecycle {
                 ResourceLifecycle::Frozen => {
-                    // For frozen resources, add management permissions
-                    permission_set_ids.insert(format!("{}/management", resource_type));
+                    // Frozen: heartbeat-only. No management permissions — frozen resources should not be modified.
                 }
-                ResourceLifecycle::Live | ResourceLifecycle::LiveOnSetup => {
-                    // For live resources, add provisioning permissions
-                    permission_set_ids.insert(format!("{}/provision", resource_type));
+                ResourceLifecycle::Live => {
+                    // Live: management permissions to update/redeploy the resource.
+                    permission_set_ids.insert(format!("{}/management", resource_type));
                 }
             }
         }
@@ -220,7 +219,7 @@ mod tests {
             "test-function".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(function),
-                lifecycle: ResourceLifecycle::Live, // Should get function/provision
+                lifecycle: ResourceLifecycle::Live, // Should get function/management
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -229,7 +228,7 @@ mod tests {
             "test-storage".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(storage),
-                lifecycle: ResourceLifecycle::Frozen, // Should get storage/management
+                lifecycle: ResourceLifecycle::Frozen, // Should get nothing (heartbeat only)
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -260,14 +259,14 @@ mod tests {
                 assert!(profile.0.contains_key("*"));
                 let global_permissions = profile.0.get("*").unwrap();
 
-                // Should contain both function/provision and storage/management (push is default)
+                // Should contain function/management (push is default); storage is frozen so no management
                 let permission_names: Vec<String> = global_permissions
                     .iter()
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(permission_names.contains(&"storage/management".to_string()));
+                assert!(permission_names.contains(&"function/management".to_string()));
+                assert!(!permission_names.contains(&"storage/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -324,8 +323,8 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have both auto-generated function/provision and extended storage/data-write
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                // Should have both auto-generated function/management and extended storage/data-write
+                assert!(permission_names.contains(&"function/management".to_string()));
                 assert!(permission_names.contains(&"storage/data-write".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -465,8 +464,8 @@ mod tests {
                 assert!(permission_names.contains(&"function/heartbeat".to_string()));
                 assert!(permission_names.contains(&"storage/heartbeat".to_string()));
 
-                // Should NOT contain management/provision permissions since it's pull model
-                assert!(!permission_names.contains(&"function/provision".to_string()));
+                // Should NOT contain management permissions since it's pull model
+                assert!(!permission_names.contains(&"function/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -527,9 +526,9 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should contain both heartbeat and provision permissions
+                // Should contain both heartbeat and management permissions
                 assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                assert!(permission_names.contains(&"function/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -585,8 +584,8 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have function/provision (for live resource) and function/invoke (for ARC)
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                // Should have function/management (for live resource) and function/invoke (for ARC)
+                assert!(permission_names.contains(&"function/management".to_string()));
                 assert!(permission_names.contains(&"function/invoke".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -641,8 +640,8 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have function/provision (for live resource) and queue/data-write (for ARC)
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                // Should have function/management (for live resource) and queue/data-write (for ARC)
+                assert!(permission_names.contains(&"function/management".to_string()));
                 assert!(permission_names.contains(&"queue/data-write".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -704,8 +703,8 @@ mod tests {
 
                 // Should NOT contain heartbeat permissions since heartbeat is disabled
                 assert!(!permission_names.contains(&"function/heartbeat".to_string()));
-                // Should still have provision permissions (push is default)
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                // Should still have management permissions (push is default)
+                assert!(permission_names.contains(&"function/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -766,9 +765,9 @@ mod tests {
 
                 // Should NOT contain telemetry permissions since telemetry is disabled
                 assert!(!permission_names.contains(&"function/telemetry".to_string()));
-                // Should still have heartbeat and provision permissions
+                // Should still have heartbeat and management permissions
                 assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                assert!(permission_names.contains(&"function/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -832,8 +831,8 @@ mod tests {
 
                 // Should contain heartbeat permissions (heartbeat is On by default)
                 assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                // Should contain provision permissions (push is default)
-                assert!(permission_names.contains(&"function/provision".to_string()));
+                // Should contain management permissions (push is default)
+                assert!(permission_names.contains(&"function/management".to_string()));
                 // Note: function/telemetry permission set may not exist in registry,
                 // but the code attempts to add it. If it exists, it would be added.
             }

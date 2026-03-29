@@ -255,7 +255,7 @@ pub enum ManagementPermissions {
     /// Auto-derived permissions only (default)
     /// Uses resource lifecycles to determine management permissions:
     /// - Frozen resources: `<type>/management`
-    /// - Live/LiveOnSetup resources: `<type>/provision`
+    /// - Live resources: `<type>/provision`
     Auto,
 
     /// Add permissions to auto-derived baseline

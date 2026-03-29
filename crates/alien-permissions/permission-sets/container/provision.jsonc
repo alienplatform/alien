@@ -129,11 +129,7 @@
         // Compute Engine uses project NAME in resource.name (not number).
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed container LB provision",
-              "expression": "resource.name.startsWith('projects/${projectName}/') && resource.name.contains('${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}"
@@ -148,11 +144,7 @@
         // Compute Engine uses project NAME in resource.name (not number).
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed disks",
-              "expression": "resource.type == 'compute.googleapis.com/Disk' && resource.name.startsWith('projects/${projectName}/') && resource.name.contains('${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}"

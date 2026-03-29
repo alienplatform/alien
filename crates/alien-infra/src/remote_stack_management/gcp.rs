@@ -134,6 +134,9 @@ impl GcpRemoteStackManagementController {
         if permission_sets.is_empty() {
             info!("No management permission sets to create custom roles for");
         } else {
+            // All permission sets need custom roles created (both provision and non-provision),
+            // because resource controllers reference non-provision custom roles when applying
+            // resource-level IAM bindings.
             info!(
                 permission_sets_count = permission_sets.len(),
                 "Ensuring per-permission-set custom roles exist for management"
@@ -169,11 +172,19 @@ impl GcpRemoteStackManagementController {
 
         let permission_sets = Self::resolve_management_permission_sets(ctx)?;
 
-        if !permission_sets.is_empty() {
+        // Only provision permission sets (ID ends with "/provision") need project-level IAM
+        // bindings. Non-provision sets (management, heartbeat, etc.) are applied by resource
+        // controllers via resource-level IAM, so they don't need project-level binding here.
+        let provision_sets: Vec<_> = permission_sets
+            .into_iter()
+            .filter(|ps| ps.id.ends_with("/provision"))
+            .collect();
+
+        if !provision_sets.is_empty() {
             info!(
                 service_account_email = %service_account_email,
-                permission_sets_count = permission_sets.len(),
-                "Binding per-permission-set management roles to service account"
+                provision_sets_count = provision_sets.len(),
+                "Binding provision permission-set roles to service account at project level"
             );
 
             let generator = GcpRuntimePermissionsGenerator::new();
@@ -196,7 +207,7 @@ impl GcpRemoteStackManagementController {
 
             let mut new_bindings = Vec::new();
 
-            for permission_set in &permission_sets {
+            for permission_set in &provision_sets {
                 let bindings = generator
                     .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
                     .context(ErrorData::InfrastructureError {
@@ -276,7 +287,7 @@ impl GcpRemoteStackManagementController {
 
                 info!(
                     service_account_email = %service_account_email,
-                    "Per-permission-set management roles bound to service account at project level"
+                    "Provision permission-set roles bound to service account at project level"
                 );
 
                 self.role_bound = true;
@@ -466,7 +477,10 @@ impl GcpRemoteStackManagementController {
             "Updating GCP management service account permissions"
         );
 
-        // Ensure per-permission-set custom roles are up-to-date
+        // Ensure per-permission-set custom roles are up-to-date.
+        // All permission sets (both provision and non-provision) need custom roles,
+        // because resource controllers reference non-provision custom roles when applying
+        // resource-level IAM bindings.
         let permission_sets = Self::resolve_management_permission_sets(ctx)?;
         if !permission_sets.is_empty() {
             ResourcePermissionsHelper::ensure_gcp_stack_custom_roles(ctx, &permission_sets).await?;

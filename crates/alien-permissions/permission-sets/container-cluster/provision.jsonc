@@ -98,11 +98,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed container cluster provision",
-              "expression": "resource.name.startsWith('projects/${projectName}/') && (resource.type == 'compute.googleapis.com/InstanceTemplate' || resource.type == 'compute.googleapis.com/InstanceGroupManager' || resource.type == 'compute.googleapis.com/Firewall')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}"
@@ -144,11 +140,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed secrets",
-              "expression": "resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}"

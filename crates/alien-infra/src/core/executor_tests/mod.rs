@@ -3,7 +3,7 @@
 //! These tests cover all aspects of the StackExecutor:
 //! - Parallel execution of independent resources
 //! - Dependency ordering and resolution
-//! - Lifecycle filtering (Frozen, Live, LiveOnSetup)
+//! - Lifecycle filtering (Frozen, Live)
 //! - Resource deletion flows
 //! - Resource updates and config changes
 //! - Plan calculation (creates, updates, deletes)

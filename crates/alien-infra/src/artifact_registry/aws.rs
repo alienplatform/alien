@@ -1,8 +1,8 @@
-use alien_error::{AlienError, Context, ContextError, IntoAlienErrorDirect};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -261,9 +261,18 @@ impl AwsArtifactRegistryController {
 
         info!(registry=%config.id, "Applying resource-scoped permissions for ECR repository");
 
-        // Apply resource-scoped permissions from the stack
-        self.apply_resource_scoped_permissions(ctx, &config.id)
+        // Apply resource-scoped permissions from the stack using the centralized helper.
+        // This handles wildcard ("*") permissions and management SA permissions.
+        {
+            use crate::core::ResourcePermissionsHelper;
+            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+                ctx,
+                &config.id,
+                &config.id,
+                "artifact-registry",
+            )
             .await?;
+        }
 
         info!(registry=%config.id, "Successfully applied resource-scoped permissions");
 
@@ -723,7 +732,7 @@ impl AwsArtifactRegistryController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::ArtifactRegistryBinding;
 
         if let Some(repository_prefix) = &self.repository_prefix {
@@ -733,195 +742,19 @@ impl AwsArtifactRegistryController {
                 self.push_role_arn.clone(),
             );
 
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
 
 impl AwsArtifactRegistryController {
-    /// Applies resource-scoped permissions to the ECR repository from stack permission profiles
-    async fn apply_resource_scoped_permissions(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        registry_id: &str,
-    ) -> Result<()> {
-        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let aws_config = ctx.get_aws_config()?;
-
-        // Build permission context for this specific artifact registry resource
-        let mut permission_context = alien_permissions::PermissionContext::new()
-            .with_aws_account_id(aws_config.account_id.to_string())
-            .with_aws_region(aws_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(registry_id.to_string());
-
-        // Add managing account ID from stack settings if available
-        if let Some(aws_management) = ctx.get_aws_management_config()? {
-            permission_context =
-                permission_context.with_managing_role_arn(aws_management.managing_role_arn.clone());
-
-            // Extract and set managing account ID from role ARN
-            if let Some(managing_account_id) =
-                alien_permissions::PermissionContext::extract_account_id_from_role_arn(
-                    &aws_management.managing_role_arn,
-                )
-            {
-                permission_context =
-                    permission_context.with_managing_account_id(managing_account_id);
-            }
-        }
-
-        let generator = alien_permissions::generators::AwsRuntimePermissionsGenerator::new();
-
-        // Process each permission profile in the stack
-        for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            if let Some(permission_set_refs) = profile.0.get(&config.id) {
-                info!(
-                    registry_id = %config.id,
-                    profile = %profile_name,
-                    permission_sets = ?permission_set_refs,
-                    "Processing resource-scoped permissions for artifact registry"
-                );
-
-                // Try to process permissions for this profile, continue on errors
-                if let Err(e) = self
-                    .process_profile_permissions(
-                        ctx,
-                        profile_name,
-                        permission_set_refs,
-                        &generator,
-                        &permission_context,
-                    )
-                    .await
-                {
-                    warn!(
-                        registry_id = %config.id,
-                        profile = %profile_name,
-                        error = %e,
-                        "Failed to process permissions for profile, continuing with other profiles"
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Process permissions for a specific profile
-    async fn process_profile_permissions(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        profile_name: &str,
-        permission_set_refs: &[alien_core::permissions::PermissionSetReference],
-        generator: &alien_permissions::generators::AwsRuntimePermissionsGenerator,
-        permission_context: &alien_permissions::PermissionContext,
-    ) -> Result<()> {
-        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let aws_config = ctx.get_aws_config()?;
-
-        // Get the service account IAM role name for this profile
-        let service_account_role_name =
-            self.get_service_account_role_name_for_profile(ctx, profile_name)?;
-
-        // Process each permission set for this resource
-        for permission_set_ref in permission_set_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!("Permission set '{}' not found", permission_set_ref.id()),
-                        resource_id: Some(profile_name.to_string()),
-                    })
-                })?;
-
-            // Generate IAM policy for resource-scoped permissions
-            let policy = generator
-                .generate_policy(
-                    &permission_set,
-                    alien_permissions::BindingTarget::Resource,
-                    permission_context,
-                )
-                .map_err(|e| {
-                    AlienError::new(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to generate policy for permission set '{}': {}",
-                            permission_set.id, e
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?;
-
-            let policy_json = serde_json::to_string_pretty(&policy).map_err(|e| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("Failed to serialize IAM policy document: {}", e),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
-
-            let policy_name = format!(
-                "alien-{}-{}",
-                config.id,
-                permission_set.id.replace('/', "-")
-            );
-
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-            iam_client
-                .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply permission '{}' to role '{}'",
-                        permission_set.id, service_account_role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                role_name = %service_account_role_name,
-                permission_set = %permission_set.id,
-                "Applied resource-scoped artifact registry permission"
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Get the service account IAM role name for a permission profile
-    fn get_service_account_role_name_for_profile(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        profile_name: &str,
-    ) -> Result<String> {
-        let service_account_id = format!("{}-sa", profile_name);
-        let service_account_resource = ctx
-            .desired_stack
-            .resources
-            .get(&service_account_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Service account resource '{}' not found for profile '{}'",
-                        service_account_id, profile_name
-                    ),
-                    resource_id: Some(profile_name.to_string()),
-                })
-            })?;
-
-        let service_account_controller = ctx
-            .require_dependency::<crate::service_account::AwsServiceAccountController>(
-                &(&service_account_resource.config).into(),
-            )?;
-
-        service_account_controller.role_name.ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: "artifact-registry".to_string(),
-                dependency_id: profile_name.to_string(),
-            })
-        })
-    }
-
     /// Generates an assume role policy that allows service account roles in the stack to assume this role
     /// In the new permission system, service accounts are created from permission profiles,
     /// and the artifact registry roles can be assumed by any service account role in the stack

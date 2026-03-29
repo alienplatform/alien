@@ -42,6 +42,7 @@ impl AzurePermissionsHelper {
     pub async fn apply_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
+        resource_type: &str,
         resource_scope: Scope,
         permission_context: &PermissionContext,
     ) -> Result<()> {
@@ -51,14 +52,32 @@ impl AzurePermissionsHelper {
             .get_azure_authorization_client(azure_config)?;
 
         let generator = AzureRuntimePermissionsGenerator::new();
+        let type_prefix = format!("{}/", resource_type);
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
+            // Combine resource-specific permissions with matching wildcard permissions
+            let mut combined_refs: Vec<alien_core::permissions::PermissionSetReference> =
+                Vec::new();
+
             if let Some(permission_set_refs) = profile.0.get(resource_id) {
+                combined_refs.extend(permission_set_refs.iter().cloned());
+            }
+
+            if let Some(wildcard_refs) = profile.0.get("*") {
+                combined_refs.extend(
+                    wildcard_refs
+                        .iter()
+                        .filter(|r| r.id().starts_with(&type_prefix))
+                        .cloned(),
+                );
+            }
+
+            if !combined_refs.is_empty() {
                 info!(
                     resource_id = %resource_id,
                     profile = %profile_name,
-                    permission_sets = ?permission_set_refs.iter().map(|r| r.id()).collect::<Vec<_>>(),
+                    permission_sets = ?combined_refs.iter().map(|r| r.id()).collect::<Vec<_>>(),
                     "Processing resource-scoped permissions"
                 );
 
@@ -68,7 +87,7 @@ impl AzurePermissionsHelper {
                     &authorization_client,
                     resource_id,
                     profile_name,
-                    permission_set_refs,
+                    &combined_refs,
                     &generator,
                     permission_context,
                     &resource_scope,
@@ -84,6 +103,9 @@ impl AzurePermissionsHelper {
                 }
             }
         }
+
+        // Note: Azure management permissions are handled via Lighthouse (cross-tenant delegation)
+        // in the AzureRemoteStackManagementController, not via resource-level IAM here.
 
         Ok(())
     }

@@ -25,7 +25,7 @@ use alien_core::{
     CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, Network,
     ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 /// Generates the Cloud Run service name from stack prefix and function ID
@@ -1961,7 +1961,7 @@ impl GcpFunctionController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, CloudRunFunctionBinding, FunctionBinding};
 
         if let (Some(service_name), Some(url)) = (&self.service_name, &self.url) {
@@ -1974,9 +1974,14 @@ impl GcpFunctionController {
                 private_url: BindingValue::Value(url.clone()),
                 public_url: Some(BindingValue::Value(url.clone())),
             });
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -2250,7 +2255,7 @@ impl GcpFunctionController {
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         // Get the function's own binding params (may be None during initial creation)
-        let self_binding_params = self.get_binding_params();
+        let self_binding_params = self.get_binding_params()?;
 
         let env_vars = EnvironmentVariableBuilder::new(initial_env)
             .add_standard_alien_env_vars(ctx)
@@ -2369,21 +2374,39 @@ impl GcpFunctionController {
         }
 
         let generator = GcpRuntimePermissionsGenerator::new();
+        let type_prefix = "function/";
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
+            // Combine resource-specific permissions with matching wildcard permissions
+            let mut combined_refs: Vec<alien_core::permissions::PermissionSetReference> =
+                Vec::new();
+
             if let Some(permission_set_refs) = profile.0.get(&config.id) {
+                combined_refs.extend(permission_set_refs.iter().cloned());
+            }
+
+            if let Some(wildcard_refs) = profile.0.get("*") {
+                combined_refs.extend(
+                    wildcard_refs
+                        .iter()
+                        .filter(|r| r.id().starts_with(type_prefix))
+                        .cloned(),
+                );
+            }
+
+            if !combined_refs.is_empty() {
                 info!(
                     service_name = %service_name,
                     profile = %profile_name,
-                    permission_sets = ?permission_set_refs,
+                    permission_sets = ?combined_refs.iter().map(|r| r.id()).collect::<Vec<_>>(),
                     "Processing resource-scoped permissions for function"
                 );
 
                 self.process_profile_permissions(
                     ctx,
                     profile_name,
-                    permission_set_refs,
+                    &combined_refs,
                     &generator,
                     &permission_context,
                     all_bindings,
@@ -2396,6 +2419,39 @@ impl GcpFunctionController {
                     ),
                     resource_id: Some(config.id.clone()),
                 })?;
+            }
+        }
+
+        // Process management SA permissions matching the function resource type
+        if let Some(management_profile) = ctx.desired_stack.management().profile() {
+            let mut management_refs: Vec<alien_core::permissions::PermissionSetReference> =
+                Vec::new();
+
+            if let Some(permission_set_refs) = management_profile.0.get(&config.id) {
+                management_refs.extend(permission_set_refs.iter().cloned());
+            }
+
+            if let Some(wildcard_refs) = management_profile.0.get("*") {
+                management_refs.extend(
+                    wildcard_refs
+                        .iter()
+                        .filter(|r| r.id().starts_with(type_prefix))
+                        .cloned(),
+                );
+            }
+
+            if !management_refs.is_empty() {
+                use crate::core::ResourcePermissionsHelper;
+                ResourcePermissionsHelper::collect_gcp_management_bindings_for(
+                    ctx,
+                    &config.id,
+                    service_name,
+                    &management_refs,
+                    &generator,
+                    &permission_context,
+                    all_bindings,
+                )
+                .await?;
             }
         }
 

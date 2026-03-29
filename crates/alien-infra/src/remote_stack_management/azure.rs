@@ -841,7 +841,9 @@ impl AzureRemoteStackManagementController {
             })
         })?;
 
-        // Create a combined management permission set from the profile
+        // Only provision permission sets (ID ends with "/provision") need RG-scoped role
+        // assignments via the management role definition. Non-provision sets (management,
+        // heartbeat, etc.) are applied by resource controllers via resource-level IAM.
         let mut combined_actions = Vec::new();
         let mut combined_data_actions = Vec::new();
         let azure_config = ctx.get_azure_config()?;
@@ -850,6 +852,12 @@ impl AzureRemoteStackManagementController {
             let permission_set =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned());
             if let Some(permission_set) = permission_set {
+                // Skip non-provision permission sets — they are handled by resource controllers
+                // via resource-level IAM role assignments.
+                if !permission_set.id.ends_with("/provision") {
+                    continue;
+                }
+
                 // Create permission context for Azure generation
                 let permission_context = PermissionContext::new()
                     .with_subscription_id(azure_config.subscription_id.clone())

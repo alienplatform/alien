@@ -1,8 +1,5 @@
-use alien_error::{AlienError, Context, ContextError, IntoAlienErrorDirect};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
-use alien_permissions::{
-    generators::GcpRuntimePermissionsGenerator, BindingTarget, PermissionContext,
-};
 use tracing::{debug, info};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
@@ -499,7 +496,7 @@ impl GcpArtifactRegistryController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{ArtifactRegistryBinding, BindingValue};
 
         if let (Some(_project_id), Some(_location)) = (&self.project_id, &self.location) {
@@ -508,15 +505,20 @@ impl GcpArtifactRegistryController {
                 self.push_service_account_email.clone(),
             );
 
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
 
 impl GcpArtifactRegistryController {
-    /// Applies resource-scoped permissions to the artifact registry from stack permission profiles
+    /// Applies resource-scoped permissions to the artifact registry using repository-level IAM
     async fn apply_resource_scoped_permissions(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -524,209 +526,53 @@ impl GcpArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let gcp_config = ctx.get_gcp_config()?;
 
-        // Ensure all GCP custom roles referenced by the permission sets exist
-        // before trying to apply IAM bindings that reference them
-        ResourcePermissionsHelper::ensure_gcp_resource_custom_roles(ctx, &config.id, &config.id)
-            .await?;
+        let project_id = gcp_config.project_id.clone();
+        let location = gcp_config.region.clone();
+        let repository_id = config.id.clone();
 
-        // Build permission context for this specific artifact registry resource
-        let mut permission_context = PermissionContext::new()
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(config.id.clone());
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
-
-        let generator = GcpRuntimePermissionsGenerator::new();
-
-        // Process each permission profile in the stack
-        for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            if let Some(permission_set_refs) = profile.0.get(&config.id) {
-                info!(
-                    registry_id = %config.id,
-                    profile = %profile_name,
-                    permission_sets = ?permission_set_refs,
-                    "Processing resource-scoped permissions for artifact registry"
-                );
-
-                self.process_profile_permissions(
-                    ctx,
-                    profile_name,
-                    permission_set_refs,
-                    &generator,
-                    &permission_context,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to process permissions for profile '{}' on artifact registry '{}'",
-                        profile_name, config.id
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Process permissions for a specific profile
-    async fn process_profile_permissions(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        profile_name: &str,
-        permission_set_refs: &[alien_core::permissions::PermissionSetReference],
-        generator: &GcpRuntimePermissionsGenerator,
-        permission_context: &PermissionContext,
-    ) -> Result<()> {
-        // Get the service account email for this profile
-        let service_account_email =
-            self.get_service_account_email_for_profile(ctx, profile_name)?;
-
-        // Get clients
-        let gcp_config = ctx.get_gcp_config()?;
-        let rm_client = ctx
+        // Use ResourcePermissionsHelper to apply repository-level IAM
+        // (instead of project-level IAM which is overly broad)
+        let client = ctx
             .service_provider
-            .get_gcp_resource_manager_client(gcp_config)?;
+            .get_gcp_artifact_registry_client(gcp_config)?;
+        let project_id_owned = project_id.clone();
+        let location_owned = location.clone();
+        let repository_id_owned = repository_id.clone();
+        let config_id_owned = config.id.clone();
 
-        // Get current project IAM policy (version 3 required for conditional bindings)
-        let current_policy = rm_client
-            .get_project_iam_policy(
-                gcp_config.project_id.clone(),
-                Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
-                    requested_policy_version: Some(3),
-                }),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get current project IAM policy".to_string(),
-                resource_id: Some(profile_name.to_string()),
-            })?;
-
-        let mut updated_policy = current_policy;
-        // Ensure policy version is 3 for conditional bindings
-        updated_policy.version = Some(3);
-
-        // Process each permission set for this resource
-        for permission_set_ref in permission_set_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!("Permission set '{}' not found", permission_set_ref.id()),
-                        resource_id: Some(profile_name.to_string()),
-                    })
-                })?;
-
-            // Generate IAM bindings for resource-scoped permissions
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to generate bindings for permission set '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(profile_name.to_string()),
-                })?;
-
-            info!(
-                profile = %profile_name,
-                service_account = %service_account_email,
-                permission_set = %permission_set.id,
-                bindings_count = bindings_result.bindings.len(),
-                "Applying IAM bindings for artifact registry permissions"
-            );
-
-            // Convert and merge bindings into the policy, deduplicating by (role, condition)
-            for binding in bindings_result.bindings {
-                let iam_condition = binding.condition.map(|cond| {
-                    alien_gcp_clients::iam::Expr::builder()
-                        .expression(cond.expression)
-                        .title(cond.title)
-                        .description(cond.description)
-                        .build()
-                });
-
-                let member = format!("serviceAccount:{}", service_account_email);
-
-                let existing = updated_policy.bindings.iter_mut().find(|b| {
-                    b.role == binding.role
-                        && match (&b.condition, &iam_condition) {
-                            (None, None) => true,
-                            (Some(a), Some(b)) => a.expression == b.expression,
-                            _ => false,
-                        }
-                });
-
-                if let Some(existing) = existing {
-                    if !existing.members.contains(&member) {
-                        existing.members.push(member);
-                    }
-                } else {
-                    let mut iam_binding = alien_gcp_clients::iam::Binding::builder()
-                        .role(binding.role.clone())
-                        .members(vec![member])
-                        .build();
-                    iam_binding.condition = iam_condition;
-                    updated_policy.bindings.push(iam_binding);
-                }
-            }
-        }
-
-        // Apply the updated policy
-        rm_client
-            .set_project_iam_policy(gcp_config.project_id.clone(), updated_policy, None)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to apply IAM bindings".to_string(),
-                resource_id: Some(profile_name.to_string()),
-            })?;
-
-        info!(
-            profile = %profile_name,
-            service_account = %service_account_email,
-            "Successfully applied IAM bindings for artifact registry permissions"
-        );
+        ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            &config.id,
+            "Artifact Registry repository",
+            "artifact-registry",
+            client,
+            |client, iam_policy| async move {
+                client
+                    .set_repository_iam_policy(
+                        project_id_owned,
+                        location_owned,
+                        repository_id_owned.clone(),
+                        iam_policy,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to apply IAM policy to Artifact Registry repository '{}'",
+                            repository_id_owned
+                        ),
+                        resource_id: Some(config_id_owned),
+                    })?;
+                info!(
+                    repository_id = %repository_id_owned,
+                    "Applied IAM policy to Artifact Registry repository"
+                );
+                Ok(())
+            },
+        )
+        .await?;
 
         Ok(())
-    }
-
-    /// Get the service account email for a permission profile
-    fn get_service_account_email_for_profile(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        profile_name: &str,
-    ) -> Result<String> {
-        let service_account_id = format!("{}-sa", profile_name);
-        let service_account_resource = ctx
-            .desired_stack
-            .resources
-            .get(&service_account_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Service account resource '{}' not found for profile '{}'",
-                        service_account_id, profile_name
-                    ),
-                    resource_id: Some(profile_name.to_string()),
-                })
-            })?;
-
-        let service_account_controller = ctx
-            .require_dependency::<crate::service_account::GcpServiceAccountController>(
-                &(&service_account_resource.config).into(),
-            )?;
-
-        service_account_controller
-            .service_account_email
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: "artifact_registry".to_string(),
-                    dependency_id: profile_name.to_string(),
-                })
-            })
     }
 
     /// Create a mock controller for testing

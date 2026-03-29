@@ -28,46 +28,45 @@
      * Require more permissions after initial setup, but allow frequent updates (e.g. redeploying code)
      * Example: Lambda function or Cloud Run service that changes as you ship new code
 
-   Each resource also has a `initialSetup` flag to mark whether it should be deployed as part of initial setup or not. 
-   
-   Frozen resources **must** be deployed during initial setup, live resources by default are usually **not** deployed during initial setup,
-   but this can be enabled optionally (useful in some scenarios like **Managing Functions** - see requirement #6).
+   Initial setup deploys ALL resources (both frozen and live). After initial setup, the managing account
+   operates with least-privilege management permissions.
 
 
-3. The library can automatically derive the **Live Permissions** of a stack from its definition by platform (AWS, GCP, Azure, ...). 
+3. The library can automatically derive the **Management Permissions** of a stack from its definition by platform (AWS, GCP, Azure, ...).
 
-   The **Live Permissions** of a stack are defined as a list of policies for each resource in the stack, where each policy includes:
-     * Permissions necessary to create, update, read, and delete live resources with `initialSetup = false`
-     * Permissions necessary to read and update live resources with `initialSetup = true`
-     * Permissions necessary to monitor frozen resources
-   
-   For example, if we have a live `Function` resource, then on AWS, the `CreateFunction`, `UpdateFunctionCode`, etc. permissions 
-   will be included in the Live Permissions (in a policy specific for that Lambda function).
+   The **Management Permissions** of a stack are defined as a list of policies for each resource in the stack, where each policy includes:
+     * `<type>/management` (read + update) for live resources
+     * `<type>/heartbeat` (read-only monitoring) for all resources
 
-   The purpose of Live Permissions is to enable least-privilege remote management of the stack.
+   The `provision` permission set (create, update, delete) is **never** auto-generated — it is only needed during initial setup,
+   which runs with elevated credentials. Developers can explicitly opt into provision permissions via `ManagementPermissions.extend()`.
+
+   For example, if we have a live `Function` resource, then on AWS, the `UpdateFunctionCode`, `GetFunction`, etc. permissions
+   will be included in the Management Permissions (scoped to that specific Lambda function's ARN).
+
+   The purpose of Management Permissions is to enable least-privilege remote management of the stack.
 
 
 4. For initial setup, the stack can be compiled to a CloudFormation or Azure ARM template.
-   
+
    A user who has elevated permissions necessary for the initial deployment can then deploy this template.
 
-   This will deploy all resources with the `initialSetup` flag (e.g. VPC, S3 bucket), and IAM permissions necessary to create and update live resources (e.g. Lambda function).
+   This will deploy all resources (e.g. VPC, S3 bucket, Lambda function), and management permissions necessary to manage live resources after initial setup.
 
    Note: For Google Cloud we don't need to generate a template because deployment happens completely dynamically ("Login with Google"), as opposed to AWS and Azure
    where the user _must_ deploy something first.
 
 
-5. Live permissions are given either to a **Managing Cloud Account** or a **Managing Function** resource.
+5. Management permissions are given either to a **Managing Cloud Account** or a **Managing Function** resource.
 
-   If live permissions are given to a managing cloud account, then management of the stack happens from that account using
+   If management permissions are given to a managing cloud account, then management of the stack happens from that account using
    `AssumeRole` on AWS, service account impersonation on GCP, etc. This is only available on platforms like AWS, Google Cloud, and Azure.
-   
+
    Any details about the managing cloud account are injected in run-time, not in the stack definition.
    In the stack definition, the developer simply marks the stack to be managed by a certain managing account.
-  
-   If live permissions are given to a Function resource, then the management of the stack happens from that function.
+
+   If management permissions are given to a Function resource, then the management of the stack happens from that function.
    The function can receive management (e.g. update) via any `alien-runtime` transport like http polling.
-   The managing function must have `initialSetup = true`.
 
 
 ## 2. Architecture
@@ -112,7 +111,7 @@ let next_state = alien_infra::run_step(state).await?;
 
 ### 4.1 Initial Setup
 
-This flow covers deploying the initial infrastructure, focusing on resources marked with `initialSetup = true`.
+This flow covers deploying the initial infrastructure — all resources (both frozen and live) are created during initial setup.
 
 #### 4.1.1 Parse stack configuration
 
@@ -181,10 +180,9 @@ This step prepares the full set of cloud resources for template-based initial de
 #### 4.1.3 Generate and Deploy Initial Setup Template
 
 For platforms like AWS/Azure requiring templates for initial setup, `alien-infra` compiles:
-*   Resources marked with `initialSetup = true`
-    (this includes all `frozen` resources and optionally some `live` ones).
+*   All resources in the stack (both frozen and live).
 *   Necessary foundational resources (like VPCs or IAM roles) automatically determined based on stack needs.
-*   Required management permissions for subsequent live updates.
+*   Required management permissions for subsequent operations (management + heartbeat for live resources, heartbeat-only for frozen).
 
 ... into a platform-specific template (e.g., CloudFormation, ARM).
 
@@ -326,9 +324,9 @@ This fetched `State` is stored by Alien, becoming the baseline for the Live Depl
 
 This flow uses `alien-infra` to manage ongoing updates based on the stored `State`.
 
-Typically used *after* Initial Setup (4.1) to deploy/update `live` resources.
+Typically used *after* Initial Setup (4.1) to update live resources with new code or configuration.
 
-Can also handle *initial* deployment (including `initialSetup=true` resources) if the initial setup template was bypassed (e.g., GCP "Login with Google" flow), starting from an empty state.
+Can also handle *initial* deployment if the initial setup template was bypassed (e.g., GCP "Login with Google" flow), starting from an empty state.
 
 **Execute State Transition Step-by-Step**
 
@@ -1315,16 +1313,14 @@ impl GenerateTemplate for CloudFormationGenerator {
             platform_resources.extend(expanded);
         }
         
-        // 3. Calculate live permissions
-        let mut live_permission_policies = Vec::new();
+        // 3. Calculate management permissions
+        let mut management_permission_policies = Vec::new();
         for resource in stack.resources() {
-            // Skip non-live resources with initialSetup=true (they don't need live permissions)
-            if !resource.is_live() && resource.initial_setup() {
-                continue;
-            }
-            
+            // Frozen resources only get heartbeat, live resources get management + heartbeat
+            // Provision is never auto-generated
+
             // Calculate permissions for this resource
-            let resource_permissions = self.permissions_calculator.calculate_live_permissions(resource)?;
+            let resource_permissions = self.permissions_calculator.calculate_management_permissions(resource)?;
             
             if !resource_permissions.is_empty() {
                 let policy = PermissionPolicy::new(&format!("{}Policy", resource.id()))

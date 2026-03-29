@@ -439,7 +439,6 @@ export default new alien.Stack("my-app")
 **Lifecycle options:**
 - `"live"` - Can be updated by platform (default for services)
 - `"frozen"` - Created once, rarely changed (use for ComputePools)
-- `"live-on-setup"` - Updated during initial setup, then frozen
 
 ## Validation Rules
 

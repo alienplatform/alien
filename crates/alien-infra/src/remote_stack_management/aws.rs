@@ -461,7 +461,9 @@ impl AwsRemoteStackManagementController {
             })
         })?;
 
-        // Create a combined permission set from the management profile
+        // Only provision permission sets (ID ends with "/provision") need project-level IAM
+        // policies attached to the management role. Non-provision sets (management, heartbeat,
+        // etc.) are applied by resource controllers via resource-level IAM.
         let mut combined_actions = Vec::new();
         let mut combined_resources = std::collections::HashSet::new();
 
@@ -469,6 +471,12 @@ impl AwsRemoteStackManagementController {
             let permission_set =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned());
             if let Some(permission_set) = permission_set {
+                // Skip non-provision permission sets — they are handled by resource controllers
+                // via resource-level IAM policies.
+                if !permission_set.id.ends_with("/provision") {
+                    continue;
+                }
+
                 if let Some(aws_platform) = &permission_set.platforms.aws {
                     for platform_permission in aws_platform {
                         if let Some(actions) = &platform_permission.grant.actions {

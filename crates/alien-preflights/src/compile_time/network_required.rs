@@ -306,7 +306,7 @@ mod tests {
             "compute".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(cluster),
-                lifecycle: ResourceLifecycle::LiveOnSetup,
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
             },

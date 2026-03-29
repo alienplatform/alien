@@ -8,7 +8,7 @@ In the previous doc, you saw how a Stack is defined: a list of Resources to depl
 
 But it's not provision-and-done. `alien-infra` runs **continuously** throughout the lifetime of a deployment:
 
-- **Initial provisioning** — creates frozen resources (buckets, vaults, VPCs)
+- **Initial provisioning** — creates all resources (buckets, vaults, VPCs, functions, containers)
 - **Code deploys** — updates live resources (functions, containers) when new versions ship
 - **Heartbeats** — periodically checks that resources still exist and are healthy
 - **Reconciliation** — if something drifts (a resource is deleted externally), brings it back
@@ -50,10 +50,10 @@ Terraform can't do this. It holds state in memory and must complete before exiti
 
 This is why frozen/live matters:
 
-- **Frozen resources** → deployed during initial setup
-- **Live resources** → deployed during ongoing operations
+- **Frozen resources** → created during initial setup, only heartbeat monitoring afterward
+- **Live resources** → created during initial setup, updated during ongoing operations with management permissions
 
-The executor filters by lifecycle. Same library, different phases, different permissions.
+Both frozen and live resources are created during initial setup. The distinction determines what happens afterward: frozen resources are monitored but not modified, while live resources can be updated with new code or configuration. The executor filters by lifecycle during ongoing operations — only live resources are updated.
 
 ### Embeddability
 
@@ -304,9 +304,9 @@ let executor = StackExecutor::new(&stack, config, Some(vec![ResourceLifecycle::F
 let executor = StackExecutor::new(&stack, config, Some(vec![ResourceLifecycle::Live]))?;
 ```
 
-This enables two-phase deployment:
-1. **Initial setup** - deploy frozen resources (elevated permissions)
-2. **Updates** - deploy live resources (minimal permissions)
+This enables phased deployment:
+1. **Initial setup** - deploy all resources (elevated permissions)
+2. **Updates** - update only live resources (least-privilege management permissions)
 
 ## Platform Controllers
 

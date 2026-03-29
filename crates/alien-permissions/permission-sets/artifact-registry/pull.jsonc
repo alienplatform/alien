@@ -53,18 +53,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}",
-            "condition": {
-              "title": "Stack prefixed artifact registry pull",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}/locations/${region}"
           },
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}",
-            "condition": {
-              "title": "Resource specific artifact registry pull",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${resourceName}-')"
-            }
+            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
           }
         }
       },
@@ -74,18 +66,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Artifact registry service accounts",
-              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Resource specific artifact registry service account",
-              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}-pull@')"
-            }
+            "scope": "projects/${projectName}"
           }
         }
       }

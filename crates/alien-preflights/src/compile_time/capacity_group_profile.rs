@@ -88,7 +88,7 @@ mod tests {
             "compute".to_string(),
             ResourceEntry {
                 config: Resource::new(cluster),
-                lifecycle: ResourceLifecycle::LiveOnSetup,
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
             },

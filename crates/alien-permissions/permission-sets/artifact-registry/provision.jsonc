@@ -58,18 +58,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}",
-            "condition": {
-              "title": "Stack prefixed artifact registry provision",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}/locations/${region}"
           },
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}",
-            "condition": {
-              "title": "Resource specific artifact registry provision",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository' && resource.name.startsWith('projects/${projectName}/locations/${region}/repositories/${resourceName}-')"
-            }
+            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
           }
         }
       }

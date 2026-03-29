@@ -27,18 +27,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Vault data read access",
-              "expression": "(resource.type == 'secretmanager.googleapis.com/Secret' || resource.type == 'secretmanager.googleapis.com/SecretVersion') && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Vault data read access",
-              "expression": "(resource.type == 'secretmanager.googleapis.com/Secret' || resource.type == 'secretmanager.googleapis.com/SecretVersion') && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-${resourceName}-')"
-            }
+            "scope": "projects/${projectName}/secrets/${resourceName}"
           }
         }
       }

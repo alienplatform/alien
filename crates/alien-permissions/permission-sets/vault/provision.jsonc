@@ -30,18 +30,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Vault provision access",
-              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Vault provision access",
-              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-${resourceName}-')"
-            }
+            "scope": "projects/${projectName}"
           }
         }
       },

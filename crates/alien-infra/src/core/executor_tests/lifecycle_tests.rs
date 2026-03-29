@@ -1,4 +1,4 @@
-//! Tests for lifecycle filtering (Frozen vs Live vs LiveOnSetup resources).
+//! Tests for lifecycle filtering (Frozen vs Live resources).
 
 use super::helpers::*;
 use crate::error::Result;
@@ -114,40 +114,35 @@ async fn test_no_filter_deploys_all() -> Result<()> {
     Ok(())
 }
 
-/// Tests filtering with multiple lifecycle types.
+/// Tests filtering with multiple lifecycle types (Frozen + Live = all).
 #[tokio::test]
 async fn test_multi_lifecycle_filtering() -> Result<()> {
     let frozen_store = test_storage("frozen-store");
-    let live_on_setup_func = test_function("live-on-setup-func");
     let live_func = test_function("live-func");
 
     let stack = Stack::new("multi-filter-stack".to_owned())
         .add(frozen_store.clone(), ResourceLifecycle::Frozen)
-        .add(live_on_setup_func.clone(), ResourceLifecycle::LiveOnSetup)
         .add(live_func.clone(), ResourceLifecycle::Live)
         .build();
 
-    // Create executor with filter for Frozen and LiveOnSetup resources
+    // Create executor with filter for both Frozen and Live resources (all)
     let executor = new_executor_with_filter(
         &stack,
-        vec![ResourceLifecycle::Frozen, ResourceLifecycle::LiveOnSetup],
+        vec![ResourceLifecycle::Frozen, ResourceLifecycle::Live],
     )?;
 
     let state = new_test_state();
     let final_state = run_to_synced(&executor, state).await?;
 
-    // Verify Frozen and LiveOnSetup resources were processed
+    // Verify both resources were processed
     assert_eq!(
         get_status(&final_state, "frozen-store"),
         Some(ResourceStatus::Running)
     );
     assert_eq!(
-        get_status(&final_state, "live-on-setup-func"),
+        get_status(&final_state, "live-func"),
         Some(ResourceStatus::Running)
     );
-
-    // Verify Live resource was not processed
-    assert_not_in_state(&final_state, &["live-func"]);
 
     Ok(())
 }
@@ -288,7 +283,6 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
     let base_resource = test_storage("base-resource");
     let frozen_dependent = test_function("frozen-dependent");
     let live_dependent = test_function("live-dependent");
-    let live_on_setup_dependent = test_function("liveonsetup-dependent");
 
     let stack = Stack::new("mixed-dependents-stack".to_owned())
         .add(base_resource.clone(), ResourceLifecycle::Frozen)
@@ -302,11 +296,6 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
             ResourceLifecycle::Live,
             vec![ResourceRef::new(Storage::RESOURCE_TYPE, "base-resource")],
         )
-        .add_with_dependencies(
-            live_on_setup_dependent.clone(),
-            ResourceLifecycle::LiveOnSetup,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "base-resource")],
-        )
         .build();
 
     // Set up initial state with all resources
@@ -316,12 +305,7 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
 
     assert_all_running(
         &state,
-        &[
-            "base-resource",
-            "frozen-dependent",
-            "live-dependent",
-            "liveonsetup-dependent",
-        ],
+        &["base-resource", "frozen-dependent", "live-dependent"],
     );
 
     // Try to delete only Frozen resources
@@ -329,11 +313,11 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
 
     let state_after_frozen = run_to_synced(&frozen_deletion, state).await?;
 
-    // Base resource should not be deleted because it has Live and LiveOnSetup dependents
+    // Base resource should not be deleted because it has a Live dependent
     assert_eq!(
         get_status(&state_after_frozen, "base-resource"),
         Some(ResourceStatus::Running),
-        "Base resource should not be deleted due to Live/LiveOnSetup dependents"
+        "Base resource should not be deleted due to Live dependent"
     );
     // Frozen dependent should be deleted
     assert_eq!(
@@ -357,14 +341,14 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
         "Live dependent should be deleted"
     );
 
-    // Delete LiveOnSetup resources
-    let setup_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::LiveOnSetup])?;
-    let final_state = run_to_synced(&setup_deletion, state_after_live).await?;
+    // Now base resource can be deleted (no more dependents)
+    let final_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
+    let final_state = run_to_synced(&final_deletion, state_after_live).await?;
 
     assert_eq!(
-        get_status(&final_state, "liveonsetup-dependent"),
+        get_status(&final_state, "base-resource"),
         Some(ResourceStatus::Deleted),
-        "LiveOnSetup dependent should be deleted"
+        "Base resource should now be deleted"
     );
 
     Ok(())
@@ -375,12 +359,10 @@ async fn test_resource_with_mixed_lifecycle_dependents() -> Result<()> {
 async fn test_changing_lifecycle_filters() -> Result<()> {
     let frozen_res = test_storage("frozen-res");
     let live_res = test_storage("live-res");
-    let setup_res = test_function("setup-res");
 
     let stack = Stack::new("changing-filters-stack".to_owned())
         .add(frozen_res.clone(), ResourceLifecycle::Frozen)
         .add(live_res.clone(), ResourceLifecycle::Live)
-        .add(setup_res.clone(), ResourceLifecycle::LiveOnSetup)
         .build();
 
     // Start with only Frozen resources
@@ -399,7 +381,7 @@ async fn test_changing_lifecycle_filters() -> Result<()> {
         ),
         "Frozen resource should be Pending or Provisioning after one step"
     );
-    assert_not_in_state(&state, &["live-res", "setup-res"]);
+    assert_not_in_state(&state, &["live-res"]);
 
     // Switch to Live resources (without completing Frozen)
     let live_executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
@@ -411,16 +393,12 @@ async fn test_changing_lifecycle_filters() -> Result<()> {
         "Live resource should be Running"
     );
 
-    // Deploy LiveOnSetup
-    let setup_executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::LiveOnSetup])?;
-    state = run_to_synced(&setup_executor, state).await?;
-
     // Complete everything
     let completion_executor = new_executor(&stack)?;
     state = run_to_synced(&completion_executor, state).await?;
 
     // All should be Running
-    assert_all_running(&state, &["frozen-res", "live-res", "setup-res"]);
+    assert_all_running(&state, &["frozen-res", "live-res"]);
 
     Ok(())
 }
@@ -435,7 +413,7 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
     //   B (Live) ---> D (Frozen)
     //                  |
     //                  v
-    //                  E (LiveOnSetup)
+    //                  E (Live)
 
     let resource_a = test_storage("resource-a");
     let resource_b = test_function("resource-b");
@@ -465,7 +443,7 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
         )
         .add_with_dependencies(
             resource_e.clone(),
-            ResourceLifecycle::LiveOnSetup,
+            ResourceLifecycle::Live,
             vec![ResourceRef::new(Function::RESOURCE_TYPE, "resource-d")],
         )
         .build();
@@ -486,33 +464,14 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
         ],
     );
 
-    // Delete LiveOnSetup first
-    let setup_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::LiveOnSetup])?;
-    let state = run_to_synced(&setup_deletion, state).await?;
+    // Delete Live first
+    let live_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
+    let state = run_to_synced(&live_deletion, state).await?;
 
     assert_eq!(
         get_status(&state, "resource-e"),
         Some(ResourceStatus::Deleted)
     );
-
-    // Delete Frozen - D should be deleted, A should remain (B, C depend on it)
-    let frozen_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
-    let state = run_to_synced(&frozen_deletion, state).await?;
-
-    assert_eq!(
-        get_status(&state, "resource-a"),
-        Some(ResourceStatus::Running),
-        "Resource A should remain due to Live dependents"
-    );
-    assert_eq!(
-        get_status(&state, "resource-d"),
-        Some(ResourceStatus::Deleted)
-    );
-
-    // Delete Live
-    let live_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
-    let state = run_to_synced(&live_deletion, state).await?;
-
     assert_eq!(
         get_status(&state, "resource-b"),
         Some(ResourceStatus::Deleted)
@@ -522,12 +481,17 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
         Some(ResourceStatus::Deleted)
     );
 
-    // Now A can be deleted
-    let final_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
-    let final_state = run_to_synced(&final_deletion, state).await?;
+    // Delete Frozen - D should be deleted, A should be deleted (no more dependents)
+    let frozen_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
+    let state = run_to_synced(&frozen_deletion, state).await?;
 
     assert_eq!(
-        get_status(&final_state, "resource-a"),
+        get_status(&state, "resource-a"),
+        Some(ResourceStatus::Deleted),
+        "Resource A should be deleted since Live dependents are gone"
+    );
+    assert_eq!(
+        get_status(&state, "resource-d"),
         Some(ResourceStatus::Deleted)
     );
 

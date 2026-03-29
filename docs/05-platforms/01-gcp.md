@@ -36,7 +36,7 @@ Default: `linux-x64`
 
 ## Permissions
 
-Permissions go into **custom roles** bound via IAM. Stack-level scope uses project-level IAM bindings with **CEL conditions** (e.g. `resource.name.startsWith('projects/_/buckets/my-app-')`). Resource-level scope uses `setIamPolicy` directly on the resource.
+Permissions go into **custom roles** bound via resource-level IAM. Each stack uses **one GCP project**, so all resources in the project belong to the stack — no CEL conditions needed. Both stack-level and resource-level scope use `setIamPolicy` directly on individual resources. For `provision` permissions (needed during initial setup when resources don't exist yet), project-level IAM bindings are used instead.
 
 ## Quirks
 

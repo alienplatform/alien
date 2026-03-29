@@ -59,9 +59,9 @@ The naming convention:
 - `data-read` / `data-write` — application-level access to data
 - `execute` — runtime permissions for compute (logs, pull images)
 - `invoke` — calling functions from outside
-- `management` — read + update (used for frozen resources after setup)
-- `provision` — full lifecycle: create, update, delete (used for live resources)
-- `heartbeat` — read-only monitoring
+- `management` — read + update (used for live resources during ongoing operations)
+- `provision` — full lifecycle: create, update, delete (used during initial setup for all resources)
+- `heartbeat` — read-only monitoring (used for frozen resources during ongoing operations)
 
 Developers use these built-in sets 99% of the time. For the other 1%, they can define custom permission sets inline.
 
@@ -100,11 +100,7 @@ Each permission set is a JSONC file that defines what to grant and how to bind i
       },
       "binding": {
         "stack": {
-          "scope": "projects/${projectName}",
-          "condition": {
-            "title": "Stack-prefixed only",
-            "expression": "resource.name.startsWith('projects/_/buckets/${stackPrefix}-')"
-          }
+          "scope": "projects/_/buckets/${resourceName}"
         },
         "resource": {
           "scope": "projects/_/buckets/${resourceName}"
@@ -170,8 +166,8 @@ When you deploy to AWS, the permission set above generates this IAM policy:
 
 On GCP, the same permission set generates:
 1. A custom role with the permissions
-2. An IAM binding with a CEL condition for stack-level scope
-3. A direct IAM policy on the bucket for resource-level scope
+2. Resource-level IAM bindings via `setIamPolicy` on individual resources (for both stack-level and resource-level scope)
+3. One GCP project per stack — no CEL conditions needed since all resources in the project belong to the stack
 
 On Azure:
 1. A custom role definition
@@ -280,37 +276,58 @@ ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
 
 ## Management Permissions
 
-Management permissions control what the managing account can do in the remote environment — create resources, update functions, check health.
+Management permissions control what the managing account can do in the remote environment — update functions, check health, and optionally create resources.
+
+### Frozen vs Live Is a User Choice
+
+When adding resources to a stack, the developer chooses whether each resource is `frozen` or `live`:
+
+```typescript
+export default new alien.Stack("my-app")
+  .add(dataStorage, "frozen")   // Developer decides this is frozen
+  .add(codeStorage, "frozen")   // Developer decides this is frozen
+  .add(myFunction, "live")      // Developer decides this is live
+  .build()
+```
+
+This is not an inherent property of the resource type. A `Storage` resource could be frozen or live depending on the use case. A storage bucket for long-lived logs is typically frozen (created once, rarely changed). A storage bucket that gets recreated with each deployment could be live.
+
+The choice affects two things:
+1. **What happens after initial setup** — all resources are created during initial setup, but only live resources are updated during ongoing operations. Frozen resources remain untouched.
+2. **What management permissions are needed** — frozen resources only need heartbeat monitoring, live resources need management + heartbeat permissions
 
 ### Auto-Generation
 
 By default, management permissions are auto-generated based on resource lifecycles:
 
 ```
-Frozen resources → <type>/management    (read + update)
-Live resources   → <type>/provision     (create, update, delete)
-
-If heartbeat enabled:
-All resources    → <type>/heartbeat     (read-only monitoring)
+Frozen resources → <type>/heartbeat     (read-only monitoring)
+Live resources   → <type>/management    (read + update)
+                 + <type>/heartbeat     (read-only monitoring)
 ```
+
+The `provision` permission set (`<type>/provision`) is **never** auto-generated. It grants full lifecycle permissions (create, update, delete) and is only needed during initial setup, which runs with elevated credentials. After initial setup, the managing account operates with least-privilege permissions — it can update live resources but not create or delete them.
 
 The `ManagementPermissionProfileMutation` calculates this during preflights.
 
 ### Customization
 
-Developers can extend or override:
+Developers can extend the auto-generated permissions using `ManagementPermissions.extend()`. This is the way to explicitly opt into `provision` permissions if the managing account needs to create or delete resources after initial setup:
 
 ```typescript
 .permissions({
   management: ManagementPermissions.extend({
-    "*": ["custom/special-permission"]
+    "*": ["storage/provision"]  // Explicitly grant provision for all storage
   })
 })
+```
 
-// Or override completely:
+Or override completely:
+
+```typescript
 .permissions({
   management: ManagementPermissions.override({
-    "*": ["storage/management", "function/provision"]
+    "*": ["storage/management", "function/management"]
   })
 })
 ```
@@ -343,15 +360,16 @@ For Kubernetes and Local platforms, an Agent runs inside the environment and pul
 | Aspect | AWS | GCP | Azure |
 |--------|-----|-----|-------|
 | Identity | IAM Role | Service Account | Managed Identity |
-| Stack-level scope | ARN wildcards (`my-stack-*`) | CEL conditions on project IAM | Resource group scope |
-| Resource-level scope | ARN in role policy | `setIamPolicy` on resource | Role assignment on resource |
+| Stack-level scope | ARN wildcards (`my-stack-*`) | Resource-level IAM on each resource | Resource group scope |
+| Resource-level scope | Specific ARN in role policy | `setIamPolicy` on individual resource | Role assignment on specific resource |
 | Cross-account | AssumeRole with trust policy | Service account impersonation | Azure Lighthouse |
+| Provision scope | Wildcard ARNs (resources don't exist yet) | Project-level (resources don't exist yet) | Resource-group-scoped (resources don't exist yet) |
 
-**AWS**: All permissions go into IAM role policies. Stack-level uses wildcard ARNs. Resource-level uses specific ARNs. Both end up in the same policy document.
+**AWS**: All permissions go into IAM role policies. Stack-level uses wildcard ARNs. Resource-level uses specific ARNs. Both end up in the same policy document. For management permissions, resource-specific ARN statements are used (not wildcards), except for `provision` which must use wildcards since the resources don't exist yet.
 
-**GCP**: Permissions go into custom roles. Stack-level bindings use project IAM with CEL conditions. Resource-level bindings apply directly to resources via `setIamPolicy`.
+**GCP**: Permissions go into custom roles. IAM bindings are applied via `setIamPolicy` on individual resources — one GCP project per stack, so no CEL conditions are needed. For management permissions, resource-level IAM is applied on each resource. `provision` permissions use project-level bindings since the resources don't exist yet.
 
-**Azure**: Permissions go into custom role definitions. Stack-level uses resource group scope. Resource-level creates role assignments on specific resources.
+**Azure**: Permissions go into custom role definitions. Resource-level creates role assignments on specific resources. For management permissions, role assignments are scoped to specific resources (not resource-group-scoped), except for `provision` which uses resource-group scope since the resources don't exist yet.
 
 ## The Permission Generators
 

@@ -67,11 +67,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed storage provision",
-              "expression": "resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/buckets/${resourceName}"

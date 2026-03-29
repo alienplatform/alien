@@ -42,11 +42,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Service account provision access",
-              "expression": "(resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')) || (resource.type == 'iam.googleapis.com/Role' && resource.name.startsWith('projects/${projectName}/roles/${stackPrefix}_'))"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"

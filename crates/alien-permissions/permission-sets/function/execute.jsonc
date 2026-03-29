@@ -50,18 +50,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${managingProjectId}",
-            "condition": {
-              "title": "Function runtime access",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
-            }
+            "scope": "projects/${managingProjectId}"
           },
           "resource": {
-            "scope": "projects/${managingProjectId}",
-            "condition": {
-              "title": "Function runtime access",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
-            }
+            "scope": "projects/${managingProjectId}"
           }
         }
       }

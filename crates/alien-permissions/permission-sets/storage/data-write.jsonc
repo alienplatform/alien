@@ -52,11 +52,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed storage write access",
-              "expression": "(resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-')) || (resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-'))"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/buckets/${resourceName}"
@@ -69,18 +65,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Storage signed URL access",
-              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           },
           "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Storage signed URL access",
-              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')"
-            }
+            "scope": "projects/${projectName}"
           }
         }
       }

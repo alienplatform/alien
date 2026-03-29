@@ -532,39 +532,13 @@ impl ResourceStatus {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceLifecycle {
-    /// Frozen resources are created once during initial setup and are rarely, if ever, modified.
-    /// They typically require fewer permissions for ongoing management after the initial deployment.
+    /// Frozen resources are set up once and not modified after creation. They receive
+    /// heartbeat-only permissions for ongoing health checks but no management permissions.
     /// Example: S3 buckets for logs, VPCs, IAM roles.
     Frozen,
 
-    /// Live resources are frequently updated as part of ongoing deployments.
-    /// They generally require more permissions for ongoing management to allow for these frequent updates.
-    /// By default, live resources are not created during the initial setup phase unless specified.
+    /// Live resources are updated on every deploy and require management permissions
+    /// for ongoing updates. All resources (Frozen and Live) are created during initial setup.
     /// Example: Lambda functions, Cloud Run services.
     Live,
-
-    /// LiveOnSetup resources are live resources that are specifically designated to be created
-    /// during the initial setup phase of the stack. This is useful for resources that need to be
-    /// present from the beginning but are still expected to be updated frequently.
-    /// Example: A managing function that orchestrates updates for other live resources.
-    LiveOnSetup,
-}
-
-impl ResourceLifecycle {
-    /// Returns `true` if the resource is considered live (i.e., `Live` or `LiveOnSetup`).
-    pub fn is_live(&self) -> bool {
-        match self {
-            ResourceLifecycle::Frozen => false,
-            ResourceLifecycle::Live | ResourceLifecycle::LiveOnSetup => true,
-        }
-    }
-
-    /// Returns `true` if the resource should be created or configured during the initial setup phase.
-    /// This applies to `Frozen` resources and `LiveOnSetup` resources.
-    pub fn initial_setup(&self) -> bool {
-        match self {
-            ResourceLifecycle::Frozen | ResourceLifecycle::LiveOnSetup => true,
-            ResourceLifecycle::Live => false,
-        }
-    }
 }

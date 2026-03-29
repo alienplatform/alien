@@ -153,7 +153,7 @@ pub async fn handle_updating(
     // Create executor for resources
     // By default, only deploy live resources (frozen resources don't change)
     // If allow_frozen_changes is true, also deploy frozen resources
-    let mut lifecycle_filter_vec = vec![ResourceLifecycle::Live, ResourceLifecycle::LiveOnSetup];
+    let mut lifecycle_filter_vec = vec![ResourceLifecycle::Live];
     if config.allow_frozen_changes {
         info!("Including frozen resources in update (allow_frozen_changes=true)");
         lifecycle_filter_vec.push(ResourceLifecycle::Frozen);

@@ -90,18 +90,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${managingProjectId}",
-            "condition": {
-              "title": "Container cluster image pull",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
-            }
+            "scope": "projects/${managingProjectId}"
           },
           "resource": {
-            "scope": "projects/${managingProjectId}",
-            "condition": {
-              "title": "Container cluster image pull",
-              "expression": "resource.type == 'artifactregistry.googleapis.com/Repository'"
-            }
+            "scope": "projects/${managingProjectId}"
           }
         }
       },
