@@ -47,11 +47,12 @@ pub async fn handle_initial_setup(
         })
     })?;
 
-    // Inject environment variables so Function/Container resources are created with the
-    // correct config from the start. Without this, the Function is created without env vars
-    // during InitialSetup, then Provisioning detects a config mismatch and triggers an
-    // unwanted update (e.g., Cloud Run revision 00002) that may fail.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    // Inject only plain environment variables during InitialSetup. Secret variables
+    // (ALIEN_SECRETS) are deferred to Provisioning because the vault doesn't exist yet —
+    // it's being created in parallel during InitialSetup. If we injected ALIEN_SECRETS now,
+    // alien-runtime would try to load secrets from a non-existent vault at startup, crashing
+    // the function (e.g., Cloud Run revision 00001 fails PORT=8080 health check).
+    crate::helpers::inject_plain_environment_variables(&mut target_stack, &config)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

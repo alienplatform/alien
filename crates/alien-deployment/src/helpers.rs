@@ -148,7 +148,30 @@ struct AlienSecretsConfig {
 ///
 /// Targeting patterns control which resources receive which variables.
 pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
-    info!("Injecting environment variables into compute resources");
+    inject_environment_variables_inner(stack, config, false)
+}
+
+/// Inject only plain (non-secret) environment variables into stack compute resources.
+///
+/// Used during InitialSetup when the vault doesn't exist yet — ALIEN_SECRETS would cause
+/// alien-runtime to try loading secrets from a non-existent vault, crashing the function.
+/// Secret injection is deferred to Provisioning, after vault creation and secret sync.
+pub fn inject_plain_environment_variables(
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+) -> Result<()> {
+    inject_environment_variables_inner(stack, config, true)
+}
+
+fn inject_environment_variables_inner(
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+    skip_secrets: bool,
+) -> Result<()> {
+    info!(
+        "Injecting environment variables into compute resources (skip_secrets={})",
+        skip_secrets
+    );
 
     let snapshot = &config.environment_variables;
 
@@ -158,9 +181,21 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
 
         // Use type-safe ResourceType constants instead of string matching
         if resource_type == alien_core::Function::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, true)?;
+            inject_into_compute_resource(
+                resource_name,
+                resource_entry,
+                snapshot,
+                true,
+                skip_secrets,
+            )?;
         } else if resource_type == alien_core::Container::RESOURCE_TYPE {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, false)?;
+            inject_into_compute_resource(
+                resource_name,
+                resource_entry,
+                snapshot,
+                false,
+                skip_secrets,
+            )?;
         }
         // Other resource types don't support environment variables
     }
@@ -340,6 +375,7 @@ fn inject_into_compute_resource(
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     is_function: bool,
+    skip_secrets: bool,
 ) -> Result<()> {
     // Get the environment map (same interface for Function and Container)
     let environment = if is_function {
@@ -410,7 +446,7 @@ fn inject_into_compute_resource(
 
     // If resource needs secrets, add ALIEN_SECRETS env var
     // alien-runtime will load these from the vault at startup
-    if !secret_keys.is_empty() {
+    if !secret_keys.is_empty() && !skip_secrets {
         let alien_secrets = AlienSecretsConfig {
             keys: secret_keys.clone(),
             hash: snapshot.hash.clone(),
