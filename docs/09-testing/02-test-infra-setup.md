@@ -1,6 +1,6 @@
 # Test Infrastructure Setup
 
-All cloud resources needed for integration and E2E tests are provisioned by a single Terraform stack in `tests/infra/`. One `terraform apply` creates everything across AWS, GCP, and Azure — including building and pushing test Docker images.
+All cloud resources needed for integration and E2E tests are provisioned by a single Terraform stack in `infra/standalone/`. One `terraform apply` creates everything across AWS, GCP, and Azure — including building and pushing test Docker images.
 
 > **Note for external contributors:** this infrastructure runs against Alien's internal cloud accounts. If you're contributing from outside the team, you'll need your own cloud accounts and can point the Terraform variables at them.
 
@@ -97,4 +97,4 @@ This runs `terraform apply` (first run ~10-20 min due to Docker image builds), g
 
 ## Updating infrastructure
 
-After any change to `tests/infra/`: push to a branch touching those paths and the `cloud-tests.yml` workflow will automatically pick it up, apply changes, and regenerate `.env.test`.
+After any change to `infra/standalone/`: push to a branch touching those paths and the `cloud-tests.yml` workflow will automatically pick it up, apply changes, and regenerate `.env.test`.

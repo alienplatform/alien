@@ -351,6 +351,82 @@ impl AzureServiceAccountController {
             self.role_assignment_ids.push(full_assignment_id);
         }
 
+        // Assign Azure built-in roles for ACR pull/push.
+        // Azure does not allow `Microsoft.ContainerRegistry/registries/pull` and
+        // `registries/push` in custom role definitions, so we use the built-in
+        // AcrPull / AcrPush roles instead.
+        // Scoped to the subscription because the ACR may be in a different
+        // resource group (e.g. the manager's infrastructure RG).
+        let builtin_roles = Self::collect_acr_builtin_roles(&config.stack_permission_sets);
+        let subscription_scope = Scope::Subscription;
+        for (role_name, role_id) in &builtin_roles {
+            let full_role_definition_id = format!(
+                "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
+                azure_cfg.subscription_id, role_id
+            );
+
+            let assignment_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!(
+                    "alien:azure:builtin-role-assign:{}:{}",
+                    role_id, principal_id
+                )
+                .as_bytes(),
+            )
+            .to_string();
+
+            let role_assignment = RoleAssignment {
+                id: None,
+                name: None,
+                properties: Some(RoleAssignmentProperties {
+                    condition: None,
+                    condition_version: None,
+                    created_by: None,
+                    created_on: None,
+                    delegated_managed_identity_resource_id: None,
+                    description: Some(format!(
+                        "{} role for Alien ServiceAccount {}",
+                        role_name, config.id
+                    )),
+                    principal_id: principal_id.clone(),
+                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                    role_definition_id: full_role_definition_id,
+                    scope: Some(format!(
+                        "/subscriptions/{}",
+                        azure_cfg.subscription_id
+                    )),
+                    updated_by: None,
+                    updated_on: None,
+                }),
+                type_: None,
+            };
+
+            let full_assignment_id =
+                client.build_role_assignment_id(&subscription_scope, assignment_id.clone());
+
+            client
+                .create_or_update_role_assignment_by_id(
+                    full_assignment_id.clone(),
+                    &role_assignment,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to assign built-in {} role to managed identity '{}'",
+                        role_name, principal_id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            info!(
+                assignment_id = %full_assignment_id,
+                builtin_role = %role_name,
+                "Built-in role assignment created successfully"
+            );
+
+            self.role_assignment_ids.push(full_assignment_id);
+        }
+
         self.stack_permissions_applied = true;
 
         Ok(HandlerAction::Continue {
@@ -742,12 +818,30 @@ impl AzureServiceAccountController {
         }
 
         let generator = AzureRuntimePermissionsGenerator::new();
-        let permission_context = PermissionContext::new()
+        let azure_config = ctx.get_azure_config()?;
+        let resource_group =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+
+        let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_subscription_id(ctx.get_azure_config()?.subscription_id.clone())
-            .with_resource_group(
-                crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?,
+            .with_subscription_id(azure_config.subscription_id.clone())
+            .with_resource_group(resource_group.clone());
+
+        // Compute storage account name deterministically (needed by kv/* and storage/* permission sets).
+        // We can't read from state because the storage account may still be provisioning concurrently.
+        let storage_account_name =
+            crate::infra_requirements::generate_storage_account_name(
+                ctx.resource_prefix,
+                "default-storage-account",
             );
+        permission_context = permission_context.with_storage_account_name(storage_account_name);
+
+        // Managing subscription/resource group: used by function/execute and container-cluster/execute
+        // permission sets for cross-subscription management (Lighthouse). In single-subscription mode,
+        // these are the same as the current subscription/resource group.
+        permission_context = permission_context
+            .with_managing_subscription_id(azure_config.subscription_id.clone())
+            .with_managing_resource_group(resource_group);
 
         let mut all_role_definitions = Vec::new();
 
@@ -769,6 +863,53 @@ impl AzureServiceAccountController {
         }
 
         Ok(all_role_definitions)
+    }
+
+    /// Azure built-in role IDs for ACR access.
+    /// These cannot be used in custom role definitions — Azure rejects
+    /// `registries/pull` and `registries/push` in both `actions` and `dataActions`.
+    const ACR_PULL_ROLE_ID: &'static str = "7f951dda-4ed3-4680-a7ca-43fe172d538d";
+    const ACR_PUSH_ROLE_ID: &'static str = "8311e382-0749-4cb8-b61a-304f252e45ec";
+
+    /// Permission set IDs that require ACR pull access.
+    const ACR_PULL_PERMISSION_SETS: &'static [&'static str] = &[
+        "artifact-registry/pull",
+        "artifact-registry/management",
+        "function/execute",
+        "container-cluster/execute",
+    ];
+
+    /// Permission set IDs that require ACR push access (push implies pull).
+    const ACR_PUSH_PERMISSION_SETS: &'static [&'static str] = &[
+        "artifact-registry/push",
+        "artifact-registry/provision",
+    ];
+
+    /// Determine which Azure built-in ACR roles are needed based on permission sets.
+    /// Returns a deduplicated list of (role_name, role_id) pairs.
+    fn collect_acr_builtin_roles(
+        permission_sets: &[alien_core::PermissionSet],
+    ) -> Vec<(&'static str, &'static str)> {
+        let mut needs_pull = false;
+        let mut needs_push = false;
+
+        for ps in permission_sets {
+            if Self::ACR_PUSH_PERMISSION_SETS.contains(&ps.id.as_str()) {
+                needs_push = true;
+            }
+            if Self::ACR_PULL_PERMISSION_SETS.contains(&ps.id.as_str()) {
+                needs_pull = true;
+            }
+        }
+
+        let mut roles = Vec::new();
+        // AcrPush includes pull, so only assign AcrPull if we don't need push
+        if needs_push {
+            roles.push(("AcrPush", Self::ACR_PUSH_ROLE_ID));
+        } else if needs_pull {
+            roles.push(("AcrPull", Self::ACR_PULL_ROLE_ID));
+        }
+        roles
     }
 
     /// Creates a controller in a ready state with mock values for testing purposes.

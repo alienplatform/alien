@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Configuration for ALIEN_SECRETS environment variable
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,21 +63,61 @@ pub async fn load_secrets_from_vault(
                 message: "Failed to load vault binding".to_string(),
             })?;
 
-    // Fetch each secret from vault
+    // Fetch each secret from vault with retries.
+    // IAM permission propagation on cloud platforms (especially GCP) can take
+    // a short time after a new service account is granted access.
+    // We retry with exponential backoff to handle this, but keep total retry
+    // time under ~40s to stay well within Cloud Run's 240s startup probe timeout.
+    const MAX_RETRIES: u32 = 5;
+    const INITIAL_DELAY_SECS: u64 = 2;
+    const MAX_DELAY_SECS: u64 = 10;
+
     let mut loaded_secrets = HashMap::new();
     for secret_key in &config.keys {
         debug!(secret_name = %secret_key, "Fetching secret from vault");
 
-        let secret_value =
-            vault
-                .get_secret(secret_key)
-                .await
-                .context(ErrorData::SecretLoadFailed {
-                    secret_name: secret_key.clone(),
-                    message: format!("Failed to fetch secret '{}' from vault", secret_key),
-                })?;
+        let mut last_error = None;
+        for attempt in 0..=MAX_RETRIES {
+            match vault.get_secret(secret_key).await {
+                Ok(value) => {
+                    if attempt > 0 {
+                        info!(
+                            secret_name = %secret_key,
+                            attempt = attempt,
+                            "Secret loaded from vault after retry"
+                        );
+                    }
+                    loaded_secrets.insert(secret_key.clone(), value);
+                    last_error = None;
+                    break;
+                }
+                Err(e) => {
+                    if attempt < MAX_RETRIES {
+                        let delay = std::cmp::min(
+                            INITIAL_DELAY_SECS * 2u64.pow(attempt),
+                            MAX_DELAY_SECS,
+                        );
+                        warn!(
+                            secret_name = %secret_key,
+                            attempt = attempt + 1,
+                            max_retries = MAX_RETRIES,
+                            delay_secs = delay,
+                            error = %e,
+                            "Failed to fetch secret, retrying (IAM propagation may be pending)"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
 
-        loaded_secrets.insert(secret_key.clone(), secret_value);
+        if let Some(e) = last_error {
+            return Err(AlienError::from(e)).context(ErrorData::SecretLoadFailed {
+                secret_name: secret_key.clone(),
+                message: format!("Failed to fetch secret '{}' from vault after {} retries", secret_key, MAX_RETRIES),
+            });
+        }
 
         debug!(
             secret_name = %secret_key,

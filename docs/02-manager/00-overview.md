@@ -1,4 +1,4 @@
-# Server
+# alien-manager
 
 alien-manager is the control plane for Alien applications. It stores releases, deploys them to remote environments, dispatches commands to running deployments, and forwards telemetry. Single binary, SQLite-backed, no external dependencies.
 
@@ -35,7 +35,7 @@ The developer builds and registers a release with alien-manager:
 
 ```sh
 alien build --platform aws
-alien release --server http://server:8080
+alien release
 ```
 
 This compiles `alien.ts` into OCI images, pushes them to the container registry, and creates a release record. alien-manager now knows what to deploy — but nothing is provisioned yet.
@@ -139,25 +139,57 @@ For **push dispatch**, `DefaultCommandDispatcher` resolves credentials via `Cred
 
 ## Embeddable
 
-alien-manager is a library. The standalone binary is one way to run it, but you can embed it in your own process with custom providers:
+alien-manager is a library. The builder + traits IS the architecture — there is no "mode" concept in the library itself. Each call site wires the builder with appropriate trait implementations:
+
+### Standalone
+
+The `alien-manager` binary (`bin/main.rs`). Single-tenant, single-project. SQLite stores, environment-based credentials, token-based auth. This is the OSS distribution. Uses the `with_standalone_defaults()` convenience method:
 
 ```rust
-let server = AlienManagerBuilder::new(config)
+AlienManager::builder(config)
+    .token_store(bootstrapped_token_store)
+    .with_standalone_defaults()
+    .await?
+    .build()
+    .await?
+```
+
+### Dev
+
+Started by `alien dev`. The CLI embeds the library and wires local-only providers explicitly: `LocalCredentialResolver`, `PermissiveAuthValidator`, `InMemoryTelemetryBackend`, local SQLite stores, and local command bindings. The default `local-dev` deployment group is created by the CLI after startup, not by the manager builder.
+
+```rust
+AlienManager::builder(config)
+    .deployment_store(dev_deployment_store)
+    .release_store(dev_release_store)
+    .token_store(dev_token_store)
+    .credential_resolver(local_credentials)
+    .telemetry_backend(in_memory_telemetry)
+    .auth_validator(permissive_auth)
+    .server_bindings(local_bindings)
+    .build()
+    .await?
+```
+
+### Platform
+
+Used by managed platforms that embed alien-manager in their own binary. The call site creates all providers explicitly — API-backed stores, multi-tenant auth, platform-specific credential resolution, custom telemetry pipeline — and passes them to the builder:
+
+```rust
+AlienManager::builder(config)
     .deployment_store(my_deployment_store)
     .release_store(my_release_store)
     .token_store(my_token_store)
-    .credentials(my_credential_resolver)
-    .telemetry(my_telemetry_backend)
-    .auth(my_auth_validator)
-    .bindings(my_server_bindings)
+    .credential_resolver(my_credential_resolver)
+    .telemetry_backend(my_telemetry_backend)
+    .auth_validator(my_auth_validator)
+    .server_bindings(my_server_bindings)
     .extra_routes(my_additional_routes)
     .build()
-    .await?;
-
-server.start(addr).await?;
+    .await?
 ```
 
-This lets you plug in custom authentication, telemetry, and data backends while sharing all the core logic: API handlers, deployment loop, command server, sync protocol.
+All providers must be set explicitly (either one-by-one or via `with_standalone_defaults()`). The core logic — API handlers, deployment loop, command server, sync protocol — is shared across all configurations.
 
 ## Crate Location
 

@@ -1,6 +1,6 @@
 {
   "id": "container-cluster/execute",
-  "description": "Runtime permissions for Horizon VMs: cross-account image pull and per-container service account impersonation.",
+  "description": "Runtime permissions for Horizon VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
   "platforms": {
     "aws": [
       // Cross-account ECR image pull from managing account's registry
@@ -32,6 +32,48 @@
           },
           "resource": {
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      // EBS volume attach/detach for persistent storage containers.
+      // horizond calls ec2:AttachVolume/DetachVolume/DescribeVolumes at runtime.
+      // Describe* require Resource: "*" (AWS API limitation).
+      {
+        "grant": {
+          "actions": [
+            "ec2:AttachVolume",
+            "ec2:DetachVolume",
+            "ec2:DescribeVolumes"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // ELB target registration: horizond registers/deregisters container instances
+      // with ALB/NLB target groups for load-balanced containers.
+      {
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:RegisterTargets",
+            "elasticloadbalancing:DeregisterTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
+            ]
           }
         }
       }
@@ -77,6 +119,9 @@
           }
         }
       }
+      // Note: GCP disk attach/detach and NEG operations are covered by
+      // roles/compute.instanceAdmin.v1 and roles/iam.serviceAccountUser
+      // granted directly in the GCP container cluster controller (not via permission sets).
     ],
     "azure": [
       // Cross-subscription ACR image pull from managing subscription
@@ -85,8 +130,7 @@
           "actions": [
             "Microsoft.ContainerRegistry/registries/read",
             "Microsoft.ContainerRegistry/registries/metadata/read"
-          ],
-          "dataActions": ["Microsoft.ContainerRegistry/registries/pull/read"]
+          ]
         },
         "binding": {
           "stack": {
@@ -113,6 +157,8 @@
           }
         }
       }
+      // Note: Azure disk attach/detach and LB backend pool operations are covered by
+      // Contributor role assigned to the managed identity in the Azure container cluster controller.
     ]
   }
 }

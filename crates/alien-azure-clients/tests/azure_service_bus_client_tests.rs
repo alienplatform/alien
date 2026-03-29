@@ -730,7 +730,7 @@ async fn test_message_send_and_receive_delete(ctx: &ServiceBusTestContext) -> Re
         label: Some("test-message".to_string()),
         correlation_id: Some(Uuid::new_v4().to_string()),
         message_id: Some(Uuid::new_v4().to_string()),
-        time_to_live: Some(300), // 5 minutes
+        time_to_live: Some(300.0), // 5 minutes
         ..default_broker_properties()
     };
 
@@ -823,7 +823,7 @@ async fn test_message_peek_lock_and_complete(ctx: &ServiceBusTestContext) -> Res
     let broker_properties = BrokerProperties {
         label: Some("peek-lock-test".to_string()),
         message_id: Some(message_id.clone()),
-        time_to_live: Some(300),
+        time_to_live: Some(300.0),
         ..default_broker_properties()
     };
 

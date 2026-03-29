@@ -171,6 +171,10 @@ pub struct GcpClientConfig {
     /// Service endpoint overrides for testing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_overrides: Option<GcpServiceOverrides>,
+    /// The GCP project number (numeric). Resolved at runtime via Resource Manager API.
+    /// Used in IAM condition expressions where resource.name uses project number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_number: Option<String>,
 }
 
 /// Service endpoint overrides for testing Azure services
@@ -210,6 +214,16 @@ pub enum AzureCredentials {
         federated_token_file: String,
         /// The authority host URL
         authority_host: String,
+    },
+    /// Azure Managed Identity (Container Apps / App Service)
+    /// Uses IDENTITY_ENDPOINT + IDENTITY_HEADER injected by the platform
+    ManagedIdentity {
+        /// The client ID of the user-assigned managed identity
+        client_id: String,
+        /// The identity endpoint URL (from IDENTITY_ENDPOINT env var)
+        identity_endpoint: String,
+        /// The identity header secret (from IDENTITY_HEADER env var)
+        identity_header: String,
     },
 }
 
@@ -338,7 +352,7 @@ pub enum ClientConfig {
         /// State directory for local resources and deployment state
         state_directory: String,
         /// Optional artifact registry configuration for pulling container images.
-        /// When present, the local platform will fetch credentials from the agent manager
+        /// When present, the local platform will fetch credentials from the manager
         /// before pulling images, enabling centralized registry access control.
         #[serde(skip_serializing_if = "Option::is_none")]
         artifact_registry_config: Option<crate::ArtifactRegistryConfig>,

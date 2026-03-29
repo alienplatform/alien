@@ -18,6 +18,14 @@ import {
 import { AlienError } from "@alienplatform/core"
 import { Hono } from "hono"
 
+// Debug: catch any unhandled errors/rejections
+process.on("uncaughtException", (err) => {
+  console.error("[CRASH-DEBUG] uncaughtException:", err)
+})
+process.on("unhandledRejection", (reason) => {
+  console.error("[CRASH-DEBUG] unhandledRejection:", reason)
+})
+
 const app = new Hono()
 
 async function toExternalOperationError(error: unknown, operation: string) {
@@ -74,6 +82,15 @@ app.get("/sse", c => {
   })
 })
 
+// --- Debug: sleep endpoint to test HTTP timeout ---
+app.get("/sleep/:seconds", async c => {
+  const seconds = parseInt(c.req.param("seconds"))
+  console.log(`[SLEEP-DEBUG] sleeping ${seconds}s`)
+  await new Promise(resolve => setTimeout(resolve, seconds * 1000))
+  console.log(`[SLEEP-DEBUG] woke up after ${seconds}s`)
+  return c.json({ slept: seconds })
+})
+
 // --- Storage binding test ---
 
 app.post("/storage-test/:bindingName", async c => {
@@ -112,15 +129,23 @@ app.post("/storage-test/:bindingName", async c => {
 
 app.post("/kv-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
+  console.log(`[KV-DEBUG] kv-test started, bindingName=${bindingName}`)
   try {
+    console.log(`[KV-DEBUG] calling kv(${bindingName})`)
     const k = await kv(bindingName)
+    console.log(`[KV-DEBUG] kv binding obtained`)
     const testKey = `test-key-${Date.now()}`
     const testValue = { message: "kv-test", ts: Date.now() }
 
+    console.log(`[KV-DEBUG] calling k.set(${testKey})`)
     await k.set(testKey, testValue)
+    console.log(`[KV-DEBUG] k.set completed`)
     const retrieved = await k.get(testKey)
+    console.log(`[KV-DEBUG] k.get completed`)
     const value = retrieved ? JSON.parse(new TextDecoder().decode(retrieved)) : null
+    console.log(`[KV-DEBUG] calling k.delete(${testKey})`)
     await k.delete(testKey)
+    console.log(`[KV-DEBUG] k.delete completed`)
 
     return c.json({
       success: true,
@@ -132,6 +157,7 @@ app.post("/kv-test/:bindingName", async c => {
       },
     })
   } catch (error: unknown) {
+    console.error(`[KV-DEBUG] kv-test error:`, error)
     const alienError = await toExternalOperationError(error, "kv-test")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
@@ -141,14 +167,22 @@ app.post("/kv-test/:bindingName", async c => {
 
 app.post("/vault-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
+  console.log(`[VAULT-DEBUG] vault-test started, bindingName=${bindingName}`)
   try {
+    console.log(`[VAULT-DEBUG] calling vault(${bindingName})`)
     const v = await vault(bindingName)
+    console.log(`[VAULT-DEBUG] vault binding obtained`)
     const testKey = `test-secret-${Date.now()}`
     const testValue = "test-secret-value"
 
+    console.log(`[VAULT-DEBUG] calling v.set(${testKey})`)
     await v.set(testKey, testValue)
+    console.log(`[VAULT-DEBUG] v.set completed`)
     const retrieved = await v.get(testKey)
+    console.log(`[VAULT-DEBUG] v.get completed, value=${retrieved}`)
+    console.log(`[VAULT-DEBUG] calling v.delete(${testKey})`)
     await v.delete(testKey)
+    console.log(`[VAULT-DEBUG] v.delete completed`)
 
     return c.json({
       success: true,
@@ -160,6 +194,7 @@ app.post("/vault-test/:bindingName", async c => {
       },
     })
   } catch (error: unknown) {
+    console.log(`[VAULT-DEBUG] vault-test caught error:`, error)
     const alienError = await toExternalOperationError(error, "vault-test")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
@@ -169,14 +204,21 @@ app.post("/vault-test/:bindingName", async c => {
 
 app.post("/queue-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
+  console.log(`[QUEUE-DEBUG] queue-test started, bindingName=${bindingName}`)
   try {
+    console.log(`[QUEUE-DEBUG] calling queue(${bindingName})`)
     const q = await queue(bindingName)
+    console.log(`[QUEUE-DEBUG] queue binding obtained`)
+    console.log(`[QUEUE-DEBUG] calling q.send("default", ...)`)
     await q.send("default", { test: true, ts: Date.now() })
+    console.log(`[QUEUE-DEBUG] q.send completed`)
 
     return c.json({ success: true, bindingName })
   } catch (error: unknown) {
+    console.error(`[QUEUE-DEBUG] queue-test error:`, error)
     const alienError = await toExternalOperationError(error, "queue-test")
-    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+    const detail = error instanceof Error ? error.message : String(error)
+    return c.json({ success: false, error: alienError.message, code: alienError.code, detail }, 500)
   }
 })
 
@@ -184,7 +226,7 @@ app.post("/queue-test/:bindingName", async c => {
 
 app.get("/external-secret", async c => {
   try {
-    const v = await vault("test-alien-vault")
+    const v = await vault("alien-vault")
     const value = await v.get("EXTERNAL_TEST_SECRET")
     return c.json({ exists: !!value, value })
   } catch (error: unknown) {
@@ -202,7 +244,7 @@ app.post("/wait-until-test", async c => {
   waitUntil(
     (async () => {
       await new Promise(resolve => setTimeout(resolve, delayMs || 1000))
-      const s = await storage(storageBindingName || "test-alien-storage")
+      const s = await storage(storageBindingName || "alien-storage")
       await s.put(`wait-until-${testId}.txt`, testData || "background-task-done")
     })(),
   )
@@ -254,7 +296,7 @@ app.get("/events/list", async c => {
 app.get("/events/storage/:key", async c => {
   const key = c.req.param("key")
   try {
-    const k = await kv("test-alien-kv")
+    const k = await kv("alien-kv")
     const sanitizedKey = key.replace(/\//g, "_")
     const data = await k.get(`storage_event:${sanitizedKey}`)
     if (!data) return c.json({ found: false })
@@ -267,7 +309,7 @@ app.get("/events/storage/:key", async c => {
 app.get("/events/queue/:messageId", async c => {
   const messageId = c.req.param("messageId")
   try {
-    const k = await kv("test-alien-kv")
+    const k = await kv("alien-kv")
     const sanitizedId = messageId.replace(/\//g, "_")
     const data = await k.get(`queue_message:${sanitizedId}`)
     if (!data) return c.json({ found: false })
@@ -280,7 +322,7 @@ app.get("/events/queue/:messageId", async c => {
 // --- Event handlers ---
 
 onStorageEvent("*", async event => {
-  const k = await kv("test-alien-kv")
+  const k = await kv("alien-kv")
   const sanitizedKey = event.key.replace(/\//g, "_")
   await k.set(`storage_event:${sanitizedKey}`, {
     key: event.key,
@@ -292,7 +334,7 @@ onStorageEvent("*", async event => {
 })
 
 onQueueMessage("*", async message => {
-  const k = await kv("test-alien-kv")
+  const k = await kv("alien-kv")
   const sanitizedId = message.id.replace(/\//g, "_")
   await k.set(`queue_message:${sanitizedId}`, {
     messageId: message.id,
@@ -305,7 +347,7 @@ onQueueMessage("*", async message => {
   })
 })
 
-// --- ARC Commands ---
+// --- Commands ---
 
 command("echo", async (params: any) => {
   return params

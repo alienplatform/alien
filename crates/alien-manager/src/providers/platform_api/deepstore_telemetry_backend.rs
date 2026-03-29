@@ -1,6 +1,6 @@
-use alien_platform_api::SdkResultExt;
-use alien_error::{AlienError, GenericError};
 use crate::traits::{TelemetryBackend, TelemetrySignal};
+use alien_error::{AlienError, GenericError};
+use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 use tracing::debug;
 
@@ -68,7 +68,9 @@ impl TelemetryBackend for DeepStoreTelemetryBackend {
             TelemetrySignal::Traces => "traces",
             TelemetrySignal::Metrics => {
                 return Err(AlienError::new(GenericError {
-                    message: "Metrics proxying is not supported; sync metrics directly to the Alien API".to_string(),
+                    message:
+                        "Metrics proxying is not supported; sync metrics directly to the Alien API"
+                            .to_string(),
                 }));
             }
         };
@@ -104,7 +106,10 @@ impl TelemetryBackend for DeepStoreTelemetryBackend {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AlienError::new(GenericError {
-                message: format!("DeepStore returned {} for {}: {}", status, signal_path, body),
+                message: format!(
+                    "DeepStore returned {} for {}: {}",
+                    status, signal_path, body
+                ),
             }));
         }
 

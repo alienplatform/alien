@@ -14,8 +14,8 @@ use alien_aws_clients::apigatewayv2::{
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
 use alien_aws_clients::lambda::{
-    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
-    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    AddPermissionRequest, CreateFunctionRequest, Environment,
+    FunctionCode, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -214,20 +214,32 @@ impl AwsFunctionController {
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &cfg.id);
 
         if cfg.ingress == Ingress::Public {
-            let domain_info = Self::resolve_domain_info(ctx, &cfg.id)?;
-            self.fqdn = Some(domain_info.fqdn.clone());
-            self.certificate_id = domain_info.certificate_id;
-            self.certificate_arn = domain_info.certificate_arn;
-            self.uses_custom_domain = domain_info.uses_custom_domain;
-            self.domain_name = Some(domain_info.fqdn.clone());
+            match Self::resolve_domain_info(ctx, &cfg.id) {
+                Ok(domain_info) => {
+                    self.fqdn = Some(domain_info.fqdn.clone());
+                    self.certificate_id = domain_info.certificate_id;
+                    self.certificate_arn = domain_info.certificate_arn;
+                    self.uses_custom_domain = domain_info.uses_custom_domain;
+                    self.domain_name = Some(domain_info.fqdn.clone());
 
-            // Check for URL override in deployment config, otherwise use domain FQDN
-            self.url = ctx
-                .deployment_config
-                .public_urls
-                .as_ref()
-                .and_then(|urls| urls.get(&cfg.id).cloned())
-                .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                    // Check for URL override in deployment config, otherwise use domain FQDN
+                    self.url = ctx
+                        .deployment_config
+                        .public_urls
+                        .as_ref()
+                        .and_then(|urls| urls.get(&cfg.id).cloned())
+                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                }
+                Err(_) => {
+                    // Standalone mode: no domain metadata available.
+                    // Use API Gateway with its default endpoint URL (no custom domain).
+                    // The URL will be set after API Gateway creation.
+                    info!(
+                        function=%cfg.id,
+                        "No domain metadata — will use API Gateway default endpoint (standalone mode)"
+                    );
+                }
+            }
         }
 
         // Prepare environment variables
@@ -309,10 +321,12 @@ impl AwsFunctionController {
 
         if is_active {
             if function_config.ingress == Ingress::Public {
-                let next_state = if self.uses_custom_domain {
-                    CreatingApiGateway
-                } else {
+                let next_state = if self.uses_custom_domain || self.certificate_arn.is_some() {
+                    // Platform mode: wait for certificate then create API Gateway + custom domain
                     WaitingForCertificate
+                } else {
+                    // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
+                    CreatingApiGateway
                 };
                 Ok(HandlerAction::Continue {
                     state: next_state,
@@ -625,10 +639,28 @@ impl AwsFunctionController {
 
         self.stage_name = stage.stage_name.clone().or(Some("$default".to_string()));
 
-        Ok(HandlerAction::Continue {
-            state: CreatingApiDomain,
-            suggested_delay: Some(Duration::from_secs(1)),
-        })
+        if self.fqdn.is_some() {
+            // Platform mode: proceed to custom domain setup
+            Ok(HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        } else {
+            // Standalone mode: use the default API Gateway endpoint URL
+            let aws_cfg = ctx.get_aws_config()?;
+            let region = &aws_cfg.region;
+            let default_url = format!("https://{}.execute-api.{}.amazonaws.com", api_id, region);
+            info!(
+                function=%function_config.id,
+                url=%default_url,
+                "Using API Gateway default endpoint (no custom domain)"
+            );
+            self.url = Some(default_url);
+            Ok(HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        }
     }
 
     #[handler(
@@ -778,15 +810,25 @@ impl AwsFunctionController {
                 resource_id: Some(function_config.id.clone()),
             })?;
 
-        if self.uses_custom_domain {
-            Ok(HandlerAction::Continue {
-                state: RunningReadinessProbe,
-                suggested_delay: None,
-            })
+        if self.fqdn.is_some() {
+            if self.uses_custom_domain {
+                // Custom domain: readiness probe then done
+                Ok(HandlerAction::Continue {
+                    state: RunningReadinessProbe,
+                    suggested_delay: None,
+                })
+            } else {
+                // Platform-managed domain: wait for DNS propagation
+                Ok(HandlerAction::Continue {
+                    state: WaitingForDns,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                })
+            }
         } else {
+            // Standalone mode: no custom domain, skip DNS and readiness probe
             Ok(HandlerAction::Continue {
-                state: WaitingForDns,
-                suggested_delay: Some(Duration::from_secs(5)),
+                state: ApplyingResourcePermissions,
+                suggested_delay: None,
             })
         }
     }

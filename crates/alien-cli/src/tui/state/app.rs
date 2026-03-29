@@ -102,7 +102,7 @@ pub enum Action {
     },
     /// Delete a deployment via API
     DeleteDeployment(String),
-    /// Switch log source (agent manager) - triggers reconnection
+    /// Switch log source (manager) - triggers reconnection
     SwitchLogSource,
     /// Search logs via DeepStore query (platform mode only)
     SearchLogs(String),

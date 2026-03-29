@@ -34,7 +34,7 @@ Docs are grouped by topic in numbered directories. Within each directory, files 
 - **Ship updates** - prefer this over "deploy new versions." Alien brings the web experience (ship every week like Vercel) to remote environments you don't control.
 - **Platform** not "cloud" - Alien supports AWS, GCP, Azure, Kubernetes, and Local. Say "platform" when speaking generically. Only say "cloud" when specifically talking about AWS/GCP/Azure.
 - **Control plane** - the generic term for whatever calls `alien-deployment` and persists state.
-- **Remote environment** - where the agent runs (customer cloud, K8s cluster, local machine).
+- **Remote environment** - where the deployment runs (customer cloud, K8s cluster, local machine).
 
 ## Don'ts
 

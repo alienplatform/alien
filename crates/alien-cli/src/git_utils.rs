@@ -13,11 +13,13 @@
 //!
 //! // Collect metadata from current directory
 //! let metadata = collect_git_metadata(env::current_dir().unwrap()).unwrap();
-//! println!("Current branch: {:?}", metadata.commit_ref);
+//! if let Some(inner) = metadata.0 {
+//!     println!("Current branch: {:?}", inner.commit_ref);
+//! }
 //!
 //! // Detect git repository info
 //! if let Some(repo_info) = detect_git_repository(env::current_dir().unwrap()).unwrap() {
-//!     println!("Repository: {}", repo_info.repo);
+//!     println!("Repository: {}", *repo_info.repo);
 //! }
 //! ```
 
@@ -50,8 +52,10 @@ use std::process::Command;
 /// ```no_run
 /// # use alien_cli::git_utils::collect_git_metadata;
 /// let metadata = collect_git_metadata(".").unwrap();
-/// if let Some(Some(branch)) = metadata.commit_ref {
-///     println!("Current branch: {}", branch);
+/// if let Some(inner) = metadata.0 {
+///     if let Some(branch) = inner.commit_ref {
+///         println!("Current branch: {:?}", branch);
+///     }
 /// }
 /// ```
 pub fn collect_git_metadata<P: AsRef<Path>>(repo_path: P) -> Result<GitMetadata> {
@@ -278,7 +282,7 @@ pub use alien_platform_api::types::CreateProjectBodyGitRepository as GitReposito
 /// ```no_run
 /// # use alien_cli::git_utils::detect_git_repository;
 /// if let Some(repo_info) = detect_git_repository(".").unwrap() {
-///     println!("Found repository: {}", repo_info.repo);
+///     println!("Found repository: {}", *repo_info.repo);
 /// } else {
 ///     println!("No supported git repository found");
 /// }

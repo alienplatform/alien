@@ -88,8 +88,8 @@ pub async fn handle_initial_setup(
         info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
 
         // Note: Secrets sync happens at the start of Provisioning phase
-        // Note: Cross-account access setup happens in the agent manager after this step
-        // The agent manager has access to the artifact registry binding
+        // Note: Cross-account access setup happens in the manager after this step
+        // The manager has access to the artifact registry binding
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::Provisioning;

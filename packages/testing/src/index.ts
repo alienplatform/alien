@@ -11,13 +11,7 @@ export {
 export type {
   DeployOptions,
   DeploymentInfo,
+  UpgradeOptions,
   Platform,
   EnvironmentVariable,
-  PlatformCredentials,
-  AWSCredentials,
-  GCPCredentials,
-  AzureCredentials,
-  KubernetesCredentials,
-  LocalCredentials,
-  TestCredentials,
 } from "./types.js"

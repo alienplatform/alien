@@ -1,6 +1,6 @@
 # OSS E2E Tests
 
-End-to-end tests that deploy real applications to real infrastructure through a self-hosted alien-manager. No platform dependency — everything runs through OSS components.
+End-to-end tests that deploy real applications to real infrastructure through a standalone alien-manager. No platform dependency — everything runs through OSS components.
 
 ## Test Matrix
 
@@ -34,9 +34,9 @@ Each cell runs the same set of checks — health, bindings (storage, KV, vault, 
 
 - CloudFormation, Terraform, Helm, Agent Image deployment methods (platform-generated artifacts)
 - Multi-tenant workspace/project isolation
-- DeepStore telemetry pipeline
+- Managed telemetry pipeline
 - Dashboard/OAuth integration
-- Managed server (PlatformApiStore, ImpersonationCredentialResolver)
+- Platform manager (custom store and credential resolver implementations)
 
 ## Architecture
 
@@ -275,13 +275,13 @@ AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 ```
 
-The alien-manager container is started automatically by Testcontainers. No `ALIEN_SERVER` or `ALIEN_API_KEY` needed — the framework handles it.
+The alien-manager container is started automatically by Testcontainers. No `ALIEN_MANAGER_URL` or `ALIEN_API_KEY` needed — the framework handles it.
 
 ### Optional
 
 ```bash
-ALIEN_SERVER=http://localhost:8080     # Skip Testcontainers, use existing server
-ALIEN_API_KEY=ax_admin_...            # Required when using ALIEN_SERVER
+ALIEN_MANAGER_URL=http://localhost:8080     # Skip Testcontainers, use existing server
+ALIEN_API_KEY=ax_admin_...            # Required when using ALIEN_MANAGER_URL
 SKIP_CLEANUP=true                     # Keep resources for debugging
 VERBOSE=true                          # Detailed logs
 ```

@@ -50,13 +50,13 @@
             "datastore.indexes.update"
           ]
         },
+        // Firestore uses the (default) database shared across stacks.
+        // Isolation is enforced at the collection level by the application (collection names
+        // are prefixed with kv-{stackPrefix}-). IAM conditions cannot scope to collections,
+        // so we use scope-only bindings.
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
-          }
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
         }
       }
     ],
@@ -73,7 +73,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"

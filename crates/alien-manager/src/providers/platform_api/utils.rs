@@ -32,10 +32,7 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String> {
 }
 
 /// Create an alien-platform-api Client with a specific Bearer token (for token passthrough).
-pub fn create_client_with_token(
-    api_url: &str,
-    token: &str,
-) -> Result<alien_platform_api::Client> {
+pub fn create_client_with_token(api_url: &str, token: &str) -> Result<alien_platform_api::Client> {
     let auth_value = format!("Bearer {}", token);
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(

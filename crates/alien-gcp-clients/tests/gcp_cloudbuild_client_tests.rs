@@ -48,6 +48,7 @@ impl AsyncTestContext for CloudBuildTestContext {
                 json: gcp_credentials_json,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let client = CloudBuildClient::new(Client::new(), config);

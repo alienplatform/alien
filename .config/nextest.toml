@@ -7,6 +7,9 @@ otlp-tests = { max-threads = 1 }
 lambda-tests = { max-threads = 1 }
 # Define a group for function integration tests that run bun install (race condition on concurrent installs)
 function-integration-tests = { max-threads = 1 }
+# E2E tests deploy to real cloud infrastructure and must run serially to avoid
+# resource conflicts and credential race conditions (env vars are process-global).
+e2e-tests = { max-threads = 1 }
 
 [[profile.default.overrides]]
 # Apply this rule to tests in the 'build_push_tests.rs' file
@@ -28,3 +31,9 @@ test-group = 'lambda-tests'
 # Function integration tests must run serially - they run bun install which has race conditions on concurrent installs
 filter = 'binary(function_integration)'
 test-group = 'function-integration-tests'
+
+[[profile.default.overrides]]
+# E2E tests deploy to real cloud infrastructure and must run serially to avoid
+# resource conflicts and credential race conditions (env vars are process-global).
+filter = 'package(alien-test) and test(push_|pull_)'
+test-group = 'e2e-tests'

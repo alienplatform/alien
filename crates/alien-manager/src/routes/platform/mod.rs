@@ -16,15 +16,10 @@ use crate::providers::platform_api::PlatformState;
 
 /// Build the platform-specific routes (agent init, telemetry query, artifact registry,
 /// credential resolution, GCP OAuth). Merged into the main router only in Platform mode.
-pub fn build_platform_routes(
-    ext: Arc<PlatformState>,
-) -> Router<crate::routes::AppState> {
+pub fn build_platform_routes(ext: Arc<PlatformState>) -> Router<crate::routes::AppState> {
     Router::new()
         // Agent initialization (platform-specific: creates deployment+token via Platform API)
-        .route(
-            "/v1/initialize",
-            post(initialize::initialize_agent),
-        )
+        .route("/v1/initialize", post(initialize::initialize_agent))
         // DeepStore query/search proxy (JWT-validated)
         .route("/v1/search", post(telemetry_query::search_logs))
         .route("/v1/logs/search", post(telemetry_query::search_logs))
@@ -63,17 +58,11 @@ pub fn build_platform_routes(
             post(credentials::resolve_credentials),
         )
         // GCP OAuth onboarding
-        .route(
-            "/v1/google-cloud-login",
-            get(gcp::google_cloud_login),
-        )
+        .route("/v1/google-cloud-login", get(gcp::google_cloud_login))
         .route(
             "/v1/google-cloud-login/callback",
             get(gcp::google_cloud_callback),
         )
-        .route(
-            "/v1/gcp/project-metadata",
-            post(gcp::get_project_metadata),
-        )
+        .route("/v1/gcp/project-metadata", post(gcp::get_project_metadata))
         .layer(Extension(ext))
 }

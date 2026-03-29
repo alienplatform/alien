@@ -8,7 +8,7 @@ AWS uses **AssumeRole** for cross-account access. The managing account has an IA
 
 ```json
 {
-  "Principal": { "AWS": "arn:aws:iam::111111111111:role/acme-agent-manager" },
+  "Principal": { "AWS": "arn:aws:iam::111111111111:role/acme-manager" },
   "Action": "sts:AssumeRole"
 }
 ```

@@ -2,9 +2,13 @@
  * Core types for @alienplatform/testing
  */
 
-import type { Platform } from "@alienplatform/core"
-
-export type { Platform }
+/**
+ * Target platform for deployment.
+ *
+ * - 'local' (default) — runs locally via `alien dev`, no credentials needed
+ * - 'aws' | 'gcp' | 'azure' — deploys to the cloud via the platform API (requires ALIEN_API_KEY)
+ */
+export type Platform = "local" | "aws" | "gcp" | "azure"
 
 /**
  * Environment variable configuration for deployments
@@ -17,52 +21,6 @@ export interface EnvironmentVariable {
 }
 
 /**
- * Platform credentials (optional)
- *
- * When not provided, deployers use standard environment variables.
- */
-export type PlatformCredentials =
-  | {
-      platform: "aws"
-      accessKeyId: string
-      secretAccessKey: string
-      region: string
-      sessionToken?: string
-    }
-  | {
-      platform: "gcp"
-      projectId: string
-      region: string
-      serviceAccountKeyPath?: string
-      serviceAccountKeyJson?: string
-    }
-  | {
-      platform: "azure"
-      subscriptionId: string
-      tenantId: string
-      clientId: string
-      clientSecret: string
-      region: string
-    }
-  | {
-      platform: "kubernetes"
-      kubeconfigPath?: string
-    }
-  | {
-      platform: "local"
-    }
-  | {
-      platform: "test"
-    }
-
-export type AWSCredentials = Extract<PlatformCredentials, { platform: "aws" }>
-export type GCPCredentials = Extract<PlatformCredentials, { platform: "gcp" }>
-export type AzureCredentials = Extract<PlatformCredentials, { platform: "azure" }>
-export type KubernetesCredentials = Extract<PlatformCredentials, { platform: "kubernetes" }>
-export type LocalCredentials = Extract<PlatformCredentials, { platform: "local" }>
-export type TestCredentials = Extract<PlatformCredentials, { platform: "test" }>
-
-/**
  * Options for deploying an application
  */
 export interface DeployOptions {
@@ -72,11 +30,8 @@ export interface DeployOptions {
   /** Optional: specific config file to use (e.g., alien.function.ts) */
   config?: string
 
-  /** Target platform */
-  platform: Platform
-
-  /** Platform credentials (optional — falls back to env vars) */
-  credentials?: PlatformCredentials
+  /** Target platform (default: 'local') */
+  platform?: Platform
 
   /** Environment variables */
   environmentVariables?: EnvironmentVariable[]
@@ -86,7 +41,14 @@ export interface DeployOptions {
 }
 
 /**
- * Deployment info response from alien-server
+ * Options for upgrading a deployment
+ */
+export interface UpgradeOptions {
+  environmentVariables?: EnvironmentVariable[]
+}
+
+/**
+ * Deployment info response from alien dev server
  */
 export interface DeploymentInfo {
   commands: {
@@ -102,4 +64,23 @@ export interface DeploymentInfo {
   >
   status: string
   platform: Platform
+}
+
+/**
+ * Init params for creating a Deployment instance (internal)
+ */
+export interface DeploymentInit {
+  id: string
+  name: string
+  url: string
+  platform: Platform
+  commandsUrl: string
+  appPath: string
+
+  // Dev mode
+  process?: import("node:child_process").ChildProcess
+
+  // Platform API mode
+  apiUrl?: string
+  apiKey?: string
 }

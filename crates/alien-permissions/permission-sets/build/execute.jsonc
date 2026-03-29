@@ -39,21 +39,11 @@
             "iam.serviceAccounts.actAs"
           ]
         },
+        // Cloud Build IDs are auto-generated UUIDs — name-prefix conditions can never match.
+        // Conditions are fundamentally broken for builds. Must use scope-only.
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed build execution",
-              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${stackPrefix}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${stackPrefix}-'))"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Resource specific build execution",
-              "expression": "(resource.type == 'cloudbuild.googleapis.com/Build' && resource.name.startsWith('projects/${projectName}/builds/${resourceName}-')) || (resource.type == 'cloudbuild.googleapis.com/BuildTrigger' && resource.name.startsWith('projects/${projectName}/triggers/${resourceName}-'))"
-            }
-          }
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
         }
       }
     ],

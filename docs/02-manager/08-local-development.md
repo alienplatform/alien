@@ -1,6 +1,6 @@
 # Local Development
 
-`alien dev` starts alien-manager in dev mode, builds your stack, and deploys everything locally with Docker. No cloud credentials, no container registry, no external services.
+`alien dev` embeds alien-manager inside the CLI, builds your stack, and deploys everything locally with Docker. No cloud credentials, no container registry, no external services.
 
 ## What Happens
 
@@ -9,10 +9,10 @@ cd my-app
 alien dev
 ```
 
-1. Start alien-manager in dev mode (SQLite at `.alien/dev.db`, port 9090)
+1. Start an embedded alien-manager instance (SQLite at `.alien/dev-server.db`, port 9090)
 2. Build the stack for the local platform (`alien build --platform local`)
 3. Create a release from the built OCI tarballs
-4. Create a deployment in the default deployment group
+4. Ensure the default `local-dev` deployment group exists, then create a deployment in it
 5. Deployment loop picks it up, loads images into Docker, runs containers
 6. CLI TUI shows deployment status and streams logs
 
@@ -31,7 +31,7 @@ Everything runs on your machine. The deployment loop uses `ClientConfig::Local` 
 
 ## Log Streaming
 
-`alien dev` runs alien-manager in the same process. Logs flow through a shared in-memory buffer — no HTTP APIs needed for reading.
+`alien dev` runs alien-manager in the same process. Logs flow through a shared in-memory buffer.
 
 ### Architecture
 
@@ -54,7 +54,7 @@ struct LogBuffer {
 
 1. **Docker log capture** — after the deployment loop starts a container, it spawns a task that tails Docker logs via the Docker API. `stdout` → INFO, `stderr` → ERROR. Works for all containers, even those without `alien-runtime`.
 
-2. **OTLP ingestion** — containers with `alien-runtime` send structured OTLP logs to `POST /v1/logs` on the dev server. The dev-mode `TelemetryBackend` parses the protobuf and pushes entries into the same LogBuffer.
+2. **OTLP ingestion** — containers with `alien-runtime` send structured OTLP logs to `POST /v1/logs` on the embedded dev server. The CLI enables local log ingest explicitly, and `InMemoryTelemetryBackend` pushes entries into the same LogBuffer.
 
 ```rust
 struct DevTelemetryBackend {

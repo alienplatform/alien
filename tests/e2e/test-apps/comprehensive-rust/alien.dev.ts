@@ -3,11 +3,11 @@ import * as alien from "@alienplatform/core"
 // Simplified config for local dev - excludes Build and Queue resources
 // that don't have local controllers
 
-const storage = new alien.Storage("test-alien-storage").build()
-const vault = new alien.Vault("test-alien-vault").build()
-const kv = new alien.Kv("test-alien-kv").build()
+const storage = new alien.Storage("alien-storage").build()
+const vault = new alien.Vault("alien-vault").build()
+const kv = new alien.Kv("alien-kv").build()
 
-const fn = new alien.Function("test-alien-function")
+const fn = new alien.Function("alien-rs-fn")
   .code({
     type: "source",
     src: "./",
@@ -27,7 +27,7 @@ const fn = new alien.Function("test-alien-function")
   .link(kv)
   .build()
 
-const stack = new alien.Stack("test-alien-stack")
+const stack = new alien.Stack("alien-rs-stack")
   .permissions({
     profiles: {
       execution: {

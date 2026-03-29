@@ -109,33 +109,57 @@ impl GcpQueueController {
         if let Some(topic_name) = &self.topic_name {
             use crate::core::ResourcePermissionsHelper;
 
-            // Get the GCP Pub/Sub client
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
 
             // Apply IAM permissions to the topic
-            let topic_name_owned = topic_name.clone();
-            let config_id_owned = config.id.clone();
-            ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
-                ctx,
-                &config.id,
-                topic_name,
-                "Queue",
-                client,
-                |client, iam_policy| async move {
-                    // Set IAM policy on the topic
-                    client
-                        .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to apply IAM policy to Pub/Sub topic '{}'", topic_name_owned),
-                            resource_id: Some(config_id_owned),
-                        })?;
+            {
+                let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+                let topic_name_owned = topic_name.clone();
+                let config_id_owned = config.id.clone();
+                ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
+                    ctx,
+                    &config.id,
+                    topic_name,
+                    "Queue topic",
+                    client,
+                    |client, iam_policy| async move {
+                        client
+                            .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!("Failed to apply IAM policy to Pub/Sub topic '{}'", topic_name_owned),
+                                resource_id: Some(config_id_owned),
+                            })?;
+                        info!(topic = %topic_name_owned, "Applied IAM policy to topic");
+                        Ok(())
+                    },
+                ).await?;
+            }
 
-                    info!(topic = %topic_name_owned, "Successfully applied resource-scoped IAM policy");
-                    Ok(())
-                },
-            ).await?;
+            // Apply IAM permissions to the subscription
+            if let Some(subscription_name) = &self.subscription_name {
+                let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+                let sub_name_owned = subscription_name.clone();
+                let config_id_owned = config.id.clone();
+                ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
+                    ctx,
+                    &config.id,
+                    subscription_name,
+                    "Queue subscription",
+                    client,
+                    |client, iam_policy| async move {
+                        client
+                            .set_subscription_iam_policy(sub_name_owned.clone(), iam_policy)
+                            .await
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!("Failed to apply IAM policy to Pub/Sub subscription '{}'", sub_name_owned),
+                                resource_id: Some(config_id_owned),
+                            })?;
+                        info!(subscription = %sub_name_owned, "Applied IAM policy to subscription");
+                        Ok(())
+                    },
+                ).await?;
+            }
         }
 
         info!(resource_id = %config.id(), "Successfully applied resource-scoped permissions");

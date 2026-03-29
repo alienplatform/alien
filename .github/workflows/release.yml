@@ -207,6 +207,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-deploy
             target/x86_64-unknown-linux-musl/release/alien-agent
             target/x86_64-unknown-linux-musl/release/alien-runtime
+            target/x86_64-unknown-linux-musl/release/alien-manager
           key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}
 
       - uses: ./.github/actions/setup-rust
@@ -223,13 +224,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime -p alien-manager \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien alien-deploy alien-agent alien-runtime; do
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -261,6 +262,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-deploy
             target/aarch64-unknown-linux-musl/release/alien-agent
             target/aarch64-unknown-linux-musl/release/alien-runtime
+            target/aarch64-unknown-linux-musl/release/alien-manager
           key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}
 
       - uses: ./.github/actions/setup-rust
@@ -277,13 +279,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime -p alien-manager \
             --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien alien-deploy alien-agent alien-runtime; do
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -464,7 +466,7 @@ jobs:
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
           }
 
-          for binary in alien alien-deploy alien-agent alien-runtime; do
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
@@ -513,7 +515,7 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
-            for binary in alien-agent alien-runtime; do
+            for binary in alien-agent alien-runtime alien-manager; do
               cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
@@ -592,6 +594,28 @@ jobs:
           push: true
           tags: ${{ steps.meta_agent.outputs.tags }}
           labels: ${{ steps.meta_agent.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-manager)
+        id: meta_manager
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-manager
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-manager
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-manager
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_manager.outputs.tags }}
+          labels: ${{ steps.meta_manager.outputs.labels }}
           provenance: true
           sbom: true
 

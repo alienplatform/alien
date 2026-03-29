@@ -127,7 +127,7 @@ fn test_gcp_missing_platform_error() {
 }
 
 #[test]
-fn test_gcp_missing_binding_target_error() {
+fn test_gcp_missing_binding_target_graceful_skip() {
     let generator = GcpRuntimePermissionsGenerator::new();
 
     // Create a permission set with only stack binding
@@ -138,10 +138,9 @@ fn test_gcp_missing_binding_target_error() {
 
     let context = create_test_context();
 
+    // Should succeed with empty bindings (graceful skip), not error
     let result = generator.generate_bindings(&permission_set, BindingTarget::Resource, &context);
-
-    assert!(result.is_err());
-    let error = result.unwrap_err();
-    let error_string = error.to_string();
-    assert!(error_string.contains("Binding target 'resource' is not supported"));
+    assert!(result.is_ok());
+    let bindings = result.unwrap();
+    assert!(bindings.bindings.is_empty());
 }

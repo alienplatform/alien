@@ -88,10 +88,6 @@
             "Microsoft.ContainerRegistry/registries/quarantine/read",
             "Microsoft.ContainerRegistry/registries/quarantine/write",
             "Microsoft.ContainerRegistry/registries/sign/write"
-          ],
-          "dataActions": [
-            "Microsoft.ContainerRegistry/registries/pull/read",
-            "Microsoft.ContainerRegistry/registries/push/write"
           ]
         },
         "binding": {

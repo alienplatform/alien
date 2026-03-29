@@ -1,4 +1,4 @@
-//! Command registry abstraction for ARC server
+//! Command registry abstraction for command server
 //!
 //! The CommandRegistry is the **source of truth** for all command metadata.
 //! It tracks command state, timestamps, sizes, and errors.
@@ -7,7 +7,7 @@
 //! - `InMemoryCommandRegistry`: In-memory implementation for tests and local dev (in this crate)
 //! - `PlatformCommandRegistry`: Platform API integration (in alien-manager)
 //!
-//! The ARC KV store holds only operational data: params/response blobs, pending indices, leases.
+//! The command KV store holds only operational data: params/response blobs, pending indices, leases.
 
 use crate::error::Result;
 use alien_core::{CommandState, DeploymentModel};

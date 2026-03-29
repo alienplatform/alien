@@ -50,6 +50,14 @@ pub trait CompileTimeCheck: Send + Sync {
 }
 ```
 
+Examples:
+
+- **HorizonRequiredCheck** - Containers on cloud platforms (AWS/GCP/Azure) require a Horizon cluster for orchestration. This is available through the alien.dev platform (alien-hosted or private managers). Local and Kubernetes platforms support containers natively without Horizon.
+- **DnsTlsRequiredCheck** - External URLs on cloud platforms require DNS and TLS configuration (domain assignment, certificate issuance). This is provided automatically by the alien.dev platform. Standalone managers do not currently support external URLs on cloud platforms.
+- **UniqueResourcesCheck** - All resource IDs in the stack are unique
+- **ResourceReferencesExistCheck** - All resource references point to existing resources
+- **SingleQueueTriggerCheck** - Each queue has at most one trigger function
+
 ### Runtime Checks
 
 Runtime checks validate the actual target environment — they require API calls. They run during deployment only.

@@ -76,7 +76,7 @@ The core component is the `alien-infra` Rust library.
 
 It offers flexibility in deployment:
 *   **Embedded:** Can be embedded directly into agents for self-update capabilities.
-*   **Remote Management:** Can be used by the agent-manager for remote updates of agent infrastructure.
+*   **Remote Management:** Can be used by the manager for remote updates of deployment infrastructure.
 *   **CLI:** Provides a command-line interface (e.g., `main.rs`) for direct interaction.
 
 Furthermore, `alien-infra` is designed for cross-language use:

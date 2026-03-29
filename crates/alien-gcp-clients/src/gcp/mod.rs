@@ -239,6 +239,7 @@ impl GcpClientConfigExt for GcpClientConfig {
             } else {
                 None
             },
+            project_number: None,
         })
     }
 
@@ -272,6 +273,7 @@ impl GcpClientConfigExt for GcpClientConfig {
                 token: token_response.access_token,
             },
             service_overrides: self.service_overrides.clone(),
+            project_number: self.project_number.clone(),
         })
     }
 
@@ -731,6 +733,7 @@ impl GcpClientConfigExt for GcpClientConfig {
                 token: "mock-access-token-12345".to_string(),
             },
             service_overrides: None,
+            project_number: None,
         }
     }
 }

@@ -147,7 +147,7 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Stack prefixed secrets",
-              "expression": "resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-')"
+              "expression": "resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-')"
             }
           },
           "resource": {

@@ -15,7 +15,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
-use alien_server_sdk::Client as ServerClient;
+use alien_manager_api::Client as ServerClient;
 use clap::Parser;
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
@@ -231,15 +231,15 @@ async fn initialize_deployment(
     name: &str,
 ) -> Result<InitResult> {
     let sdk_platform = match platform {
-        Platform::Aws => alien_server_sdk::types::Platform::Aws,
-        Platform::Gcp => alien_server_sdk::types::Platform::Gcp,
-        Platform::Azure => alien_server_sdk::types::Platform::Azure,
-        Platform::Kubernetes => alien_server_sdk::types::Platform::Kubernetes,
-        Platform::Local => alien_server_sdk::types::Platform::Local,
-        Platform::Test => alien_server_sdk::types::Platform::Test,
+        Platform::Aws => alien_manager_api::types::Platform::Aws,
+        Platform::Gcp => alien_manager_api::types::Platform::Gcp,
+        Platform::Azure => alien_manager_api::types::Platform::Azure,
+        Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Local => alien_manager_api::types::Platform::Local,
+        Platform::Test => alien_manager_api::types::Platform::Test,
     };
 
-    let body = alien_server_sdk::types::InitializeRequest {
+    let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform),
     };

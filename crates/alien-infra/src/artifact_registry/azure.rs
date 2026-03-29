@@ -53,8 +53,9 @@ impl AzureArtifactRegistryController {
             config.id.replace("-", "")
         );
 
-        // Use default resource group for now (could be configurable later)
-        let resource_group_name = "alien-default-rg";
+        // Look up resource group from infra requirements
+        let resource_group_name =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
 
         info!(
             registry_id = %config.id,
@@ -107,7 +108,7 @@ impl AzureArtifactRegistryController {
         };
 
         let operation_result = acr_client
-            .create_registry(resource_group_name, &registry_name, &registry)
+            .create_registry(&resource_group_name, &registry_name, &registry)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -125,7 +126,7 @@ impl AzureArtifactRegistryController {
                 );
 
                 self.registry_name = Some(registry_name.clone());
-                self.resource_group_name = Some(resource_group_name.to_string());
+                self.resource_group_name = Some(resource_group_name.clone());
                 self.login_server = created_registry.properties.and_then(|p| p.login_server);
 
                 Ok(HandlerAction::Continue {
@@ -140,7 +141,7 @@ impl AzureArtifactRegistryController {
                 );
 
                 self.registry_name = Some(registry_name);
-                self.resource_group_name = Some(resource_group_name.to_string());
+                self.resource_group_name = Some(resource_group_name);
 
                 Ok(HandlerAction::Continue {
                     state: WaitingForCreation,

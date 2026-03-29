@@ -9,15 +9,15 @@ The CLI determines which mode to use based on how it's invoked:
 ```
 if command is `alien dev ...`:
     → Dev mode
-elif ALIEN_SERVER is set (or --server flag):
-    → Self-hosted mode
+elif ALIEN_MANAGER_URL is set:
+    → Standalone mode
 else:
     → Platform mode
 ```
 
 ### Platform mode (default)
 
-The CLI talks to the Alien platform. The platform handles routing requests to the appropriate managed server, workspace/project scoping, OAuth, and artifact registry management.
+The CLI talks to the Alien platform. The platform handles routing requests to the appropriate manager, workspace/project scoping, OAuth, and artifact registry management.
 
 ```bash
 alien login                          # OAuth → selects workspace
@@ -38,12 +38,12 @@ export ALIEN_API_KEY=ax_...
 
 This is still platform mode — it has workspaces, projects, OAuth — just at a different URL.
 
-### Self-hosted mode
+### Standalone mode
 
-The CLI talks directly to a standalone alien-manager. Set `ALIEN_SERVER` (or use `--server`):
+The CLI talks directly to a standalone alien-manager. Set `ALIEN_MANAGER_URL`:
 
 ```bash
-export ALIEN_SERVER=http://my-server:8080
+export ALIEN_MANAGER_URL=http://my-server:8080
 export ALIEN_API_KEY=ax_admin_...
 
 alien build --platform aws
@@ -71,13 +71,13 @@ All dev commands route to `localhost:9090`. Workspace and project are constants 
 
 ### Why two URL variables?
 
-`ALIEN_BASE_URL` and `ALIEN_SERVER` serve different purposes:
+`ALIEN_BASE_URL` and `ALIEN_MANAGER_URL` serve different purposes:
 
 - **`ALIEN_BASE_URL`** = "where is the platform?" — points at the Alien platform API (default: `api.alien.dev`). The platform routes requests, manages workspaces and projects, handles OAuth. Setting a custom URL means you're using a different platform deployment, not a bare server.
 
-- **`ALIEN_SERVER`** = "where is my alien-manager?" — points directly at a standalone alien-manager. No platform in the middle. No workspaces, no OAuth, no routing. Just a server with an API key.
+- **`ALIEN_MANAGER_URL`** = "where is my alien-manager?" — points directly at a standalone alien-manager. No platform in the middle. No workspaces, no OAuth, no routing. Just a server with an API key.
 
-The presence of `ALIEN_SERVER` is what switches the CLI to self-hosted mode.
+The presence of `ALIEN_MANAGER_URL` is what switches the CLI to standalone mode.
 
 ## Commands
 
@@ -91,7 +91,7 @@ The presence of `ALIEN_SERVER` is what switches the CLI to self-hosted mode.
 
 ### Server commands
 
-These work against any alien-manager — platform-managed, self-hosted, or local dev. In platform mode, they route through the platform API transparently.
+These work against any alien-manager — platform-managed, standalone, or local dev. In platform mode, they route through the platform API transparently.
 
 | Command | Description |
 |---------|-------------|
@@ -122,6 +122,11 @@ These only work in platform mode. They don't exist on standalone alien-managers.
 | `alien link` | Link current directory to a platform project |
 | `alien unlink` | Remove project link |
 | `alien packages ls` | List packages in registry |
+| `alien manager deploy` | Deploy a new private manager to your cloud |
+| `alien manager status <id>` | Show manager status and details |
+| `alien manager ls` | List managers in workspace |
+| `alien manager events <id>` | View manager events (`--follow` to poll) |
+| `alien manager destroy <id>` | Destroy a manager (`--yes` to skip confirmation) |
 
 ### Dev mode commands
 
@@ -146,7 +151,7 @@ Dev mode uses the same command implementations — only the target changes.
 1. **OAuth** — `alien login` opens the browser, runs PKCE flow, stores tokens in the system keyring. Tokens auto-refresh.
 2. **API key** — set `ALIEN_API_KEY` env var. Used in CI/CD (GitHub Actions).
 
-**Self-hosted mode** — `ALIEN_API_KEY` required. The admin token is printed on first server startup.
+**Standalone mode** — `ALIEN_API_KEY` required. The admin token is printed on first server startup.
 
 **Dev mode** — no authentication. The dev server accepts all requests.
 
@@ -164,7 +169,7 @@ Dev mode uses the same command implementations — only the target changes.
 
 Commands that need a project (like `alien release`) check for this file first. If not found, they prompt interactively or use the `--project` flag.
 
-Project linking is platform-only. In self-hosted mode, there's one project — no linking needed. In dev mode, the project is always `local-dev`.
+Project linking is platform-only. In standalone mode, there's one project — no linking needed. In dev mode, the project is always `local-dev`.
 
 ### Configuration hierarchy
 
@@ -176,12 +181,11 @@ Project linking is platform-only. In self-hosted mode, there's one project — n
 4. **Profile** — `~/.config/alien/profile.json` (default workspace from `alien login`)
 5. **Defaults** — `https://api.alien.dev`
 
-**Self-hosted mode** — resolution order:
+**Standalone mode** — resolution order:
 
-1. **CLI flags** — `--server`, `--api-key`
-2. **Environment variables** — `ALIEN_SERVER`, `ALIEN_API_KEY`
+1. **Environment variables** — `ALIEN_MANAGER_URL`, `ALIEN_API_KEY`
 
-No project link, no profile, no defaults. `ALIEN_API_KEY` is required.
+No project link, no profile, no defaults. Both `ALIEN_MANAGER_URL` and `ALIEN_API_KEY` are required.
 
 **Dev mode** — no resolution needed. Target is always `localhost:{port}`, no auth, workspace/project are `local-dev`.
 
@@ -203,9 +207,9 @@ ALIEN_BASE_URL=https://api.alien.dev    # Platform API URL (default)
 ALIEN_API_KEY=ax_...                     # API key for auth (skips OAuth)
 ALIEN_WORKSPACE=my-workspace             # Default workspace
 
-# Self-hosted mode
-ALIEN_SERVER=http://my-server:8080       # Self-hosted server URL (triggers self-hosted mode)
-ALIEN_API_KEY=ax_admin_...               # API key (required in self-hosted mode)
+# Standalone mode
+ALIEN_MANAGER_URL=http://my-server:8080  # Standalone manager URL (triggers standalone mode)
+ALIEN_API_KEY=ax_admin_...               # API key (required in standalone mode)
 
 # Debugging
 ALIEN_LOG=debug                          # Log level
@@ -273,4 +277,4 @@ The same commands work in GitHub Actions:
 
 `alien/crates/alien-cli/`
 
-Dependencies: `alien-build`, `alien-deployment`, `alien-manager`, `alien-client-sdk`.
+Dependencies: `alien-build`, `alien-deployment`, `alien-manager`, `alien-manager-api`.

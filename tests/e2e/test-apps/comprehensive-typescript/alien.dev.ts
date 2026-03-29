@@ -1,10 +1,10 @@
 import * as alien from "@alienplatform/core"
 
-const storage = new alien.Storage("test-alien-storage").build()
-const vault = new alien.Vault("test-alien-vault").build()
-const kv = new alien.Kv("test-alien-kv").build()
+const storage = new alien.Storage("alien-storage").build()
+const vault = new alien.Vault("alien-vault").build()
+const kv = new alien.Kv("alien-kv").build()
 
-const fn = new alien.Function("test-alien-ts-function")
+const fn = new alien.Function("alien-ts-fn")
   .code({
     type: "source",
     src: "./",
@@ -24,7 +24,7 @@ const fn = new alien.Function("test-alien-ts-function")
   .link(kv)
   .build()
 
-const stack = new alien.Stack("test-alien-ts-stack")
+const stack = new alien.Stack("alien-ts-stack")
   .permissions({
     profiles: {
       execution: {

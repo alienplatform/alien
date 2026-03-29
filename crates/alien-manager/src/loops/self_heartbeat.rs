@@ -48,11 +48,7 @@ pub async fn run_self_heartbeat_loop(ext: Arc<PlatformState>) -> Result<()> {
 async fn load_management_config(ext: &PlatformState) -> Result<Option<ManagementConfig>> {
     use alien_bindings::ServiceAccountInfo;
 
-    let service_account = match ext
-        .bindings
-        .load_service_account("management")
-        .await
-    {
+    let service_account = match ext.bindings.load_service_account("management").await {
         Ok(sa) => sa,
         Err(_) => {
             debug!("No management ServiceAccount binding found");
@@ -139,8 +135,8 @@ fn convert_management_config_to_sdk(
 async fn report_heartbeat(ext: &PlatformState) -> Result<()> {
     let management_config = load_management_config(ext).await?;
 
-    let metrics_builder =
-        alien_platform_api::types::ManagerHeartbeatRequestMetrics::builder().active_deployments(None);
+    let metrics_builder = alien_platform_api::types::ManagerHeartbeatRequestMetrics::builder()
+        .active_deployments(None);
 
     let metrics =
         alien_platform_api::types::ManagerHeartbeatRequestMetrics::try_from(metrics_builder)

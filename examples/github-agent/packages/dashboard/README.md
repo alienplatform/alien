@@ -47,7 +47,7 @@ Use the demo credentials:
 │                                                              │
 │  1. GET /api/agents → List agents via Alien SDK              │
 │  2. POST /api/integrations → Send creds to agent vault       │
-│  3. Workflow syncs metrics periodically via ARC commands     │
+│  3. Workflow syncs metrics periodically via commands          │
 │  4. Browser fetches PRs directly from agent (E2E encrypted)  │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -89,7 +89,7 @@ See `.env.example` for all required environment variables.
 - `app/(dashboard)/agents/page.tsx` - Agent deployment instructions
 - `app/(dashboard)/integrations/page.tsx` - GitHub integrations management
 - `lib/config.ts` - Environment configuration and SDK setup
-- `lib/arc.ts` - ARC client for agent commands
+- `lib/arc.ts` - Commands client for deployment commands
 - `lib/queries.ts` - React Query hooks for data fetching
 - `workflows/sync-metrics.ts` - Periodic metric sync workflow
 

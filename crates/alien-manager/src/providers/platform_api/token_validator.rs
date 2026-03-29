@@ -1,6 +1,6 @@
-use alien_platform_api::types::{ServiceAccountSubject, Subject, SubjectScope};
-use alien_error::{AlienError, IntoAlienError};
 use crate::traits::{AuthSubject, AuthValidator, TokenScope, TokenType};
+use alien_error::{AlienError, IntoAlienError};
+use alien_platform_api::types::{ServiceAccountSubject, Subject, SubjectScope};
 use async_trait::async_trait;
 use axum::http;
 use reqwest::Client as HttpClient;
@@ -22,10 +22,7 @@ impl PlatformTokenValidator {
 
 #[async_trait]
 impl AuthValidator for PlatformTokenValidator {
-    async fn validate(
-        &self,
-        headers: &http::HeaderMap,
-    ) -> Result<Option<AuthSubject>, AlienError> {
+    async fn validate(&self, headers: &http::HeaderMap) -> Result<Option<AuthSubject>, AlienError> {
         let auth_header = match headers.get(http::header::AUTHORIZATION) {
             Some(h) => h,
             None => return Ok(None),
@@ -65,47 +62,45 @@ fn subject_to_auth_subject(subject: Subject) -> AuthSubject {
                 deployment_id: None,
             },
         },
-        Subject::ServiceAccountSubject(ServiceAccountSubject { id, scope, .. }) => {
-            match scope {
-                SubjectScope::Workspace | SubjectScope::Manager { .. } => AuthSubject {
-                    token_id: id,
-                    scope: TokenScope {
-                        token_type: TokenType::Admin,
-                        deployment_group_id: None,
-                        deployment_id: None,
-                    },
+        Subject::ServiceAccountSubject(ServiceAccountSubject { id, scope, .. }) => match scope {
+            SubjectScope::Workspace | SubjectScope::Manager { .. } => AuthSubject {
+                token_id: id,
+                scope: TokenScope {
+                    token_type: TokenType::Admin,
+                    deployment_group_id: None,
+                    deployment_id: None,
                 },
-                SubjectScope::Project { project_id } => AuthSubject {
-                    token_id: id,
-                    scope: TokenScope {
-                        token_type: TokenType::DeploymentGroup,
-                        deployment_group_id: Some(project_id),
-                        deployment_id: None,
-                    },
+            },
+            SubjectScope::Project { project_id } => AuthSubject {
+                token_id: id,
+                scope: TokenScope {
+                    token_type: TokenType::DeploymentGroup,
+                    deployment_group_id: Some(project_id),
+                    deployment_id: None,
                 },
-                SubjectScope::DeploymentGroup {
-                    deployment_group_id,
-                    ..
-                } => AuthSubject {
-                    token_id: id,
-                    scope: TokenScope {
-                        token_type: TokenType::DeploymentGroup,
-                        deployment_group_id: Some(deployment_group_id),
-                        deployment_id: None,
-                    },
+            },
+            SubjectScope::DeploymentGroup {
+                deployment_group_id,
+                ..
+            } => AuthSubject {
+                token_id: id,
+                scope: TokenScope {
+                    token_type: TokenType::DeploymentGroup,
+                    deployment_group_id: Some(deployment_group_id),
+                    deployment_id: None,
                 },
-                SubjectScope::Deployment {
-                    deployment_id,
-                    project_id,
-                } => AuthSubject {
-                    token_id: id,
-                    scope: TokenScope {
-                        token_type: TokenType::Deployment,
-                        deployment_group_id: Some(project_id),
-                        deployment_id: Some(deployment_id),
-                    },
+            },
+            SubjectScope::Deployment {
+                deployment_id,
+                project_id,
+            } => AuthSubject {
+                token_id: id,
+                scope: TokenScope {
+                    token_type: TokenType::Deployment,
+                    deployment_group_id: Some(project_id),
+                    deployment_id: Some(deployment_id),
                 },
-            }
-        }
+            },
+        },
     }
 }

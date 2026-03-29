@@ -133,15 +133,15 @@ pub async fn test_vault(
 pub async fn get_external_secret(
     State(app_state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    info!("Attempting to read EXTERNAL_TEST_SECRET from test-alien-vault");
+    info!("Attempting to read EXTERNAL_TEST_SECRET from alien-vault");
 
     let vault_instance = app_state
         .ctx
         .get_bindings()
-        .load_vault("test-alien-vault")
+        .load_vault("alien-vault")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "test-alien-vault".to_string(),
+            binding_name: "alien-vault".to_string(),
         })?;
 
     match vault_instance.get_secret("EXTERNAL_TEST_SECRET").await {

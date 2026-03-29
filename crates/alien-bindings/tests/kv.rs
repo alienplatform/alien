@@ -321,6 +321,7 @@ impl AsyncTestContext for AwsProviderTestContext {
                 session_token: None,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let dynamodb_client = DynamoDbClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
@@ -572,6 +573,7 @@ impl AsyncTestContext for GcpProviderTestContext {
                 json: gcp_credentials_json.clone(),
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let firestore_client = FirestoreClient::new(Client::new(), firestore_config);
@@ -881,6 +883,7 @@ impl AsyncTestContext for AzureProviderTestContext {
                 client_secret: client_secret.clone(),
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let management_client =

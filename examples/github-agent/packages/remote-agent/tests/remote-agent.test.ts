@@ -1,7 +1,7 @@
 /**
  * GitHub Agent Remote - Integration Tests
  *
- * Uses @alienplatform/testing with the dev deployer for pure local command testing.
+ * Uses @alienplatform/testing in local mode for pure local testing.
  */
 
 import { type Deployment, deploy } from "@alienplatform/testing"

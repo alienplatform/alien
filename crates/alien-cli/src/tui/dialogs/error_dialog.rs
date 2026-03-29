@@ -11,7 +11,7 @@
 //! - Any error that implements AlienErrorData
 //!
 //! Usage:
-//! ```rust
+//! ```ignore
 //! // Press E on failed deployment
 //! Action::ShowErrorDialog(deployment.error.clone())
 //!

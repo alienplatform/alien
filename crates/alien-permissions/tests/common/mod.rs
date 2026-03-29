@@ -12,6 +12,7 @@ pub fn create_test_context() -> PermissionContext {
         .with_stack_prefix("my-stack")
         .with_resource_name("my-stack-payments-data")
         .with_project_name("my-project")
+        .with_project_number("123456789012")
         .with_region("us-central1")
         .with_subscription_id("00000000-0000-0000-0000-000000000000")
         .with_resource_group("rg-observability-prod")

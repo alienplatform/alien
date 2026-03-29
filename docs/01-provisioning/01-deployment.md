@@ -149,7 +149,7 @@ loop {
     let result = step(current, config, credentials).await?;
     current = result.state;  // Direct assignment, no merge
     
-    api.save(&agent_id, &current, result.update_heartbeat).await?;
+    api.save(&deployment_id, &current, result.update_heartbeat).await?;
     
     if let Some(delay_ms) = result.suggested_delay_ms {
         sleep(Duration::from_millis(delay_ms)).await;

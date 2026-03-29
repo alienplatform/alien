@@ -128,8 +128,8 @@ pub fn router() -> Router<AppState> {
 
 /// Router for the `/v1/initialize` endpoint only.
 ///
-/// Separated so embedders (e.g. alien-platform-manager) can replace it with a
-/// platform-specific implementation that proxies token creation to the Platform API.
+/// Separated so embedders can replace it with a platform-specific implementation
+/// that proxies token creation to the Platform API (e.g. platform mode's extra_routes).
 pub fn initialize_router() -> Router<AppState> {
     Router::new().route("/v1/initialize", post(initialize))
 }
@@ -323,9 +323,7 @@ async fn agent_sync(
         };
 
         release.and_then(|r| {
-            let stack = serde_json::from_value(
-                serde_json::to_value(&r.stack).ok()?,
-            ).ok()?;
+            let stack = serde_json::from_value(serde_json::to_value(&r.stack).ok()?).ok()?;
 
             let env_vars: Vec<EnvironmentVariable> = deployment
                 .user_environment_variables
@@ -355,7 +353,10 @@ async fn agent_sync(
         None
     };
 
-    Json(AgentSyncResponse { target: target.map(|t| serde_json::to_value(&t).unwrap_or_default()) }).into_response()
+    Json(AgentSyncResponse {
+        target: target.map(|t| serde_json::to_value(&t).unwrap_or_default()),
+    })
+    .into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

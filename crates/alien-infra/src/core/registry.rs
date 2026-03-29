@@ -5,9 +5,9 @@ use std::marker::PhantomData;
 use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureStorageAccount,
-    Build, Container, ContainerCluster, Function, Kv, Network, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, Container, ContainerCluster, Function,
+    Kv, Network, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;
@@ -411,6 +411,14 @@ impl ResourceRegistry {
             Platform::Azure,
             Box::new(DefaultControllerFactory::<
                 crate::infra_requirements::AzureContainerAppsEnvironmentController,
+            >::new()),
+        );
+
+        registry.register_controller_factory(
+            AzureServiceBusNamespace::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::infra_requirements::AzureServiceBusNamespaceController,
             >::new()),
         );
 

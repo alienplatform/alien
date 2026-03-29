@@ -1,231 +1,112 @@
 # @alienplatform/testing
 
-Testing framework for Alien applications. Deploy, test, and tear down Alien apps in real environments.
+Testing framework for Alien applications. Deploy, test, and tear down Alien apps in local or cloud environments.
 
 ## Installation
 
 ```bash
-npm install @alienplatform/testing
+npm install --save-dev @alienplatform/testing
 ```
 
 ## Quick Start
 
-```typescript
-import { deploy } from "@alienplatform/testing"
+### Local Testing (default)
 
+No credentials needed — uses `alien dev` under the hood:
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { deploy, type Deployment } from "@alienplatform/testing"
+
+describe("My App", () => {
+  let deployment: Deployment
+
+  beforeAll(async () => {
+    deployment = await deploy({ app: "./my-app" })
+  }, 300_000)
+
+  afterAll(async () => {
+    await deployment?.destroy()
+  })
+
+  it("should respond to requests", async () => {
+    const response = await fetch(`${deployment.url}/api/hello`)
+    expect(response.status).toBe(200)
+  })
+
+  it("should handle commands", async () => {
+    const result = await deployment.invokeCommand("echo", { message: "hello" })
+    expect(result.message).toBe("hello")
+  })
+})
+```
+
+### Cloud Testing
+
+Requires `ALIEN_API_KEY` — deploys to real cloud infrastructure:
+
+```typescript
 const deployment = await deploy({
   app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
+  platform: "aws", // or "gcp", "azure"
 })
-
-// Test your deployment
-const response = await fetch(`${deployment.url}/api/test`)
-expect(response.status).toBe(200)
-
-// Cleanup
-await deployment.destroy()
 ```
 
-## Authentication
+## Two Modes
 
-### API Key
+| | Local | Cloud |
+|---|---|---|
+| **Trigger** | `platform: "local"` (default) | `platform: "aws" \| "gcp" \| "azure"` |
+| **How** | Spawns `alien dev` | Builds + creates release/deployment via platform API |
+| **Credentials** | None | `ALIEN_API_KEY` env var |
+| **Speed** | ~5 seconds | 5-15 minutes |
+| **Cleanup** | Kills process | DELETE via platform API |
 
-Set your Alien API key:
+## API Reference
 
-```bash
-export ALIEN_API_KEY="your-key"
-# or
-alien login
-```
+### `deploy(options): Promise<Deployment>`
 
-### Platform Credentials
-
-Credentials are **optional**. When not provided, deployers use standard environment variables.
-
-#### AWS
-```bash
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_REGION="us-east-1"
-```
-
-Or pass explicitly:
 ```typescript
-credentials: {
-  platform: "aws",
-  accessKeyId: "...",
-  secretAccessKey: "...",
-  region: "us-east-1",
+interface DeployOptions {
+  /** Path to application directory */
+  app: string
+
+  /** Target platform (default: "local") */
+  platform?: "local" | "aws" | "gcp" | "azure"
+
+  /** Specific config file (e.g., "alien.container.ts") */
+  config?: string
+
+  /** Environment variables for the deployment */
+  environmentVariables?: EnvironmentVariable[]
+
+  /** Show detailed logs */
+  verbose?: boolean
 }
 ```
 
-#### GCP
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/key.json"
-export GCP_PROJECT_ID="my-project"
-```
+### `Deployment`
 
-Or pass explicitly:
 ```typescript
-credentials: {
-  platform: "gcp",
-  projectId: "my-project",
-  serviceAccountKeyPath: "/path/to/key.json",
-  // or
-  serviceAccountKeyJson: "{ ... }",
+class Deployment {
+  readonly id: string
+  readonly name: string
+  readonly url: string
+  readonly platform: Platform
+  destroyed: boolean
+
+  /** Invoke a command on the deployment */
+  async invokeCommand(name: string, params: any): Promise<any>
+
+  /** Set an external secret using platform-native tools */
+  async setExternalSecret(vault: string, key: string, value: string): Promise<void>
+
+  /** Upgrade to a new release (cloud mode only) */
+  async upgrade(options?: UpgradeOptions): Promise<void>
+
+  /** Destroy the deployment and clean up resources */
+  async destroy(): Promise<void>
 }
-```
-
-#### Azure
-```bash
-export AZURE_SUBSCRIPTION_ID="..."
-export AZURE_TENANT_ID="..."
-export AZURE_CLIENT_ID="..."
-export AZURE_CLIENT_SECRET="..."
-```
-
-Or pass explicitly:
-```typescript
-credentials: {
-  platform: "azure",
-  subscriptionId: "...",
-  tenantId: "...",
-  clientId: "...",
-  clientSecret: "...",
-}
-```
-
-#### Kubernetes
-```bash
-export KUBECONFIG="~/.kube/config"
-```
-
-Or pass explicitly:
-```typescript
-credentials: {
-  platform: "kubernetes",
-  kubeconfigPath: "~/.kube/config",
-}
-```
-
-## Deployment Methods
-
-### API (Default)
-
-Fastest method. Agent Manager deploys directly:
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "api", // default
-})
-```
-
-### CLI
-
-Tests the actual CLI deployment flow:
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "cli",
-})
-```
-
-### Terraform
-
-Tests Terraform provider:
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "terraform",
-})
-```
-
-### CloudFormation
-
-Tests CloudFormation deployment (AWS only):
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "cloudformation",
-})
-```
-
-### Helm
-
-Tests Helm chart deployment (Kubernetes only):
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "kubernetes",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "helm",
-  valuesYaml: "./values.yaml",
-  namespace: "default",
-})
-```
-
-### Operator Image
-
-Tests pull-mode deployment via Docker operator:
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  method: "operator-image",
-})
-```
-
-## Query Logs
-
-Query deployment logs using DeepStore:
-
-```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "test",
-  workspace: "my-workspace",
-  project: "my-project",
-})
-
-// Configure log querying
-const logsConfig = {
-  managerUrl: "http://localhost:3000",
-  deepstoreServerUrl: "http://localhost:8080",
-  databaseId: "db_123",
-  agentToken: "token_123",
-}
-
-const logs = await deployment.queryLogs({
-  query: "level:ERROR",
-  startTime: new Date(Date.now() - 3600_000), // 1 hour ago
-  endTime: new Date(),
-  maxHits: 100,
-})
-
-console.log(`Found ${logs.num_hits} logs`)
 ```
 
 ## Environment Variables
@@ -235,85 +116,49 @@ Pass environment variables to your deployment:
 ```typescript
 const deployment = await deploy({
   app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
   environmentVariables: [
-    { name: "DATABASE_URL", value: "postgres://...", type: "plaintext" },
+    { name: "DATABASE_URL", value: "postgres://..." },
     { name: "API_KEY", value: "secret", type: "secret" },
+    { name: "CACHE_TTL", value: "300", targetResources: ["my-function"] },
   ],
 })
 ```
 
-## Stack Settings
+## External Secrets
 
-Customize deployment behavior:
+Set platform-native secrets that deployments read via vault bindings:
 
 ```typescript
-const deployment = await deploy({
-  app: "./my-app",
-  platform: "aws",
-  workspace: "my-workspace",
-  project: "my-project",
-  stackSettings: {
-    deploymentModel: "push",
-    heartbeats: "on",
-    telemetry: "auto",
-    updates: "auto",
+await deployment.setExternalSecret("my-vault", "API_KEY", "secret-value")
+```
+
+Uses AWS SSM Parameter Store, GCP Secret Manager, Azure Key Vault, or local vault depending on platform.
+
+## Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ALIEN_API_KEY` | Platform API key (required for cloud mode) | — |
+| `ALIEN_API_URL` | Platform API URL | `https://api.alien.dev` |
+| `ALIEN_CLI_PATH` | Path to alien CLI binary | Auto-detected |
+| `VERBOSE` | Show detailed logs | `false` |
+
+## Best Practices
+
+- **Always clean up** — destroy deployments in `afterAll`
+- **Generous timeouts** — real deployments take minutes (use 300-600s for `beforeAll`)
+- **Separate test accounts** — use dedicated cloud accounts for testing
+- **Serial cloud tests** — cloud APIs have rate limits; run cloud tests serially
+
+```typescript
+// vitest.config.ts
+export default {
+  test: {
+    testTimeout: 300_000,
+    hookTimeout: 600_000,
   },
-})
+}
 ```
-
-## Example Test
-
-```typescript
-import { describe, it, expect } from "vitest"
-import { deploy } from "@alienplatform/testing"
-
-describe("my app", () => {
-  it("should deploy and respond", async () => {
-    const deployment = await deploy({
-      app: "./fixtures/my-app",
-      platform: "test",
-      workspace: "test-workspace",
-      project: "test-project",
-    })
-
-    try {
-      const response = await fetch(`${deployment.url}/api/hello`)
-      const data = await response.json()
-      
-      expect(response.status).toBe(200)
-      expect(data.message).toBe("Hello, World!")
-    } finally {
-      await deployment.destroy()
-    }
-  }, 180_000) // 3 min timeout
-})
-```
-
-## API Reference
-
-### `deploy(options: DeployOptions): Promise<Deployment>`
-
-Deploy an Alien application for testing.
-
-### `Deployment`
-
-Handle to a deployed application.
-
-**Properties:**
-- `id: string` - Agent ID
-- `name: string` - Agent name
-- `url: string` - Deployment URL
-- `platform: Platform` - Target platform
-- `status: AgentStatus` - Current status
-
-**Methods:**
-- `refresh(): Promise<void>` - Refresh deployment info from API
-- `waitForStatus(status: AgentStatus, options?: WaitOptions): Promise<void>` - Wait for specific status
-- `queryLogs(query: LogQuery): Promise<LogQueryResult>` - Query deployment logs
-- `destroy(): Promise<void>` - Tear down the deployment
 
 ## License
 

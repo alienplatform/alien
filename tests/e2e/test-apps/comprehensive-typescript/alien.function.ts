@@ -1,11 +1,11 @@
 import * as alien from "@alienplatform/core"
 
-const storage = new alien.Storage("test-alien-storage").build()
-const vault = new alien.Vault("test-alien-vault").build()
-const kv = new alien.Kv("test-alien-kv").build()
-const queue = new alien.Queue("test-alien-queue").build()
+const storage = new alien.Storage("alien-storage").build()
+const vault = new alien.Vault("alien-vault").build()
+const kv = new alien.Kv("alien-kv").build()
+const queue = new alien.Queue("alien-queue").build()
 
-const fn = new alien.Function("test-alien-ts-function")
+const fn = new alien.Function("alien-ts-fn")
   .code({
     type: "source",
     src: "./",
@@ -14,7 +14,7 @@ const fn = new alien.Function("test-alien-ts-function")
       entrypoint: "dist/index.js",
     },
   })
-  .memoryMb(512)
+  .memoryMb(2048)
   .timeoutSeconds(180)
   .permissions("execution")
   .ingress("public")
@@ -31,7 +31,7 @@ const fn = new alien.Function("test-alien-ts-function")
 // storage.onEvent("*", fn)
 // queue.onMessage(fn)
 
-const stack = new alien.Stack("test-alien-ts-stack")
+const stack = new alien.Stack("alien-ts-stack")
   .permissions({
     profiles: {
       execution: {

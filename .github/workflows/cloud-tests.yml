@@ -11,7 +11,7 @@ on:
       - 'crates/alien-client-config/**'
       - 'crates/alien-error/**'
       - 'crates/alien-core/**'
-      - 'tests/infra/**'
+      - 'infra/standalone/**'
       - 'scripts/gen-env-test.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -26,7 +26,7 @@ on:
       - 'crates/alien-client-config/**'
       - 'crates/alien-error/**'
       - 'crates/alien-core/**'
-      - 'tests/infra/**'
+      - 'infra/standalone/**'
       - 'scripts/gen-env-test.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -55,13 +55,13 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform init
-        working-directory: tests/infra
+        working-directory: infra/standalone
         run: terraform init
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
       - name: Terraform apply
-        working-directory: tests/infra
+        working-directory: infra/standalone
         run: terraform apply -auto-approve
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
@@ -84,7 +84,7 @@ jobs:
 
       - name: Get registry endpoints
         id: registries
-        working-directory: tests/infra
+        working-directory: infra/standalone
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
         run: |
@@ -100,7 +100,7 @@ jobs:
           echo "acr_registry=$(echo "$AZURE_CONTAINER_APP_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Login to registries
-        working-directory: tests/infra
+        working-directory: infra/standalone
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
@@ -120,7 +120,7 @@ jobs:
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: tests/infra/images/lambda
+          context: infra/standalone/images/lambda
           platforms: linux/arm64
           push: true
           tags: ${{ steps.registries.outputs.aws_lambda_image }}
@@ -130,7 +130,7 @@ jobs:
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: tests/infra/images/http-server
+          context: infra/standalone/images/http-server
           platforms: linux/amd64
           push: true
           tags: |
@@ -142,7 +142,7 @@ jobs:
         run: ./scripts/gen-env-test.sh
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
 
       - name: Upload .env.test artifact
         uses: actions/upload-artifact@v4

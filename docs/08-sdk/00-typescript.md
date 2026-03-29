@@ -94,7 +94,7 @@ const ctx = await AlienContext.fromEnv()
 const bucket = ctx.storage("my-bucket")
 
 // Remote bindings (access resources from outside the runtime)
-const remoteCtx = await AlienContext.forRemoteAgent(agentId, token)
+const remoteCtx = await AlienContext.forRemoteDeployment(deploymentId, token)
 const customerBucket = remoteCtx.storage("customer-data")
 ```
 

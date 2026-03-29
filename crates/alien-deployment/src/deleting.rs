@@ -117,8 +117,8 @@ pub async fn handle_deleting(
     let result = if stack_status == StackStatus::Deleted {
         info!("All resources deleted successfully, transitioning to Deleted");
 
-        // Note: Cross-account access removal happens in the agent manager after this step
-        // The agent manager has access to the artifact registry binding
+        // Note: Cross-account access removal happens in the manager after this step
+        // The manager has access to the artifact registry binding
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::Deleted;

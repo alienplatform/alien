@@ -951,6 +951,10 @@ impl GcpContainerClusterController {
             // Allows the VM to generate access tokens for per-container service accounts,
             // which is required by the horizond IMDS metadata proxy to vend per-container credentials.
             "roles/iam.serviceAccountTokenCreator",
+            // Required by GCE attachDisk/detachDisk — the caller must have serviceAccountUser
+            // on the instance's service account. Without this, the API returns 200 but the
+            // async operation silently fails with SERVICE_ACCOUNT_ACCESS_DENIED.
+            "roles/iam.serviceAccountUser",
         ];
 
         let mut changed = false;

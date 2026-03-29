@@ -82,6 +82,7 @@ impl AsyncTestContext for ComputeTestContext {
                 json: gcp_credentials_json,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let client = ComputeClient::new(Client::new(), config);
@@ -1086,6 +1087,7 @@ impl ComputeTestContext {
                 json: r#"{"type":"service_account","project_id":"fake","private_key_id":"fake","private_key":"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n","client_email":"fake@fake.iam.gserviceaccount.com","client_id":"fake","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}"#.to_string(),
             },
             service_overrides: None,
+            project_number: None,
         };
         ComputeClient::new(Client::new(), invalid_config)
     }

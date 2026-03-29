@@ -8,7 +8,7 @@
 //! ## Features
 //!
 //! - **Core types**: Always available protocol types and serialization
-//! - **server**: Command server implementation for agent managers
+//! - **server**: Command server implementation for managers
 //! - **runtime**: Command envelope processing for alien-runtime
 //! - **openapi**: OpenAPI schema generation support
 

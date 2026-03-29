@@ -1,11 +1,11 @@
 import * as alien from "@alienplatform/core"
 
-const storage = new alien.Storage("test-alien-storage").build()
-const vault = new alien.Vault("test-alien-vault").build()
-const kv = new alien.Kv("test-alien-kv").build()
-const queue = new alien.Queue("test-alien-queue").build()
+const storage = new alien.Storage("alien-storage").build()
+const vault = new alien.Vault("alien-vault").build()
+const kv = new alien.Kv("alien-kv").build()
+const queue = new alien.Queue("alien-queue").build()
 
-const container = new alien.Container("test-alien-ts-container")
+const container = new alien.Container("alien-ts-ctr")
   .code({
     type: "source",
     src: "./",
@@ -17,6 +17,7 @@ const container = new alien.Container("test-alien-ts-container")
   .memory("512Mi")
   .cpu(0.5)
   .permissions("execution")
+  .port(3000)
   .expose("http")
   .environment({ NODE_ENV: "production" })
   .readinessProbe({ method: "GET", path: "/hello" })
@@ -26,7 +27,7 @@ const container = new alien.Container("test-alien-ts-container")
   .link(queue)
   .build()
 
-const stack = new alien.Stack("test-alien-ts-stack")
+const stack = new alien.Stack("alien-ts-stack")
   .permissions({
     profiles: {
       execution: {

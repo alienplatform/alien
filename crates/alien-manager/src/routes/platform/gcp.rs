@@ -65,9 +65,7 @@ const OAUTH_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/cloudplatformprojects.readonly",
 ];
 
-pub async fn google_cloud_login(
-    Extension(ext): Extension<Arc<PlatformState>>,
-) -> Result<Response> {
+pub async fn google_cloud_login(Extension(ext): Extension<Arc<PlatformState>>) -> Result<Response> {
     let client_id = ext.gcp_oauth.client_id.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "GCP OAuth client ID not configured".to_string(),
@@ -111,14 +109,11 @@ pub async fn google_cloud_callback(
         })
     })?;
 
-    let client_secret = ext
-        .gcp_oauth.client_secret
-        .as_ref()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "GCP OAuth client secret not configured".to_string(),
-            })
-        })?;
+    let client_secret = ext.gcp_oauth.client_secret.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "GCP OAuth client secret not configured".to_string(),
+        })
+    })?;
 
     let callback_url = format!("{}/v1/google-cloud-login/callback", ext.base_url);
 

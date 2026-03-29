@@ -11,9 +11,9 @@ describe("My Alien App", () => {
   let deployment: Deployment
 
   beforeAll(async () => {
+    // Local mode — just point to the app directory
     deployment = await deploy({
       app: "./fixtures/hello-world",
-      platform: "local",
     })
   }, 180_000) // 3 min timeout for deployment
 

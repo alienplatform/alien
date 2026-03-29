@@ -2,7 +2,7 @@
 
 How code goes from your machine to running in a customer's cloud. This doc covers the deployment data model, the deployment lifecycle, push and pull execution, and credential impersonation.
 
-For the high-level push vs pull narrative, read [Server — How Deployments Work](00-overview.md#how-deployments-work) first.
+For the high-level push vs pull narrative, read [alien-manager — How Deployments Work](00-overview.md#how-deployments-work) first.
 
 ## The Deployment Record
 
@@ -154,7 +154,7 @@ After each step, the loop writes the new deployment state back via `reconcile()`
 
 A separate heartbeat loop (default 60s) polls `running` deployments and updates their heartbeat timestamp. This enables stale deployment detection.
 
-The self-hosted alien-manager is single-instance. The deployment loop processes deployments sequentially within each iteration — no locking needed. The `DeploymentStore` trait supports a `locked_by` mechanism for managed deployments where multiple server instances run concurrently.
+The standalone alien-manager is single-instance. The deployment loop processes deployments sequentially within each iteration — no locking needed. The `DeploymentStore` trait supports a `locked_by` mechanism for platform-mode deployments where multiple manager instances run concurrently.
 
 ### Pull model
 

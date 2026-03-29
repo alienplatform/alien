@@ -20,6 +20,12 @@ impl AzureKeyVault {
             vault_base_url,
         }
     }
+
+    /// Azure Key Vault secret names only allow alphanumerics and hyphens.
+    /// Convert underscores to hyphens for compatibility.
+    fn sanitize_secret_name(name: &str) -> String {
+        name.replace('_', "-")
+    }
 }
 
 #[async_trait]
@@ -29,9 +35,10 @@ impl crate::traits::Binding for AzureKeyVault {}
 impl crate::traits::Vault for AzureKeyVault {
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
+        let sanitized = Self::sanitize_secret_name(secret_name);
         let response = self
             .client
-            .get_secret(self.vault_base_url.clone(), secret_name.to_string(), None)
+            .get_secret(self.vault_base_url.clone(), sanitized, None)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -51,6 +58,7 @@ impl crate::traits::Vault for AzureKeyVault {
 
     /// Set a secret value
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let sanitized = Self::sanitize_secret_name(secret_name);
         let parameters = SecretSetParameters {
             value: value.to_string(),
             content_type: None,
@@ -61,7 +69,7 @@ impl crate::traits::Vault for AzureKeyVault {
         self.client
             .set_secret(
                 self.vault_base_url.clone(),
-                secret_name.to_string(),
+                sanitized,
                 parameters,
             )
             .await
@@ -78,8 +86,9 @@ impl crate::traits::Vault for AzureKeyVault {
 
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
+        let sanitized = Self::sanitize_secret_name(secret_name);
         self.client
-            .delete_secret(self.vault_base_url.clone(), secret_name.to_string())
+            .delete_secret(self.vault_base_url.clone(), sanitized)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(

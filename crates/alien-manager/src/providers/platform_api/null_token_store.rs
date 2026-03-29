@@ -1,5 +1,5 @@
-use alien_error::{AlienError, GenericError};
 use crate::traits::{CreateTokenParams, TokenRecord, TokenStore};
+use alien_error::{AlienError, GenericError};
 use async_trait::async_trait;
 
 /// No-op token store for platform mode.

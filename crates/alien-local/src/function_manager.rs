@@ -911,7 +911,7 @@ impl LocalFunctionManager {
             Self::save_metadata_static(&self.state_dir, &function_metadata)?;
         } else {
             // Pull from remote registry
-            // Fetch credentials from agent manager if artifact_registry_config is provided
+            // Fetch credentials from manager if artifact_registry_config is provided
             let auth = if let Some(config) = artifact_registry_config {
                 debug!(
                     manager_url = %config.manager_url,
@@ -1016,7 +1016,7 @@ async fn fetch_artifact_registry_credentials(
 ) -> Result<dockdash::RegistryAuth> {
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 
-    // Note: These match the types in agent-manager's models.rs
+    // Note: These match the types in alien-manager's models.rs
     #[derive(serde::Serialize)]
     #[serde(rename_all = "lowercase")]
     #[allow(dead_code)]
@@ -1074,7 +1074,7 @@ async fn fetch_artifact_registry_credentials(
         .await
         .into_alien_error()
         .context(ErrorData::Other {
-            message: format!("Failed to fetch credentials from agent manager: {}", url),
+            message: format!("Failed to fetch credentials from manager: {}", url),
         })?;
 
     if !response.status().is_success() {
@@ -1084,7 +1084,7 @@ async fn fetch_artifact_registry_credentials(
             .await
             .unwrap_or_else(|_| "Unable to read response body".to_string());
         return Err(AlienError::new(ErrorData::Other {
-            message: format!("Agent manager returned error status {}: {}", status, body),
+            message: format!("Manager returned error status {}: {}", status, body),
         }));
     }
 
@@ -1094,7 +1094,7 @@ async fn fetch_artifact_registry_credentials(
             .await
             .into_alien_error()
             .context(ErrorData::Other {
-                message: "Failed to parse credentials response from agent manager".to_string(),
+                message: "Failed to parse credentials response from manager".to_string(),
             })?;
 
     Ok(dockdash::RegistryAuth::Basic(

@@ -4,7 +4,7 @@
 //! It provides minimal functionality needed for core runtime testing:
 //! - HTTP server with health and inspect endpoints
 //! - Event handlers for storage and queue events
-//! - ARC commands for testing command invocation
+//! - Commands for testing command invocation
 //! - Minimal bindings usage (Storage, KV)
 
 use alien_bindings::{AlienContext, ErrorData as BindingsErrorData};
@@ -223,7 +223,7 @@ fn register_event_handlers(app_state: &AppState) {
         });
     }
 
-    // ARC test command for small payloads (inline response)
+    // Test command for small payloads (inline response)
     ctx.on_command("arc-test-small", |params: serde_json::Value| async move {
         info!(params = ?params, "Received arc-test-small command");
 
@@ -241,7 +241,7 @@ fn register_event_handlers(app_state: &AppState) {
         }))
     });
 
-    // ARC test command for large payloads (storage-based response)
+    // Test command for large payloads (storage-based response)
     ctx.on_command("arc-test-large", |params: serde_json::Value| async move {
         info!(params = ?params, "Received arc-test-large command");
 

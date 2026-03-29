@@ -530,11 +530,14 @@ impl GcpArtifactRegistryController {
             .await?;
 
         // Build permission context for this specific artifact registry resource
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(config.id.clone());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
 
         let generator = GcpRuntimePermissionsGenerator::new();
 

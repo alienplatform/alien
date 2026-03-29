@@ -20,12 +20,32 @@ use http_body_util::BodyExt;
 use prost_types::Timestamp;
 use tracing::error;
 
+/// Create a shared reqwest client for forwarding HTTP requests.
+///
+/// This client is meant to be created once and reused across all requests
+/// to benefit from connection pooling. Configured for localhost forwarding
+/// with no proxy, generous timeouts (the app may make slow cloud API calls),
+/// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
+/// close idle connections with the default settings).
+pub fn create_forward_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .read_timeout(std::time::Duration::from_secs(300))
+        .no_proxy()
+        .tcp_keepalive(None)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// Forward an HTTP request to the application.
 ///
 /// This is the core proxy logic used by all HTTP-based transports.
 /// Supports streaming responses (SSE, chunked transfer, etc.).
-pub async fn forward_http_request(request: Request<Body>, app_port: u16) -> Response<Body> {
-    let client = reqwest::Client::new();
+pub async fn forward_http_request(
+    client: &reqwest::Client,
+    request: Request<Body>,
+    app_port: u16,
+) -> Response<Body> {
 
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -83,7 +103,17 @@ pub async fn forward_http_request(request: Request<Body>, app_port: u16) -> Resp
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(e) => {
-            error!(error = %e, target_url = %target_url, "Failed to forward request");
+            let is_connect = e.is_connect();
+            let is_timeout = e.is_timeout();
+            let is_request = e.is_request();
+            error!(
+                error = %e,
+                target_url = %target_url,
+                is_connect,
+                is_timeout,
+                is_request,
+                "Failed to forward request"
+            );
             (StatusCode::BAD_GATEWAY, "Failed to forward request").into_response()
         }
     }

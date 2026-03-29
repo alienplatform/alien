@@ -34,27 +34,19 @@
             "pubsub.topics.delete",
             "pubsub.topics.get",
             "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
             "pubsub.subscriptions.create",
             "pubsub.subscriptions.delete",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update"
           ]
         },
+        // Pub/Sub does not support IAM conditions (resource.name/resource.type) for any operation.
+        // All conditions silently fail. Stack: scope-only. Resource: scope-only (resource-level
+        // IAM via setTopicIamPolicy/setSubscriptionIamPolicy applied by the queue controller).
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Queue provision access",
-              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Queue provision access",
-              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
-            }
-          }
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
         }
       }
     ],

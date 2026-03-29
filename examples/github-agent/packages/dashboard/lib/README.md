@@ -5,7 +5,7 @@
 These files contain server-side code and should **NOT** be imported in client components:
 
 - `config.ts` - Contains `alien` SDK client (uses Node.js environment)
-- `arc.ts` - ARC client with dynamic Node.js imports (`node:fs/promises`)
+- `arc.ts` - Commands client with dynamic Node.js imports (`node:fs/promises`)
 - `deployment-groups.ts` - Uses database and SDK (server-side only)
 - `db.ts` - Database connection (server-side only)
 - `schema.ts` - Database schema (server-side only)

@@ -1,0 +1,27 @@
+# Multi-arch build for alien-manager Docker image
+# Used for standalone (self-hosted) manager deployments
+
+FROM cgr.dev/chainguard/wolfi-base:latest as binary-selector
+
+COPY target/aarch64-unknown-linux-musl/release/alien-manager /tmp/alien-manager-aarch64
+COPY target/x86_64-unknown-linux-musl/release/alien-manager /tmp/alien-manager-x86_64
+
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+       amd64)  cp /tmp/alien-manager-x86_64 /tmp/alien-manager ;; \
+       arm64)  cp /tmp/alien-manager-aarch64 /tmp/alien-manager ;; \
+    esac
+
+FROM cgr.dev/chainguard/wolfi-base:latest
+
+WORKDIR /app
+
+COPY --from=binary-selector /tmp/alien-manager /app/alien-manager
+RUN chmod +x /app/alien-manager
+
+RUN mkdir -p /var/lib/alien-manager && chown nonroot:nonroot /var/lib/alien-manager
+RUN chown -R nonroot:nonroot /app
+
+USER nonroot
+
+ENTRYPOINT ["/app/alien-manager"]

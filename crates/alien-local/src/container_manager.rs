@@ -532,7 +532,7 @@ impl LocalContainerManager {
             }
         }
 
-        // ARC polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*)
+        // Command polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*)
         // The runtime CLI will read ALIEN_AGENT_ID, ALIEN_COMMANDS_POLLING_ENABLED, etc. from env
         // No need to inject here - it should come from the deployment configuration
 

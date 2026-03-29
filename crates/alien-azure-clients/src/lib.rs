@@ -3,7 +3,8 @@ pub use azure::*;
 
 // Re-export commonly used types for convenience
 pub use azure::{
-    AzureClientConfig, AzureClientConfigExt, AzureCredentials, AzureImpersonationConfig,
+    extract_oid_from_token, AzureClientConfig, AzureClientConfigExt, AzureCredentials,
+    AzureImpersonationConfig,
 };
 
 // Re-export all client APIs

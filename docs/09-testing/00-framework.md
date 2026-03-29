@@ -1,40 +1,48 @@
 # Testing Framework
 
-`@alienplatform/testing` deploys applications to real environments — AWS, GCP, Azure, Kubernetes, or locally with Docker. No mocks, no simulators — test deployments are regular Alien deployments. The same provisioning engine, the same runtime, the same infrastructure.
+`@alienplatform/testing` deploys applications to real environments — AWS, GCP, Azure, or locally with Docker. No mocks, no simulators. The same provisioning engine, the same runtime, the same infrastructure.
 
-## How It Works
+## Two Modes
 
-The testing framework starts an alien-manager as a Docker container via [Testcontainers](https://testcontainers.com/), then uses the server's API to build, release, and deploy your application to real cloud infrastructure. The server's deployment loop handles provisioning — same code path as production.
+The framework auto-detects the deployment method based on the target platform.
 
-```
-┌────────────────────────────────────────────────────┐
-│                 Test Runner (Vitest)                │
-│                                                    │
-│  1. Start alien-manager container (Testcontainers)  │
-│  2. Build app → create release                     │
-│  3. Create deployment group + deployment           │
-│  4. Server's deployment loop provisions resources  │
-│  5. Poll until "running"                           │
-│  6. Run checks (HTTP → deployed app)               │
-│  7. Cleanup                                        │
-└──────────────────┬─────────────────────────────────┘
-                   │
-         ┌─────────┴─────────┐
-         ▼                   ▼
-   alien-manager         Cloud APIs
-   (container)          (AWS/GCP/Azure)
-         │                   ▲
-         │  deployment loop  │
-         └───────────────────┘
+### Local Mode (default)
+
+Spawns `alien dev` as a child process. No credentials, no cloud accounts — everything runs locally.
+
+```typescript
+const deployment = await deploy({
+  app: './my-app',
+  // platform defaults to "local"
+})
 ```
 
-No workspace, no project, no deployment method selection. The framework manages the server lifecycle — you just provide your app and cloud credentials.
+What happens:
+1. Finds the `alien` CLI (from `ALIEN_CLI_PATH`, Cargo build output, or PATH)
+2. Allocates a free port
+3. Spawns `alien dev --no-tui --port <N>`
+4. Polls `/health` until the server is ready
+5. Polls `/v1/deployments` until the deployment reaches `running`
+6. Returns a `Deployment` handle with the public URL
 
-## Installation
+### Cloud Mode
 
-```bash
-npm install --save-dev @alienplatform/testing
+Builds the app and deploys via the platform API. Requires `ALIEN_API_KEY`.
+
+```typescript
+const deployment = await deploy({
+  app: './my-app',
+  platform: 'aws', // or 'gcp', 'azure'
+})
 ```
+
+What happens:
+1. Reads `ALIEN_API_KEY` from environment (required)
+2. Runs `alien build --platform <aws|gcp|azure>`
+3. Creates a release via `POST /v1/releases`
+4. Creates a deployment via `POST /v1/deployments`
+5. Polls until the deployment reaches `running` (up to 15 minutes)
+6. Returns a `Deployment` handle
 
 ## Basic Usage
 
@@ -46,76 +54,22 @@ describe('My Alien App', () => {
   let deployment: Deployment
 
   beforeAll(async () => {
-    deployment = await deploy({
-      app: './my-app',
-      platform: 'aws',
-    })
-  }, 600_000) // 10 min — real cloud provisioning is slow
+    deployment = await deploy({ app: './my-app' })
+  }, 300_000)
 
   afterAll(async () => {
     await deployment?.destroy()
   })
 
   it('should respond to requests', async () => {
-    expect(deployment.status).toBe('running')
-
     const response = await fetch(`${deployment.url}/api/hello`)
     expect(response.status).toBe(200)
   })
-})
-```
 
-That's it. The framework:
-
-1. Starts an alien-manager container (or reuses an existing one if `ALIEN_SERVER` is set)
-2. Runs `alien build --platform aws` on your app
-3. Creates a release via the server API
-4. Creates a deployment group and deployment
-5. The server's deployment loop provisions real resources using your credentials (from environment variables)
-6. Polls until the deployment reaches `running` status
-7. Returns a `Deployment` handle with the deployed app's URL
-
-For local deployments (`platform: 'local'`), no cloud credentials are needed — resources are provisioned with Docker on the host machine.
-
-## Credentials
-
-Credentials come from standard environment variables. The alien-manager's `EnvironmentCredentialResolver` picks them up automatically.
-
-```bash
-# AWS
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_REGION=us-east-1
-
-# GCP
-export GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
-export GOOGLE_REGION=europe-central2
-
-# Azure
-export AZURE_SUBSCRIPTION_ID=...
-export AZURE_TENANT_ID=...
-export AZURE_CLIENT_ID=...
-export AZURE_CLIENT_SECRET=...
-export AZURE_REGION=eastus
-
-# Kubernetes
-export KUBECONFIG=/path/to/kubeconfig  # defaults to ~/.kube/config
-
-# Local — no credentials needed
-```
-
-Or pass them explicitly:
-
-```typescript
-const deployment = await deploy({
-  app: './my-app',
-  platform: 'aws',
-  credentials: {
-    platform: 'aws',
-    accessKeyId: '...',
-    secretAccessKey: '...',
-    region: 'us-east-1',
-  },
+  it('should handle commands', async () => {
+    const result = await deployment.invokeCommand('echo', { message: 'hello' })
+    expect(result.message).toBe('hello')
+  })
 })
 ```
 
@@ -126,8 +80,8 @@ interface DeployOptions {
   /** Path to application directory */
   app: string
 
-  /** Target platform: 'aws' | 'gcp' | 'azure' | 'kubernetes' | 'local' */
-  platform: Platform
+  /** Target platform (default: 'local') */
+  platform?: 'local' | 'aws' | 'gcp' | 'azure'
 
   /** Specific config file (e.g., 'alien.container.ts') */
   config?: string
@@ -135,61 +89,41 @@ interface DeployOptions {
   /** Environment variables for the deployment */
   environmentVariables?: EnvironmentVariable[]
 
-  /** Stack settings overrides */
-  stackSettings?: Partial<StackSettings>
-
-  /** Explicit cloud credentials (otherwise uses env vars) */
-  credentials?: PlatformCredentials
-
   /** Show detailed logs */
   verbose?: boolean
 }
 ```
 
-The `config` option lets you test different deployment shapes with the same app:
+The `config` option lets you test different deployment shapes:
 
 ```typescript
 // Test as a function
-const fnDeployment = await deploy({
-  app: './test-apps/comprehensive',
-  config: 'alien.function.ts',
-  platform: 'aws',
-})
+const fn = await deploy({ app: './my-app', config: 'alien.function.ts', platform: 'aws' })
 
 // Test as a container
-const containerDeployment = await deploy({
-  app: './test-apps/comprehensive',
-  config: 'alien.container.ts',
-  platform: 'aws',
-})
+const container = await deploy({ app: './my-app', config: 'alien.container.ts', platform: 'aws' })
 ```
 
 ## Deployment API
 
-The `Deployment` class returned by `deploy()`:
-
 ```typescript
 class Deployment {
-  readonly id: string
-  readonly name: string
-  readonly url: string         // Public URL of the deployed app
+  readonly id: string        // Deployment ID
+  readonly name: string      // Deployment name
+  readonly url: string       // Public URL of the deployed app
   readonly platform: Platform
-  readonly resourcePrefix: string
-  readonly status: DeploymentStatus
+  destroyed: boolean
 
-  /** Refresh deployment info from server */
-  async refresh(): Promise<void>
-
-  /** Wait for a specific status (with configurable timeout) */
-  async waitForStatus(status: DeploymentStatus, opts?: WaitOptions): Promise<void>
-
-  /** Invoke a remote command on the deployment */
+  /** Invoke a command on the deployment */
   async invokeCommand(name: string, params: any): Promise<any>
 
-  /** Set a secret in the deployment's vault via platform-native tools */
+  /** Set a secret using platform-native tools (SSM, Secret Manager, Key Vault) */
   async setExternalSecret(vault: string, key: string, value: string): Promise<void>
 
-  /** Destroy the deployment and clean up cloud resources */
+  /** Push a new release and wait for it to be active (cloud mode only) */
+  async upgrade(options?: UpgradeOptions): Promise<void>
+
+  /** Destroy the deployment and clean up resources */
   async destroy(): Promise<void>
 }
 ```
@@ -201,45 +135,63 @@ const result = await deployment.invokeCommand('echo', { message: 'hello' })
 expect(result.message).toBe('hello')
 ```
 
-Uses the command server — push dispatch (Lambda invoke, Pub/Sub, Service Bus) or pull polling, depending on the platform.
-
 ### External Secrets
 
 ```typescript
 await deployment.setExternalSecret('my-vault', 'API_KEY', 'secret-value')
 ```
 
-Writes secrets using platform-native tools (AWS SSM Parameter Store, GCP Secret Manager, Azure Key Vault) so the deployment can read them via vault bindings.
+Writes secrets using platform-native tools — AWS SSM Parameter Store, GCP Secret Manager, Azure Key Vault, or the local vault CLI — so the deployment reads them via vault bindings.
+
+### Upgrade (Cloud Only)
+
+```typescript
+// Modify your app, then:
+await deployment.upgrade()
+
+// With new env vars:
+await deployment.upgrade({
+  environmentVariables: [{ name: 'NEW_VAR', value: 'hello' }],
+})
+```
+
+Rebuilds the app, creates a new release, updates the deployment, and waits for the new release to be running.
+
+## Credentials
+
+Cloud mode reads `ALIEN_API_KEY` from the environment:
+
+```bash
+export ALIEN_API_KEY=your-key-here
+```
+
+Cloud provider credentials come from standard environment variables — the platform handles provisioning.
 
 ## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ALIEN_SERVER` | Skip Testcontainers, use existing server | — (starts container) |
-| `ALIEN_API_KEY` | API key (when using existing server) | — (auto-generated for container) |
+| `ALIEN_API_KEY` | Platform API key (required for cloud mode) | — |
+| `ALIEN_API_URL` | Platform API URL | `https://api.alien.dev` |
+| `ALIEN_CLI_PATH` | Path to alien CLI binary | Auto-detected |
 | `VERBOSE` | Show detailed logs | `false` |
-| `SKIP_CLEANUP` | Keep resources after tests for debugging | `false` |
-
-When `ALIEN_SERVER` is set, the framework skips starting a container and connects to the existing server. Useful for development — run alien-manager locally and iterate on tests without container startup overhead.
 
 ## Best Practices
 
-**Separate test accounts.** Always use dedicated cloud accounts for testing. Never use production credentials.
+**Always clean up.** Destroy deployments in `afterAll`. If a test crashes, clean up manually.
 
-**Always clean up.** Destroy deployments in `afterAll`. If a test crashes, clean up manually via the server API or cloud console.
+**Generous timeouts.** Local deploys take seconds, cloud deploys take minutes. Use 300s+ for `beforeAll`.
 
-**Generous timeouts.** Real deployments take minutes. Use 600s (10 min) for `beforeAll`, longer for builds.
+**Separate test accounts.** Never use production cloud accounts for testing.
 
-**Serial execution.** Cloud APIs have rate limits and resource quotas. Run cloud tests serially:
+**Serial cloud tests.** Cloud APIs have rate limits. Run cloud tests serially:
 
 ```typescript
 // vitest.config.ts
 export default {
   test: {
-    pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
-    testTimeout: 600_000,
-    hookTimeout: 900_000,
+    testTimeout: 300_000,
+    hookTimeout: 600_000,
   },
 }
 ```

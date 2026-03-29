@@ -274,7 +274,7 @@ export class AlienContext implements AlienBindingsProvider {
   // ============================================================================
 
   /**
-   * Register an ARC command.
+   * Register a command.
    *
    * @param name - Command name
    * @param handler - Command handler that receives params and returns a result
@@ -341,7 +341,7 @@ export class AlienContext implements AlienBindingsProvider {
     // Register event handlers with the control plane
     await this.eventLoop.registerHandlers()
 
-    // Start event loop (handles ARC commands, events, etc.)
+    // Start event loop (handles commands, events, etc.)
     await this.eventLoop.start()
   }
 

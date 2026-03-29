@@ -5,21 +5,6 @@ pub fn deployment_id() -> String {
     format!("dp_{}", nanoid::nanoid!())
 }
 
-/// Generate a deployment group ID with "dg_" prefix.
-pub fn deployment_group_id() -> String {
-    format!("dg_{}", nanoid::nanoid!())
-}
-
-/// Generate a release ID with "rel_" prefix.
-pub fn release_id() -> String {
-    format!("rel_{}", nanoid::nanoid!())
-}
-
-/// Generate a token ID with "tok_" prefix.
-pub fn token_id() -> String {
-    format!("tok_{}", nanoid::nanoid!())
-}
-
 /// Generate a raw token value with the given prefix.
 /// Returns (raw_token, key_prefix, key_hash).
 pub fn generate_token(prefix: &str) -> (String, String, String) {
@@ -45,7 +30,3 @@ pub fn sha256_hash(input: &str) -> String {
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
 }
-
-/// Dev mode constants.
-pub const LOCAL_DEV_DEPLOYMENT_GROUP_ID: &str = "dg_local_dev";
-pub const LOCAL_DEV_DEPLOYMENT_GROUP_NAME: &str = "Local Development";

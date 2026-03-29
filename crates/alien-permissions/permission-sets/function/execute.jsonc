@@ -73,8 +73,7 @@
             "Microsoft.ContainerRegistry/registries/read",
             "Microsoft.ContainerRegistry/registries/metadata/read",
             "Microsoft.App/containerApps/read"
-          ],
-          "dataActions": ["Microsoft.ContainerRegistry/registries/pull/read"]
+          ]
         },
         "binding": {
           "stack": {

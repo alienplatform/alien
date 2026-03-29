@@ -21,14 +21,11 @@ pub async fn search_logs(
         })
     })?;
 
-    let public_key = ext
-        .deepstore.jwt_public_key
-        .as_deref()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
-            })
-        })?;
+    let public_key = ext.deepstore.jwt_public_key.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
+        })
+    })?;
     let scopes = validate_deepstore_query_jwt(&headers, public_key)?;
 
     if scopes.is_empty() {
@@ -80,14 +77,11 @@ pub async fn field_capabilities(
         })
     })?;
 
-    let public_key = ext
-        .deepstore.jwt_public_key
-        .as_deref()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
-            })
-        })?;
+    let public_key = ext.deepstore.jwt_public_key.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
+        })
+    })?;
     let scopes = validate_deepstore_query_jwt(&headers, public_key)?;
 
     if scopes.is_empty() {
@@ -142,14 +136,11 @@ pub async fn fetch_draft_documents(
         })
     })?;
 
-    let public_key = ext
-        .deepstore.jwt_public_key
-        .as_deref()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
-            })
-        })?;
+    let public_key = ext.deepstore.jwt_public_key.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DEEPSTORE_JWT_PUBLIC_KEY is required for query endpoints".to_string(),
+        })
+    })?;
     let scopes = validate_deepstore_query_jwt(&headers, public_key)?;
 
     if scopes.is_empty() {

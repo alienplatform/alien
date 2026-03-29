@@ -1,7 +1,7 @@
 /**
  * Basic example of using @alienplatform/testing
  *
- * This demonstrates the simplest use case: deploy an app, test it, tear it down.
+ * This demonstrates the simplest use case: deploy an app locally, test it, tear it down.
  */
 
 import { deploy } from "@alienplatform/testing"
@@ -9,9 +9,9 @@ import { deploy } from "@alienplatform/testing"
 async function main() {
   console.log("Deploying test application...")
 
+  // Local mode (default) — no credentials needed
   const deployment = await deploy({
     app: "./fixtures/hello-world",
-    platform: "local",
     verbose: true,
   })
 
@@ -30,15 +30,15 @@ async function main() {
       throw new Error(`Expected 200, got ${response.status}`)
     }
 
-    console.log("✅ Test passed!")
+    console.log("Test passed!")
   } catch (error) {
-    console.error("❌ Test failed:", error)
+    console.error("Test failed:", error)
     throw error
   } finally {
     // Always cleanup
     console.log("Cleaning up...")
     await deployment.destroy()
-    console.log("✅ Cleanup complete")
+    console.log("Cleanup complete")
   }
 }
 

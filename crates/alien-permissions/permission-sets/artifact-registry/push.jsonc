@@ -107,10 +107,6 @@
             "Microsoft.ContainerRegistry/registries/write",
             "Microsoft.ContainerRegistry/registries/metadata/read",
             "Microsoft.ContainerRegistry/registries/metadata/write"
-          ],
-          "dataActions": [
-            "Microsoft.ContainerRegistry/registries/pull/read",
-            "Microsoft.ContainerRegistry/registries/push/write"
           ]
         },
         "binding": {

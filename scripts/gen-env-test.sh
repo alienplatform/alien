@@ -10,7 +10,7 @@
 #   AXIOM_DATASET       - (default: dev)
 set -euo pipefail
 
-TF=$(cd tests/infra && terraform output -json)
+TF=$(cd infra/standalone && terraform output -json)
 jq_val() { echo "$TF" | jq -r ".$1.value"; }
 
 # Capture all values into variables before writing so we can safely
@@ -31,6 +31,7 @@ aws_lambda_image=$(jq_val aws_lambda_image_uri)
 aws_lambda_execution_role_arn=$(jq_val aws_lambda_execution_role_arn)
 aws_ecr_push_role_arn=$(jq_val aws_ecr_push_role_arn)
 aws_ecr_pull_role_arn=$(jq_val aws_ecr_pull_role_arn)
+aws_ecr_repository=$(echo "$aws_lambda_image" | cut -d: -f1)
 
 gcp_management_sa_key=$(jq_val management_gcp_service_account_key)
 gcp_management_project_id=$(jq_val management_gcp_project_id)
@@ -42,6 +43,7 @@ gcp_target_region=$(jq_val target_gcp_region)
 
 gcp_gcs_bucket=$(jq_val gcp_gcs_bucket)
 gcp_cloudrun_image=$(jq_val gcp_cloudrun_image_uri)
+gcp_gar_repository=$(echo "$gcp_cloudrun_image" | cut -d: -f1)
 
 azure_management_subscription_id=$(jq_val management_azure_subscription_id)
 azure_management_tenant_id=$(jq_val management_azure_tenant_id)
@@ -60,6 +62,7 @@ azure_blob_container=$(jq_val azure_blob_container)
 azure_container_app_image=$(jq_val azure_container_app_image_uri)
 azure_managed_environment=$(jq_val azure_managed_environment)
 azure_acr_name=$(jq_val azure_acr_name)
+azure_acr_repository=$(echo "$azure_container_app_image" | cut -d: -f1)
 
 cat > .env.test <<EOF
 # AWS - Management
@@ -80,6 +83,7 @@ ALIEN_TEST_AWS_LAMBDA_IMAGE='${aws_lambda_image}'
 ALIEN_TEST_AWS_LAMBDA_EXECUTION_ROLE_ARN='${aws_lambda_execution_role_arn}'
 ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN='${aws_ecr_push_role_arn}'
 ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN='${aws_ecr_pull_role_arn}'
+ALIEN_TEST_AWS_ECR_REPOSITORY='${aws_ecr_repository}'
 
 # GCP - Management
 GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY='${gcp_management_sa_key}'
@@ -94,6 +98,7 @@ GOOGLE_TARGET_REGION='${gcp_target_region}'
 # GCP test resources
 ALIEN_TEST_GCP_GCS_BUCKET='${gcp_gcs_bucket}'
 ALIEN_TEST_GCP_CLOUDRUN_IMAGE='${gcp_cloudrun_image}'
+ALIEN_TEST_GCP_GAR_REPOSITORY='${gcp_gar_repository}'
 
 # Azure - Management
 AZURE_MANAGEMENT_SUBSCRIPTION_ID='${azure_management_subscription_id}'
@@ -117,6 +122,7 @@ ALIEN_TEST_AZURE_TEST_BLOB_CONTAINER='${azure_blob_container}'
 ALIEN_TEST_AZURE_CONTAINER_APP_IMAGE='${azure_container_app_image}'
 ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME='${azure_managed_environment}'
 ALIEN_TEST_AZURE_REGISTRY_NAME='${azure_acr_name}'
+ALIEN_TEST_AZURE_ACR_REPOSITORY='${azure_acr_repository}'
 
 # Telemetry
 AXIOM_OTLP_ENDPOINT='${AXIOM_OTLP_ENDPOINT:-https://api.axiom.co/v1/logs}'

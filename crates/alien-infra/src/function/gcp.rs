@@ -202,11 +202,13 @@ impl GcpFunctionController {
                 suggested_delay: None,
             })
         } else {
-            // Operation still in progress
+            // Operation still in progress.
+            // Cloud Run service creation can take 2-5 minutes, especially for
+            // first-time deployments that need to pull and start a container image.
             debug!(operation=%operation_name, "Operation still in progress");
             Ok(HandlerAction::Stay {
-                max_times: 20,
-                suggested_delay: Some(Duration::from_secs(3)),
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
             })
         }
     }
@@ -270,15 +272,16 @@ impl GcpFunctionController {
                         suggested_delay: None,
                     });
                 }
-                Err(e) => {
-                    return Err(e).context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Failed to resolve domain info for public function '{}'",
-                            config.id
-                        ),
-                        operation: Some("resolve_domain_info".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    });
+                Err(_) => {
+                    // Standalone mode: no domain metadata available.
+                    // The Cloud Run service URL is already set from the service
+                    // creation response and is publicly accessible. Skip the
+                    // custom domain / certificate / load balancer flow.
+                    info!(
+                        function=%config.id,
+                        url=?self.url,
+                        "No domain metadata — skipping custom domain setup (standalone mode)"
+                    );
                 }
             }
         }
@@ -897,8 +900,10 @@ impl GcpFunctionController {
 
         info!(name=%service_name, "Setting IAM policy for Cloud Run service");
 
-        // Consolidate all IAM policy changes into a single operation
-        self.apply_consolidated_iam_policy(ctx, service_name, cfg.ingress == Ingress::Public)
+        // Apply resource-scoped IAM bindings only. Public access is handled via
+        // invoker_iam_disabled on the service (set during creation), not via allUsers
+        // IAM binding. This avoids issues with domain-restricted sharing org policies.
+        self.apply_consolidated_iam_policy(ctx, service_name, false)
             .await?;
 
         // Always go to readiness probe next (linear flow - may be no-op)
@@ -1172,8 +1177,8 @@ impl GcpFunctionController {
             // Operation still in progress
             debug!(operation=%operation_name, "Update operation still in progress");
             Ok(HandlerAction::Stay {
-                max_times: 20,
-                suggested_delay: Some(Duration::from_secs(3)),
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
             })
         }
     }
@@ -1218,8 +1223,8 @@ impl GcpFunctionController {
         if !is_ready {
             debug!(name=%service_name, "Service not yet ready after update");
             return Ok(HandlerAction::Stay {
-                max_times: 20,
-                suggested_delay: Some(Duration::from_secs(3)),
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
             });
         }
 
@@ -2170,6 +2175,10 @@ impl GcpFunctionController {
             .build()];
 
         // Build service
+        // When ingress is public, disable the IAM invoker check instead of adding
+        // allUsers to IAM policy. This works even when the GCP organization has
+        // domain-restricted sharing enabled (which blocks allUsers in IAM).
+        let is_public = cfg.ingress == Ingress::Public;
         let service = Service::builder()
             .description(format!("Alien function: {}", cfg.id))
             .labels(HashMap::from([
@@ -2180,6 +2189,7 @@ impl GcpFunctionController {
             .ingress(ingress)
             .template(template)
             .traffic(traffic)
+            .invoker_iam_disabled(is_public)
             .build();
 
         Ok(service)
@@ -2349,11 +2359,14 @@ impl GcpFunctionController {
         let gcp_config = ctx.get_gcp_config()?;
 
         // Build permission context for this specific function resource
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(service_name.to_string());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
 
         let generator = GcpRuntimePermissionsGenerator::new();
 

@@ -39,7 +39,7 @@ export const config: {
  *
  * Provides typed access to:
  * - agents.list() - List agents in a deployment group
- * - agents.getInfo() - Get agent connection info (ARC URL, resource URLs)
+ * - agents.getInfo() - Get agent connection info (command URL, resource URLs)
  * - deploymentGroups.* - Manage deployment groups
  *
  * Note: This will only be initialized on the server (Node.js environment).

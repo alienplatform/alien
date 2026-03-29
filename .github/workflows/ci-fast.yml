@@ -68,9 +68,9 @@ jobs:
 
       - name: Rust fast tests (non-cloud)
         env:
-          AXIOM_OTLP_ENDPOINT: ${{ secrets.AXIOM_OTLP_ENDPOINT }}
-          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
-          AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
+          AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          AXIOM_DATASET: dev
         run: |
           depot cargo nextest run --workspace \
             --exclude alien-aws-clients \

@@ -30,17 +30,12 @@
     "zod": "4.3.2"
   },
   "peerDependencies": {
-    "@aws-sdk/client-cloudformation": "^3.0.0",
     "@aws-sdk/client-ssm": "^3.0.0",
     "@azure/identity": "^4.0.0",
     "@azure/keyvault-secrets": "^4.0.0",
-    "@google-cloud/secret-manager": "^5.0.0",
-    "@kubernetes/client-node": "^0.21.0"
+    "@google-cloud/secret-manager": "^5.0.0"
   },
   "peerDependenciesMeta": {
-    "@aws-sdk/client-cloudformation": {
-      "optional": true
-    },
     "@aws-sdk/client-ssm": {
       "optional": true
     },
@@ -52,19 +47,14 @@
     },
     "@azure/identity": {
       "optional": true
-    },
-    "@kubernetes/client-node": {
-      "optional": true
     }
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@aws-sdk/client-cloudformation": "^3.0.0",
     "@aws-sdk/client-ssm": "^3.0.0",
     "@azure/identity": "^4.0.0",
     "@azure/keyvault-secrets": "^4.0.0",
     "@google-cloud/secret-manager": "^5.0.0",
-    "@kubernetes/client-node": "^0.21.0",
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",

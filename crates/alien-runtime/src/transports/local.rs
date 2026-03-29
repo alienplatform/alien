@@ -25,7 +25,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use super::shared::forward_http_request;
+use super::shared::{create_forward_client, forward_http_request};
 use crate::error::{ErrorData, Result};
 use alien_error::AlienError;
 
@@ -68,6 +68,7 @@ impl LocalTransport {
 
         let state = TransportState {
             app_http_port: self.app_http_port,
+            http_client: create_forward_client(),
         };
 
         let app = Router::new()
@@ -107,6 +108,7 @@ impl LocalTransport {
 #[derive(Clone)]
 struct TransportState {
     app_http_port: Option<u16>,
+    http_client: reqwest::Client,
 }
 
 async fn handle_request(
@@ -120,7 +122,7 @@ async fn handle_request(
 
     // Forward HTTP request to app
     if let Some(app_port) = state.app_http_port {
-        return forward_http_request(request, app_port).await;
+        return forward_http_request(&state.http_client, request, app_port).await;
     }
 
     error!("No app HTTP port registered");

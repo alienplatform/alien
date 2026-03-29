@@ -1,10 +1,10 @@
-use alien_platform_api::SdkResultExt;
-use alien_core::{DeploymentStatus, Platform};
-use alien_error::{AlienError, GenericError, IntoAlienError};
 use crate::traits::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentFilter,
     DeploymentGroupRecord, DeploymentRecord, DeploymentStore, ReconcileData,
 };
+use alien_core::{DeploymentStatus, Platform};
+use alien_error::{AlienError, GenericError, IntoAlienError};
+use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 use chrono::Utc;
 use tracing::{error, warn};
@@ -29,8 +29,7 @@ fn convert_via_json<T: serde::Serialize, U: serde::de::DeserializeOwned>(
 
 /// Check if an `AlienError` represents an HTTP 404 response.
 fn is_not_found(e: &AlienError) -> bool {
-    e.http_status_code == Some(404)
-        || e.code.to_uppercase().contains("NOT_FOUND")
+    e.http_status_code == Some(404) || e.code.to_uppercase().contains("NOT_FOUND")
 }
 
 /// Bridges alien-manager's `DeploymentStore` trait to the Platform API sync endpoints.
@@ -40,10 +39,7 @@ pub struct PlatformApiDeploymentStore {
 }
 
 impl PlatformApiDeploymentStore {
-    pub fn new(
-        platform_client: alien_platform_api::Client,
-        manager_id: String,
-    ) -> Self {
+    pub fn new(platform_client: alien_platform_api::Client, manager_id: String) -> Self {
         Self {
             platform_client,
             manager_id,
@@ -59,44 +55,38 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         filter: &DeploymentFilter,
         limit: u32,
     ) -> Result<Vec<AcquiredDeployment>, AlienError> {
-        let statuses: Vec<alien_platform_api::types::SyncAcquireRequestStatusesItem> =
-            filter
-                .statuses
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|s| {
-                    convert_via_json::<_, alien_platform_api::types::SyncAcquireRequestStatusesItem>(
-                        &serde_json::Value::String(s.clone()),
-                    )
-                    .ok()
-                })
-                .collect();
+        let statuses: Vec<alien_platform_api::types::SyncAcquireRequestStatusesItem> = filter
+            .statuses
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|s| {
+                convert_via_json::<_, alien_platform_api::types::SyncAcquireRequestStatusesItem>(
+                    &serde_json::Value::String(s.clone()),
+                )
+                .ok()
+            })
+            .collect();
 
-        let platforms: Vec<alien_platform_api::types::SyncAcquireRequestPlatformsItem> =
-            filter
-                .platforms
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|p| {
-                    convert_via_json::<
-                        _,
-                        alien_platform_api::types::SyncAcquireRequestPlatformsItem,
-                    >(p)
+        let platforms: Vec<alien_platform_api::types::SyncAcquireRequestPlatformsItem> = filter
+            .platforms
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|p| {
+                convert_via_json::<_, alien_platform_api::types::SyncAcquireRequestPlatformsItem>(p)
                     .ok()
-                })
-                .collect();
+            })
+            .collect();
 
-        let manager_id: alien_platform_api::types::ManagerId = self
-            .manager_id
-            .as_str()
-            .try_into()
-            .map_err(|_: alien_platform_api::types::error::ConversionError| {
-                AlienError::new(GenericError {
-                    message: "Invalid manager ID format for sync acquire".to_string(),
-                })
-            })?;
+        let manager_id: alien_platform_api::types::ManagerId =
+            self.manager_id.as_str().try_into().map_err(
+                |_: alien_platform_api::types::error::ConversionError| {
+                    AlienError::new(GenericError {
+                        message: "Invalid manager ID format for sync acquire".to_string(),
+                    })
+                },
+            )?;
 
         let response = self
             .platform_client
@@ -196,18 +186,17 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         let sdk_state: alien_platform_api::types::SyncReconcileRequestState =
             convert_via_json(&data.state)?;
 
-        let deployment_id: alien_platform_api::types::SyncReconcileRequestDeploymentId = data
-            .deployment_id
-            .as_str()
-            .try_into()
-            .map_err(|_: alien_platform_api::types::error::ConversionError| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "Invalid deployment ID format for reconcile: {}",
-                        data.deployment_id
-                    ),
-                })
-            })?;
+        let deployment_id: alien_platform_api::types::SyncReconcileRequestDeploymentId =
+            data.deployment_id.as_str().try_into().map_err(
+                |_: alien_platform_api::types::error::ConversionError| {
+                    AlienError::new(GenericError {
+                        message: format!(
+                            "Invalid deployment ID format for reconcile: {}",
+                            data.deployment_id
+                        ),
+                    })
+                },
+            )?;
 
         let reconcile_response = self
             .platform_client
@@ -250,16 +239,16 @@ impl DeploymentStore for PlatformApiDeploymentStore {
 
     async fn release(&self, deployment_id: &str, session: &str) -> Result<(), AlienError> {
         let deployment_id_typed: alien_platform_api::types::SyncReleaseRequestDeploymentId =
-            deployment_id
-                .try_into()
-                .map_err(|_: alien_platform_api::types::error::ConversionError| {
+            deployment_id.try_into().map_err(
+                |_: alien_platform_api::types::error::ConversionError| {
                     AlienError::new(GenericError {
                         message: format!(
                             "Invalid deployment ID format for release: {}",
                             deployment_id
                         ),
                     })
-                })?;
+                },
+            )?;
 
         self.platform_client
             .sync_release()
@@ -302,11 +291,7 @@ impl DeploymentStore for PlatformApiDeploymentStore {
 
         let response = req.send().await.into_sdk_error()?;
 
-        response
-            .items
-            .iter()
-            .map(|d| convert_via_json(d))
-            .collect()
+        response.items.iter().map(|d| convert_via_json(d)).collect()
     }
 
     async fn delete_deployment(&self, id: &str) -> Result<(), AlienError> {
@@ -344,9 +329,8 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         deployment_id: &str,
         release_id: &str,
     ) -> Result<(), AlienError> {
-        let body: alien_platform_api::types::PinReleaseRequest = convert_via_json(
-            &serde_json::json!({ "releaseId": release_id }),
-        )?;
+        let body: alien_platform_api::types::PinReleaseRequest =
+            convert_via_json(&serde_json::json!({ "releaseId": release_id }))?;
 
         self.platform_client
             .pin_deployment_release()
@@ -371,14 +355,13 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         &self,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError> {
-        let body: alien_platform_api::types::NewDeploymentRequest = convert_via_json(
-            &serde_json::json!({
+        let body: alien_platform_api::types::NewDeploymentRequest =
+            convert_via_json(&serde_json::json!({
                 "name": params.name,
                 "deploymentGroupId": params.deployment_group_id,
                 "platform": params.platform,
                 "stackSettings": params.stack_settings,
-            }),
-        )?;
+            }))?;
 
         let detail = self
             .platform_client
@@ -395,12 +378,11 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         &self,
         params: CreateDeploymentGroupParams,
     ) -> Result<DeploymentGroupRecord, AlienError> {
-        let body: alien_platform_api::types::CreateDeploymentGroupRequest = convert_via_json(
-            &serde_json::json!({
+        let body: alien_platform_api::types::CreateDeploymentGroupRequest =
+            convert_via_json(&serde_json::json!({
                 "name": params.name,
                 "maxDeployments": params.max_deployments,
-            }),
-        )?;
+            }))?;
 
         let group = self
             .platform_client
@@ -449,11 +431,7 @@ impl DeploymentStore for PlatformApiDeploymentStore {
             .await
             .into_sdk_error()?;
 
-        response
-            .items
-            .iter()
-            .map(|g| convert_via_json(g))
-            .collect()
+        response.items.iter().map(|g| convert_via_json(g)).collect()
     }
 }
 

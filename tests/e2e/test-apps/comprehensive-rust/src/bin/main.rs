@@ -26,7 +26,7 @@ use tracing::{error, info, warn};
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Host address to bind to
-    #[clap(long, value_parser, default_value = "127.0.0.1")]
+    #[clap(long, value_parser, default_value = "0.0.0.0")]
     host: String,
 }
 
@@ -40,22 +40,11 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Read port from PORT environment variable (set by alien-runtime), fallback to 0 (dynamic)
-    // Using port 0 lets the OS pick a free port, which is safer for testing
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(0);
+    // Always use port 0 (dynamic) — the alien-runtime entrypoint binds to PORT=8080,
+    // so the user app must pick a free port and register it via register_http_server().
+    let port: u16 = 0;
 
-    info!(
-        port = port,
-        source = if std::env::var("PORT").is_ok() {
-            "PORT env var"
-        } else {
-            "dynamic"
-        },
-        "Starting Alien Test Server"
-    );
+    info!(port = port, "Starting Alien Test Server (dynamic port)");
 
     // Initialize Alien context
     let ctx = AlienContext::from_env()
@@ -143,7 +132,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize key: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("test-alien-kv").await?;
+                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "key": event.key,
                     "bucket": event.bucket,
@@ -181,7 +170,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize schedule name: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("test-alien-kv").await?;
+                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "scheduleName": event.schedule_name,
                     "scheduledTime": event.scheduled_time,
@@ -217,7 +206,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize message ID: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("test-alien-kv").await?;
+                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "messageId": message.id,
                     "source": message.source,

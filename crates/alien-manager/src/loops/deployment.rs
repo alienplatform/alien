@@ -99,7 +99,11 @@ impl DeploymentLoop {
                 .map(String::from)
                 .collect(),
             ),
-            platforms: if self.config.targets.is_empty() { None } else { Some(self.config.targets.clone()) },
+            platforms: if self.config.targets.is_empty() {
+                None
+            } else {
+                Some(self.config.targets.clone())
+            },
             ..Default::default()
         };
 
@@ -390,10 +394,11 @@ impl DeploymentLoop {
             target_resources: None,
         });
 
-        // 2. OTLP telemetry configuration — if an OTLP endpoint is configured or dev mode.
+        // 2. OTLP telemetry configuration — if an OTLP endpoint is configured
+        // or local log ingest is enabled on this manager instance.
         let base_url = self.config.base_url();
 
-        if self.config.otlp_endpoint.is_some() || self.config.dev_mode() {
+        if self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest() {
             vars.push(EnvironmentVariable {
                 name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
                 value: format!("{}/v1/logs", base_url),
@@ -422,12 +427,6 @@ impl DeploymentLoop {
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
         });
-        vars.push(EnvironmentVariable {
-            name: "ALIEN_DEPLOYMENT_ID".to_string(),
-            value: deployment_id.to_string(),
-            var_type: EnvironmentVariableType::Plain,
-            target_resources: None,
-        });
         // Token for commands polling — in dev mode, use deployment_id as token (permissive auth)
         vars.push(EnvironmentVariable {
             name: "ALIEN_COMMANDS_TOKEN".to_string(),
@@ -441,8 +440,17 @@ impl DeploymentLoop {
             vars.extend(user_vars.iter().cloned());
         }
 
-        // Build hash from current timestamp (simplified; production uses SHA256).
-        let hash = format!("env-{}", chrono::Utc::now().timestamp());
+        // Build deterministic hash from variable contents so the infra executor
+        // only sees a change when the actual values change.
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        for v in &vars {
+            hasher.update(v.name.as_bytes());
+            hasher.update(b"=");
+            hasher.update(v.value.as_bytes());
+            hasher.update(b"\n");
+        }
+        let hash = format!("env-{:x}", hasher.finalize());
 
         Ok(EnvironmentVariablesSnapshot {
             variables: vars,

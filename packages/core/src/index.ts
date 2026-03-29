@@ -36,7 +36,7 @@ export {
   DevStatusStateSchema,
   AgentStatusSchema,
   DevResourceInfoSchema,
-  // ARC Protocol types
+  // Command Protocol types
   PresignedRequestBackendSchema,
   PresignedRequestSchema,
   BodySpecSchema,
@@ -86,7 +86,7 @@ export type {
   DevStatusState,
   AgentStatus,
   DevResourceInfo,
-  // ARC Protocol types
+  // Command Protocol types
   PresignedRequestBackend,
   PresignedRequest,
   BodySpec,

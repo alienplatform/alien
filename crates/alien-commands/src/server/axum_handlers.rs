@@ -28,7 +28,7 @@ impl HasCommandServer for Arc<CommandServer> {
     }
 }
 
-/// Create an Axum router with all ARC endpoints using a generic state type
+/// Create an Axum router with all command endpoints using a generic state type
 pub fn create_axum_router<S>() -> Router<S>
 where
     S: HasCommandServer + Clone + Send + Sync + 'static,
@@ -52,7 +52,7 @@ where
         )
 }
 
-/// Create a new ARC command
+/// Create a new command
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/commands",
@@ -196,7 +196,7 @@ where
 ///
 /// This bypasses the normal command lifecycle (create → dispatch → respond)
 /// and writes params/response directly into KV. Used by the demo service
-/// to populate payload data for commands created outside the ARC flow.
+/// to populate payload data for commands created outside the command flow.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -434,13 +434,13 @@ mod openapi {
             )
         ),
         tags(
-            (name = "commands", description = "ARC command management"),
-            (name = "leases", description = "ARC lease management for polling deployments"),
+            (name = "commands", description = "Command management"),
+            (name = "leases", description = "Lease management for polling deployments"),
             (name = "deployments", description = "Deployment response submission")
         ),
         info(
-            title = "ARC API",
-            description = "Alien Remote Call (ARC) Protocol API",
+            title = "Commands API",
+            description = "Alien Commands API",
             version = "1.0.0"
         ),
     )]

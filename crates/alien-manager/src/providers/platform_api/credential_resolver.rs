@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_bindings::BindingsProviderApi;
+use crate::traits::{CredentialResolver, DeploymentRecord};
 use alien_bindings::traits::ImpersonationRequest;
+use alien_bindings::BindingsProviderApi;
 use alien_core::{ClientConfig, DeploymentStatus, Platform};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
-use crate::traits::{CredentialResolver, DeploymentRecord};
 use async_trait::async_trait;
 
 use super::error::ErrorData;

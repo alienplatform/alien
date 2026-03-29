@@ -52,6 +52,7 @@ impl AsyncTestContext for GcsTestContext {
                 json: gcp_credentials_json,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let client = GcsClient::new(Client::new(), config);
@@ -154,6 +155,7 @@ impl GcsTestContext {
                     json: r#"{"type":"service_account","project_id":"fake","private_key_id":"fake","private_key":"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n","client_email":"fake@fake.iam.gserviceaccount.com","client_id":"fake","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}"#.to_string(),
                 },
                 service_overrides: None,
+            project_number: None,
             };
         GcsClient::new(Client::new(), invalid_config)
     }
@@ -701,6 +703,7 @@ async fn test_error_translation_access_denied(ctx: &mut GcsTestContext) {
                 json: r#"{"type":"service_account","project_id":"fake","private_key_id":"fake","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKB\nfake/invalid/key\n-----END PRIVATE KEY-----\n","client_email":"fake@fake.iam.gserviceaccount.com","client_id":"fake","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}"#.to_string(),
             },
             service_overrides: None,
+            project_number: None,
         };
 
     let invalid_client = GcsClient::new(Client::new(), invalid_config);

@@ -11,11 +11,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use super::auth::resolve_subject;
 use crate::providers::platform_api::{
     error::{ErrorData, Result},
     PlatformState,
 };
-use super::auth::resolve_subject;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlatformQuery {

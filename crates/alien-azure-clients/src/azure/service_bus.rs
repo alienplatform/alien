@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::warn;
 use url::Url;
 
 /// Check if a header name is a standard HTTP header that should not be treated as a custom property
@@ -84,12 +85,12 @@ pub struct BrokerProperties {
     /// Reply to address
     #[serde(rename = "ReplyTo", skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
-    /// Time to live in seconds
+    /// Time to live in seconds (Azure returns this as a float, e.g. 922337203685477.5)
     #[serde(rename = "TimeToLive", skip_serializing_if = "Option::is_none")]
-    pub time_to_live: Option<i32>,
+    pub time_to_live: Option<f64>,
     /// Delivery count
     #[serde(rename = "DeliveryCount", skip_serializing_if = "Option::is_none")]
-    pub delivery_count: Option<i32>,
+    pub delivery_count: Option<i64>,
     /// Lock token for peek-lock operations
     #[serde(rename = "LockToken", skip_serializing_if = "Option::is_none")]
     pub lock_token: Option<String>,
@@ -902,7 +903,17 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         let broker_properties =
             if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
                 let broker_props_str = broker_props_header.to_str().unwrap_or("{}");
-                serde_json::from_str(broker_props_str).ok()
+                match serde_json::from_str(broker_props_str) {
+                    Ok(props) => Some(props),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            raw_header = %broker_props_str,
+                            "Failed to parse BrokerProperties header"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -1009,7 +1020,17 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         let broker_properties =
             if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
                 let broker_props_str = broker_props_header.to_str().unwrap_or("{}");
-                serde_json::from_str(broker_props_str).ok()
+                match serde_json::from_str(broker_props_str) {
+                    Ok(props) => Some(props),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            raw_header = %broker_props_str,
+                            "Failed to parse BrokerProperties header"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             };

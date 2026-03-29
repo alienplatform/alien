@@ -148,26 +148,14 @@ impl GcpRuntimePermissionsGenerator {
         // Process each GCP platform permission in the permission set
         for platform_permission in gcp_platform_permissions {
             let binding_spec = match binding_target {
-                BindingTarget::Stack => {
-                    platform_permission.binding.stack.as_ref().ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "gcp".to_string(),
-                            binding_target: "stack".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?
-                }
-                BindingTarget::Resource => platform_permission
-                    .binding
-                    .resource
-                    .as_ref()
-                    .ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "gcp".to_string(),
-                            binding_target: "resource".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?,
+                BindingTarget::Stack => match platform_permission.binding.stack.as_ref() {
+                    Some(spec) => spec,
+                    None => continue,
+                },
+                BindingTarget::Resource => match platform_permission.binding.resource.as_ref() {
+                    Some(spec) => spec,
+                    None => continue,
+                },
             };
 
             let mut binding = GcpIamBinding {

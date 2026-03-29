@@ -12,7 +12,7 @@ name = "alien-test-server"
 path = "src/bin/main.rs"
 
 [dependencies]
-alien-bindings = { workspace = true, features = ["grpc", "openapi", "local"] }
+alien-bindings = { workspace = true, features = ["grpc", "openapi", "local", "gcp", "aws", "azure"] }
 alien-core = { workspace = true, features = ["openapi"] }
 alien-error = { workspace = true, features = ["axum", "openapi"] }
 anyhow = { workspace = true }

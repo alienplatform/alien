@@ -2,9 +2,9 @@ import { CommandsClient } from "@alienplatform/commands-client"
 import { alien, config } from "./config"
 
 /**
- * Get an ARC client for a specific deployment.
+ * Get a commands client for a specific deployment.
  *
- * Discovers the deployment's ARC endpoint via the Platform SDK,
+ * Discovers the deployment's command endpoint via the Platform SDK,
  * then creates a client configured to communicate with that deployment.
  */
 export async function getCommandsClient(deploymentId: string) {
@@ -22,7 +22,7 @@ export async function getCommandsClient(deploymentId: string) {
 }
 
 /**
- * Invoke an ARC command on a specific deployment.
+ * Invoke a command on a specific deployment.
  *
  * This is the core function for control plane → deployment communication.
  */

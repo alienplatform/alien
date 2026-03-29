@@ -3,8 +3,9 @@ use alien_azure_clients::models::certificates::CertificateImportParameters;
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
     ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
-    CustomDomain, CustomDomainBindingType, EnvironmentVar, IngressTransport, RegistryCredentials,
-    Scale, Secret, Template, TrafficWeight,
+    CustomDomain, CustomDomainBindingType, EnvironmentVar, IdentitySettings,
+    IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
+    TrafficWeight,
 };
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -1693,12 +1694,17 @@ impl AzureFunctionController {
         // Prepare environment variables using shared logic
         let env_vars = self.prepare_environment_variables_azure(func, ctx).await?;
 
+        // Azure Container Apps requires specific CPU/memory combinations.
+        // The ratio is 0.5 Gi per 0.25 CPU (2 Gi per 1 CPU).
+        let memory_gi = func.memory_mb as f64 / 1024.0;
+        let cpu = (memory_gi / 2.0).max(0.25);
+
         let container = Container {
             name: Some("main".to_string()),
             image: Some(image.clone()),
             resources: Some(ContainerResources {
-                cpu: Some(0.25),
-                memory: Some(format!("{}Gi", func.memory_mb as f64 / 1024.0)),
+                cpu: Some(cpu),
+                memory: Some(format!("{}Gi", memory_gi)),
                 ephemeral_storage: None,
             }),
             env: env_vars,
@@ -1748,9 +1754,11 @@ impl AzureFunctionController {
         // Registry creds if provided via deployment config
         let mut registries = vec![];
         let mut secrets = vec![];
+        let has_password_creds;
 
         // Get image pull credentials from context (passed from DeploymentConfig)
         if let Some(creds) = &ctx.deployment_config.image_pull_credentials {
+            has_password_creds = true;
             let pwd_secret_name = format!("{}-registry-password", func.id);
             secrets.push(Secret {
                 identity: None,
@@ -1769,6 +1777,8 @@ impl AzureFunctionController {
                 server: Some(server),
                 username: Some(creds.username.clone()),
             });
+        } else {
+            has_password_creds = false;
         }
 
         // Managed identity support from ServiceAccounts
@@ -1825,7 +1835,30 @@ impl AzureFunctionController {
             }
         }
 
+        // If image is from Azure Container Registry and no password credentials were provided,
+        // configure the managed identity for ACR pull via the registries field.
+        if !has_password_creds && image.contains(".azurecr.io") {
+            let acr_server = image.split('/').next().unwrap_or_default().to_string();
+            // Use the permission-based service account identity for ACR pull
+            if let Ok(service_account_state) = ctx
+                .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                    &service_account_ref,
+                )
+            {
+                if let Some(identity_id) = &service_account_state.identity_resource_id {
+                    registries.push(RegistryCredentials {
+                        identity: Some(identity_id.clone()),
+                        password_secret_ref: None,
+                        server: Some(acr_server),
+                        username: None,
+                    });
+                }
+            }
+        }
+
         // Create managed identity spec if we have any identities
+        let identity_resource_ids: Vec<String> = identity_map.keys().cloned().collect();
+
         let managed_identity = if !identity_map.is_empty() {
             Some(ManagedServiceIdentity {
                 principal_id: None,
@@ -1862,7 +1895,13 @@ impl AzureFunctionController {
         let configuration = Configuration {
             active_revisions_mode: ConfigurationActiveRevisionsMode::Single,
             dapr: dapr_config,
-            identity_settings: vec![],
+            identity_settings: identity_resource_ids
+                .iter()
+                .map(|identity_id| IdentitySettings {
+                    identity: identity_id.clone(),
+                    lifecycle: IdentitySettingsLifecycle::All,
+                })
+                .collect(),
             ingress: ingress_cfg,
             max_inactive_revisions: None,
             registries,

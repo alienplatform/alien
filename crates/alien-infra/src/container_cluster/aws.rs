@@ -899,22 +899,40 @@ impl AwsContainerClusterController {
                 })?;
         }
 
+        // horizond runtime permissions: tag discovery, EBS volume attach/detach,
+        // and ELB target registration/deregistration.
+        // DescribeVolumes and DescribeTags require Resource: "*" (AWS API limitation).
         iam_client
             .put_role_policy(
                 &role_name,
-                "DescribeInstanceTags",
+                "HorizondRuntime",
                 r#"{
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["ec2:DescribeTags"],
-    "Resource": "*"
-  }]
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeTags",
+        "ec2:DescribeVolumes",
+        "ec2:AttachVolume",
+        "ec2:DetachVolume"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets"
+      ],
+      "Resource": "*"
+    }
+  ]
 }"#,
             )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to attach DescribeTags policy".to_string(),
+                message: "Failed to attach HorizondRuntime policy".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
 

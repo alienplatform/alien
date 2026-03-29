@@ -25,9 +25,7 @@
         "grant": {
           "permissions": [
             "secretmanager.secrets.create",
-            "secretmanager.secrets.delete",
-            "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
+            "secretmanager.secrets.delete"
           ]
         },
         "binding": {
@@ -35,15 +33,31 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Vault provision access",
-              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-')"
+              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-')"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Vault provision access",
-              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectName}/secrets/${stackPrefix}-${resourceName}-')"
+              "expression": "resource.type == 'secretmanager.googleapis.com/Secret' && resource.name.startsWith('projects/${projectNumber}/secrets/${stackPrefix}-${resourceName}-')"
             }
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": [
+            "resourcemanager.projects.getIamPolicy",
+            "resourcemanager.projects.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
           }
         }
       }
@@ -55,7 +69,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-*"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"

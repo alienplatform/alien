@@ -23,21 +23,12 @@
         "grant": {
           "permissions": ["pubsub.subscriptions.consume", "pubsub.subscriptions.get"]
         },
+        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
+        // for pubsub.subscriptions.consume at runtime.
+        // Access is scoped per-stack via the service account identity instead.
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Queue data read access",
-              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${stackPrefix}-')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${stackPrefix}-'))"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Queue data read access",
-              "expression": "(resource.type == 'pubsub.googleapis.com/Topic' && resource.name.startsWith('projects/${projectName}/topics/${resourceName}')) || (resource.type == 'pubsub.googleapis.com/Subscription' && resource.name.startsWith('projects/${projectName}/subscriptions/${resourceName}'))"
-            }
-          }
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
         }
       }
     ],

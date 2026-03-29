@@ -1477,8 +1477,8 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_manager_stack_gets_reasonable_instance() {
-        // Simulates the agent-manager stack: 4 containers, each 2 CPU / 4 GiB
+    fn test_manager_stack_gets_reasonable_instance() {
+        // Simulates the manager stack: 4 containers, each 2 CPU / 4 GiB
         // maxReplicas: 10, 10, 10, 5
         let req = WorkloadRequirements {
             total_cpu_at_max: 70.0,              // 2*10 + 2*10 + 2*10 + 2*5

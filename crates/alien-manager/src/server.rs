@@ -67,7 +67,8 @@ impl AlienManager {
 
         // Spawn the heartbeat loop
         if !self.config.disable_heartbeat_loop {
-            let heartbeat_loop = HeartbeatLoop::new(self.config.clone(), self.deployment_store.clone());
+            let heartbeat_loop =
+                HeartbeatLoop::new(self.config.clone(), self.deployment_store.clone());
             tokio::spawn(async move {
                 heartbeat_loop.run().await;
             });

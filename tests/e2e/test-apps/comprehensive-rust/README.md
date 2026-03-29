@@ -22,7 +22,7 @@ The `alien.ts` automatically determines the correct binary path based on your pl
 ## Configuration
 
 The server configuration is defined in `alien.ts`. It includes:
-- A storage resource (`test-alien-storage`)
+- A storage resource (`alien-storage`)
 - A management role with full stack permissions
 - A function role with storage read/write permissions
 - A public function that runs the test server

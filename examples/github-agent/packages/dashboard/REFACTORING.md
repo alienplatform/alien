@@ -192,7 +192,7 @@ The refactored code maintains a clear separation between server-side and client-
 
 **Server-Side Only:**
 - `lib/config.ts` - SDK client initialization
-- `lib/arc.ts` - ARC client (uses Node.js imports)
+- `lib/arc.ts` - Commands client (uses Node.js imports)
 - `lib/deployment-groups.ts` - Database + SDK operations
 - `lib/db.ts`, `lib/auth.ts`, `lib/schema.ts`
 

@@ -75,7 +75,10 @@ impl ManagedCommandDispatcher {
         })
     }
 
-    fn provider_for_target(&self, platform: Platform) -> &Arc<dyn alien_bindings::BindingsProviderApi> {
+    fn provider_for_target(
+        &self,
+        platform: Platform,
+    ) -> &Arc<dyn alien_bindings::BindingsProviderApi> {
         self.target_providers
             .get(&platform)
             .unwrap_or(&self.bindings_provider)
@@ -168,14 +171,13 @@ impl ManagedCommandDispatcher {
             })?;
 
         let provider = self.provider_for_target(platform);
-        let base_config =
-            impersonate_management_service_account(&**provider, platform)
-                .await
-                .map_err(|e| {
-                    AlienError::new(ArcErrorData::Other {
-                        message: format!("Failed to impersonate management SA: {}", e),
-                    })
-                })?;
+        let base_config = impersonate_management_service_account(&**provider, platform)
+            .await
+            .map_err(|e| {
+                AlienError::new(ArcErrorData::Other {
+                    message: format!("Failed to impersonate management SA: {}", e),
+                })
+            })?;
 
         let resolver = RemoteAccessResolver::new(std::env::vars().collect());
         let client_config = resolver

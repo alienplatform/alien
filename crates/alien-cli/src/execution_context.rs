@@ -4,17 +4,18 @@
 //!
 //! Mode resolution:
 //! - `alien dev ...` → Dev mode (localhost, no auth, auto-starts manager)
-//! - `--server` flag or `ALIEN_SERVER` env var → direct manager URL
+//! - `ALIEN_MANAGER_URL` env var → standalone alien-manager instance
 //! - `#[cfg(feature = "platform")]`: if authenticated, auto-resolve to manager.alien.dev
 //! - else → error (no manager URL)
 //!
 //! Platform-specific features (OAuth login, workspaces, projects, link/unlink) are
 //! behind `#[cfg(feature = "platform")]`.
 
+use crate::commands::start_embedded_dev_manager;
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::Client as ServerSdkClient;
 use alien_platform_api::Client as SdkClient;
-use alien_server_sdk::Client as ServerSdkClient;
 use tokio::time::Duration;
 use tracing::info;
 
@@ -40,7 +41,7 @@ pub struct ManagerContext {
 /// Execution mode determines which API the command targets and carries all global flags.
 ///
 /// Core modes (always available):
-/// - `SelfHosted` — direct manager connection via `--server` / `ALIEN_SERVER`
+/// - `Standalone` — direct manager connection via `ALIEN_MANAGER_URL`
 /// - `Dev` — local dev server (auto-started)
 ///
 /// Platform mode (behind `platform` feature):
@@ -56,11 +57,8 @@ pub enum ExecutionMode {
         workspace: Option<String>,
         project: Option<String>,
     },
-    /// Self-hosted mode: commands run against an alien-manager instance
-    SelfHosted {
-        server_url: String,
-        api_key: String,
-    },
+    /// Standalone mode: commands run against a standalone alien-manager instance
+    Standalone { server_url: String, api_key: String },
     /// Dev mode: commands run against local dev server
     Dev { port: u16 },
 }
@@ -71,7 +69,7 @@ impl ExecutionMode {
         match self {
             #[cfg(feature = "platform")]
             Self::Platform { base_url, .. } => base_url.clone(),
-            Self::SelfHosted { server_url, .. } => server_url.clone(),
+            Self::Standalone { server_url, .. } => server_url.clone(),
             Self::Dev { port } => format!("http://localhost:{}", port),
         }
     }
@@ -86,9 +84,9 @@ impl ExecutionMode {
         matches!(self, Self::Dev { .. })
     }
 
-    /// Check if this is self-hosted mode
-    pub fn is_self_hosted(&self) -> bool {
-        matches!(self, Self::SelfHosted { .. })
+    /// Check if this is standalone mode
+    pub fn is_standalone(&self) -> bool {
+        matches!(self, Self::Standalone { .. })
     }
 
     /// Ensure the target is ready (starts dev server if needed)
@@ -101,7 +99,7 @@ impl ExecutionMode {
                 }
                 Ok(())
             }
-            Self::SelfHosted { .. } => Ok(()),
+            Self::Standalone { .. } => Ok(()),
             #[cfg(feature = "platform")]
             Self::Platform { .. } => Ok(()),
         }
@@ -112,7 +110,7 @@ impl ExecutionMode {
     /// This is the primary way commands should interact with the manager.
     pub fn server_sdk_client(&self) -> Result<ServerSdkClient> {
         match self {
-            Self::SelfHosted {
+            Self::Standalone {
                 server_url,
                 api_key,
             } => {
@@ -145,12 +143,12 @@ impl ExecutionMode {
 
     /// Get a platform SDK client (works in all modes).
     ///
-    /// - SelfHosted: creates client with auth header pointing at manager URL
+    /// - Standalone: creates client with auth header pointing at manager URL
     /// - Dev: creates unauthenticated client pointing at localhost
     /// - Platform: uses OAuth auth flow
     pub async fn sdk_client(&self) -> Result<SdkClient> {
         match self {
-            Self::SelfHosted {
+            Self::Standalone {
                 server_url,
                 api_key,
             } => {
@@ -184,12 +182,12 @@ impl ExecutionMode {
 
     /// Resolve workspace: flag override -> profile.json -> interactive prompt.
     ///
-    /// In SelfHosted/Dev modes, returns a sensible default.
+    /// In Standalone/Dev modes, returns a sensible default.
     /// In Platform mode, resolves from flag/profile/interactive prompt.
     pub async fn resolve_workspace(&self) -> Result<String> {
         match self {
             Self::Dev { .. } => Ok("local-dev".to_string()),
-            Self::SelfHosted { .. } => Ok("default".to_string()),
+            Self::Standalone { .. } => Ok("default".to_string()),
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => match workspace.clone().or_else(load_workspace) {
                 Some(ws) => Ok(ws),
@@ -208,7 +206,7 @@ impl ExecutionMode {
     pub fn project_override(&self) -> Option<&str> {
         match self {
             Self::Dev { .. } => Some("local-dev"),
-            Self::SelfHosted { .. } => Some("default"),
+            Self::Standalone { .. } => Some("default"),
             #[cfg(feature = "platform")]
             Self::Platform { project, .. } => project.as_deref(),
         }
@@ -218,20 +216,17 @@ impl ExecutionMode {
     pub fn get_workspace_project(&self) -> Result<(String, Option<String>)> {
         match self {
             Self::Dev { .. } => Ok(("local-dev".to_string(), Some("local-dev".to_string()))),
-            Self::SelfHosted { .. } => Ok(("default".to_string(), Some("default".to_string()))),
+            Self::Standalone { .. } => Ok(("default".to_string(), Some("default".to_string()))),
             #[cfg(feature = "platform")]
             Self::Platform {
                 workspace, project, ..
             } => {
-                let ws = workspace
-                    .clone()
-                    .or_else(load_workspace)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ConfigurationError {
-                            message: "No workspace set. Run 'alien login' or use --workspace"
-                                .to_string(),
-                        })
-                    })?;
+                let ws = workspace.clone().or_else(load_workspace).ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: "No workspace set. Run 'alien login' or use --workspace"
+                            .to_string(),
+                    })
+                })?;
                 Ok((ws, project.clone()))
             }
         }
@@ -239,18 +234,22 @@ impl ExecutionMode {
 
     /// Get an authenticated HTTP client (works in all modes).
     ///
-    /// - SelfHosted: creates client with Bearer token
+    /// - Standalone: creates client with Bearer token
     /// - Dev: creates unauthenticated client
     /// - Platform: uses OAuth flow (requires `platform` feature)
     pub async fn auth_http(&self) -> Result<crate::auth::AuthHttp> {
         match self {
-            Self::SelfHosted {
+            Self::Standalone {
                 server_url,
                 api_key,
             } => {
                 let auth_value = format!("Bearer {}", api_key);
                 let client = crate::auth::client_with_header(&auth_value)?;
-                Ok(crate::auth::build_auth_http(client, server_url.clone(), &auth_value))
+                Ok(crate::auth::build_auth_http(
+                    client,
+                    server_url.clone(),
+                    &auth_value,
+                ))
             }
             Self::Dev { port } => {
                 let base_url = format!("http://localhost:{}", port);
@@ -263,16 +262,12 @@ impl ExecutionMode {
 
     /// Resolve manager URL and return an authenticated manager SDK client.
     ///
-    /// - SelfHosted: uses the known server_url
+    /// - Standalone: uses the known server_url
     /// - Dev: uses localhost:{port}
     /// - Platform: calls build-config API to discover the project's manager URL
-    pub async fn resolve_manager(
-        &self,
-        project: &str,
-        platform: &str,
-    ) -> Result<ManagerContext> {
+    pub async fn resolve_manager(&self, project: &str, platform: &str) -> Result<ManagerContext> {
         match self {
-            Self::SelfHosted {
+            Self::Standalone {
                 server_url,
                 api_key,
             } => {
@@ -293,8 +288,7 @@ impl ExecutionMode {
                         message: "Failed to build HTTP client".to_string(),
                     })?;
 
-                let client =
-                    ServerSdkClient::new_with_client(server_url, http_client.clone());
+                let client = ServerSdkClient::new_with_client(server_url, http_client.clone());
 
                 Ok(ManagerContext {
                     manager_url: server_url.clone(),
@@ -307,8 +301,7 @@ impl ExecutionMode {
             Self::Dev { port } => {
                 let manager_url = format!("http://localhost:{}", port);
                 let http_client = reqwest::Client::new();
-                let client =
-                    ServerSdkClient::new_with_client(&manager_url, http_client.clone());
+                let client = ServerSdkClient::new_with_client(&manager_url, http_client.clone());
 
                 Ok(ManagerContext {
                     manager_url,
@@ -330,21 +323,20 @@ impl ExecutionMode {
                 let platform_client = http.sdk_client();
                 let workspace = self.resolve_workspace().await?;
 
-                let workspace_param =
-                    GetProjectBuildConfigWorkspace::try_from(workspace.as_str()).map_err(|e| {
+                let workspace_param = GetProjectBuildConfigWorkspace::try_from(workspace.as_str())
+                    .map_err(|e| {
                         AlienError::new(ErrorData::ValidationError {
                             field: "workspace".to_string(),
                             message: format!("Invalid workspace: {}", e),
                         })
                     })?;
 
-                let project_param =
-                    ProjectIdOrNamePathParam::try_from(project).map_err(|e| {
-                        AlienError::new(ErrorData::ValidationError {
-                            field: "project".to_string(),
-                            message: format!("Invalid project: {}", e),
-                        })
-                    })?;
+                let project_param = ProjectIdOrNamePathParam::try_from(project).map_err(|e| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "project".to_string(),
+                        message: format!("Invalid project: {}", e),
+                    })
+                })?;
 
                 let platform_param =
                     GetProjectBuildConfigPlatform::try_from(platform).map_err(|e| {
@@ -354,7 +346,7 @@ impl ExecutionMode {
                         })
                     })?;
 
-                // Retry logic: agent manager might be starting up
+                // Retry logic: manager might be starting up
                 let max_duration = std::time::Duration::from_secs(60);
                 let start_time = std::time::Instant::now();
                 let mut attempt: u32 = 0;
@@ -380,14 +372,9 @@ impl ExecutionMode {
                                 let backoff_secs =
                                     std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
                                 if attempt == 1 {
-                                    info!(
-                                        "Agent manager not ready yet, waiting for startup..."
-                                    );
+                                    info!("Manager not ready yet, waiting for startup...");
                                 } else {
-                                    info!(
-                                        "Still waiting for agent manager (attempt {})...",
-                                        attempt
-                                    );
+                                    info!("Still waiting for manager (attempt {})...", attempt);
                                 }
                                 tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                                 continue;
@@ -396,7 +383,7 @@ impl ExecutionMode {
                             if is_retryable {
                                 let mut err = AlienError::new(ErrorData::ApiRequestFailed {
                                     message: format!(
-                                        "Agent manager for {} platform did not become ready within {} seconds",
+                                        "Manager for {} platform did not become ready within {} seconds",
                                         platform,
                                         max_duration.as_secs()
                                     ),
@@ -446,7 +433,7 @@ impl ExecutionMode {
 
     /// Resolve project: --project flag > project link > interactive prompt.
     ///
-    /// In SelfHosted/Dev modes, returns "default"/"local-dev".
+    /// In Standalone/Dev modes, returns "default"/"local-dev".
     /// In Platform mode, resolves from flag/profile/interactive prompt and returns the project ID.
     pub async fn resolve_project(
         &self,
@@ -461,7 +448,7 @@ impl ExecutionMode {
                 );
                 Ok(("local-dev".to_string(), link))
             }
-            Self::SelfHosted { .. } => {
+            Self::Standalone { .. } => {
                 let link = crate::project_link::ProjectLink::new(
                     "default".to_string(),
                     "default".to_string(),
@@ -506,7 +493,7 @@ impl ExecutionMode {
                 base_url: Some(base_url.clone()),
                 no_browser: *no_browser,
             },
-            Self::SelfHosted {
+            Self::Standalone {
                 server_url,
                 api_key,
             } => AuthOpts {
@@ -521,7 +508,6 @@ impl ExecutionMode {
             },
         }
     }
-
 }
 
 /// Check if dev server is healthy
@@ -533,60 +519,5 @@ async fn check_server_health(port: u16) -> bool {
 
 /// Start the dev server in the background
 async fn start_dev_server(port: u16) -> Result<()> {
-    let current_dir =
-        std::env::current_dir()
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "get current directory".to_string(),
-                file_path: ".".to_string(),
-                reason: "Failed to get current directory".to_string(),
-            })?;
-
-    let state_dir = current_dir.join(".alien");
-    std::fs::create_dir_all(&state_dir)
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "create".to_string(),
-            file_path: state_dir.display().to_string(),
-            reason: "Failed to create .alien directory".to_string(),
-        })?;
-
-    let db_path = state_dir.join("dev-server.db");
-
-    let config = alien_manager::ManagerConfig {
-        port,
-        db_path: Some(db_path),
-        state_dir: Some(state_dir.clone()),
-        mode: alien_manager::config::ManagerMode::Dev,
-        ..Default::default()
-    };
-
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-
-    // Spawn server in background
-    tokio::spawn(async move {
-        match alien_manager::AlienManager::builder(config).build().await {
-            Ok(server) => {
-                if let Err(e) = server.start(addr).await {
-                    tracing::error!("Dev server error: {:?}", e);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to start dev server: {:?}", e);
-            }
-        }
-    });
-
-    // Wait for server to be ready
-    for _ in 0..50 {
-        if check_server_health(port).await {
-            info!("Dev server ready");
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    Err(AlienError::new(ErrorData::ServerStartFailed {
-        reason: "Timeout waiting for dev server to start".to_string(),
-    }))
+    start_embedded_dev_manager(port).await
 }

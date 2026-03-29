@@ -101,4 +101,4 @@ Default: `TokenDbValidator` — extracts the Bearer token from headers, hashes i
 
 ## Dev Mode
 
-In dev mode, authentication is permissive. A default admin token and deployment group token are auto-created. Requests without a token fall back to a default scope rather than being rejected. This allows `alien dev` to work without manual token management.
+In `alien dev`, authentication is permissive. Requests without a token fall back to a default admin-like scope rather than being rejected. No manual token bootstrap is required, and the CLI ensures the default `local-dev` deployment group exists after the embedded manager starts.

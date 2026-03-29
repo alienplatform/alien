@@ -514,8 +514,7 @@ mod oauth_flow {
                 .clone(),
             refresh_token: OAuth2TokenResponse::refresh_token(&token_result)
                 .map(|t| t.secret().clone()),
-            expires_in: OAuth2TokenResponse::expires_in(&token_result)
-                .map(|d| d.as_secs() as i64),
+            expires_in: OAuth2TokenResponse::expires_in(&token_result).map(|d| d.as_secs() as i64),
         })
     }
 
@@ -761,8 +760,7 @@ mod oauth_flow {
                 .clone(),
             refresh_token: OAuth2TokenResponse::refresh_token(&token_result)
                 .map(|t| t.secret().clone()),
-            expires_in: OAuth2TokenResponse::expires_in(&token_result)
-                .map(|d| d.as_secs() as i64),
+            expires_in: OAuth2TokenResponse::expires_in(&token_result).map(|d| d.as_secs() as i64),
         })
     }
 
@@ -839,10 +837,7 @@ mod oauth_flow {
                 }
             }
 
-            fn save_store(
-                &self,
-                store: &HashMap<String, String>,
-            ) -> Result<(), DebugKeyringError> {
+            fn save_store(&self, store: &HashMap<String, String>) -> Result<(), DebugKeyringError> {
                 let path = self.keyring_path();
                 if let Some(dir) = path.parent() {
                     fs::create_dir_all(dir).map_err(|e| {

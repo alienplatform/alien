@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use alien_platform_api::SdkResultExt;
 use alien_error::{Context, IntoAlienError};
+use alien_platform_api::SdkResultExt;
 use axum::{extract::Extension, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -38,45 +38,43 @@ pub async fn initialize_agent(
     let subject = validate_token_with_platform(&ext.api_url, &token).await?;
 
     match subject {
-        alien_platform_api::types::Subject::ServiceAccountSubject(sa) => {
-            match sa.scope {
-                alien_platform_api::types::SubjectScope::DeploymentGroup {
-                    deployment_group_id,
-                    project_id,
-                    ..
-                } => {
-                    info!(deployment_group_id = %deployment_group_id, "Creating new deployment from Deployment Group Token");
+        alien_platform_api::types::Subject::ServiceAccountSubject(sa) => match sa.scope {
+            alien_platform_api::types::SubjectScope::DeploymentGroup {
+                deployment_group_id,
+                project_id,
+                ..
+            } => {
+                info!(deployment_group_id = %deployment_group_id, "Creating new deployment from Deployment Group Token");
 
-                    let (deployment_id, token) = create_deployment_from_deployment_group(
-                        &ext.api_url,
-                        &token,
-                        &deployment_group_id,
-                        &project_id,
-                        &ext.manager_id,
-                        &request.platform,
-                    )
-                    .await?;
+                let (deployment_id, token) = create_deployment_from_deployment_group(
+                    &ext.api_url,
+                    &token,
+                    &deployment_group_id,
+                    &project_id,
+                    &ext.manager_id,
+                    &request.platform,
+                )
+                .await?;
 
-                    info!(deployment_id = %deployment_id, "Successfully created deployment");
+                info!(deployment_id = %deployment_id, "Successfully created deployment");
 
-                    Ok(Json(InitializeResponse {
-                        deployment_id,
-                        token: Some(token),
-                    }))
-                }
-                alien_platform_api::types::SubjectScope::Deployment { deployment_id, .. } => {
-                    info!(deployment_id = %deployment_id, "Using existing deployment token");
-
-                    Ok(Json(InitializeResponse {
-                        deployment_id,
-                        token: None,
-                    }))
-                }
-                _ => Err(alien_error::AlienError::new(ErrorData::Unauthorized {
-                    message: "Token must be agent-scoped or deployment-group-scoped".to_string(),
-                })),
+                Ok(Json(InitializeResponse {
+                    deployment_id,
+                    token: Some(token),
+                }))
             }
-        }
+            alien_platform_api::types::SubjectScope::Deployment { deployment_id, .. } => {
+                info!(deployment_id = %deployment_id, "Using existing deployment token");
+
+                Ok(Json(InitializeResponse {
+                    deployment_id,
+                    token: None,
+                }))
+            }
+            _ => Err(alien_error::AlienError::new(ErrorData::Unauthorized {
+                message: "Token must be agent-scoped or deployment-group-scoped".to_string(),
+            })),
+        },
         alien_platform_api::types::Subject::UserSubject(_) => {
             Err(alien_error::AlienError::new(ErrorData::Unauthorized {
                 message: "User tokens are not supported for agent initialization".to_string(),
@@ -132,14 +130,13 @@ async fn create_deployment_from_deployment_group(
                 message: "Invalid project ID format".to_string(),
             })?;
 
-    let typed_name =
-        deployment_name
-            .as_str()
-            .try_into()
-            .into_alien_error()
-            .context(ErrorData::SyncFailed {
-                message: "Invalid deployment name format".to_string(),
-            })?;
+    let typed_name = deployment_name
+        .as_str()
+        .try_into()
+        .into_alien_error()
+        .context(ErrorData::SyncFailed {
+            message: "Invalid deployment name format".to_string(),
+        })?;
 
     let typed_platform = platform
         .try_into()
@@ -160,7 +157,9 @@ async fn create_deployment_from_deployment_group(
         deployment_model: Some(
             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull,
         ),
-        heartbeats: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::On),
+        heartbeats: Some(
+            alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::On,
+        ),
         telemetry: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsTelemetry::Off),
         updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
         network: None,

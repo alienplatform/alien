@@ -5,7 +5,7 @@ Minimal test application for testing the Alien runtime, local development, and b
 ## Purpose
 
 This is a lightweight Rust application used for testing core Alien functionality in:
-- `alien-runtime` - Testing transport event routing (HTTP forwarding, event handling, ARC protocol)
+- `alien-runtime` - Testing transport event routing (HTTP forwarding, event handling, command protocol)
 - `alien-local` - Testing function lifecycle (extract, start, stop, health checks)
 - `dockdash` - Testing OCI image building and registry operations
 
@@ -23,10 +23,10 @@ This is a lightweight Rust application used for testing core Alien functionality
 - **Storage events** - Listens to all storage events and stores them in KV for verification
 - **Queue messages** - Processes queue messages and stores them in KV for verification
 
-### ARC Commands
+### Commands
 
-- `arc-test-small` - Tests ARC protocol with small inline responses
-- `arc-test-large` - Tests ARC protocol with large responses (>48KB, triggers storage mode)
+- `arc-test-small` - Tests command protocol with small inline responses
+- `arc-test-large` - Tests command protocol with large responses (>48KB, triggers storage mode)
 
 ### Bindings
 

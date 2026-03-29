@@ -39,7 +39,6 @@
             "storage.objects.getIamPolicy",
             "storage.multipartUploads.list",
             "storage.multipartUploads.listParts",
-            "iam.serviceAccounts.signBlob",
             "storage.objects.create",
             "storage.objects.update",
             "storage.objects.delete",
@@ -56,11 +55,32 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Stack prefixed storage write access",
-              "expression": "(resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/${projectName}/buckets/${stackPrefix}-')) || (resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/${projectName}/buckets/${stackPrefix}-'))"
+              "expression": "(resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-')) || (resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-'))"
             }
           },
           "resource": {
             "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": ["iam.serviceAccounts.signBlob"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Storage signed URL access",
+              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "Storage signed URL access",
+              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')"
+            }
           }
         }
       }
@@ -70,12 +90,12 @@
         "grant": {
           "actions": [
             "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/write"
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+            "Microsoft.Storage/storageAccounts/listKeys/action"
           ],
           "dataActions": [
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
-            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-            "Microsoft.Storage/storageAccounts/listKeys/action",
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"

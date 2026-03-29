@@ -48,4 +48,5 @@ rustc-ice-*.txt
 .terraform.lock.hcl
 
 # Editor config
-.cursor
+.cursor/
+.codex/

@@ -182,7 +182,7 @@ impl EnvironmentVariableBuilder {
     /// Container Apps). The transport tells alien-runtime which platform API to poll for
     /// invocations and how to parse incoming events.
     ///
-    /// - AWS:        `lambda` + `ALIEN_LAMBDA_MODE=streaming`
+    /// - AWS:        `lambda` + `ALIEN_LAMBDA_MODE=buffered`
     /// - GCP:        `cloud-run`
     /// - Azure:      `container-app`
     /// - Kubernetes: `passthrough`
@@ -195,8 +195,10 @@ impl EnvironmentVariableBuilder {
             Platform::Aws => {
                 self.env_vars
                     .insert("ALIEN_TRANSPORT".to_string(), "lambda".to_string());
+                // Use buffered mode: API Gateway HTTP APIs don't support Lambda
+                // response streaming. Streaming only works with Function URLs.
                 self.env_vars
-                    .insert("ALIEN_LAMBDA_MODE".to_string(), "streaming".to_string());
+                    .insert("ALIEN_LAMBDA_MODE".to_string(), "buffered".to_string());
             }
             Platform::Gcp => {
                 self.env_vars

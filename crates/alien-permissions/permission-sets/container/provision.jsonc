@@ -126,12 +126,13 @@
             "compute.globalForwardingRules.get"
           ]
         },
+        // Compute Engine uses project NAME in resource.name (not number).
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
-              "title": "Stack prefixed container provision",
-              "expression": "resource.name.startsWith('projects/${projectName}/')"
+              "title": "Stack prefixed container LB provision",
+              "expression": "resource.name.startsWith('projects/${projectName}/') && resource.name.contains('${stackPrefix}-')"
             }
           },
           "resource": {
@@ -144,12 +145,13 @@
         "grant": {
           "permissions": ["compute.disks.create", "compute.disks.delete", "compute.disks.get"]
         },
+        // Compute Engine uses project NAME in resource.name (not number).
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Stack prefixed disks",
-              "expression": "resource.type == 'compute.googleapis.com/Disk' && resource.name.startsWith('projects/${projectName}/')"
+              "expression": "resource.type == 'compute.googleapis.com/Disk' && resource.name.startsWith('projects/${projectName}/') && resource.name.contains('${stackPrefix}-')"
             }
           },
           "resource": {

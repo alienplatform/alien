@@ -10,7 +10,7 @@ use object_store::path::Path as StoragePath;
 
 use crate::error::{ErrorData, Result};
 
-/// Helper functions for storage operations in ARC server
+/// Helper functions for storage operations in command server
 pub struct ArcStorageHelper {
     storage: Arc<dyn Storage>,
 }

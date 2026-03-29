@@ -1,17 +1,19 @@
-use alien_platform_api::SdkResultExt;
-use alien_error::{AlienError, GenericError, IntoAlienError};
 use crate::traits::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
+use alien_error::{AlienError, GenericError, IntoAlienError};
+use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 
 /// Convert a value to/from another serde-compatible type via JSON round-trip.
 fn convert_via_json<T: serde::Serialize, U: serde::de::DeserializeOwned>(
     value: &T,
 ) -> Result<U, AlienError> {
-    let json = serde_json::to_value(value).into_alien_error().map_err(|e| {
-        AlienError::new(GenericError {
-            message: format!("JSON serialize failed: {}", e),
-        })
-    })?;
+    let json = serde_json::to_value(value)
+        .into_alien_error()
+        .map_err(|e| {
+            AlienError::new(GenericError {
+                message: format!("JSON serialize failed: {}", e),
+            })
+        })?;
     serde_json::from_value(json).map_err(|e| {
         AlienError::new(GenericError {
             message: format!("JSON deserialize failed: {}", e),
@@ -40,16 +42,15 @@ impl ReleaseStore for PlatformApiReleaseStore {
         &self,
         params: CreateReleaseParams,
     ) -> Result<ReleaseRecord, AlienError> {
-        let body: alien_platform_api::types::CreateReleaseRequest = convert_via_json(
-            &serde_json::json!({
+        let body: alien_platform_api::types::CreateReleaseRequest =
+            convert_via_json(&serde_json::json!({
                 "stack": params.stack,
                 "gitMetadata": {
                     "commitSha": params.git_commit_sha,
                     "commitRef": params.git_commit_ref,
                     "commitMessage": params.git_commit_message,
                 },
-            }),
-        )?;
+            }))?;
 
         let release = self
             .platform_client

@@ -41,6 +41,7 @@ async function __alienBootstrap() {
     const server = Bun.serve({
       fetch: fetchHandler,
       port: 0, // Random available port
+      idleTimeout: 255, // Max value (seconds) — prevent Bun from closing idle connections during slow operations
     })
 
     await ctx.registerHttpServer(server.port)

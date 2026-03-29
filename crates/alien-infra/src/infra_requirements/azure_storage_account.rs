@@ -588,7 +588,7 @@ impl AzureStorageAccountController {
 }
 
 /// Generates the full, prefixed Azure storage account name (pure function).
-fn generate_storage_account_name(resource_prefix: &str, id: &str) -> String {
+pub fn generate_storage_account_name(resource_prefix: &str, id: &str) -> String {
     // Azure storage account names must be 3-24 characters, lowercase, and globally unique
     // Format: {prefix}{id} with length constraints and character restrictions
     let clean_prefix = resource_prefix

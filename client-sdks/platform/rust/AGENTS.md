@@ -1,34 +1,24 @@
-# Inspecting Generated Types
+# alien-platform-api (Rust SDK)
 
-This SDK uses [progenitor](https://github.com/oxidecomputer/progenitor) to auto-generate types from `openapi.json` at build time. Generated code is in `$OUT_DIR/codegen.rs` (~18MB).
+Auto-generated Rust client for the platform API. Uses [progenitor](https://github.com/oxidecomputer/progenitor) to generate types from `openapi.json` at build time. Generated code is in `$OUT_DIR/codegen.rs`.
 
-## Finding the generated file
+## Inspecting Generated Types
 
 ```bash
-# Build to trigger codegen
-cargo build -p alien-client-sdk
-
-# Locate codegen.rs (picks the most recently modified)
-CODEGEN=$(find target/debug/build -path "*alien-client-sdk*/out/codegen.rs" -type f | xargs ls -t 2>/dev/null | head -1)
-
-# Browse all types
-cat $CODEGEN | less
-
-# Find a specific type
+cargo build -p alien-platform-api
+CODEGEN=$(find target/debug/build -path "*alien-platform-api*/out/codegen.rs" -type f | xargs ls -t 2>/dev/null | head -1)
 grep -A 20 "pub struct DeploymentStatus" $CODEGEN
-
-# Search for fields containing "agent"
-grep -i "agent.*:" $CODEGEN | head -20
 ```
 
-## Regenerating the spec
+## Regenerating
 
 ```bash
-# From repo root - generates API openapi.json, copies to SDK, and builds
-pnpm run generate:api-rust-sdk
-
-# Or regenerate everything for the API (openapi + all SDKs)
-pnpm run generate:api
+pnpm run generate:api-rust-sdk   # openapi → SDK
+pnpm run generate:api            # regenerate everything
 ```
 
-Don't run in sandbox!
+## Don't
+
+- Don't edit generated code — regenerate from the OpenAPI spec
+- Don't run generation commands inside a sandbox
+- Don't use "agent" in field names — use "deployment"

@@ -2,7 +2,9 @@
 
 ## Quickstart
 
-Deploy an Alien application to AWS using a self-hosted alien-manager.
+Deploy an Alien application to AWS using a standalone alien-manager.
+
+For local development, use `alien dev`. The `alien-manager` binary is for standalone and platform-managed wiring, not for local dev mode.
 
 ### Start the server
 
@@ -27,16 +29,14 @@ Save this key — it won't be shown again.
 ### Configure the CLI
 
 ```bash
-export ALIEN_SERVER=http://localhost:8080
+export ALIEN_MANAGER_URL=http://localhost:8080
 export ALIEN_API_KEY=ax_admin_abc123def456...
 ```
 
 ### Create a deployment group
 
 ```bash
-alien deployment-groups create \
-  --name production \
-  --server $ALIEN_SERVER
+alien onboard production
 ```
 
 Returns a deployment group token (`ax_dg_...`) for creating deployments within the group.
@@ -45,10 +45,8 @@ Returns a deployment group token (`ax_dg_...`) for creating deployments within t
 
 ```bash
 alien build --platform aws
-alien release --server $ALIEN_SERVER
+alien release --platform aws --yes
 alien deploy \
-  --server $ALIEN_SERVER \
-  --token ax_dg_... \
   --platform aws \
   --name production
 ```
@@ -58,7 +56,7 @@ The deployment loop picks up the deployment, impersonates the configured AWS cre
 ### Check status
 
 ```bash
-alien deployments ls --server $ALIEN_SERVER
+alien deployments ls
 ```
 
 ```
@@ -70,7 +68,6 @@ production  running   aws       rel_abc123
 
 ```bash
 alien command invoke \
-  --server $ALIEN_SERVER \
   --deployment production \
   --command my-command \
   --params '{"key": "value"}'
@@ -82,7 +79,7 @@ Push a new release and deployments update automatically:
 
 ```bash
 alien build --platform aws
-alien release --server $ALIEN_SERVER
+alien release --platform aws --yes
 ```
 
 ### Pull model (Kubernetes)
@@ -91,7 +88,7 @@ For environments where alien-manager can't impersonate credentials directly, ins
 
 ```bash
 helm install alien-agent alien/agent \
-  --set syncUrl=$ALIEN_SERVER \
+  --set syncUrl=$ALIEN_MANAGER_URL \
   --set token=ax_dg_... \
   --set platform=kubernetes
 ```

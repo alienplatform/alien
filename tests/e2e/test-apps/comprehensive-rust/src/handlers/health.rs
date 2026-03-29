@@ -32,12 +32,15 @@ pub async fn health_check() -> Result<Json<HealthResponse>> {
     path = "/hello",
     tag = "health",
     responses(
-        (status = 200, description = "Hello message", body = String),
+        (status = 200, description = "Hello message", body = serde_json::Value),
     ),
     operation_id = "hello",
     summary = "Hello endpoint",
     description = "Returns a simple hello message for compatibility"
 )]
-pub async fn hello() -> &'static str {
-    "Hello from alien-runtime test server!"
+pub async fn hello() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "message": "Hello from Rust!",
+        "timestamp": Utc::now().to_rfc3339(),
+    }))
 }

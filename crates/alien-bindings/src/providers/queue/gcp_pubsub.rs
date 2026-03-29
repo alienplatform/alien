@@ -82,9 +82,13 @@ impl Queue for GcpPubSubQueue {
             .publish(self.topic.clone(), req)
             .await
             .map(|_| ())
-            .context(ErrorData::BindingSetupFailed {
-                binding_type: "queue.pubsub".to_string(),
-                reason: "Failed to publish".to_string(),
+            .map_err(|e| {
+                let reason = format!("Failed to publish to topic '{}': {}", self.topic, e);
+                tracing::error!(%reason, "PubSub publish failed");
+                alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "queue.pubsub".to_string(),
+                    reason,
+                })
             })
     }
 

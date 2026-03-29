@@ -1,18 +1,22 @@
 /**
  * deploy() — single entry point for deploying an Alien application for testing
  *
- * Spawns `alien dev` as a child process with --no-tui. The CLI handles building,
- * creating a release, creating a deployment, and provisioning resources.
+ * Auto-detects the deployment method based on the target platform:
+ * - local (default): spawns `alien dev` as a child process — no credentials needed
+ * - aws / gcp / azure: builds + creates release/deployment via platform API — reads ALIEN_API_KEY from env
  */
 
-import { spawn } from "node:child_process"
-import { existsSync, rmSync } from "node:fs"
+import { execFile, spawn } from "node:child_process"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
+import { promisify } from "node:util"
 import { AlienError } from "@alienplatform/core"
 import getPort from "get-port"
 import { Deployment } from "./deployment.js"
 import { TestingOperationFailedError, withTestingContext } from "./errors.js"
 import type { DeployOptions, DeploymentInfo } from "./types.js"
+
+const execFileAsync = promisify(execFile)
 
 /**
  * Get the alien CLI path with fallback discovery.
@@ -25,8 +29,6 @@ import type { DeployOptions, DeploymentInfo } from "./types.js"
 function getAlienCliPath(appPath: string): string {
   const raw = process.env.ALIEN_CLI_PATH?.trim()
   if (raw) {
-    // If the path contains a directory separator it's a file path — resolve it
-    // so spawn doesn't interpret it relative to the child's cwd.
     if (raw.includes("/") || raw.includes("\\")) {
       return resolve(raw)
     }
@@ -55,18 +57,32 @@ function getAlienCliPath(appPath: string): string {
 }
 
 /**
- * Deploy an Alien application for testing
+ * Deploy an Alien application for testing.
  *
- * Spawns `alien dev --no-tui` as a child process, waits for the deployment
- * to reach "running" status, then returns a Deployment handle.
+ * Uses local dev mode by default. Set `platform` to a cloud provider
+ * to deploy via the platform API (requires ALIEN_API_KEY env var).
  */
 export async function deploy(options: DeployOptions): Promise<Deployment> {
+  const platform = options.platform ?? "local"
+
+  if (platform === "local") {
+    return deployViaDev(options)
+  }
+
+  // Cloud platforms: aws, gcp, azure
+  return deployViaApi(options)
+}
+
+// ---------------------------------------------------------------------------
+// Method: dev — spawns `alien dev` as a child process
+// ---------------------------------------------------------------------------
+
+async function deployViaDev(options: DeployOptions): Promise<Deployment> {
   const verbose = options.verbose ?? process.env.VERBOSE === "true"
   const port = await getPort()
   const cliPath = getAlienCliPath(options.app)
 
-  // Build args: alien dev --platform <p> --no-tui --port <port> [--config <f>] [--env K=V]... [--secret K=V]...
-  const args = ["dev", "--platform", options.platform, "--no-tui", "--port", String(port)]
+  const args = ["dev", "--no-tui", "--port", String(port)]
 
   if (options.config) {
     args.push("--config", options.config)
@@ -83,50 +99,13 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
   }
 
   // Clean .alien state directory to ensure fresh deployment state.
-  // Without this, a stale dev-server.db from a previous run can cause the CLI
-  // to reuse an old deployment whose ports are no longer live.
   const alienStateDir = join(options.app, ".alien")
   rmSync(alienStateDir, { recursive: true, force: true })
 
-  // Build environment for the child process
   const childEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
   }
 
-  // Pass platform credentials as env vars if provided
-  if (options.credentials) {
-    switch (options.credentials.platform) {
-      case "aws":
-        childEnv.AWS_ACCESS_KEY_ID = options.credentials.accessKeyId
-        childEnv.AWS_SECRET_ACCESS_KEY = options.credentials.secretAccessKey
-        childEnv.AWS_REGION = options.credentials.region
-        if (options.credentials.sessionToken) {
-          childEnv.AWS_SESSION_TOKEN = options.credentials.sessionToken
-        }
-        break
-      case "gcp":
-        childEnv.GCP_PROJECT_ID = options.credentials.projectId
-        childEnv.GOOGLE_CLOUD_REGION = options.credentials.region
-        if (options.credentials.serviceAccountKeyPath) {
-          childEnv.GOOGLE_APPLICATION_CREDENTIALS = options.credentials.serviceAccountKeyPath
-        }
-        break
-      case "azure":
-        childEnv.AZURE_SUBSCRIPTION_ID = options.credentials.subscriptionId
-        childEnv.AZURE_TENANT_ID = options.credentials.tenantId
-        childEnv.AZURE_CLIENT_ID = options.credentials.clientId
-        childEnv.AZURE_CLIENT_SECRET = options.credentials.clientSecret
-        childEnv.AZURE_REGION = options.credentials.region
-        break
-      case "kubernetes":
-        if (options.credentials.kubeconfigPath) {
-          childEnv.KUBECONFIG = options.credentials.kubeconfigPath
-        }
-        break
-    }
-  }
-
-  // Spawn alien dev
   const proc = spawn(cliPath, args, {
     cwd: options.app,
     env: childEnv,
@@ -164,9 +143,8 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
 
   const serverUrl = `http://localhost:${port}`
 
-  // Wait for the deployment to reach "running" status
   try {
-    const info = await waitForDeploymentRunning(
+    const info = await waitForDevDeploymentRunning(
       serverUrl,
       () => exited,
       () => exitCode,
@@ -193,28 +171,139 @@ export async function deploy(options: DeployOptions): Promise<Deployment> {
       id: info.commands.deploymentId,
       name: "default",
       url: publicUrl,
-      platform: options.platform,
+      platform: options.platform ?? "local",
       commandsUrl: info.commands.url,
       process: proc,
-      credentials: options.credentials,
       appPath: options.app,
     })
   } catch (error) {
-    // Kill the process if we failed to deploy
     proc.kill("SIGTERM")
     throw await withTestingContext(
       error,
       "deploy",
       "Failed while waiting for deployment to become ready",
-      { serverUrl, appPath: options.app, platform: options.platform },
+      { serverUrl, appPath: options.app, platform: options.platform ?? "local" },
     )
   }
 }
 
+// ---------------------------------------------------------------------------
+// Method: api — direct platform API calls (reads ALIEN_API_KEY from env)
+// ---------------------------------------------------------------------------
+
+interface PlatformDeploymentResponse {
+  id: string
+  name: string
+  status: string
+  releaseId: string
+  url?: string
+  commandsUrl?: string
+}
+
+interface PlatformReleaseResponse {
+  id: string
+  version: number
+}
+
+async function deployViaApi(options: DeployOptions): Promise<Deployment> {
+  const platform = options.platform ?? "local"
+  const verbose = options.verbose ?? process.env.VERBOSE === "true"
+
+  const apiKey = process.env.ALIEN_API_KEY
+  if (!apiKey) {
+    throw new Error(
+      `Cloud deployment (platform: '${platform}') requires the ALIEN_API_KEY environment variable to be set`,
+    )
+  }
+
+  const apiUrl = process.env.ALIEN_API_URL ?? "https://api.alien.dev"
+
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  }
+
+  // 1. Build the application
+  if (verbose) console.log("[testing:api] Building application...")
+  const cliPath = getAlienCliPath(options.app)
+  const buildArgs = ["build", "--platform", platform]
+  if (options.config) {
+    buildArgs.push("--config", options.config)
+  }
+  await execFileAsync(cliPath, buildArgs, { cwd: options.app })
+
+  // 2. Read the built stack
+  const stackPath = resolve(options.app, ".alien", "stack.json")
+  if (!existsSync(stackPath)) {
+    throw new Error(`Build did not produce stack.json at ${stackPath}`)
+  }
+  const stack = JSON.parse(readFileSync(stackPath, "utf-8"))
+
+  // 3. Create a release
+  if (verbose) console.log("[testing:api] Creating release...")
+  const releaseResp = await fetch(`${apiUrl}/v1/releases`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ stack }),
+  })
+
+  if (!releaseResp.ok) {
+    const body = await releaseResp.text()
+    throw new Error(`Failed to create release: ${releaseResp.status} ${body}`)
+  }
+
+  const release = (await releaseResp.json()) as PlatformReleaseResponse
+
+  // 4. Create a deployment
+  if (verbose) console.log("[testing:api] Creating deployment...")
+  const deploymentName = `e2e-${Date.now()}`
+  const deployBody: Record<string, unknown> = {
+    releaseId: release.id,
+    platform,
+    name: deploymentName,
+  }
+
+  if (options.environmentVariables?.length) {
+    deployBody.environmentVariables = options.environmentVariables
+  }
+
+  const deployResp = await fetch(`${apiUrl}/v1/deployments`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(deployBody),
+  })
+
+  if (!deployResp.ok) {
+    const body = await deployResp.text()
+    throw new Error(`Failed to create deployment: ${deployResp.status} ${body}`)
+  }
+
+  const deployment = (await deployResp.json()) as PlatformDeploymentResponse
+
+  // 5. Poll until running
+  if (verbose) console.log(`[testing:api] Waiting for deployment ${deployment.id} to be running...`)
+  const running = await waitForPlatformDeploymentRunning(apiUrl, apiKey, deployment.id, verbose)
+
+  return new Deployment({
+    id: running.id,
+    name: running.name,
+    url: running.url!,
+    platform,
+    commandsUrl: running.commandsUrl!,
+    appPath: options.app,
+    apiUrl,
+    apiKey,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Wait for a deployment to reach "running" status by polling the dev server API.
+ * Wait for a dev-mode deployment to reach "running" status by polling the local server API.
  */
-async function waitForDeploymentRunning(
+async function waitForDevDeploymentRunning(
   serverUrl: string,
   hasExited: () => boolean,
   getExitCode: () => number | null,
@@ -286,7 +375,6 @@ async function waitForDeploymentRunning(
             )
           }
 
-          // Get deployment info if running
           const infoResp = await fetch(`${serverUrl}/v1/deployments/${deployment.id}/info`, {
             signal: AbortSignal.timeout(5000),
           })
@@ -300,11 +388,9 @@ async function waitForDeploymentRunning(
         }
       }
     } catch (error) {
-      // Rethrow deployment failure errors
       if (error instanceof AlienError && error.code === "TESTING_OPERATION_FAILED") {
         throw error
       }
-      // Network errors are expected while things are starting
     }
 
     await new Promise(r => setTimeout(r, pollInterval))
@@ -320,12 +406,64 @@ async function waitForDeploymentRunning(
 }
 
 /**
+ * Wait for a platform API deployment to reach "running" status.
+ */
+async function waitForPlatformDeploymentRunning(
+  apiUrl: string,
+  apiKey: string,
+  deploymentId: string,
+  verbose: boolean,
+): Promise<PlatformDeploymentResponse> {
+  const timeout = 900_000 // 15 minutes
+  const pollInterval = 5000
+  const start = Date.now()
+  const headers = { Authorization: `Bearer ${apiKey}` }
+
+  while (Date.now() - start < timeout) {
+    try {
+      const resp = await fetch(`${apiUrl}/v1/deployments/${deploymentId}`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+      })
+
+      if (resp.ok) {
+        const data = (await resp.json()) as PlatformDeploymentResponse
+        if (verbose) {
+          console.log(`[testing] Deployment ${deploymentId} status: ${data.status}`)
+        }
+
+        if (data.status === "running") {
+          if (!data.url) {
+            throw new Error(`Deployment is running but has no URL: ${JSON.stringify(data)}`)
+          }
+          return data
+        }
+
+        if (data.status === "error" || data.status.includes("failed")) {
+          throw new Error(`Deployment failed with status: ${data.status}`)
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("failed with status")) {
+        throw error
+      }
+      // Network errors expected during provisioning
+    }
+
+    await new Promise(r => setTimeout(r, pollInterval))
+  }
+
+  throw new Error(
+    `Timeout waiting for deployment ${deploymentId} to reach running status (${timeout / 1000}s)`,
+  )
+}
+
+/**
  * Find the public URL from deployment resources
  */
 function findPublicUrl(
   resources: Record<string, { resourceType: string; publicUrl?: string }>,
 ): string | undefined {
-  // Prefer router/gateway/proxy resources
   for (const [name, resource] of Object.entries(resources)) {
     if (
       resource.publicUrl &&
@@ -335,7 +473,6 @@ function findPublicUrl(
     }
   }
 
-  // Fallback to last resource with publicUrl
   const publicResources = Object.entries(resources).filter(
     ([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.publicUrl,
   )

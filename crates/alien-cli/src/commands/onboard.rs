@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_server_sdk::types::CreateDeploymentGroupRequest;
+use alien_manager_api::types::CreateDeploymentGroupRequest;
 use clap::Parser;
 use std::io::{self, Write};
 
@@ -50,10 +50,10 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
         input.trim().to_string()
     };
 
-    // Resolve project (discovers project in Platform mode, returns defaults in SelfHosted/Dev)
+    // Resolve project (discovers project in Platform mode, returns defaults in Standalone/Dev)
     let (project_id, _project_link) = ctx.resolve_project(None).await?;
 
-    // Resolve manager (discovers URL in Platform mode, known in SelfHosted/Dev)
+    // Resolve manager (discovers URL in Platform mode, known in Standalone/Dev)
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
 
     println!("Creating deployment group '{}'...", name);
@@ -126,13 +126,22 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     println!();
     println!("  \x1b[1;4mDirect CLI Usage\x1b[0m");
     println!();
-    println!("    curl -fsSL {}/install | bash", mgr.manager_url.trim_end_matches('/'));
+    println!(
+        "    curl -fsSL {}/install | bash",
+        mgr.manager_url.trim_end_matches('/')
+    );
     println!("    alien-deploy up \\");
     println!("      --token {} \\", token_response.token);
     println!("      --platform <aws|gcp|azure|kubernetes|local> \\");
-    println!("      --manager-url {}", mgr.manager_url.trim_end_matches('/'));
+    println!(
+        "      --manager-url {}",
+        mgr.manager_url.trim_end_matches('/')
+    );
     println!();
-    println!("  \x1b[2mGroup: {} | Max deployments: {}\x1b[0m", name, args.max_deployments);
+    println!(
+        "  \x1b[2mGroup: {} | Max deployments: {}\x1b[0m",
+        name, args.max_deployments
+    );
 
     Ok(())
 }

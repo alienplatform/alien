@@ -140,6 +140,13 @@ async fn get_impersonated_token(
                 field_name: Some("credentials".to_string()),
             }))
         }
+        AzureCredentials::ManagedIdentity { .. } => {
+            // Managed identity already represents the target identity
+            Err(AlienError::new(ErrorData::InvalidInput {
+                message: "Cannot impersonate using managed identity. The managed identity itself is the impersonated identity.".to_string(),
+                field_name: Some("credentials".to_string()),
+            }))
+        }
         AzureCredentials::ServicePrincipal {
             client_id,
             client_secret,
@@ -202,6 +209,48 @@ async fn get_impersonated_token(
             Ok(token_response.access_token)
         }
     }
+}
+
+/// Extract the caller's object ID (oid) from an Azure JWT access token.
+/// Azure access tokens are JWTs — we decode the payload to read the `oid` claim.
+pub fn extract_oid_from_token(token: &str) -> Result<String> {
+    use base64::Engine;
+
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            message: "Azure access token is not a valid JWT (expected 3 parts)".to_string(),
+            field_name: None,
+        }));
+    }
+
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                message: format!("Failed to base64-decode Azure JWT payload: {}", e),
+                field_name: None,
+            })
+        })?;
+
+    #[derive(Deserialize)]
+    struct JwtClaims {
+        oid: Option<String>,
+    }
+
+    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: format!("Failed to parse Azure JWT payload: {}", e),
+            field_name: None,
+        })
+    })?;
+
+    claims.oid.ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: "Azure JWT does not contain 'oid' claim".to_string(),
+            field_name: None,
+        })
+    })
 }
 
 /// Trait for Azure platform configuration operations
@@ -291,9 +340,20 @@ impl AzureClientConfigExt for AzureClientConfig {
                 client_id: client_id.clone(),
                 client_secret: client_secret.clone(),
             }
+        } else if let (Some(client_id), Some(identity_endpoint), Some(identity_header)) = (
+            environment_variables.get("AZURE_CLIENT_ID"),
+            environment_variables.get("IDENTITY_ENDPOINT"),
+            environment_variables.get("IDENTITY_HEADER"),
+        ) {
+            // Azure Container Apps / App Service managed identity
+            AzureCredentials::ManagedIdentity {
+                client_id: client_id.clone(),
+                identity_endpoint: identity_endpoint.clone(),
+                identity_header: identity_header.clone(),
+            }
         } else {
             return Err(AlienError::new(ErrorData::InvalidClientConfig {
-                message: "Missing Azure credentials environment variables. Provide one of: AZURE_ACCESS_TOKEN, AZURE_CLIENT_ID+AZURE_CLIENT_SECRET, or AZURE_CLIENT_ID+AZURE_FEDERATED_TOKEN_FILE".to_string(),
+                message: "Missing Azure credentials environment variables. Provide one of: AZURE_ACCESS_TOKEN, AZURE_CLIENT_ID+AZURE_CLIENT_SECRET, AZURE_CLIENT_ID+AZURE_FEDERATED_TOKEN_FILE, or AZURE_CLIENT_ID+IDENTITY_ENDPOINT+IDENTITY_HEADER".to_string(),
                 errors: None,
             }));
         };
@@ -429,6 +489,50 @@ impl AzureClientConfigExt for AzureClientConfig {
                             "Failed to parse Azure service principal token response for scope '{}'",
                             scope
                         ),
+                        },
+                    )?;
+
+                Ok(token_response.access_token)
+            }
+            AzureCredentials::ManagedIdentity {
+                client_id,
+                identity_endpoint,
+                identity_header,
+            } => {
+                #[derive(Deserialize)]
+                struct TokenResponse {
+                    access_token: String,
+                }
+
+                // Managed identity uses "resource" (not "scope"), strip ".default" suffix
+                let resource = scope.trim_end_matches("/.default");
+
+                let client = reqwest::Client::new();
+                let response = client
+                    .get(identity_endpoint)
+                    .query(&[
+                        ("resource", resource),
+                        ("api-version", "2019-08-01"),
+                        ("client_id", client_id),
+                    ])
+                    .header("X-IDENTITY-HEADER", identity_header)
+                    .send()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to get Azure managed identity token for resource '{}'",
+                            resource
+                        ),
+                    })?;
+
+                let token_response: TokenResponse =
+                    response.json().await.into_alien_error().context(
+                        ErrorData::AuthenticationError {
+                            message: format!(
+                                "Failed to parse Azure managed identity token response for resource '{}'",
+                                resource
+                            ),
                         },
                     )?;
 

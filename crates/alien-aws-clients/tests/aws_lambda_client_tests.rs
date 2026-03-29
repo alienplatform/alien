@@ -19,7 +19,7 @@ ALIEN_TEST_AWS_LAMBDA_EXECUTION_ROLE_ARN=arn:aws:iam::your_account_id:role/lambd
 
 ### 2. Create and Push Test Lambda Image
 ```bash
-cd tests/infra/images/lambda
+cd infra/standalone/images/lambda
 
 # Build for ARM64 (Lambda's default architecture)
 docker build --platform linux/arm64 -t test-lambda .

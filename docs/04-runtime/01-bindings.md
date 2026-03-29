@@ -147,7 +147,7 @@ When `ALIEN_BINDINGS_MODE=grpc`, every `storage.put()` call goes through gRPC to
 The `ALIEN_BINDINGS_MODE` environment variable controls how bindings are delivered:
 
 - **`direct`** - Bindings loaded directly from environment variables. No gRPC server needed. Use this for:
-  - Standalone processes (like deepstore-agent in the demo service)
+  - Standalone processes outside alien-runtime
   - Testing without alien-runtime
   - Any scenario where you have direct access to cloud credentials via env vars
 
@@ -471,7 +471,7 @@ When you call `for_remote_deployment(deployment_id, token)`:
 
 **Scalability:** All resource operations (put, get, list) happen client-to-cloud. The control plane is not in the data path.
 
-**Stateless:** Agent-manager receives stack state in the request. No need to store per-agent state.
+**Stateless:** alien-manager receives stack state in the request. No need to store per-deployment state.
 
 ## TypeScript and Python
 

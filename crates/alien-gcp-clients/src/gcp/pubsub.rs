@@ -509,7 +509,7 @@ impl PubSubApi for PubSubClient {
         );
 
         self.base
-            .execute_request(Method::POST, &path, None, Some(request), &subscription_id)
+            .execute_request_no_response(Method::POST, &path, None, Some(request), &subscription_id)
             .await
     }
 
@@ -526,7 +526,7 @@ impl PubSubApi for PubSubClient {
         );
 
         self.base
-            .execute_request(Method::POST, &path, None, Some(request), &subscription_id)
+            .execute_request_no_response(Method::POST, &path, None, Some(request), &subscription_id)
             .await
     }
 }

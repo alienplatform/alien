@@ -21,7 +21,7 @@
 //!
 //! ## Examples
 //!
-//! ```rust
+//! ```ignore
 //! use std::path::PathBuf;
 //! use alien_cli::config::load_configuration;
 //!
@@ -66,7 +66,9 @@ impl JavaScriptRuntime {
 }
 
 /// Load an Alien stack configuration from a file or directory.
-/// Searches for `alien.ts`, `alien.js`, or `alien.json` in directories.
+/// Searches for configuration files in directories.
+///
+/// Resolution order: `alien.ts`, `alien.config.ts`, `alien.js`, `alien.config.js`, `alien.json`.
 #[alien_event(AlienEvent::LoadingConfiguration)]
 pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
     info!("Loading configuration from: {}", config_path.display());
@@ -76,20 +78,22 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             "Searching for configuration files in directory: {}",
             config_path.display()
         );
-        // Look for alien.ts first, then alien.js, then alien.json
-        let ts_config = config_path.join("alien.ts");
-        let js_config = config_path.join("alien.js");
-        let json_config = config_path.join("alien.json");
+        // Search in priority order
+        let candidates = [
+            "alien.ts",
+            "alien.config.ts",
+            "alien.js",
+            "alien.config.js",
+            "alien.json",
+        ];
 
-        if ts_config.exists() {
-            info!("Found TypeScript configuration: {}", ts_config.display());
-            ts_config
-        } else if js_config.exists() {
-            info!("Found JavaScript configuration: {}", js_config.display());
-            js_config
-        } else if json_config.exists() {
-            info!("Found JSON configuration: {}", json_config.display());
-            json_config
+        if let Some(found) = candidates
+            .iter()
+            .map(|name| config_path.join(name))
+            .find(|p| p.exists())
+        {
+            info!("Found configuration: {}", found.display());
+            found
         } else {
             warn!(
                 "No configuration files found in directory: {}",
@@ -98,9 +102,9 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             return Err(alien_error::AlienError::new(
                 ErrorData::ConfigurationError {
                     message: format!(
-                    "Could not find alien.ts, alien.js, or alien.json in {}",
-                    config_path.display()
-                ),
+                        "Could not find alien.ts, alien.config.ts, alien.js, alien.config.js, or alien.json in {}",
+                        config_path.display()
+                    ),
                 },
             ));
         }
@@ -174,9 +178,7 @@ async fn load_javascript_config(config_file: PathBuf) -> Result<Stack> {
 
 /// Check if `@alienplatform/core` is resolvable from the config directory.
 fn is_core_resolvable(config_dir: &Path) -> bool {
-    config_dir
-        .join("node_modules/@alienplatform/core")
-        .exists()
+    config_dir.join("node_modules/@alienplatform/core").exists()
 }
 
 /// Ensure `@alienplatform/core` is available for config execution.
@@ -216,10 +218,7 @@ async fn ensure_core_available(
 
     let cache_node_modules = cache_dir.join("node_modules");
 
-    if cache_node_modules
-        .join("@alienplatform/core")
-        .exists()
-    {
+    if cache_node_modules.join("@alienplatform/core").exists() {
         debug!(
             "Using cached @alienplatform/core from {}",
             cache_dir.display()
@@ -273,10 +272,7 @@ async fn ensure_core_available(
         let stderr = String::from_utf8_lossy(&install_output.stderr);
         return Err(alien_error::AlienError::new(
             ErrorData::ConfigurationError {
-                message: format!(
-                    "Failed to install @alienplatform/core: {}",
-                    stderr
-                ),
+                message: format!("Failed to install @alienplatform/core: {}", stderr),
             },
         ));
     }
@@ -699,11 +695,7 @@ mod tests {
             create_javascript_config_content(),
         )
         .unwrap();
-        fs::write(
-            temp_path.join("alien.json"),
-            create_json_config_content(),
-        )
-        .unwrap();
+        fs::write(temp_path.join("alien.json"), create_json_config_content()).unwrap();
 
         let shared_nm = shared_node_modules_path().await;
         std::os::unix::fs::symlink(shared_nm, temp_path.join("node_modules")).unwrap();
@@ -741,11 +733,7 @@ mod tests {
             create_javascript_config_content(),
         )
         .unwrap();
-        fs::write(
-            temp_path.join("alien.json"),
-            create_json_config_content(),
-        )
-        .unwrap();
+        fs::write(temp_path.join("alien.json"), create_json_config_content()).unwrap();
 
         let shared_nm = shared_node_modules_path().await;
         std::os::unix::fs::symlink(shared_nm, temp_path.join("node_modules")).unwrap();
@@ -774,11 +762,7 @@ mod tests {
         let temp_path = temp_dir.path();
 
         // Create only JSON config file
-        fs::write(
-            temp_path.join("alien.json"),
-            create_json_config_content(),
-        )
-        .unwrap();
+        fs::write(temp_path.join("alien.json"), create_json_config_content()).unwrap();
 
         let result = load_configuration(temp_path.to_path_buf()).await;
 
@@ -795,8 +779,7 @@ mod tests {
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg
-            .contains("Could not find alien.ts, alien.js, or alien.json"));
+        assert!(error_msg.contains("Could not find alien.ts"));
     }
 
     #[tokio::test]

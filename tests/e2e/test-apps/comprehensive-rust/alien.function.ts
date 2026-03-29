@@ -1,17 +1,17 @@
 import * as alien from "@alienplatform/core"
 
-const storage = new alien.Storage("test-alien-storage").build()
+const storage = new alien.Storage("alien-storage").build()
 const artifactRegistry = new alien.ArtifactRegistry("test-alien-artifact-registry").build()
-const vault = new alien.Vault("test-alien-vault").build()
-const kv = new alien.Kv("test-alien-kv").build()
-const queue = new alien.Queue("test-alien-queue").build()
+const vault = new alien.Vault("alien-vault").build()
+const kv = new alien.Kv("alien-kv").build()
+const queue = new alien.Queue("alien-queue").build()
 
 const build = new alien.Build("test-alien-build")
   .environment({ TEST_VAR: "test-value" })
   .permissions("build-execution")
   .build()
 
-const fn = new alien.Function("test-alien-function")
+const fn = new alien.Function("alien-rs-fn")
   .code({
     type: "source",
     src: "./",
@@ -24,7 +24,7 @@ const fn = new alien.Function("test-alien-function")
   .timeoutSeconds(180)
   .permissions("execution")
   .ingress("public")
-  .environment({ RUST_LOG: "info" })
+  .environment({ RUST_LOG: "info", NODE_ENV: "production" })
   .readinessProbe({ method: "GET", path: "/hello" })
   .link(storage)
   .link(build)
@@ -41,7 +41,7 @@ const fn = new alien.Function("test-alien-function")
 // // Queue message subscription for testing queue message delivery
 // queue.onMessage(fn)
 
-const stack = new alien.Stack("test-alien-stack")
+const stack = new alien.Stack("alien-rs-stack")
   .permissions({
     profiles: {
       execution: {

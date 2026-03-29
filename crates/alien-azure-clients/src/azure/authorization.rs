@@ -83,6 +83,8 @@ pub trait AuthorizationApi: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug, Clone)]
 pub enum Scope {
+    /// Subscription scope
+    Subscription,
     /// Resource group scope
     ResourceGroup { resource_group_name: String },
     /// Individual resource scope
@@ -100,6 +102,9 @@ impl Scope {
     /// Convert the scope to the Azure Resource Manager scope string format
     pub fn to_scope_string(&self, client_config: &AzureClientConfig) -> String {
         match self {
+            Scope::Subscription => {
+                format!("subscriptions/{}", client_config.subscription_id)
+            }
             Scope::ResourceGroup {
                 resource_group_name,
             } => {

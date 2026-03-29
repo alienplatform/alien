@@ -40,10 +40,10 @@ pub async fn get_storage_event(
     let kv = app_state
         .ctx
         .get_bindings()
-        .load_kv("test-alien-kv")
+        .load_kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "test-alien-kv".to_string(),
+            binding_name: "alien-kv".to_string(),
         })?;
 
     // Sanitize key: replace / with _ to match how events are stored
@@ -74,10 +74,10 @@ pub async fn get_cron_event(
     let kv = app_state
         .ctx
         .get_bindings()
-        .load_kv("test-alien-kv")
+        .load_kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "test-alien-kv".to_string(),
+            binding_name: "alien-kv".to_string(),
         })?;
 
     // Sanitize schedule: replace / with _ to match how events are stored
@@ -108,10 +108,10 @@ pub async fn get_queue_message(
     let kv = app_state
         .ctx
         .get_bindings()
-        .load_kv("test-alien-kv")
+        .load_kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "test-alien-kv".to_string(),
+            binding_name: "alien-kv".to_string(),
         })?;
 
     // Sanitize message ID: replace / with _ to match how events are stored
@@ -139,10 +139,10 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
     let kv = app_state
         .ctx
         .get_bindings()
-        .load_kv("test-alien-kv")
+        .load_kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "test-alien-kv".to_string(),
+            binding_name: "alien-kv".to_string(),
         })?;
 
     let mut storage_events = Vec::new();

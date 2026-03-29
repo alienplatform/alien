@@ -10,22 +10,6 @@ use crate::error::ErrorData;
 use crate::server::AlienManager;
 use crate::traits::*;
 
-/// Holds all optional provider overrides extracted from the builder.
-struct BuilderOverrides {
-    deployment_store: Option<Arc<dyn DeploymentStore>>,
-    release_store: Option<Arc<dyn ReleaseStore>>,
-    token_store: Option<Arc<dyn TokenStore>>,
-    credential_resolver: Option<Arc<dyn CredentialResolver>>,
-    telemetry_backend: Option<Arc<dyn TelemetryBackend>>,
-    auth_validator: Option<Arc<dyn AuthValidator>>,
-    server_bindings: Option<ServerBindings>,
-    extra_routes: Option<axum::Router<crate::routes::AppState>>,
-    dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
-    skip_initialize: bool,
-    skip_deploy_page: bool,
-    skip_install: bool,
-}
-
 pub struct AlienManagerBuilder {
     config: ManagerConfig,
     deployment_store: Option<Arc<dyn DeploymentStore>>,
@@ -36,7 +20,9 @@ pub struct AlienManagerBuilder {
     auth_validator: Option<Arc<dyn AuthValidator>>,
     server_bindings: Option<ServerBindings>,
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
+    platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
+    log_buffer: Option<Arc<crate::dev::LogBuffer>>,
     /// When `true`, the default `/v1/initialize` route is omitted from the router.
     /// Use this when embedding in a process that overrides initialize via `extra_routes`.
     skip_initialize: bool,
@@ -58,7 +44,9 @@ impl AlienManagerBuilder {
             auth_validator: None,
             server_bindings: None,
             extra_routes: None,
+            platform_routes: None,
             dev_status_tx: None,
+            log_buffer: None,
             skip_initialize: false,
             skip_deploy_page: false,
             skip_install: false,
@@ -105,8 +93,20 @@ impl AlienManagerBuilder {
         self
     }
 
+    /// Add platform-specific routes that are merged into the main router.
+    pub fn platform_routes(mut self, routes: axum::Router<crate::routes::AppState>) -> Self {
+        self.platform_routes = Some(routes);
+        self
+    }
+
     pub fn dev_status(mut self, tx: tokio::sync::watch::Sender<()>) -> Self {
         self.dev_status_tx = Some(tx);
+        self
+    }
+
+    /// Provide a custom log buffer. If not set, a new empty one is created.
+    pub fn log_buffer(mut self, buffer: Arc<crate::dev::LogBuffer>) -> Self {
+        self.log_buffer = Some(buffer);
         self
     }
 
@@ -130,61 +130,190 @@ impl AlienManagerBuilder {
         self
     }
 
-    /// Build the server, creating default providers based on the configured `ManagerMode`.
+    /// Set up SQLite-backed standalone providers for stores and bindings.
     ///
-    /// - **Platform mode**: bootstraps identity via whoami, builds platform API providers,
-    ///   includes platform routes, and spawns the self-heartbeat loop.
-    /// - **Standalone / Dev mode**: uses SQLite-backed stores, local KV/storage, and
-    ///   environment-based credentials.
+    /// This is a convenience method that creates SQLite implementations for
+    /// `DeploymentStore`, `ReleaseStore`, `TokenStore`, `CommandRegistry`,
+    /// and local-filesystem `ServerBindings`. Already-set providers are NOT
+    /// overridden — explicit `.deployment_store(...)` etc. calls always win.
+    #[cfg(feature = "sqlite")]
+    pub async fn with_standalone_defaults(mut self) -> crate::error::Result<Self> {
+        use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+        use alien_commands::server::NullCommandDispatcher;
+
+        // --- SQLite database (shared by all default stores) ---
+        let db_path = self
+            .config
+            .db_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "alien-manager.db".to_string());
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(&db_path)
+                .await
+                .map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Failed to initialize database: {}", e),
+                    })
+                })?,
+        );
+
+        // --- Stores (only set if not already provided) ---
+        if self.deployment_store.is_none() {
+            self.deployment_store = Some(Arc::new(
+                crate::stores::sqlite::SqliteDeploymentStore::new(db.clone()),
+            ));
+        }
+
+        if self.release_store.is_none() {
+            self.release_store = Some(Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(
+                db.clone(),
+            )));
+        }
+
+        if self.token_store.is_none() {
+            self.token_store = Some(Arc::new(crate::stores::sqlite::SqliteTokenStore::new(
+                db.clone(),
+            )));
+        }
+
+        // --- Credential resolver ---
+        if self.credential_resolver.is_none() {
+            self.credential_resolver = Some(Arc::new(
+                crate::providers::environment_credentials::EnvironmentCredentialResolver::new(),
+            ));
+        }
+
+        // --- Telemetry backend ---
+        if self.telemetry_backend.is_none() {
+            self.telemetry_backend = Some(if let Some(ref endpoint) = self.config.otlp_endpoint {
+                Arc::new(
+                    crate::providers::otlp_forwarding::OtlpForwardingBackend::new(endpoint.clone()),
+                )
+            } else {
+                Arc::new(crate::providers::NullTelemetryBackend)
+            });
+        }
+
+        // --- Auth validator ---
+        if self.auth_validator.is_none() {
+            self.auth_validator = Some(Arc::new(
+                crate::providers::token_db_validator::TokenDbValidator::new(
+                    self.token_store.clone().unwrap(),
+                ),
+            ));
+        }
+
+        // --- ServerBindings (command server plumbing) ---
+        if self.server_bindings.is_none() {
+            let state_dir = self
+                .config
+                .state_dir
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| std::path::PathBuf::from(".alien-manager"));
+            let kv_path = state_dir.join("commands_kv");
+            let storage_path = state_dir.join("commands_storage");
+
+            let command_kv: Arc<dyn alien_bindings::traits::Kv> =
+                Arc::new(LocalKv::new(kv_path).await.map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Failed to create command KV store: {}", e),
+                    })
+                })?);
+
+            let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+                LocalStorage::new(
+                    storage_path
+                        .to_str()
+                        .unwrap_or("commands_storage")
+                        .to_string(),
+                )
+                .map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Failed to create command storage: {}", e),
+                    })
+                })?,
+            );
+
+            let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(
+                crate::stores::sqlite::SqliteCommandRegistry::new(db.clone()),
+            );
+
+            self.server_bindings = Some(ServerBindings {
+                command_kv,
+                command_storage,
+                command_dispatcher: Arc::new(NullCommandDispatcher),
+                command_registry,
+                artifact_registry: None,
+                bindings_provider: None,
+            });
+        }
+
+        Ok(self)
+    }
+
+    /// Build the `AlienManager` from explicitly-provided providers.
     ///
-    /// Explicit provider overrides (set via builder methods) always win over defaults.
+    /// All required providers must be set (either directly via builder methods
+    /// or via a convenience method like `with_standalone_defaults()`). Missing
+    /// providers produce a clear error.
     pub async fn build(self) -> crate::error::Result<AlienManager> {
+        macro_rules! require_provider {
+            ($field:expr, $name:literal) => {
+                $field.ok_or_else(|| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!(
+                            "{} must be provided (set it explicitly or call with_standalone_defaults())",
+                            $name
+                        ),
+                    })
+                })?
+            };
+        }
+
+        let deployment_store = require_provider!(self.deployment_store, "deployment_store");
+        let release_store = require_provider!(self.release_store, "release_store");
+        let token_store = require_provider!(self.token_store, "token_store");
+        let credential_resolver =
+            require_provider!(self.credential_resolver, "credential_resolver");
+        let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
+        let auth_validator = require_provider!(self.auth_validator, "auth_validator");
+        let server_bindings = Arc::new(require_provider!(self.server_bindings, "server_bindings"));
+        let log_buffer = self
+            .log_buffer
+            .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
+
         let config = Arc::new(self.config);
-        let overrides = BuilderOverrides {
-            deployment_store: self.deployment_store,
-            release_store: self.release_store,
-            token_store: self.token_store,
-            credential_resolver: self.credential_resolver,
-            telemetry_backend: self.telemetry_backend,
-            auth_validator: self.auth_validator,
-            server_bindings: self.server_bindings,
-            extra_routes: self.extra_routes,
-            dev_status_tx: self.dev_status_tx,
-            skip_initialize: self.skip_initialize,
-            skip_deploy_page: self.skip_deploy_page,
-            skip_install: self.skip_install,
-        };
 
-        if config.mode.is_platform() {
-            #[cfg(feature = "platform")]
-            {
-                return build_platform(config, overrides).await;
-            }
-            #[cfg(not(feature = "platform"))]
-            {
-                return Err(AlienError::new(ErrorData::ServerInitFailed {
-                    reason: "Platform mode requires the 'platform' feature".to_string(),
-                }));
-            }
-        }
-
-        #[cfg(feature = "sqlite")]
-        {
-            build_sqlite(config, overrides).await
-        }
-        #[cfg(not(feature = "sqlite"))]
-        {
-            build_explicit(config, overrides).await
-        }
+        finalize(
+            config,
+            deployment_store,
+            release_store,
+            token_store,
+            auth_validator,
+            telemetry_backend,
+            credential_resolver,
+            server_bindings,
+            log_buffer,
+            crate::routes::RouterOptions {
+                include_initialize: !self.skip_initialize,
+                include_deploy_page: !self.skip_deploy_page,
+                include_install: !self.skip_install,
+            },
+            self.extra_routes,
+            self.platform_routes,
+            self.dev_status_tx,
+        )
+        .await
     }
 }
 
 // ---------------------------------------------------------------------------
-// Finalization: shared assembly logic for all build paths
+// Finalization: shared assembly logic
 // ---------------------------------------------------------------------------
 
-/// Assembles an `AlienManager` from resolved providers. All three build paths
-/// (sqlite, platform, explicit) resolve providers then delegate here.
+/// Assembles an `AlienManager` from resolved providers.
 async fn finalize(
     config: Arc<ManagerConfig>,
     deployment_store: Arc<dyn DeploymentStore>,
@@ -232,38 +361,9 @@ async fn finalize(
         router = router.merge(extra.with_state(app_state));
     }
 
-    // --- Dev mode: ensure default deployment group exists ---
-    if config.dev_mode() {
-        let groups = deployment_store
-            .list_deployment_groups()
-            .await
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to list deployment groups: {}", e),
-                })
-            })?;
-        if groups.is_empty() {
-            info!("Dev mode: creating default 'local-dev' deployment group");
-            deployment_store
-                .create_deployment_group_with_id(
-                    "local-dev",
-                    CreateDeploymentGroupParams {
-                        name: "local-dev".to_string(),
-                        max_deployments: 100,
-                    },
-                )
-                .await
-                .map_err(|e| {
-                    AlienError::new(ErrorData::ServerInitFailed {
-                        reason: format!("Failed to create default deployment group: {}", e),
-                    })
-                })?;
-        }
-    }
-
     info!(
         port = config.port,
-        dev_mode = config.dev_mode(),
+        enable_local_log_ingest = config.enable_local_log_ingest(),
         "AlienManager built"
     );
 
@@ -281,456 +381,17 @@ async fn finalize(
 }
 
 // ---------------------------------------------------------------------------
-// Build paths
+// Platform bootstrapping helpers
 // ---------------------------------------------------------------------------
 
-/// Build with SQLite defaults for Standalone/Dev modes.
-#[cfg(feature = "sqlite")]
-async fn build_sqlite(config: Arc<ManagerConfig>, overrides: BuilderOverrides) -> crate::error::Result<AlienManager> {
-    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
-    use alien_commands::server::NullCommandDispatcher;
-
-    // --- SQLite database (shared by all default stores) ---
-    let db_path = config
-        .db_path
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "alien-manager.db".to_string());
-    let db = Arc::new(
-        crate::stores::sqlite::SqliteDatabase::new(&db_path)
-            .await
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to initialize database: {}", e),
-                })
-            })?,
-    );
-
-    // --- Stores ---
-    let deployment_store: Arc<dyn DeploymentStore> =
-        overrides.deployment_store.unwrap_or_else(|| {
-            Arc::new(crate::stores::sqlite::SqliteDeploymentStore::new(
-                db.clone(),
-            ))
-        });
-
-    let release_store: Arc<dyn ReleaseStore> = overrides.release_store.unwrap_or_else(|| {
-        Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(db.clone()))
-    });
-
-    let token_store: Arc<dyn TokenStore> = overrides
-        .token_store
-        .unwrap_or_else(|| Arc::new(crate::stores::sqlite::SqliteTokenStore::new(db.clone())));
-
-    // --- Providers ---
-    let credential_resolver: Arc<dyn CredentialResolver> = overrides
-        .credential_resolver
-        .unwrap_or_else(|| {
-            if config.dev_mode() {
-                let state_dir = config
-                    .state_dir
-                    .clone()
-                    .unwrap_or_else(|| std::path::PathBuf::from(".alien-manager"));
-                Arc::new(crate::providers::composite_credentials::CompositeCredentialResolver::new(
-                    state_dir,
-                ))
-            } else {
-                Arc::new(crate::providers::environment_credentials::EnvironmentCredentialResolver::new())
-            }
-        });
-
-    let log_buffer = Arc::new(crate::dev::LogBuffer::new());
-
-    let telemetry_backend: Arc<dyn TelemetryBackend> =
-        overrides.telemetry_backend.unwrap_or_else(|| {
-            if let Some(ref endpoint) = config.otlp_endpoint {
-                Arc::new(
-                    crate::providers::otlp_forwarding::OtlpForwardingBackend::new(
-                        endpoint.clone(),
-                    ),
-                )
-            } else {
-                Arc::new(
-                    crate::providers::in_memory_telemetry::InMemoryTelemetryBackend::new(
-                        log_buffer.clone(),
-                    ),
-                )
-            }
-        });
-
-    let auth_validator: Arc<dyn AuthValidator> = overrides.auth_validator.unwrap_or_else(|| {
-        if config.dev_mode() {
-            Arc::new(crate::providers::permissive_auth::PermissiveAuthValidator::new())
-        } else {
-            Arc::new(crate::providers::token_db_validator::TokenDbValidator::new(
-                token_store.clone(),
-            ))
-        }
-    });
-
-    // --- ServerBindings (command server plumbing) ---
-    let server_bindings = if let Some(bindings) = overrides.server_bindings {
-        Arc::new(bindings)
-    } else {
-        let state_dir = config
-            .state_dir
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| std::path::PathBuf::from(".alien-manager"));
-        let kv_path = state_dir.join("commands_kv");
-        let storage_path = state_dir.join("commands_storage");
-
-        let command_kv: Arc<dyn alien_bindings::traits::Kv> =
-            Arc::new(LocalKv::new(kv_path).await.map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to create command KV store: {}", e),
-                })
-            })?);
-
-        let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
-            LocalStorage::new(
-                storage_path
-                    .to_str()
-                    .unwrap_or("commands_storage")
-                    .to_string(),
-            )
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to create command storage: {}", e),
-                })
-            })?,
-        );
-
-        let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(
-            crate::stores::sqlite::SqliteCommandRegistry::new(db.clone()),
-        );
-
-        Arc::new(ServerBindings {
-            command_kv,
-            command_storage,
-            command_dispatcher: Arc::new(NullCommandDispatcher),
-            command_registry,
-            artifact_registry: None,
-            bindings_provider: None,
-        })
-    };
-
-    finalize(
-        config,
-        deployment_store,
-        release_store,
-        token_store,
-        auth_validator,
-        telemetry_backend,
-        credential_resolver,
-        server_bindings,
-        log_buffer,
-        crate::routes::RouterOptions {
-            include_initialize: !overrides.skip_initialize,
-            include_deploy_page: !overrides.skip_deploy_page,
-            include_install: !overrides.skip_install,
-        },
-        overrides.extra_routes,
-        None,
-        overrides.dev_status_tx,
-    )
-    .await
-}
-
-/// Build with Platform API providers.
 #[cfg(feature = "platform")]
-async fn build_platform(config: Arc<ManagerConfig>, overrides: BuilderOverrides) -> crate::error::Result<AlienManager> {
-    use std::collections::HashMap;
-    use alien_bindings::{BindingsProvider, BindingsProviderApi};
-    use alien_core::Platform;
-    use tracing::warn;
-
-    use crate::providers::platform_api::{
-        PlatformApiDeploymentStore,
-        PlatformApiReleaseStore,
-        NullTokenStore,
-        PlatformTokenValidator,
-        ImpersonationCredentialResolver,
-        DeepStoreTelemetryBackend,
-        ManagedCommandDispatcher,
-        PlatformCommandRegistry,
-        PlatformState,
-        extension::{build_platform_client, resolve_base_url},
-    };
-
-    let pc = config.mode.platform_config().unwrap();
-
-    // --- Bootstrap manager identity via whoami ---
-    let identity = bootstrap_manager_identity(&pc.api_url, &pc.api_key).await?;
-    info!(
-        manager_id = %identity.manager_id,
-        workspace_name = %identity.workspace_name,
-        "Identity resolved from MANAGER_API_KEY via whoami"
-    );
-
-    // --- Build bindings providers ---
-    let env: HashMap<String, String> = std::env::vars().collect();
-
-    // Determine if we're running as an Alien app (has runtime bindings) or standalone
-    let is_alien_app = std::env::var("ALIEN_CURRENT_CONTAINER_BINDING_NAME").is_ok();
-
-    let (bindings, target_bindings): (
-        Arc<dyn BindingsProviderApi>,
-        HashMap<Platform, Arc<dyn BindingsProviderApi>>,
-    ) = if is_alien_app {
-        info!("Alien App mode: using bindings from Alien runtime environment");
-        let provider = Arc::new(
-            BindingsProvider::from_env(env.clone())
-                .await
-                .map_err(|e| {
-                    AlienError::new(ErrorData::ServerInitFailed {
-                        reason: format!("Failed to initialize bindings provider: {}", e),
-                    })
-                })?,
-        );
-        (provider as Arc<dyn BindingsProviderApi>, HashMap::new())
-    } else {
-        info!(
-            primary_platform = %pc.primary_platform,
-            "Standalone mode: building multi-cloud providers"
-        );
-        build_standalone_providers(pc.primary_platform, &env).await?
-    };
-
-    // --- Resolve base URL ---
-    let base_url = resolve_base_url(&config.base_url, config.port, &bindings)
-        .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ServerInitFailed {
-                reason: format!("Failed to resolve base URL: {}", e),
-            })
-        })?;
-
-    // --- Build Platform API client ---
-    let platform_client = build_platform_client(&pc.api_url, &pc.api_key)
-        .map_err(|e| {
-            AlienError::new(ErrorData::ServerInitFailed {
-                reason: format!("Failed to build platform client: {}", e),
-            })
-        })?;
-
-    // --- Build PlatformState ---
-    let ext = Arc::new(PlatformState {
-        api_url: pc.api_url.clone(),
-        manager_id: identity.manager_id.clone(),
-        base_url: base_url.clone(),
-        client: platform_client.clone(),
-        bindings: bindings.clone(),
-        target_bindings: target_bindings.clone(),
-        heartbeat_interval_secs: config.self_heartbeat_interval_secs,
-        deepstore: pc.deepstore.clone(),
-        gcp_oauth: pc.gcp_oauth.clone(),
-    });
-
-    // --- Spawn self-heartbeat as a detached task ---
-    {
-        let ext_clone = ext.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                crate::loops::self_heartbeat::run_self_heartbeat_loop(ext_clone).await
-            {
-                tracing::error!(error = %e, "Self-heartbeat loop failed");
-            }
-        });
-    }
-
-    // --- Build providers (explicit overrides win) ---
-    let deployment_store: Arc<dyn DeploymentStore> = overrides.deployment_store.unwrap_or_else(|| {
-        Arc::new(PlatformApiDeploymentStore::new(
-            platform_client.clone(),
-            identity.manager_id.clone(),
-        ))
-    });
-
-    let release_store: Arc<dyn ReleaseStore> = overrides.release_store.unwrap_or_else(|| {
-        Arc::new(PlatformApiReleaseStore::new(platform_client.clone()))
-    });
-
-    let token_store: Arc<dyn TokenStore> = overrides.token_store.unwrap_or_else(|| {
-        Arc::new(NullTokenStore)
-    });
-
-    let credential_resolver: Arc<dyn CredentialResolver> = overrides.credential_resolver.unwrap_or_else(|| {
-        Arc::new(ImpersonationCredentialResolver::new(
-            bindings.clone(),
-            target_bindings.clone(),
-        ))
-    });
-
-    let telemetry_backend: Arc<dyn TelemetryBackend> = overrides.telemetry_backend.unwrap_or_else(|| {
-        if let (Some(otlp_url), Some(database_id)) = (
-            pc.deepstore.otlp_url.clone(),
-            pc.deepstore.database_id.clone(),
-        ) {
-            Arc::new(DeepStoreTelemetryBackend::new(
-                otlp_url,
-                database_id,
-                identity.workspace_name.clone(),
-                platform_client.clone(),
-            ))
-        } else {
-            warn!("DEEPSTORE_OTLP_URL or DEEPSTORE_DATABASE_ID not set — telemetry will be discarded");
-            Arc::new(crate::providers::NullTelemetryBackend)
-        }
-    });
-
-    let auth_validator: Arc<dyn AuthValidator> = overrides.auth_validator.unwrap_or_else(|| {
-        Arc::new(PlatformTokenValidator::new(pc.api_url.clone()))
-    });
-
-    // --- ServerBindings ---
-    let server_bindings = if let Some(sb) = overrides.server_bindings {
-        Arc::new(sb)
-    } else {
-        let command_kv = bindings
-            .load_kv("command-kv")
-            .await
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to load command-kv binding: {}", e),
-                })
-            })?;
-        let command_storage = bindings
-            .load_storage("command-storage")
-            .await
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to load command-storage binding: {}", e),
-                })
-            })?;
-
-        let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> = Arc::new(
-            ManagedCommandDispatcher::new(
-                &pc.api_url,
-                &pc.api_key,
-                bindings.clone(),
-                target_bindings.clone(),
-            )
-            .map_err(|e| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to create command dispatcher: {}", e),
-                })
-            })?,
-        );
-
-        let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(
-            PlatformCommandRegistry::new(&pc.api_url, &pc.api_key)
-                .map_err(|e| {
-                    AlienError::new(ErrorData::ServerInitFailed {
-                        reason: format!("Failed to create command registry: {}", e),
-                    })
-                })?,
-        );
-
-        Arc::new(ServerBindings {
-            command_kv,
-            command_storage,
-            command_dispatcher,
-            command_registry,
-            artifact_registry: None,
-            bindings_provider: None,
-        })
-    };
-
-    let log_buffer = Arc::new(crate::dev::LogBuffer::new());
-
-    // Platform-specific routes
-    let platform_routes = Some(crate::routes::platform::build_platform_routes(ext));
-
-    info!(
-        port = config.port,
-        manager_id = %identity.manager_id,
-        base_url = %base_url,
-        "AlienManager built (platform mode)"
-    );
-
-    finalize(
-        config,
-        deployment_store,
-        release_store,
-        token_store,
-        auth_validator,
-        telemetry_backend,
-        credential_resolver,
-        server_bindings,
-        log_buffer,
-        crate::routes::RouterOptions {
-            include_initialize: false,
-            include_deploy_page: false,
-            include_install: false,
-        },
-        overrides.extra_routes,
-        platform_routes,
-        overrides.dev_status_tx,
-    )
-    .await
-}
-
-/// Build with explicitly-provided providers (no defaults).
-///
-/// All providers and `server_bindings` must be set before calling this method.
-#[cfg(not(feature = "sqlite"))]
-async fn build_explicit(config: Arc<ManagerConfig>, overrides: BuilderOverrides) -> crate::error::Result<AlienManager> {
-    macro_rules! require_provider {
-        ($field:expr, $name:literal) => {
-            $field.ok_or_else(|| {
-                AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!(
-                        "{} must be provided when building without sqlite defaults",
-                        $name
-                    ),
-                })
-            })?
-        };
-    }
-
-    let deployment_store = require_provider!(overrides.deployment_store, "deployment_store");
-    let release_store = require_provider!(overrides.release_store, "release_store");
-    let token_store = require_provider!(overrides.token_store, "token_store");
-    let credential_resolver =
-        require_provider!(overrides.credential_resolver, "credential_resolver");
-    let telemetry_backend = require_provider!(overrides.telemetry_backend, "telemetry_backend");
-    let auth_validator = require_provider!(overrides.auth_validator, "auth_validator");
-    let server_bindings =
-        Arc::new(require_provider!(overrides.server_bindings, "server_bindings"));
-
-    finalize(
-        config,
-        deployment_store,
-        release_store,
-        token_store,
-        auth_validator,
-        telemetry_backend,
-        credential_resolver,
-        server_bindings,
-        Arc::new(crate::dev::LogBuffer::new()),
-        crate::routes::RouterOptions {
-            include_initialize: !overrides.skip_initialize,
-            include_deploy_page: !overrides.skip_deploy_page,
-            include_install: !overrides.skip_install,
-        },
-        overrides.extra_routes,
-        None,
-        overrides.dev_status_tx,
-    )
-    .await
-}
-
-// --- Platform bootstrapping helpers ---
-
-#[cfg(feature = "platform")]
-struct ManagerIdentity {
-    workspace_name: String,
-    manager_id: String,
+pub struct ManagerIdentity {
+    pub workspace_name: String,
+    pub manager_id: String,
 }
 
 #[cfg(feature = "platform")]
-async fn bootstrap_manager_identity(
+pub async fn bootstrap_manager_identity(
     api_base_url: &str,
     manager_api_key: &str,
 ) -> crate::error::Result<ManagerIdentity> {
@@ -824,17 +485,20 @@ async fn bootstrap_manager_identity(
 }
 
 #[cfg(feature = "platform")]
-async fn build_standalone_providers(
+pub async fn build_standalone_providers(
     primary_platform: alien_core::Platform,
     env: &std::collections::HashMap<String, String>,
 ) -> crate::error::Result<(
     std::sync::Arc<dyn alien_bindings::BindingsProviderApi>,
-    std::collections::HashMap<alien_core::Platform, std::sync::Arc<dyn alien_bindings::BindingsProviderApi>>,
+    std::collections::HashMap<
+        alien_core::Platform,
+        std::sync::Arc<dyn alien_bindings::BindingsProviderApi>,
+    >,
 )> {
-    use std::collections::HashMap;
     use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_client_config::ClientConfigExt;
     use alien_core::Platform;
+    use std::collections::HashMap;
     use tracing::warn;
 
     let primary_config = alien_core::ClientConfig::from_std_env(primary_platform)
@@ -910,11 +574,14 @@ async fn build_standalone_providers(
         );
     }
 
-    Ok((primary_provider as Arc<dyn BindingsProviderApi>, target_providers))
+    Ok((
+        primary_provider as Arc<dyn BindingsProviderApi>,
+        target_providers,
+    ))
 }
 
 #[cfg(feature = "platform")]
-fn parse_standard_bindings(
+pub fn parse_standard_bindings(
     env: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashMap<String, serde_json::Value> {
     let platform_prefixes = ["ALIEN_AWS_", "ALIEN_GCP_", "ALIEN_AZURE_"];
@@ -949,7 +616,7 @@ fn parse_standard_bindings(
 }
 
 #[cfg(feature = "platform")]
-fn parse_target_bindings(
+pub fn parse_target_bindings(
     env: &std::collections::HashMap<String, String>,
     platform: alien_core::Platform,
 ) -> std::collections::HashMap<String, serde_json::Value> {

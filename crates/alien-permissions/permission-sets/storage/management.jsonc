@@ -50,7 +50,7 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "Stack prefixed storage management",
-              "expression": "resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/${projectName}/buckets/${stackPrefix}-')"
+              "expression": "resource.type == 'storage.googleapis.com/Bucket' && resource.name.startsWith('projects/_/buckets/${stackPrefix}-')"
             }
           },
           "resource": {

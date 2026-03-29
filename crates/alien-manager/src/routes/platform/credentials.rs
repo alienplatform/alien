@@ -7,12 +7,12 @@ use axum::{extract::Extension, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use super::auth::resolve_subject;
 use crate::providers::platform_api::{
     credential_resolver::impersonate_management_service_account,
     error::{ErrorData, Result},
     PlatformState,
 };
-use super::auth::resolve_subject;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

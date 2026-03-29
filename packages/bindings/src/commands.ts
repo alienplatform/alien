@@ -1,7 +1,7 @@
 /**
  * Command handling for Alien bindings.
  *
- * Provides ARC command registration and execution.
+ * Provides command registration and execution.
  */
 
 /**
@@ -18,7 +18,7 @@ export interface CommandDefinition {
 const commands: Map<string, CommandDefinition> = new Map()
 
 /**
- * Register an ARC command.
+ * Register a command.
  *
  * @param name - Command name
  * @param handler - Command handler function that receives params and returns a result
@@ -57,7 +57,7 @@ export function getCommands(): Map<string, CommandDefinition> {
 }
 
 /**
- * Execute an ARC command by name.
+ * Execute a command by name.
  *
  * @param name - Command name to execute
  * @param params - Command parameters

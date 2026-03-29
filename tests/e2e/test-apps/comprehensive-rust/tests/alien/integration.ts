@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 const state = getStackState()
 const functionUrl = getResourceOutputs({
   state,
-  resource: { type: "function", name: "test-alien-function" },
+  resource: { type: "function", name: "alien-rs-fn" },
 }).url
 
 describe("Alien Test Server Integration Tests", () => {
@@ -73,7 +73,7 @@ describe("Alien Test Server Integration Tests", () => {
 
   describe("Storage integration", () => {
     it("should perform storage operations successfully", async () => {
-      const response = await fetch(`${functionUrl}/storage-test/test-alien-storage`, {
+      const response = await fetch(`${functionUrl}/storage-test/alien-storage`, {
         method: "POST",
       })
 
@@ -81,7 +81,7 @@ describe("Alien Test Server Integration Tests", () => {
 
       const result = await response.json()
       expect(result.overallSuccess).toBe(true)
-      expect(result.bindingName).toBe("test-alien-storage")
+      expect(result.bindingName).toBe("alien-storage")
 
       // Check that all operations succeeded
       const operations = result.operations

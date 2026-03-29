@@ -223,10 +223,13 @@ impl ResourcePermissionsHelper {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
 
         for permission_set in permission_sets {
             Self::ensure_single_gcp_custom_role(ctx, permission_set, &permission_context).await?;
@@ -459,11 +462,15 @@ impl ResourcePermissionsHelper {
     ) -> Result<PermissionContext> {
         let gcp_config = ctx.get_gcp_config()?;
 
-        Ok(PermissionContext::new()
+        let mut permission_ctx = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(resource_name.to_string()))
+            .with_resource_name(resource_name.to_string());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_ctx = permission_ctx.with_project_number(project_number.clone());
+        }
+        Ok(permission_ctx)
     }
 
     /// Process GCP permissions for a specific profile

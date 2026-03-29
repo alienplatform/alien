@@ -2,21 +2,36 @@
 //!
 //! These functions handle building, posting releases, and creating deployments
 //! for the dev server. They're used by the main CLI router for dev mode operations.
+//!
+//! Dev mode is local-only — it always uses `Platform::Local`.
 
 use crate::{
     config::load_configuration,
     error::{ErrorData, Result},
     get_current_dir,
 };
+use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
-use alien_core::{BinaryTarget, Platform, Stack};
+use alien_commands::server::NullCommandDispatcher;
+use alien_core::{BinaryTarget, Stack};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_server_sdk::types::{
-    CreateDeploymentRequest, CreateReleaseRequest, Platform as SdkPlatform, StackByPlatform,
+use alien_manager::{
+    providers::{
+        in_memory_telemetry::InMemoryTelemetryBackend, local_credentials::LocalCredentialResolver,
+        permissive_auth::PermissiveAuthValidator,
+    },
+    stores::sqlite::{
+        SqliteCommandRegistry, SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore,
+        SqliteTokenStore,
+    },
+    traits::{DeploymentStore, ReleaseStore, ServerBindings, TokenStore},
+    LogBuffer,
 };
-use alien_server_sdk::Client as AlienManagerClient;
+use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
+use alien_manager_api::Client as AlienManagerClient;
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::str::FromStr;
+use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::info;
 
@@ -48,10 +63,17 @@ pub async fn ensure_server_running_with_env(
 ) -> Result<()> {
     if check_server_health(port).await {
         info!("Dev server already running on port {}", port);
+        ensure_local_dev_deployment_group(port).await?;
         return Ok(());
     }
 
-    info!("Starting dev server on port {}...", port);
+    start_embedded_dev_manager(port).await
+}
+
+/// Build the embedded dev manager instance used by `alien dev`.
+pub async fn build_embedded_dev_manager(
+    port: u16,
+) -> Result<(alien_manager::AlienManager, SocketAddr)> {
     let state_dir = get_current_dir()?.join(".alien");
     std::fs::create_dir_all(&state_dir)
         .into_alien_error()
@@ -63,34 +85,118 @@ pub async fn ensure_server_running_with_env(
 
     let db_path = state_dir.join("dev-server.db");
 
-    // Spawn alien-manager in background using the builder
     let config = alien_manager::ManagerConfig {
         port,
         db_path: Some(db_path),
         state_dir: Some(state_dir.clone()),
-        mode: alien_manager::config::ManagerMode::Dev,
+        enable_local_log_ingest: true,
         ..Default::default()
     };
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let db = Arc::new(
+        SqliteDatabase::new(
+            config
+                .db_path
+                .as_ref()
+                .expect("dev manager db_path should always be set")
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to initialize dev server database".to_string(),
+        })?,
+    );
+    let deployment_store: Arc<dyn DeploymentStore> =
+        Arc::new(SqliteDeploymentStore::new(db.clone()));
+    let release_store: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
+    let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db.clone()));
+
+    let kv_path = state_dir.join("commands_kv");
+    let storage_path = state_dir.join("commands_storage");
+    let command_kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
+        LocalKv::new(kv_path)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to create dev command KV store".to_string(),
+            })?,
+    );
+    let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+        LocalStorage::new(storage_path.to_string_lossy().into_owned()).context(
+            ErrorData::ServerStartFailed {
+                reason: "Failed to create dev command storage".to_string(),
+            },
+        )?,
+    );
+    let server_bindings = ServerBindings {
+        command_kv,
+        command_storage,
+        command_dispatcher: Arc::new(NullCommandDispatcher),
+        command_registry: Arc::new(SqliteCommandRegistry::new(db)),
+        artifact_registry: None,
+        bindings_provider: None,
+    };
+    let log_buffer = Arc::new(LogBuffer::new());
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let server = alien_manager::AlienManager::builder(config)
+        .deployment_store(deployment_store)
+        .release_store(release_store)
+        .token_store(token_store)
+        .credential_resolver(Arc::new(LocalCredentialResolver::new(state_dir)))
+        .telemetry_backend(Arc::new(InMemoryTelemetryBackend::new(log_buffer.clone())))
+        .auth_validator(Arc::new(PermissiveAuthValidator::new()))
+        .server_bindings(server_bindings)
+        .log_buffer(log_buffer)
+        .build()
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to initialize dev server".to_string(),
+        })?;
+
+    Ok((server, addr))
+}
+
+/// Start the embedded dev manager in the background and wait for it to be healthy.
+pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
+    info!("Starting dev server on port {}...", port);
+    let (server, addr) = build_embedded_dev_manager(port).await?;
 
     tokio::spawn(async move {
-        match alien_manager::AlienManager::builder(config).build().await {
-            Ok(server) => {
-                if let Err(e) = server.start(addr).await {
-                    tracing::error!("Dev server error: {:?}", e);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to start dev server: {:?}", e);
-            }
+        if let Err(e) = server.start(addr).await {
+            tracing::error!("Dev server error: {:?}", e);
         }
     });
 
-    // Wait for server to be ready
+    wait_for_dev_server_ready(port).await?;
+    ensure_local_dev_deployment_group(port).await?;
+    info!("Dev server ready");
+
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDeploymentGroup {
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListDeploymentGroupsResponse {
+    items: Vec<DevDeploymentGroup>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDeploymentGroupBody {
+    name: String,
+    max_deployments: i64,
+}
+
+pub(crate) async fn wait_for_dev_server_ready(port: u16) -> Result<()> {
     for _ in 0..50 {
         if check_server_health(port).await {
-            info!("Dev server ready");
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -101,29 +207,92 @@ pub async fn ensure_server_running_with_env(
     }))
 }
 
+pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
+    let base_url = format!("http://localhost:{port}");
+    let http_client = reqwest::Client::new();
+
+    let response = http_client
+        .get(format!("{base_url}/v1/deployment-groups"))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list dev deployment groups".to_string(),
+            url: None,
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Failed to list dev deployment groups ({}): {}",
+                status, body
+            ),
+            url: None,
+        }));
+    }
+
+    let body: ListDeploymentGroupsResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialize".to_string(),
+                reason: "Failed to parse dev deployment groups response".to_string(),
+            })?;
+
+    if body.items.iter().any(|group| group.name == "local-dev") {
+        return Ok(());
+    }
+
+    let create_response = http_client
+        .post(format!("{base_url}/v1/deployment-groups"))
+        .json(&CreateDeploymentGroupBody {
+            name: "local-dev".to_string(),
+            max_deployments: 100,
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create default dev deployment group".to_string(),
+            url: None,
+        })?;
+
+    if !create_response.status().is_success() {
+        let status = create_response.status();
+        let body = create_response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Failed to create default dev deployment group ({}): {}",
+                status, body
+            ),
+            url: None,
+        }));
+    }
+
+    info!("Created default 'local-dev' deployment group");
+
+    Ok(())
+}
+
 /// Build and post a release to the dev server (simple version for use in TUI setup).
 ///
-/// Platform-aware: builds with the correct `PlatformBuildSettings` variant, reads the
-/// stack from `.alien/build/{platform}/stack.json`, and for cloud platforms pushes images
-/// to the dev registry before posting the release.
+/// Always builds for the local platform — dev mode is local-only.
+/// Reads the stack from `.alien/build/local/stack.json`.
 pub async fn build_and_post_release_simple(
     current_dir: &PathBuf,
     port: u16,
     skip_build: bool,
     config_file: Option<&PathBuf>,
-    platform: &str,
 ) -> Result<String> {
     let output_dir = current_dir.join(".alien");
-    let platform_typed = Platform::from_str(platform).map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
-            message: e,
-        })
-    })?;
 
     // Build if needed
     if !skip_build {
-        info!("Building stack for {} platform...", platform);
+        info!("Building stack for local platform...");
         let config_path = match config_file {
             Some(cf) if cf.is_relative() => current_dir.join(cf),
             Some(cf) => cf.clone(),
@@ -136,28 +305,10 @@ pub async fn build_and_post_release_simple(
                     message: "Failed to load configuration".to_string(),
                 })?;
 
-        let platform_build_settings = match platform_typed {
-            Platform::Aws => PlatformBuildSettings::Aws {
-                managing_account_id: None,
-            },
-            Platform::Gcp => PlatformBuildSettings::Gcp {},
-            Platform::Azure => PlatformBuildSettings::Azure {},
-            Platform::Kubernetes => PlatformBuildSettings::Kubernetes {},
-            Platform::Local => PlatformBuildSettings::Local {},
-            Platform::Test => PlatformBuildSettings::Test {},
-        };
-
-        // For local platform, build for current OS only (native binary).
-        // For cloud platforms, use default targets (Linux containers).
-        let targets = match platform_typed {
-            Platform::Local => Some(vec![BinaryTarget::current_os()]),
-            _ => None, // Use platform-specific defaults
-        };
-
         let settings = BuildSettings {
             output_directory: output_dir.to_str().unwrap().to_string(),
-            platform: platform_build_settings,
-            targets,
+            platform: PlatformBuildSettings::Local {},
+            targets: Some(vec![BinaryTarget::current_os()]),
             cache_url: None,
             override_base_image: None,
             debug_mode: true,
@@ -169,14 +320,14 @@ pub async fn build_and_post_release_simple(
     }
 
     // Load the built stack
-    let stack_file = output_dir.join("build").join(platform).join("stack.json");
-    let mut stack: Stack = serde_json::from_str(
+    let stack_file = output_dir.join("build").join("local").join("stack.json");
+    let stack: Stack = serde_json::from_str(
         &std::fs::read_to_string(&stack_file)
             .into_alien_error()
             .context(ErrorData::FileOperationFailed {
                 operation: "read".to_string(),
                 file_path: stack_file.display().to_string(),
-                reason: format!("Failed to read stack.json for {} platform", platform),
+                reason: "Failed to read stack.json for local platform".to_string(),
             })?,
     )
     .into_alien_error()
@@ -184,23 +335,6 @@ pub async fn build_and_post_release_simple(
         operation: "deserialize".to_string(),
         reason: "Failed to parse stack.json".to_string(),
     })?;
-
-    // For cloud platforms, push images to the dev registry before creating the release.
-    // Local platform doesn't need pushing — it uses local OCI tarballs directly.
-    if platform_typed != Platform::Local && platform_typed != Platform::Test {
-        info!("Pushing images to dev registry...");
-        let push_settings = super::dev_registry::resolve_dev_push_settings(
-            &platform_typed,
-            &output_dir,
-            current_dir,
-        )
-        .await?;
-
-        stack = alien_build::push_stack(stack, platform_typed.clone(), &push_settings)
-            .await
-            .context(ErrorData::BuildFailed)?;
-        info!("Images pushed to dev registry");
-    }
 
     // Post release to dev server
     let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
@@ -213,23 +347,14 @@ pub async fn build_and_post_release_simple(
                 reason: "Failed to serialize stack".to_string(),
             })?;
 
-    // Place the stack in the correct platform slot
-    let mut stack_by_platform = StackByPlatform {
+    let stack_by_platform = StackByPlatform {
         aws: None,
         gcp: None,
         azure: None,
         kubernetes: None,
-        local: None,
+        local: Some(stack_json),
         test: None,
     };
-    match platform_typed {
-        Platform::Aws => stack_by_platform.aws = Some(stack_json),
-        Platform::Gcp => stack_by_platform.gcp = Some(stack_json),
-        Platform::Azure => stack_by_platform.azure = Some(stack_json),
-        Platform::Kubernetes => stack_by_platform.kubernetes = Some(stack_json),
-        Platform::Local => stack_by_platform.local = Some(stack_json),
-        Platform::Test => stack_by_platform.test = Some(stack_json),
-    }
 
     let response = client
         .create_release()
@@ -251,12 +376,12 @@ pub async fn build_and_post_release_simple(
 
 /// Create initial deployment if it doesn't exist.
 ///
+/// Always creates a local-platform deployment — dev mode is local-only.
 /// Accepts optional environment variables to include in the deployment request.
 /// Uses raw HTTP instead of the auto-generated SDK to support the `environmentVariables`
 /// field which may not yet be in the generated SDK types.
 pub async fn create_initial_deployment(
     deployment_name: &str,
-    platform: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
 ) -> Result<()> {
@@ -285,7 +410,7 @@ pub async fn create_initial_deployment(
 
     let mut body = serde_json::json!({
         "name": deployment_name,
-        "platform": platform,
+        "platform": "local",
     });
 
     if let Some(env_vars) = &environment_variables {

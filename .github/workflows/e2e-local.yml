@@ -1,0 +1,81 @@
+name: E2E Local Dev
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "packages/**"
+      - "tests/e2e/**"
+      - ".github/workflows/e2e-local.yml"
+
+  pull_request:
+    paths:
+      - "crates/**"
+      - "packages/**"
+      - "tests/e2e/**"
+      - ".github/workflows/e2e-local.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-local-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-local:
+    name: "Local E2E — ${{ matrix.os }} / ${{ matrix.suite }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        suite:
+          - rust-function
+          - typescript-function
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript packages
+        run: pnpm build
+
+      - name: Build alien CLI
+        run: cargo build -p alien-cli
+
+      - name: Run local E2E tests
+        run: pnpm -C tests/e2e test tests/${{ matrix.suite }}/local.test.ts
+        env:
+          ALIEN_CLI_PATH: ${{ github.workspace }}/target/debug/alien${{ runner.os == 'Windows' && '.exe' || '' }}

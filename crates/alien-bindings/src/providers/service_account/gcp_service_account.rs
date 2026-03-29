@@ -100,6 +100,7 @@ impl ServiceAccount for GcpServiceAccount {
                 token: response.access_token,
             },
             service_overrides: self.config.service_overrides.clone(),
+            project_number: self.config.project_number.clone(),
         };
 
         Ok(ClientConfig::Gcp(Box::new(impersonated_config)))

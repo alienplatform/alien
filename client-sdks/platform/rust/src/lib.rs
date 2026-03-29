@@ -1,4 +1,4 @@
-//! Alien Client SDK
+//! Alien Platform API
 //!
 //! Auto-generated from OpenAPI spec with custom error conversion support.
 //!
@@ -8,7 +8,7 @@
 //! `.into_alien_error()` to preserve structured API error information:
 //!
 //! ```ignore
-//! use alien_client_sdk::SdkResultExt;
+//! use alien_platform_api::SdkResultExt;
 //!
 //! // ✅ Good: preserves API error code, message, retryable flag
 //! client.some_method().send().await.into_sdk_error().context(...)?
@@ -43,7 +43,7 @@ use alien_error::{AlienError, GenericError};
 /// ## What it preserves
 ///
 /// When the API returns an error response, `into_sdk_error()` preserves:
-/// - `code`: The API error code (e.g., "AGENT_NOT_FOUND")
+/// - `code`: The API error code (e.g., "DEPLOYMENT_NOT_FOUND")
 /// - `message`: The error message
 /// - `retryable`: Whether the operation can be retried
 /// - `context`: Additional error context as JSON

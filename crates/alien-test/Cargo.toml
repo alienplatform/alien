@@ -1,0 +1,62 @@
+[package]
+name = "alien-test"
+version.workspace = true
+edition = "2021"
+description = "E2E test infrastructure for Alien"
+license = "MIT"
+
+[lib]
+name = "alien_test"
+path = "src/lib.rs"
+
+[dependencies]
+# Core Alien crates
+alien-manager = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-manager-api = { workspace = true }
+alien-build = { workspace = true }
+alien-aws-clients = { workspace = true }
+
+# OCI registry push
+dockdash = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# HTTP
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Env loading
+dotenvy = { workspace = true }
+
+# Temp dirs for SQLite
+tempfile = { workspace = true }
+
+# IDs
+uuid = { workspace = true, features = ["v4"] }
+
+# Token hashing
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# Error handling (for e2e orchestration)
+anyhow = { workspace = true }
+
+# Base64 encoding for command params
+base64 = { workspace = true }
+
+# Ngrok tunnel for pull tests
+ngrok = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

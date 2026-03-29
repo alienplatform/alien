@@ -59,7 +59,7 @@ The executor filters by lifecycle. Same library, different phases, different per
 
 Because `alien-infra` is a Rust library (not a CLI), it can be embedded anywhere:
 
-- **Local agents** - The `acme run` command runs `alien-infra` on your laptop for local development, or on customer machines for local LLMs, endpoint security agents, robot fleets.
+- **Local deployments** — `alien dev` runs `alien-infra` on your laptop for local development, or on customer machines for local LLMs, endpoint security agents, robot fleets.
 
 - **Serverless functions** - Run `step()` in Lambda or Cloud Run. No long-running processes.
 
@@ -341,7 +341,7 @@ loop {
     current_state = result.next_state;
     
     // Store state externally
-    db.save(&agent_id, &current_state).await?;
+    db.save(&deployment_id, &current_state).await?;
     
     if is_synced(&current_state) {
         break;
@@ -358,8 +358,8 @@ This loop runs in different contexts:
 - **Lambda function** - state in DynamoDB, triggered by Step Functions
 - **Temporal workflow** - state in workflow history
 - **Terraform provider** - state in Terraform state file
-- **Local CLI** - state in `~/.alien-cli/<agent_id>/state.json`
-- **Kubernetes agent** - state in Custom Resource status
+- **Local CLI** — state in `~/.alien-cli/<deployment_id>/state.json`
+- **Kubernetes Agent** — state in Custom Resource status
 
 The library doesn't care where state lives or who calls `step()`.
 

@@ -10,7 +10,7 @@ type RouteContext = {
  * GET /api/agents/:id/info
  *
  * Get connection info for a specific agent.
- * Returns ARC endpoint URL and resource public URLs.
+ * Returns command endpoint URL and resource public URLs.
  */
 export async function GET(_request: Request, context: RouteContext): Promise<Response> {
   const session = await auth.api.getSession({

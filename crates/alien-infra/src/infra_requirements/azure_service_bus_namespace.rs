@@ -105,7 +105,7 @@ impl AzureServiceBusNamespaceController {
             Ok(namespace) => {
                 if let Some(properties) = &namespace.properties {
                     match properties.status.as_deref() {
-                        Some("Succeeded") => {
+                        Some("Active") => {
                             info!(namespace_name=%namespace_name, "Namespace creation completed");
                             self.handle_creation_completed(&namespace);
 
@@ -118,7 +118,7 @@ impl AzureServiceBusNamespaceController {
                         Some("Creating") | Some("Updating") => {
                             debug!(namespace_name=%namespace_name, "Namespace still being created");
                             Ok(HandlerAction::Stay {
-                                max_times: 20,
+                                max_times: 60,
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
@@ -130,19 +130,19 @@ impl AzureServiceBusNamespaceController {
                                 resource_id: Some(desired_config.id.clone()),
                             }));
                         }
-                        _ => {
-                            debug!(namespace_name=%namespace_name, "Provisioning state not available, continuing to wait");
+                        other => {
+                            debug!(namespace_name=%namespace_name, status=?other, "Status not 'Active', continuing to wait");
                             Ok(HandlerAction::Stay {
-                                max_times: 20,
-                                suggested_delay: Some(Duration::from_secs(10)),
+                                max_times: 60,
+                                suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
                     }
                 } else {
                     debug!(namespace_name=%namespace_name, "Properties not available, continuing to wait");
                     Ok(HandlerAction::Stay {
-                        max_times: 20,
-                        suggested_delay: Some(Duration::from_secs(10)),
+                        max_times: 60,
+                        suggested_delay: Some(Duration::from_secs(15)),
                     })
                 }
             }
@@ -152,8 +152,8 @@ impl AzureServiceBusNamespaceController {
             }) => {
                 debug!(namespace_name=%namespace_name, "Namespace not yet available, continuing to wait");
                 Ok(HandlerAction::Stay {
-                    max_times: 20,
-                    suggested_delay: Some(Duration::from_secs(10)),
+                    max_times: 60,
+                    suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
             Err(e) => {
@@ -227,13 +227,13 @@ impl AzureServiceBusNamespaceController {
 
             if let Some(properties) = namespace.properties {
                 match properties.status.as_deref() {
-                    Some("Succeeded") => {
+                    Some("Active") => {
                         // Namespace is healthy
                     }
                     Some(state) => {
                         return Err(AlienError::new(ErrorData::ResourceDrift {
                             resource_id: config.id.clone(),
-                            message: format!("Status changed from Succeeded to {}", state),
+                            message: format!("Status changed from Active to {}", state),
                         }));
                     }
                     None => {
@@ -470,8 +470,10 @@ impl AzureServiceBusNamespaceController {
 
 /// Generates the full, prefixed Azure Service Bus Namespace name (pure function).
 fn generate_service_bus_namespace_name(resource_prefix: &str, id: &str) -> String {
-    // Azure Service Bus Namespace names must be valid DNS names
-    // Format: {prefix}-{id}-sb with length constraints and character restrictions
+    // Azure Service Bus Namespace names must be:
+    // - 6-50 characters, globally unique DNS name
+    // - Alphanumeric and hyphens only, start with letter, end with letter/number
+    // - Must NOT end with "-sb" (Azure reserves this suffix)
     let clean_prefix = resource_prefix
         .to_lowercase()
         .chars()
@@ -483,9 +485,9 @@ fn generate_service_bus_namespace_name(resource_prefix: &str, id: &str) -> Strin
         .filter(|c| c.is_alphanumeric() || *c == '-')
         .collect::<String>();
 
-    let combined = format!("{}-{}-sb", clean_prefix, clean_id);
+    let combined = format!("{}-{}", clean_prefix, clean_id);
 
-    // Truncate to reasonable length if necessary (Azure limit is 50 chars for Service Bus namespace)
+    // Truncate to 50 chars (Azure limit for Service Bus namespace names)
     if combined.len() > 50 {
         combined[..50].to_string()
     } else {

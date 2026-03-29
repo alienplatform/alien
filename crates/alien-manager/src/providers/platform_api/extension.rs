@@ -44,10 +44,7 @@ impl PlatformState {
     }
 }
 
-pub fn build_platform_client(
-    api_url: &str,
-    api_key: &str,
-) -> Result<alien_platform_api::Client> {
+pub fn build_platform_client(api_url: &str, api_key: &str) -> Result<alien_platform_api::Client> {
     let auth_value = format!("Bearer {}", api_key);
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -83,25 +80,20 @@ pub async fn resolve_base_url(
         return Ok(url.clone());
     }
 
-    let container_binding_name =
-        std::env::var("ALIEN_CURRENT_CONTAINER_BINDING_NAME")
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "BASE_URL not set and ALIEN_CURRENT_CONTAINER_BINDING_NAME not found."
-                    .to_string(),
-            });
+    let container_binding_name = std::env::var("ALIEN_CURRENT_CONTAINER_BINDING_NAME")
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "BASE_URL not set and ALIEN_CURRENT_CONTAINER_BINDING_NAME not found."
+                .to_string(),
+        });
 
     match container_binding_name {
         Ok(name) => {
-            let container = bindings_provider
-                .load_container(&name)
-                .await
-                .context(ErrorData::ConfigurationError {
-                    message: format!(
-                        "Failed to load container binding '{}'",
-                        name
-                    ),
-                })?;
+            let container = bindings_provider.load_container(&name).await.context(
+                ErrorData::ConfigurationError {
+                    message: format!("Failed to load container binding '{}'", name),
+                },
+            )?;
 
             container
                 .get_public_url()

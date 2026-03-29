@@ -1149,19 +1149,16 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
-                // Construct full resource names using the project ID from config
-                let topic = if topic_name.starts_with("projects/") {
-                    topic_name // Already a full resource name
+                // Pass short names — PubSubClient methods prepend the project prefix
+                let topic = if let Some(short) = topic_name.strip_prefix(&format!("projects/{}/topics/", gcp_config.project_id)) {
+                    short.to_string()
                 } else {
-                    format!("projects/{}/topics/{}", gcp_config.project_id, topic_name)
+                    topic_name
                 };
-                let subscription = if subscription_name.starts_with("projects/") {
-                    subscription_name // Already a full resource name
+                let subscription = if let Some(short) = subscription_name.strip_prefix(&format!("projects/{}/subscriptions/", gcp_config.project_id)) {
+                    short.to_string()
                 } else {
-                    format!(
-                        "projects/{}/subscriptions/{}",
-                        gcp_config.project_id, subscription_name
-                    )
+                    subscription_name
                 };
 
                 let q: Arc<dyn Queue> =

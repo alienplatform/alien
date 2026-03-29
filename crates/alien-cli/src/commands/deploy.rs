@@ -54,10 +54,10 @@ pub struct DeployArgs {
     #[arg(long, value_enum, default_value_t = MonitoringMode::Auto)]
     pub monitoring: MonitoringMode,
 
-    /// Managed server to use for deployment.
+    /// Manager to use for deployment.
     /// Omit for auto-resolve (platform resolves from deployment record).
-    /// Use "none" to deploy without a managed server (e.g., bootstrapping the managed server itself).
-    /// Or pass a specific managed server ID.
+    /// Use "none" to deploy without a manager (e.g., bootstrapping the manager itself).
+    /// Or pass a specific manager ID.
     #[arg(long)]
     pub manager: Option<String>,
 
@@ -405,16 +405,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
     info!("📋 Session ID: {}", session_id);
 
-    // Resolve managed server ID from --manager flag
+    // Resolve manager ID from --manager flag
     // None (omitted): platform auto-resolves from deployment record
-    // "none": explicitly no managed server (e.g., bootstrapping the managed server itself)
-    // <id>: specific managed server ID
+    // "none": explicitly no manager (e.g., bootstrapping the manager itself)
+    // <id>: specific manager ID
     let manager_id = match args.manager.as_deref() {
         None | Some("none") => None,
         Some(id) => Some(id.try_into().map_err(
             |_: alien_platform_api::types::error::ConversionError| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "Invalid managed server ID".to_string(),
+                    message: "Invalid manager ID".to_string(),
                 })
             },
         )?),

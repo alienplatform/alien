@@ -18,12 +18,17 @@ pub struct PermissionContext {
 
     // GCP variables
     pub project_name: Option<String>,
+    pub project_number: Option<String>,
     pub region: Option<String>,
 
     // Azure variables
     pub subscription_id: Option<String>,
     pub resource_group: Option<String>,
     pub storage_account_name: Option<String>,
+
+    // Azure cross-subscription management variables
+    pub managing_subscription_id: Option<String>,
+    pub managing_resource_group: Option<String>,
 
     // Common variables
     pub stack_prefix: Option<String>,
@@ -42,10 +47,13 @@ impl PermissionContext {
             aws_account_id: None,
             aws_region: None,
             project_name: None,
+            project_number: None,
             region: None,
             subscription_id: None,
             resource_group: None,
             storage_account_name: None,
+            managing_subscription_id: None,
+            managing_resource_group: None,
             stack_prefix: None,
             resource_name: None,
             service_account_name: None,
@@ -74,6 +82,12 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for GCP project number (numeric, used in IAM condition expressions)
+    pub fn with_project_number(mut self, project_number: impl Into<String>) -> Self {
+        self.project_number = Some(project_number.into());
+        self
+    }
+
     /// Builder pattern for GCP region (used in artifact-registry, function, network permission sets)
     pub fn with_region(mut self, region: impl Into<String>) -> Self {
         self.region = Some(region.into());
@@ -95,6 +109,18 @@ impl PermissionContext {
     /// Builder pattern for Azure storage account name
     pub fn with_storage_account_name(mut self, storage_account_name: impl Into<String>) -> Self {
         self.storage_account_name = Some(storage_account_name.into());
+        self
+    }
+
+    /// Builder pattern for Azure managing subscription ID (cross-subscription management)
+    pub fn with_managing_subscription_id(mut self, id: impl Into<String>) -> Self {
+        self.managing_subscription_id = Some(id.into());
+        self
+    }
+
+    /// Builder pattern for Azure managing resource group (cross-subscription management)
+    pub fn with_managing_resource_group(mut self, rg: impl Into<String>) -> Self {
+        self.managing_resource_group = Some(rg.into());
         self
     }
 
@@ -157,6 +183,7 @@ impl PermissionContext {
             "awsAccountId" => self.aws_account_id.as_deref(),
             "awsRegion" => self.aws_region.as_deref(),
             "projectName" => self.project_name.as_deref(),
+            "projectNumber" => self.project_number.as_deref(),
             "region" => self.region.as_deref(),
             "subscriptionId" => self.subscription_id.as_deref(),
             "resourceGroup" => self.resource_group.as_deref(),
@@ -168,6 +195,8 @@ impl PermissionContext {
             "externalId" => self.external_id.as_deref(),
             "managingRoleArn" => self.managing_role_arn.as_deref(),
             "managingAccountId" => self.managing_account_id.as_deref(),
+            "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
+            "managingResourceGroup" => self.managing_resource_group.as_deref(),
             _ => None,
         }
     }

@@ -67,10 +67,10 @@ struct DeadlineIndexData {
 }
 
 // =============================================================================
-// ARC Server
+// Command Server
 // =============================================================================
 
-/// Core ARC server implementation.
+/// Core command server implementation.
 ///
 /// Uses CommandRegistry as source of truth for metadata.
 /// Uses KV for operational data (params, responses, indices, leases).
@@ -84,7 +84,7 @@ pub struct CommandServer {
 }
 
 impl CommandServer {
-    /// Create a new ARC server instance
+    /// Create a new command server instance
     pub fn new(
         kv: Arc<dyn Kv>,
         storage: Arc<dyn Storage>,
@@ -102,7 +102,7 @@ impl CommandServer {
         }
     }
 
-    /// Create a new ARC server with custom inline size limit
+    /// Create a new command server with custom inline size limit
     pub fn with_inline_limit(
         kv: Arc<dyn Kv>,
         storage: Arc<dyn Storage>,

@@ -220,6 +220,7 @@ impl AsyncTestContext for AwsProviderTestContext {
                 session_token: None,
             },
             service_overrides: None,
+            project_number: None,
         };
         let lambda_client = LambdaClient::new(reqwest::Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
 
@@ -511,6 +512,7 @@ impl AsyncTestContext for GcpProviderTestContext {
                 json: gcp_credentials_json.clone(),
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let cloudrun_client = CloudRunClient::new(reqwest::Client::new(), config);
@@ -711,6 +713,7 @@ impl AsyncTestContext for AzureProviderTestContext {
                 client_secret,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let container_apps_client =
@@ -1073,6 +1076,9 @@ impl AsyncTestContext for AzureProviderTestContext {
             }
             alien_azure_clients::AzureCredentials::WorkloadIdentity { client_id, .. } => {
                 panic!("WorkloadIdentity credentials not fully supported in function binding tests, client_id: {}", client_id)
+            }
+            alien_azure_clients::AzureCredentials::ManagedIdentity { client_id, .. } => {
+                panic!("ManagedIdentity credentials not supported in function binding tests, client_id: {}", client_id)
             }
         };
 

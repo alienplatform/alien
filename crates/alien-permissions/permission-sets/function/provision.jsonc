@@ -129,14 +129,10 @@
             "iam.serviceAccounts.setIamPolicy"
           ]
         },
+        // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
+        // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Stack prefixed function provision",
-              "expression": "(resource.type == 'run.googleapis.com/Service' && resource.name.startsWith('projects/${projectName}/locations/${region}/services/${stackPrefix}-')) || (resource.type == 'run.googleapis.com/Job' && resource.name.startsWith('projects/${projectName}/locations/${region}/jobs/${stackPrefix}-'))"
-            }
-          },
+          "stack": { "scope": "projects/${projectName}" },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
           }

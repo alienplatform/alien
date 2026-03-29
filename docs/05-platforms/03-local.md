@@ -4,11 +4,11 @@ The Local platform runs Alien applications as native processes on Windows, Linux
 
 ## Use Cases
 
-**Local development** — Fast iterations without cloud credentials. `acme run` starts your app locally.
+**Local development** — Fast iterations without cloud credentials. `alien dev` starts your app locally.
 
 **POCs and trials** — Enterprises can evaluate Alien applications without any cloud permissions. Download, run locally, see it work. No procurement, no security reviews, no IAM policies.
 
-**Arbitrary VMs** — Almost any enterprise can provision a Linux VM with SSH access. Deploy the Alien agent there. No Kubernetes, no container orchestration, no cloud-specific permissions. Works on EC2, VMware, bare metal, anything.
+**Arbitrary VMs** — Almost any enterprise can provision a Linux VM with SSH access. Deploy an Alien deployment there. No Kubernetes, no container orchestration, no cloud-specific permissions. Works on EC2, VMware, bare metal, anything.
 
 **Edge devices** — Robots, embedded systems, IoT devices running Linux.
 
@@ -51,10 +51,10 @@ Service managers provide the same abstraction as cloud APIs. Controllers don't k
 
 ## Entry Point
 
-The `acme run` command starts the local platform:
+The `alien deploy` command (or `alien dev` for local development) starts the local platform:
 
 ```bash
-acme run --token $TOKEN --name production
+alien deploy --platform local --token $TOKEN --name production
 ```
 
 Here's what happens:
@@ -66,7 +66,7 @@ Here's what happens:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  acme run                                                   │
+│  alien deploy (local)                                        │
 │                                                             │
 │  ┌─────────────────┐    ┌────────────────────────────────┐ │
 │  │ Bindings Server │◀───│ Function Processes              │ │
@@ -85,7 +85,7 @@ Here's what happens:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-All state is scoped by agent ID: `~/.alien-cli/<agent_id>/`.
+All state is scoped by deployment ID: `~/.alien-cli/<deployment_id>/`.
 
 ## Service Managers
 
@@ -281,7 +281,7 @@ On startup, managers scan metadata directories and restart resources:
 State directory structure:
 
 ```
-~/.alien-cli/<agent_id>/
+~/.alien-cli/<deployment_id>/
 ├── state.json                      # Deployment state (synced to platform)
 ├── storage/
 │   └── {resource_id}/              # Storage directories

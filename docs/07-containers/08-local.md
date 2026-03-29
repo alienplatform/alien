@@ -94,7 +94,7 @@ impl CompileTimeCheck for DockerAvailableCheck {
 Following the same pattern as local functions:
 
 ```
-~/.alien-cli/{agent_id}/
+~/.alien-cli/{deployment_id}/
 ├── state.json                           # Deployment state
 ├── containers/
 │   ├── postgres/

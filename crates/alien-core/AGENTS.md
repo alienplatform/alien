@@ -1,6 +1,17 @@
 # alien-core
 
-Core types and abstractions for the Alien platform.
+Core types shared across all Alien crates.
+
+## Key Modules
+
+- `deployment/` — Deployment types: status, config, state, release, compute, domain, environment. Read `deployment/mod.rs` for the module structure.
+- `platform.rs` — Platform enum (Aws, Gcp, Azure, Kubernetes, Local)
+- `stack.rs` / `stack_state.rs` — Stack and resource definitions
+- `resource.rs` / `resources/` — Resource types and per-resource configs
+- `bindings/` — Binding type definitions (storage, KV, vault, etc.)
+- `commands_types.rs` — Command system types
+- `permissions.rs` — Permission definitions
+- `events/` / `app_events/` — Event types
 
 ## Type Generation & Code Sync
 

@@ -36,11 +36,10 @@ alien-cli-common = { workspace = true }
 # Local development dependencies (always enabled)
 alien-local = { workspace = true }
 alien-deployment = { workspace = true }
-alien-aws-clients = { workspace = true }
 alien-bindings = { workspace = true }
 alien-commands = { workspace = true, features = ["server"] }
 alien-manager = { workspace = true }
-alien-server-sdk = { package = "alien-manager-api", path = "../../client-sdks/manager/rust" }
+alien-manager-api = { path = "../../client-sdks/manager/rust" }
 deepstore-client = { workspace = true }
 object_store = { workspace = true, features = ["fs", "aws", "gcp", "azure", "tls-webpki-roots"] }
 clap = { workspace = true, features = ["derive", "env"] }

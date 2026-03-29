@@ -72,7 +72,7 @@ const api = new alien.Container("api")
 **2. Platform prepares Horizon cluster (before deployment):**
 - Creates cluster in Horizon (if not exists) using Platform JWT
 - Receives management token and machine token (once only)
-- Encrypts and stores tokens in platform database (`agent.horizonConfig`)
+- Encrypts and stores tokens in platform database (`deployment.horizonConfig`)
 - Adds machine token as built-in environment variable (synced to vault)
 
 **3. Alien provisions infrastructure:**

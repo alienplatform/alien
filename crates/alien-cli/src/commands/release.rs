@@ -7,11 +7,10 @@ use alien_build::settings::PushSettings;
 use alien_core::{alien_event, AlienEvent, EventChange, EventHandler, EventState};
 use alien_core::{Platform, Stack};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::GitMetadata;
-use alien_server_sdk::types::{
-    CreateReleaseRequest as ManagerCreateReleaseRequest,
-    StackByPlatform as ManagerStackByPlatform,
+use alien_manager_api::types::{
+    CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
+use alien_platform_api::types::GitMetadata;
 use async_trait::async_trait;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -25,7 +24,7 @@ use tracing::info;
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Push images and create a release",
-    long_about = "Push built images to a container registry and create a new release on the Alien platform. By default, retrieves registry credentials from the platform's agent manager. Use override flags for custom registries (e.g., deploying the agent manager itself).",
+    long_about = "Push built images to a container registry and create a new release on the Alien platform. By default, retrieves registry credentials from the platform's manager. Use override flags for custom registries (e.g., deploying the manager itself).",
     after_help = "EXAMPLES:
     # Standard release (auto-fetch registry credentials from platform)
     alien release
@@ -42,7 +41,7 @@ use tracing::info;
     # Output JSON (for scripting/automation)
     alien release --json --yes
 
-    # Manual registry override (for deploying agent manager or custom setups)
+    # Manual registry override (for deploying manager or custom setups)
     alien release --image-repo my-registry.com/my-app --registry-auth basic --registry-username user --registry-password pass
 
     # Skip git metadata collection
@@ -73,8 +72,8 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub no_tui: bool,
 
-    // Manual registry override options (for agent manager deployment)
-    /// Image repository URL (manual override - skips platform agent manager)
+    // Manual registry override options (for manager deployment)
+    /// Image repository URL (manual override - skips platform manager)
     #[arg(long)]
     pub image_repo: Option<String>,
 
@@ -313,7 +312,10 @@ async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<
         .join(first_platform)
         .join("stack.json");
     if !stack_file.exists() {
-        println!("No build found for {} platform, building...", first_platform);
+        println!(
+            "No build found for {} platform, building...",
+            first_platform
+        );
 
         let platform = Platform::from_str(first_platform).map_err(|e| {
             AlienError::new(ErrorData::ValidationError {
@@ -375,7 +377,7 @@ async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<
         discovered
     };
 
-    // Resolve manager (discovers URL in Platform mode, known in SelfHosted/Dev)
+    // Resolve manager (discovers URL in Platform mode, known in Standalone/Dev)
     let manager = ctx
         .resolve_manager(&project_link.project_id, &platforms[0])
         .await?;
@@ -510,7 +512,7 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
 
     // Convert platform SDK GitMetadata to manager SDK GitMetadata (serde roundtrip)
     let sdk_git_metadata = git_metadata.and_then(|m| {
-        m.0.map(|inner| alien_server_sdk::types::GitMetadata {
+        m.0.map(|inner| alien_manager_api::types::GitMetadata {
             commit_sha: inner.commit_sha.map(|s| s.to_string()),
             commit_ref: inner.commit_ref.map(|s| s.to_string()),
             commit_message: inner.commit_message.map(|s| s.to_string()),
@@ -530,7 +532,7 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
 async fn create_manager_release(
     manager: &ManagerContext,
     stack: ManagerStackByPlatform,
-    git_metadata: Option<alien_server_sdk::types::GitMetadata>,
+    git_metadata: Option<alien_manager_api::types::GitMetadata>,
 ) -> Result<String> {
     info!("Creating release on manager...");
 
@@ -666,7 +668,7 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 /// Fetch push settings from the manager's artifact-registry credentials endpoint.
 ///
 /// Uses `ManagerContext.repository_name` (available when resolved via platform discovery).
-/// For SelfHosted mode without `--image-repo`, this will fail with a helpful error.
+/// For Standalone mode without `--image-repo`, this will fail with a helpful error.
 async fn fetch_push_settings_from_manager(
     manager: &ManagerContext,
     platform: &Platform,
@@ -674,7 +676,7 @@ async fn fetch_push_settings_from_manager(
     let repository_name = manager.repository_name.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "No repository name available. In self-hosted mode, use --image-repo to specify a container registry.\n\
+                "No repository name available. In standalone mode, use --image-repo to specify a container registry.\n\
                  Example: alien release --platform {} --image-repo my-registry.com/my-app",
                 platform.as_str()
             ),
@@ -721,7 +723,7 @@ async fn fetch_push_settings_from_manager(
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "parse".to_string(),
-            reason: "Failed to parse credentials response from agent manager".to_string(),
+            reason: "Failed to parse credentials response from manager".to_string(),
         })?;
 
     // Extract credentials from response
@@ -772,10 +774,10 @@ async fn fetch_push_settings_from_manager(
 /// The local platform's artifact registry runs on localhost but is exposed to containers
 /// as host.docker.internal. The CLI runs on the host, so it needs localhost URLs.
 /// This translation applies regardless of platform -- in development setups a single
-/// local agent manager may serve all platforms.
+/// local manager may serve all platforms.
 ///
 /// # Arguments
-/// * `repository_uri` - Registry URL from agent manager (e.g., "host.docker.internal:5000/artifacts/repo")
+/// * `repository_uri` - Registry URL from manager (e.g., "host.docker.internal:5000/artifacts/repo")
 /// * `platform` - Target platform being deployed to
 ///
 /// # Returns

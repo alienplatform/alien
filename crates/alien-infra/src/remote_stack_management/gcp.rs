@@ -185,11 +185,14 @@ impl GcpRemoteStackManagementController {
                 .next()
                 .unwrap_or(service_account_email);
 
-            let permission_context = PermissionContext::new()
+            let mut permission_context = PermissionContext::new()
                 .with_stack_prefix(ctx.resource_prefix.to_string())
                 .with_project_name(gcp_config.project_id.clone())
                 .with_region(gcp_config.region.clone())
                 .with_service_account_name(service_account_id.to_string());
+            if let Some(ref project_number) = gcp_config.project_number {
+                permission_context = permission_context.with_project_number(project_number.clone());
+            }
 
             let mut new_bindings = Vec::new();
 

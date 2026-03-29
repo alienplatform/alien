@@ -22,14 +22,12 @@
         "grant": {
           "permissions": ["iam.serviceAccounts.getAccessToken"]
         },
+        // iam.serviceAccounts.getAccessToken does NOT support IAM conditions at all.
+        // ALL conditions (name, type, broad) silently fail. The ONLY way to scope SA
+        // impersonation is via resource-level IAM (granting tokenCreator directly on the SA).
+        // Stack: scope-only. Resource: scoped to specific SA.
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "Service account impersonation access",
-              "expression": "resource.type == 'iam.googleapis.com/ServiceAccount' && resource.name.startsWith('projects/${projectName}/serviceAccounts/${stackPrefix}-')"
-            }
-          },
+          "stack": { "scope": "projects/${projectName}" },
           "resource": {
             "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
           }

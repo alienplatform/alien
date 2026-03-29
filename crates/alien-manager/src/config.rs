@@ -39,40 +39,12 @@ pub struct PlatformConfig {
     pub gcp_oauth: GcpOAuthConfig,
 }
 
-/// Operating mode for alien-manager.
-#[derive(Debug, Clone)]
-pub enum ManagerMode {
-    /// Platform API providers. Requires ALIEN_API_KEY / MANAGER_API_KEY.
-    Platform(PlatformConfig),
-    /// SQLite providers, no external dependency.
-    Standalone,
-    /// Dev mode: SQLite + permissive auth + local credentials.
-    Dev,
-}
-
-impl ManagerMode {
-    pub fn is_dev(&self) -> bool {
-        matches!(self, ManagerMode::Dev)
-    }
-
-    pub fn is_standalone(&self) -> bool {
-        matches!(self, ManagerMode::Standalone)
-    }
-
-    pub fn is_platform(&self) -> bool {
-        matches!(self, ManagerMode::Platform(_))
-    }
-
-    /// Returns a reference to the platform config if in Platform mode.
-    pub fn platform_config(&self) -> Option<&PlatformConfig> {
-        match self {
-            ManagerMode::Platform(pc) => Some(pc),
-            _ => None,
-        }
-    }
-}
-
 /// Configuration for alien-manager.
+///
+/// This struct carries runtime configuration — ports, paths, intervals, URLs.
+/// It does NOT determine which providers are used. Provider selection is the
+/// caller's responsibility: the binary `main.rs` (standalone or platform mode)
+/// and `alien dev` each wire the builder with appropriate trait implementations.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
     /// HTTP server port.
@@ -104,14 +76,19 @@ pub struct ManagerConfig {
     pub disable_deployment_loop: bool,
     /// Disable the heartbeat loop.
     pub disable_heartbeat_loop: bool,
-    /// Operating mode. Determines which providers are used.
-    pub mode: ManagerMode,
+    /// Whether deployments should emit OTLP logs back to this manager even
+    /// without an external OTLP endpoint.
+    ///
+    /// `alien dev` enables this so locally-run workloads send logs back to the
+    /// embedded manager. Standalone and platform managers leave it disabled
+    /// unless they have a real OTLP forwarding endpoint configured.
+    pub enable_local_log_ingest: bool,
 }
 
 impl ManagerConfig {
-    /// Whether this manager is running in dev mode.
-    pub fn dev_mode(&self) -> bool {
-        self.mode.is_dev()
+    /// Whether deployments should emit OTLP logs to this manager instance.
+    pub fn enable_local_log_ingest(&self) -> bool {
+        self.enable_local_log_ingest
     }
 
     pub fn base_url(&self) -> String {
@@ -147,7 +124,7 @@ impl Default for ManagerConfig {
             targets: Vec::new(),
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
-            mode: ManagerMode::Standalone,
+            enable_local_log_ingest: false,
         }
     }
 }

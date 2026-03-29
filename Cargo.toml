@@ -29,6 +29,7 @@ members = [
   "client-sdks/platform/rust",
   "examples/byoc-database",
   "examples/endpoint-agent",
+  "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
 ]
 resolver = "2"
@@ -113,6 +114,7 @@ keyring = "3.6"
 lambda-extension = "0.12"
 lambda_http = "0.17"
 lambda_runtime = "0.14"
+ngrok = "0.14"
 oci-client = { version = "0.15", default-features = false }
 oci-spec = "0.6.7"
 ocipkg = "0.3.9"

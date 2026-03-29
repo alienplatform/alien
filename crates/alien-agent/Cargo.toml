@@ -21,7 +21,7 @@ alien-deployment = { workspace = true }
 alien-infra = { workspace = true, features = ["all-platforms", "local"] }
 alien-local = { workspace = true }
 alien-client-config = { workspace = true }
-alien-server-sdk = { package = "alien-manager-api", path = "../../client-sdks/manager/rust" }
+alien-manager-api = { path = "../../client-sdks/manager/rust" }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }

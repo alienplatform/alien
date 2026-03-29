@@ -11,13 +11,13 @@ This example demonstrates an endpoint security monitoring agent that:
 - Monitors filesystem activity (file creation, modification, deletion)
 - Detects PII in clipboard and file content
 - Stores events in an encrypted SQLite database (Turso with AEGIS-256)
-- Exposes monitoring data via ARC commands (no HTTP exposure)
+- Exposes monitoring data via commands (no HTTP exposure)
 - Updates reliably without MDM conflicts
 
 ## Key Features
 
 - **Encrypted Storage**: Uses Turso with AEGIS-256 encryption for data at rest
-- **ARC-Only Interface**: No HTTP endpoints - all commands via Alien Remote Call protocol
+- **Command-Only Interface**: No HTTP endpoints - all interaction via Alien commands
 - **PII Detection**: Basic pattern matching for emails, SSNs, credit cards, phone numbers
 - **File Monitoring**: Cross-platform filesystem watching via `notify` crate
 - **Hash-Only Clipboard**: Never stores actual clipboard content, only hashes
@@ -33,7 +33,7 @@ endpoint-agent/
 │   ├── main.rs          # Entry point and initialization
 │   ├── db.rs            # Encrypted Turso database
 │   ├── monitor.rs       # File and clipboard monitoring
-│   ├── commands.rs      # ARC command handlers
+│   ├── commands.rs      # Command handlers
 │   ├── pii.rs           # PII detection patterns
 │   └── error.rs         # Error types
 └── tests/
@@ -79,28 +79,28 @@ alien deploy --platform local
 
 ## Usage
 
-### Using ARC Client (TypeScript)
+### Using Commands Client (TypeScript)
 
 ```typescript
-import { ArcClient } from "@alienplatform/arc-client"
+import { CommandsClient } from "@alienplatform/commands-client"
 
-const arc = new ArcClient({
+const client = new CommandsClient({
   managerUrl: "https://am.example.com",
-  agentId: "agent_123",
+  deploymentId: "dep_123",
   token: "your_token",
 })
 
 // Query recent events
-const events = await arc.invoke("get-events", {
+const events = await client.invoke("get-events", {
   since: "5m",
   limit: 10,
 })
 
 // Get configuration
-const config = await arc.invoke("get-config", {})
+const config = await client.invoke("get-config", {})
 
 // Scan directory
-const scanResult = await arc.invoke("scan-path", {
+const scanResult = await client.invoke("scan-path", {
   path: "/tmp",
 })
 ```
@@ -109,13 +109,13 @@ const scanResult = await arc.invoke("scan-path", {
 
 ```bash
 # Query events
-alien arc invoke get-events --agent <agent-id> --params '{"since": "5m", "limit": 10}'
+alien commands invoke get-events --deployment <deployment-id> --params '{"since": "5m", "limit": 10}'
 
 # Get config
-alien arc invoke get-config --agent <agent-id>
+alien commands invoke get-config --deployment <deployment-id>
 
 # Scan path
-alien arc invoke scan-path --agent <agent-id> --params '{"path": "/tmp"}'
+alien commands invoke scan-path --deployment <deployment-id> --params '{"path": "/tmp"}'
 ```
 
 ## Environment Variables

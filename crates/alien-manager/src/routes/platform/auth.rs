@@ -1,5 +1,5 @@
-use alien_platform_api::types::Subject;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::types::Subject;
 use axum::http::HeaderMap;
 
 use crate::providers::platform_api::error::{ErrorData, Result};

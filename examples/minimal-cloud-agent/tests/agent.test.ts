@@ -1,8 +1,8 @@
 /**
  * Tests for the Minimal Cloud Agent
  *
- * Uses @alienplatform/testing with the "dev" deployment method for pure local testing.
- * No Agent Manager, no API calls, no cloud dependencies.
+ * Uses @alienplatform/testing in local mode for pure local testing.
+ * No manager, no API calls, no cloud dependencies.
  */
 
 import { type Deployment, deploy } from "@alienplatform/testing"
@@ -12,7 +12,7 @@ describe("Minimal Cloud Agent", () => {
   let deployment: Deployment
 
   beforeAll(async () => {
-    // Deploy using alien dev directly - no API or Agent Manager needed
+    // Deploy using alien dev directly - no API or manager needed
     deployment = await deploy({
       app: ".",
       platform: "local",
@@ -35,7 +35,7 @@ describe("Minimal Cloud Agent", () => {
     })
   })
 
-  describe("ARC Commands", () => {
+  describe("Commands", () => {
     it("should execute echo command", async () => {
       const message = "hello from test"
 

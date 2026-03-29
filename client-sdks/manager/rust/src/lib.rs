@@ -1,12 +1,12 @@
-//! Alien Server SDK
+//! Alien Manager API
 //!
 //! Auto-generated from OpenAPI spec using Progenitor.
-//! Provides a type-safe Rust client for the alien-server API.
+//! Provides a type-safe Rust client for the alien-manager API.
 //!
 //! ## Usage
 //!
 //! ```ignore
-//! use alien_server_sdk::Client;
+//! use alien_manager_api::Client;
 //!
 //! let client = Client::new("http://localhost:8080");
 //!

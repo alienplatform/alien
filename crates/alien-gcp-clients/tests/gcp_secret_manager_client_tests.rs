@@ -83,6 +83,7 @@ impl AsyncTestContext for SecretManagerTestContext {
                 json: gcp_credentials_json,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let client = SecretManagerClient::new(Client::new(), config);

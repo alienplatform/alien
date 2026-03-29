@@ -116,17 +116,14 @@ If you're new, read the directories in order:
 ### [02-manager/](../02-manager/) — The control plane
 
 - **[00-overview.md](../02-manager/00-overview.md)** — Architecture, provider traits, builder API
-- **[01-entities.md](../02-manager/01-entities.md)** — Data model: deployments, releases, tokens
-- **[02-api.md](../02-manager/02-api.md)** — Complete API endpoint reference
-- **[03-deployment-loop.md](../02-manager/03-deployment-loop.md)** — How deployments are provisioned in remote environments
-- **[04-state-sync.md](../02-manager/04-state-sync.md)** — Deployment lifecycle: initial setup, push updates, pull mode
-- **[05-telemetry.md](../02-manager/05-telemetry.md)** — OTLP ingestion and forwarding
-- **[06-artifact-registry.md](../02-manager/06-artifact-registry.md)** — How container images get to platform registries
-- **[07-commands.md](../02-manager/07-commands.md)** — Remote command protocol
-- **[08-configuration.md](../02-manager/08-configuration.md)** — Environment variables reference
-- **[09-quickstart.md](../02-manager/09-quickstart.md)** — Getting started guide
-- **[10-auth.md](../02-manager/10-auth.md)** — Token security and scope enforcement
-- **[11-local-development.md](../02-manager/11-local-development.md)** — How `alien dev` works end-to-end
+- **[01-deployments.md](../02-manager/01-deployments.md)** — Deployment lifecycle and state machine
+- **[02-releases.md](../02-manager/02-releases.md)** — Release model and artifact registry
+- **[03-commands.md](../02-manager/03-commands.md)** — Remote command protocol
+- **[04-telemetry.md](../02-manager/04-telemetry.md)** — OTLP ingestion and forwarding
+- **[05-auth.md](../02-manager/05-auth.md)** — Token security and scope enforcement
+- **[06-api.md](../02-manager/06-api.md)** — Complete API endpoint reference
+- **[07-running.md](../02-manager/07-running.md)** — Configuration and environment variables
+- **[08-local-development.md](../02-manager/08-local-development.md)** — How `alien dev` works end-to-end
 
 ### [03-cli/](../03-cli/) — Command-line interface
 

@@ -213,7 +213,7 @@ impl AppController {
             }
 
             Action::SwitchLogSource => {
-                // Reconnect to the newly selected agent manager
+                // Reconnect to the newly selected manager
                 self.connect_to_log_source().await;
                 false
             }

@@ -1,7 +1,7 @@
 /**
  * Endpoint Agent - Integration Tests
  *
- * Uses @alienplatform/testing with the dev deployer for pure local ARC testing.
+ * Uses @alienplatform/testing in local mode for pure local testing.
  */
 
 import * as fs from "node:fs/promises"

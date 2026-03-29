@@ -294,9 +294,9 @@ export class EventLoop {
 
   private async handleTask(task: Task): Promise<void> {
     try {
-      // Handle ARC commands
+      // Handle commands
       if (task.arcCommand) {
-        const result = await this.handleArcCommand(task.arcCommand)
+        const result = await this.handleCommand(task.arcCommand)
         await this.sendTaskResult(task.taskId, { success: true, data: result })
         return
       }
@@ -350,7 +350,7 @@ export class EventLoop {
     }
   }
 
-  private async handleArcCommand(command: ProtoArcCommand): Promise<unknown> {
+  private async handleCommand(command: ProtoArcCommand): Promise<unknown> {
     // Parse command parameters
     let params: unknown = {}
     if (command.params && command.params.length > 0) {

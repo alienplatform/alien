@@ -15,16 +15,19 @@ pub mod tui;
 #[cfg(test)]
 pub mod test_utils;
 
-use crate::commands::{
-    build_and_post_release_simple, build_command, create_initial_deployment, deploy_task,
-    deployments_task, destroy_task, ensure_server_running_with_env, onboard_task,
-    release_command, serve_task, vault_task, whoami_task, BuildArgs, CliEnvVar, DeployArgs,
-    DeploymentsArgs, DestroyArgs, OnboardArgs, ReleaseArgs, ServeArgs, WhoamiArgs,
-};
+#[cfg(feature = "platform")]
+use crate::commands::manager::{manager_task, ManagerArgs};
 #[cfg(feature = "platform")]
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, LinkArgs,
     LoginArgs, LogoutArgs, PlatformCommand, ProjectArgs, UnlinkArgs, WorkspaceArgs,
+};
+use crate::commands::{
+    build_and_post_release_simple, build_command, build_embedded_dev_manager,
+    create_initial_deployment, deploy_task, deployments_task, destroy_task,
+    ensure_server_running_with_env, onboard_task, release_command, vault_task, whoami_task,
+    BuildArgs, CliEnvVar, DeployArgs, DeploymentsArgs, DestroyArgs, OnboardArgs, ReleaseArgs,
+    WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -79,8 +82,6 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     // --- Core commands (always available) ---
-    /// Start the Alien manager server
-    Serve(ServeArgs),
     /// Build the Alien application
     Build(BuildArgs),
     /// Create a release from built platforms
@@ -103,6 +104,10 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     #[command(flatten)]
     Platform(PlatformCommand),
+
+    /// Manage private managers deployed to your cloud
+    #[cfg(feature = "platform")]
+    Manager(ManagerArgs),
 }
 
 /// Dev command with optional subcommands
@@ -111,10 +116,6 @@ pub struct DevCommand {
     /// Dev server port
     #[arg(long, default_value = "9090", global = true)]
     pub port: u16,
-
-    /// Target platform (local, aws, gcp, azure, kubernetes)
-    #[arg(long, default_value = "local")]
-    pub platform: String,
 
     /// Path to configuration file (default: auto-discover alien.ts in current directory)
     #[arg(long, short = 'c')]
@@ -423,7 +424,6 @@ fn cli_env_vars_to_core(cli_vars: &[CliEnvVar]) -> Option<Vec<alien_core::Enviro
 
 async fn handle_dev_command(dev_cmd: DevCommand, global_no_tui: bool) -> Result<()> {
     let port = dev_cmd.port;
-    let platform = dev_cmd.platform;
     let skip_build = dev_cmd.skip_build;
     let status_file = dev_cmd.status_file;
     let deployment_name = dev_cmd.deployment_name;
@@ -444,7 +444,6 @@ async fn handle_dev_command(dev_cmd: DevCommand, global_no_tui: bool) -> Result<
                 deployment_name,
                 parsed_env_vars,
                 config_file,
-                platform.clone(),
             )
             .await?;
         }
@@ -533,6 +532,8 @@ async fn run_tui_dashboard(
 }
 
 /// Run dev TUI
+///
+/// Dev mode is local-only — always uses `Platform::Local`.
 async fn run_dev_tui(
     port: u16,
     no_tui: bool,
@@ -541,7 +542,6 @@ async fn run_dev_tui(
     deployment_name: String,
     user_env_vars: Vec<CliEnvVar>,
     config_file: Option<PathBuf>,
-    platform: String,
 ) -> Result<()> {
     let current_dir = get_current_dir()?;
 
@@ -554,15 +554,10 @@ async fn run_dev_tui(
     if no_tui {
         // Console mode
         info!("Starting dev environment...");
-        let _release_id = build_and_post_release_simple(
-            &current_dir,
-            port,
-            skip_build,
-            config_file.as_ref(),
-            &platform,
-        )
-        .await?;
-        create_initial_deployment(&deployment_name, &platform, port, core_env_vars).await?;
+        let _release_id =
+            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
+                .await?;
+        create_initial_deployment(&deployment_name, port, core_env_vars).await?;
 
         info!("Dev environment ready!");
         info!("   Press Ctrl+C to stop.");
@@ -586,7 +581,6 @@ async fn run_dev_tui(
         current_dir.clone(),
         port,
         deployment_name.clone(),
-        platform.clone(),
         env_vars_for_task,
         build_status_tx,
         rebuild_rx,
@@ -610,14 +604,14 @@ async fn run_dev_tui(
     result
 }
 
-/// Build task - runs initial build and listens for rebuild requests
+/// Build task - runs initial build and listens for rebuild requests.
 ///
+/// Dev mode is local-only — always builds for `Platform::Local`.
 /// This task waits for terminal initialization before starting.
 async fn run_build_task(
     current_dir: PathBuf,
     port: u16,
     deployment_name: String,
-    platform: String,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
     build_status_tx: tokio::sync::mpsc::Sender<BuildState>,
     mut rebuild_rx: tokio::sync::mpsc::Receiver<()>,
@@ -633,7 +627,7 @@ async fn run_build_task(
     // Initial build
     build_status_tx.send(BuildState::Initializing).await.ok();
     let build_start = Instant::now();
-    match build_and_post_release_simple(&current_dir, port, false, None, &platform).await {
+    match build_and_post_release_simple(&current_dir, port, false, None).await {
         Ok(_release_id) => {
             let duration = build_start.elapsed();
             build_status_tx
@@ -643,8 +637,7 @@ async fn run_build_task(
 
             // Create initial deployment after successful build
             if let Err(e) =
-                create_initial_deployment(&deployment_name, &platform, port, environment_variables)
-                    .await
+                create_initial_deployment(&deployment_name, port, environment_variables).await
             {
                 build_status_tx
                     .send(BuildState::Failed {
@@ -668,7 +661,7 @@ async fn run_build_task(
     while rebuild_rx.recv().await.is_some() {
         build_status_tx.send(BuildState::Building).await.ok();
         let build_start = Instant::now();
-        match build_and_post_release_simple(&current_dir, port, false, None, &platform).await {
+        match build_and_post_release_simple(&current_dir, port, false, None).await {
             Ok(_) => {
                 let duration = build_start.elapsed();
                 build_status_tx
@@ -696,35 +689,23 @@ async fn run_dev_server_only(
     _user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
     info!("Starting dev server on port {}...", port);
+    let (server, addr) = build_embedded_dev_manager(port).await?;
+    let bootstrap_port = port;
 
-    let current_dir = get_current_dir()?;
-    let state_dir = current_dir.join(".alien");
-    std::fs::create_dir_all(&state_dir)
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "create".to_string(),
-            file_path: state_dir.display().to_string(),
-            reason: "Failed to create .alien directory".to_string(),
-        })?;
+    tokio::spawn(async move {
+        if let Err(e) =
+            crate::commands::dev_helpers::wait_for_dev_server_ready(bootstrap_port).await
+        {
+            tracing::error!("Dev server readiness check failed: {:?}", e);
+            return;
+        }
 
-    let db_path = state_dir.join("dev-server.db");
-
-    let config = alien_manager::ManagerConfig {
-        port,
-        db_path: Some(db_path),
-        state_dir: Some(state_dir.clone()),
-        mode: alien_manager::config::ManagerMode::Dev,
-        ..Default::default()
-    };
-
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-
-    let server = alien_manager::AlienManager::builder(config)
-        .build()
-        .await
-        .context(ErrorData::ServerStartFailed {
-            reason: "Failed to initialize dev server".to_string(),
-        })?;
+        if let Err(e) =
+            crate::commands::dev_helpers::ensure_local_dev_deployment_group(bootstrap_port).await
+        {
+            tracing::error!("Failed to ensure local-dev deployment group: {:?}", e);
+        }
+    });
 
     info!("Dev server ready");
     info!("   API: http://localhost:{}/v1/deployments", port);
@@ -762,21 +743,18 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     setup_tracing(global_no_tui || command_no_tui);
 
     // Construct execution context once from global flags
-    // Mode resolution: ALIEN_SERVER → self-hosted, platform feature → platform, else → error
-    let ctx = if let Ok(server_url) = env::var("ALIEN_SERVER") {
+    // Mode resolution: ALIEN_MANAGER_URL → standalone, platform feature → platform, else → error
+    let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
         let api_key = cli
             .api_key
             .clone()
             .or_else(|| env::var("ALIEN_API_KEY").ok())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "ALIEN_API_KEY is required when ALIEN_SERVER is set. \
-                    Check the output of 'alien serve' for your admin token, then: \
-                    export ALIEN_API_KEY=<your-token>"
-                        .to_string(),
+                    message: "ALIEN_API_KEY is required when ALIEN_MANAGER_URL is set.".to_string(),
                 })
             })?;
-        ExecutionMode::SelfHosted {
+        ExecutionMode::Standalone {
             server_url,
             api_key,
         }
@@ -797,8 +775,9 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "platform"))]
         {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "No manager URL configured. Run 'alien serve' to start a local manager, then: \
-                export ALIEN_SERVER=http://localhost:8080".to_string(),
+                message: "No manager URL configured. Start an alien-manager instance, then: \
+                export ALIEN_MANAGER_URL=http://localhost:8080"
+                    .to_string(),
             }));
         }
     };
@@ -813,14 +792,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             #[cfg(not(feature = "platform"))]
             {
                 println!("Alien CLI - use 'alien --help' to see available commands");
-                println!("Start a manager with 'alien serve', then use 'alien release' to deploy");
+                println!("Start an alien-manager instance, then: export ALIEN_MANAGER_URL=http://localhost:8080");
             }
         }
 
         // --- Core commands ---
-        Some(Commands::Serve(args)) => {
-            serve_task(args).await?;
-        }
         Some(Commands::Build(mut build_args)) => {
             build_args.no_tui = global_no_tui || build_args.no_tui;
             build_command(build_args).await?;
@@ -840,15 +816,17 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
 
         // --- Platform commands (behind feature flag) ---
         #[cfg(feature = "platform")]
-        Some(Commands::Platform(cmd)) => {
-            match cmd {
-                PlatformCommand::Login(args) => login_task(args, ctx).await?,
-                PlatformCommand::Workspaces(args) => workspace_task(args, ctx).await?,
-                PlatformCommand::Projects(args) => project_task(args, ctx).await?,
-                PlatformCommand::Link(args) => link_task(args, ctx).await?,
-                PlatformCommand::Logout(args) => logout_task(args).await?,
-                PlatformCommand::Unlink(args) => unlink_task(args).await?,
-            }
+        Some(Commands::Platform(cmd)) => match cmd {
+            PlatformCommand::Login(args) => login_task(args, ctx).await?,
+            PlatformCommand::Workspaces(args) => workspace_task(args, ctx).await?,
+            PlatformCommand::Projects(args) => project_task(args, ctx).await?,
+            PlatformCommand::Link(args) => link_task(args, ctx).await?,
+            PlatformCommand::Logout(args) => logout_task(args).await?,
+            PlatformCommand::Unlink(args) => unlink_task(args).await?,
+        },
+        #[cfg(feature = "platform")]
+        Some(Commands::Manager(args)) => {
+            manager_task(args, ctx).await?;
         }
     }
 

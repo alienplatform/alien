@@ -33,7 +33,7 @@ Examples:
 - `Queue` → SQS (AWS), Pub/Sub (GCP), Storage Queue (Azure), Redis (K8s/Local)
 - `Kv` → DynamoDB (AWS), Firestore (GCP), Table Storage (Azure), Redis (K8s), sled (Local)
 
-The full list of resource types is in [16-resources/](16-resources/).
+The full list of resource types is in [06-resources/](../06-resources/).
 
 ## Frozen vs Live
 

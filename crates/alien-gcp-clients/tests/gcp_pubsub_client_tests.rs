@@ -49,6 +49,7 @@ impl AsyncTestContext for PubSubTestContext {
                 json: gcp_credentials_json,
             },
             service_overrides: None,
+            project_number: None,
         };
 
         let client = PubSubClient::new(Client::new(), config);

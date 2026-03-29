@@ -70,7 +70,7 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         secret_targeted: Vec<String>,
 
-        /// Disable push (Operator handles deployments instead of managed server)
+        /// Disable push (Operator handles deployments instead of manager)
         #[arg(long)]
         no_push: bool,
 
@@ -792,7 +792,7 @@ async fn get_deployment_task(
     }
 
     if let Some(manager_id) = &deployment.manager_id {
-        println!("  Managed Server ID: {:?}", manager_id);
+        println!("  Manager ID: {:?}", manager_id);
     }
 
     if let Some(error) = &deployment.error {

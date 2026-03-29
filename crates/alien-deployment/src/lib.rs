@@ -23,7 +23,38 @@ pub use alien_core::{
 // Re-export helper function for creating aggregated errors
 pub use helpers::create_aggregated_error_from_stack_state;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// Resolve the GCP project number if the client config is GCP and project_number is not yet set.
+/// GCP IAM condition expressions use project number (numeric) in resource.name, not project ID.
+async fn resolve_gcp_project_number(
+    client_config: alien_core::ClientConfig,
+) -> alien_core::ClientConfig {
+    if let alien_core::ClientConfig::Gcp(mut gcp_config) = client_config {
+        if gcp_config.project_number.is_none() {
+            let rm_client = alien_gcp_clients::ResourceManagerClient::new(
+                reqwest::Client::new(),
+                *gcp_config.clone(),
+            );
+            match alien_gcp_clients::ResourceManagerApi::get_project_metadata(
+                &rm_client,
+                gcp_config.project_id.clone(),
+            )
+            .await
+            {
+                Ok(project) => {
+                    gcp_config.project_number = project.project_number;
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to resolve GCP project number; IAM conditions may not work");
+                }
+            }
+        }
+        alien_core::ClientConfig::Gcp(gcp_config)
+    } else {
+        client_config
+    }
+}
 
 /// Execute one deployment step based on the current deployment state.
 ///
@@ -34,7 +65,7 @@ use tracing::{debug, info};
 /// - Takes an optional service provider for platform services (defaults to DefaultPlatformServiceProvider)
 /// - Does ONE incremental step based on `current.status`
 /// - Returns the complete next state (not a delta)
-/// - Works identically whether called from CLI, controller, or agent manager
+/// - Works identically whether called from CLI, controller, or manager
 ///
 /// The caller is responsible for:
 /// - Acquiring a lock on the deployment before calling
@@ -59,6 +90,9 @@ pub async fn step(
         "Executing deployment step (status: {:?}, platform: {:?})",
         current.status, current.platform
     );
+
+    // Resolve GCP project number for IAM condition expressions
+    let client_config = resolve_gcp_project_number(client_config).await;
 
     // Extract target stack from target_release
     let target_stack = current

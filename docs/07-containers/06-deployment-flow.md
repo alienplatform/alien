@@ -34,37 +34,37 @@ The platform ensures Horizon clusters exist and prepares secure token distributi
 
 async function buildDeploymentConfig(params: {
   db: Kysely<Database>
-  agent: Agent
-  agentManager: AgentManager | undefined
+  deployment: Deployment
+  manager: Manager | undefined
   stack: Stack
   // ...
 }): Promise<DeploymentConfig> {
   // ... other config ...
-  
+
   // Find all ContainerCluster resources in stack
   const containerClusters = Object.entries(stack.resources)
     .filter(([_, r]) => r.config.resourceType() === "container-cluster");
-  
+
   let horizonConfig = null;
   if (containerClusters.length > 0) {
     const clusterConfigs: Record<string, HorizonClusterConfig> = {};
     const builtInEnvVars: EnvironmentVariable[] = [];
-    
+
     // Ensure each cluster exists in Horizon
     for (const [resourceId, _] of containerClusters) {
-      const clusterId = `${agent.workspaceId}/${agent.projectId}/${agent.id}/${resourceId}`;
-      
-      // Check if cluster already exists in agent.horizonConfig
-      let storedCluster = agent.horizonConfig?.clusters?.[resourceId];
-      
+      const clusterId = `${deployment.workspaceId}/${deployment.projectId}/${deployment.id}/${resourceId}`;
+
+      // Check if cluster already exists in deployment.horizonConfig
+      let storedCluster = deployment.horizonConfig?.clusters?.[resourceId];
+
       if (!storedCluster) {
         // Create cluster in Horizon
         const platformJwt = await generatePlatformJwt({ scopes: ["cluster:*"] });
         const response = await horizonClient.createCluster({
           clusterId,
-          name: `${params.agent.projectId}-${params.agent.id}-${resourceId}`,
+          name: `${params.deployment.projectId}-${params.deployment.id}-${resourceId}`,
           containerCidr: "10.244.0.0/16",
-          platform: agent.platform,
+          platform: deployment.platform,
         }, {
           headers: { Authorization: `Bearer ${platformJwt}` }
         });
@@ -72,11 +72,11 @@ async function buildDeploymentConfig(params: {
         // Tokens returned ONCE ONLY - encrypt and store in platform DB
         const project = await db.selectFrom("projects")
           .select("envEncryptionKey")
-          .where("id", "=", agent.projectId)
+          .where("id", "=", deployment.projectId)
           .executeTakeFirstOrThrow();
 
-        // Update agent.horizonConfig with encrypted tokens
-        const updatedHorizonConfig = agent.horizonConfig || { clusters: {} };
+        // Update deployment.horizonConfig with encrypted tokens
+        const updatedHorizonConfig = deployment.horizonConfig || { clusters: {} };
         updatedHorizonConfig.clusters[resourceId] = {
           clusterId,
           managementToken: encryptEnvironmentVariableValue(response.managementToken, project.envEncryptionKey),
@@ -84,16 +84,16 @@ async function buildDeploymentConfig(params: {
           createdAt: new Date().toISOString(),
         };
 
-        await db.updateTable("agents")
+        await db.updateTable("deployments")
           .set({ horizonConfig: updatedHorizonConfig })
-          .where("id", "=", agent.id)
+          .where("id", "=", deployment.id)
           .execute();
 
         storedCluster = updatedHorizonConfig.clusters[resourceId];
       }
 
       // Decrypt tokens for deployment
-      const project = await getProject(db, agent.projectId);
+      const project = await getProject(db, deployment.projectId);
       const managementToken = decryptEnvironmentVariableValue(storedCluster.managementToken, project.envEncryptionKey);
       const machineToken = decryptEnvironmentVariableValue(storedCluster.machineToken, project.envEncryptionKey);
 
@@ -120,12 +120,12 @@ async function buildDeploymentConfig(params: {
   }
   
   // Merge built-in env vars into snapshot
-  const envVarsSnapshot = await getEnvironmentVariablesSnapshotForAgent({
+  const envVarsSnapshot = await getEnvironmentVariablesSnapshot({
     db,
-    agent,
-    agentManager,
+    deployment,
+    manager,
     stack,
-    // Built-in vars (ALIEN_AGENT_ID, OTEL_*, ALIEN_HORIZON_MACHINE_TOKEN_*) added here
+    // Built-in vars (ALIEN_DEPLOYMENT_ID, OTEL_*, ALIEN_HORIZON_MACHINE_TOKEN_*) added here
   });
   
   return {
@@ -138,7 +138,7 @@ async function buildDeploymentConfig(params: {
 ```
 
 **How machine tokens flow:**
-1. Platform decrypts token from `agent.horizonConfig`
+1. Platform decrypts token from `deployment.horizonConfig`
 2. Adds as built-in env var with resource-specific name:
    - Pattern: `ALIEN_HORIZON_MACHINE_TOKEN_{RESOURCE_ID}`
    - Example: ContainerCluster `id: "compute"` → `ALIEN_HORIZON_MACHINE_TOKEN_COMPUTE`
@@ -157,7 +157,7 @@ async function buildDeploymentConfig(params: {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonClusterConfig {
-    /// Cluster ID (deterministic: workspace/project/agent/resourceid)
+    /// Cluster ID (deterministic: workspace/project/deployment/resourceid)
     pub cluster_id: String,
     
     /// Management token for API access (hm_...)
@@ -202,10 +202,10 @@ pub struct DeploymentConfig {
   - Synced to vault during Provisioning phase
   - Fetched by VMs from Parameter Store/Secret Manager/Key Vault at boot
 
-**Cluster ID format:** `{workspace_id}/{project_id}/{agent_id}/{resource_id}` (deterministic, stable across retries)
+**Cluster ID format:** `{workspace_id}/{project_id}/{deployment_id}/{resource_id}` (deterministic, stable across retries)
 
 **Token storage in platform DB:**
-- Encrypted in `agent.horizon_config` JSONB field
+- Encrypted in `deployment.horizon_config` JSONB field
 - One record per ContainerCluster resource
 - Decrypted only when building DeploymentConfig
 
@@ -1151,9 +1151,9 @@ impl AwsContainerController {
 
 **Platform Preparation (Before Deployment):**
 ```
-Platform checks agent.horizonConfig for existing clusters
+Platform checks deployment.horizonConfig for existing clusters
   → If new: Platform calls Horizon API to create cluster (Platform JWT auth)
-  → Platform encrypts tokens and stores in agent.horizonConfig (platform DB)
+  → Platform encrypts tokens and stores in deployment.horizonConfig (platform DB)
   → Platform adds machine token as built-in environment variable
   → Platform includes management token in DeploymentConfig
 ```
@@ -1208,7 +1208,7 @@ horizond (every 5s):
 **Platform → Horizon:**
 - Create cluster: `POST /clusters` (Platform JWT auth)
   - Returns `managementToken` and `machineToken` (once only)
-  - Platform stores encrypted in `agent.horizonConfig`
+  - Platform stores encrypted in `deployment.horizonConfig`
 
 **Alien → Horizon:**
 - Create container: `POST /clusters/:id/containers` (management token auth)
@@ -1242,7 +1242,7 @@ const response = await horizonClient.createCluster({...});
 
 **2. Platform encrypts and stores in database:**
 ```typescript
-agent.horizonConfig = {
+deployment.horizonConfig = {
   clusters: {
     "compute": {
       clusterId: "ws/proj/agent/compute",
