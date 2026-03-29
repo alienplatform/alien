@@ -302,7 +302,9 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
 
     let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
 
-    // Policy: allow Lambda service in the target account to pull images
+    // Policy: allow Lambda service in the target account to pull images.
+    // Lambda needs both pull permissions AND policy management permissions
+    // for cross-account image caching during function deployment.
     let policy = serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
@@ -315,6 +317,25 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                 "Action": [
                     "ecr:BatchGetImage",
                     "ecr:GetDownloadUrlForLayer"
+                ],
+                "Condition": {
+                    "StringLike": {
+                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                    }
+                }
+            },
+            {
+                "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "lambda.amazonaws.com"
+                },
+                "Action": [
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:SetRepositoryPolicy",
+                    "ecr:DeleteRepositoryPolicy",
+                    "ecr:GetRepositoryPolicy"
                 ],
                 "Condition": {
                     "StringLike": {
@@ -479,7 +500,57 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
     info!(
         repo = %repo_id,
         member = %service_agent_member,
-        "GAR cross-project reader binding set"
+        "GAR cross-project reader binding set on repository"
+    );
+
+    // Step 5: Also add project-level Artifact Registry Reader on the management project.
+    // Cloud Run cross-project image access may require project-level IAM in addition
+    // to repository-level IAM for the service agent to discover and access the repository.
+    let rm_mgmt_client = ResourceManagerClient::new(reqwest::Client::new(), {
+        alien_core::GcpClientConfig {
+            project_id: mgmt.project_id.clone(),
+            region: mgmt.region.clone(),
+            credentials: alien_core::GcpCredentials::ServiceAccountKey {
+                json: sa_key.clone(),
+            },
+            service_overrides: None,
+            project_number: None,
+        }
+    });
+
+    let mut project_policy = rm_mgmt_client
+        .get_project_iam_policy(mgmt.project_id.clone(), None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get management project IAM policy: {}", e))?;
+
+    // Merge binding into project-level policy
+    let mut project_binding_found = false;
+    for binding in &mut project_policy.bindings {
+        if binding.role == reader_role {
+            if !binding.members.contains(&service_agent_member) {
+                binding.members.push(service_agent_member.clone());
+            }
+            project_binding_found = true;
+            break;
+        }
+    }
+    if !project_binding_found {
+        project_policy.bindings.push(Binding {
+            role: reader_role.to_string(),
+            members: vec![service_agent_member.clone()],
+            condition: None,
+        });
+    }
+
+    rm_mgmt_client
+        .set_project_iam_policy(mgmt.project_id.clone(), project_policy, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to set management project IAM policy: {}", e))?;
+
+    info!(
+        project = %mgmt.project_id,
+        member = %service_agent_member,
+        "GAR cross-project reader binding set on project"
     );
 
     Ok(())

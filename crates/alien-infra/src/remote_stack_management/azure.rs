@@ -807,9 +807,17 @@ impl AzureRemoteStackManagementController {
             })
         })?;
 
+        // Lighthouse expects a bare GUID, not the full ARM resource path.
+        // The stored role_definition_id is a full path like:
+        //   /subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{guid}
+        let role_def_uuid = role_definition_id
+            .split('/')
+            .last()
+            .unwrap_or(role_definition_id);
+
         let authorization = Authorization {
             principal_id: management_principal_id.clone(),
-            role_definition_id: role_definition_id.clone(),
+            role_definition_id: role_def_uuid.to_string(),
             delegated_role_definition_ids: vec![], // Empty for now
             principal_id_display_name: None,
         };
