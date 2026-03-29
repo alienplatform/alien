@@ -209,7 +209,7 @@ app.post("/queue-test/:bindingName", async c => {
     console.log(`[QUEUE-DEBUG] calling queue(${bindingName})`)
     const q = await queue(bindingName)
     console.log("[QUEUE-DEBUG] queue binding obtained")
-    console.log("[QUEUE-DEBUG] calling q.send(\"default\", ...)")
+    console.log('[QUEUE-DEBUG] calling q.send("default", ...)')
     await q.send("default", { test: true, ts: Date.now() })
     console.log("[QUEUE-DEBUG] q.send completed")
 
