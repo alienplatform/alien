@@ -495,6 +495,14 @@ impl AwsRemoteStackManagementController {
         combined_actions.sort();
         combined_actions.dedup();
 
+        // If no provision-level actions were found, return an empty string so that callers
+        // skip the PutRolePolicy call. Non-provision permission sets (management, heartbeat,
+        // etc.) are handled by resource controllers via resource-level IAM, not project-level
+        // policy on the management role.
+        if combined_actions.is_empty() {
+            return Ok(String::new());
+        }
+
         // Create the combined permission set
         let management_permission_set = PermissionSet {
             id: "management".to_string(),

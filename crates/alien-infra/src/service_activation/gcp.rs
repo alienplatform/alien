@@ -178,6 +178,16 @@ impl GcpServiceActivationController {
 
         // If we have an operation name, check the operation status first
         if let Some(op_name) = self.operation_name.as_ref() {
+            // GCP returns "operations/noop.DONE_OPERATION" when a service was already
+            // enabled. This synthetic operation name cannot be polled, so skip directly
+            // to verifying the service state.
+            if op_name.contains("noop.DONE_OPERATION") {
+                info!(
+                    service_id = %config.id,
+                    service_name = %config.service_name,
+                    "Service enablement was a noop (service already enabled), skipping operation poll"
+                );
+            } else {
             match client.get_operation(op_name.to_string()).await {
                 Ok(operation) => {
                     if let Some(done) = operation.done {
@@ -228,6 +238,7 @@ impl GcpServiceActivationController {
                     }));
                 }
             }
+            } // else (non-noop operation)
         }
 
         // Check the actual service status

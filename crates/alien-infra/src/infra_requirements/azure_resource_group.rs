@@ -75,6 +75,7 @@ impl AzureResourceGroupController {
 
         self.resource_group_name = Some(group_name.clone());
         self.location = Some(rg.location.clone());
+        self.resource_id = rg.id.clone();
 
         info!(group_name=%group_name, "Resource group creation initiated");
 
