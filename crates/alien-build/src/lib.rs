@@ -108,21 +108,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     let output_dir = base_output_dir.join("build").join(platform_name);
     info!("Target output directory: {}", output_dir.display());
 
-    // Clean the output directory before starting
-    if output_dir.exists() {
-        fs::remove_dir_all(&output_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "remove directory".to_string(),
-                file_path: output_dir.display().to_string(),
-                reason: "I/O error during directory removal".to_string(),
-            })?;
-        info!(
-            "Cleaned existing output directory: {}",
-            output_dir.display()
-        );
-    }
+    // Keep prior hashed artifacts in place so concurrent builds/releases do not
+    // invalidate each other's image directories. The latest stack.json overwrite
+    // still makes the newest build authoritative.
     fs::create_dir_all(&output_dir)
         .await
         .into_alien_error()
@@ -219,22 +207,22 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 let output_dir = output_dir.clone();
                 let bus = current_bus.clone();
                 let cancel_token = cancel_token.clone();
-                
+
                 tokio::spawn(async move {
                     // Clone func_id for use in error logging
                     let func_id_for_warning = func_id.clone();
-                    
+
                     // Define the actual work function
                     let build_work = async move {
                         info!("Starting parallel build for function: {}", func_id);
-                        
+
                         // Check if we're already cancelled
                         if cancel_token.is_cancelled() {
                             return (resource_id.clone(), func, Err(AlienError::new(ErrorData::BuildCanceled {
                                 resource_name: func_id.clone()
                             })));
                         }
-                        
+
                         // Build for all targets (handles both single and multiple targets)
                         let result = tokio::select! {
                             result = build_resource(
@@ -255,7 +243,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 }))
                             }
                         };
-                        
+
                         match &result {
                             Ok(image_uri) => {
                                 info!(
@@ -267,15 +255,18 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 info!("Failed to build function '{}': {}", func_id, e);
                             }
                         }
-                        
+
                         (resource_id, func, result)
                     };
-                    
+
                     // CRITICAL: Run with event bus context to ensure events propagate properly
                     match bus {
                         Some(bus) => bus.run(|| build_work).await,
                         None => {
-                            tracing::warn!("No event bus context available for parallel build of function '{}'", func_id_for_warning);
+                            tracing::debug!(
+                                "No event bus context available for parallel build of function '{}'",
+                                func_id_for_warning
+                            );
                             build_work.await
                         }
                     }
@@ -414,31 +405,32 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             .into_iter()
             .map(|(dedupe_key, containers_group)| {
                 // Take the first container as representative for building
-                let (_representative_resource_id, representative_container) = containers_group.first().unwrap();
+                let (_representative_resource_id, representative_container) =
+                    containers_group.first().unwrap();
                 let container_id = representative_container.id.clone();
-                
+
                 // Extract src and toolchain from the representative container
                 let (src, toolchain) = match &representative_container.code {
                     ContainerCode::Source { src, toolchain } => (src.clone(), toolchain.clone()),
                     _ => unreachable!("We only collected Source containers"),
                 };
-                
+
                 let stack_id = stack_id.clone();
                 let settings = container_settings.clone();
                 let output_dir = output_dir.clone();
                 let bus = current_bus.clone();
                 let cancel_token = cancel_token.clone();
-                
+
                 tokio::spawn(async move {
                     let container_id_for_warning = container_id.clone();
-                    
+
                     let build_work = async move {
                         // Build related_resources list: all container IDs in this dedup group
                         let related_resources: Vec<String> = containers_group
                             .iter()
                             .map(|(_, c)| c.id.clone())
                             .collect();
-                        
+
                         if containers_group.len() > 1 {
                             info!(
                                 "Building shared binary for {} containers: {:?}",
@@ -448,14 +440,14 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         } else {
                             info!("Starting parallel build for container: {}", container_id);
                         }
-                        
+
                         // Check if we're already cancelled
                         if cancel_token.is_cancelled() {
                             return (dedupe_key.clone(), containers_group, Err(AlienError::new(ErrorData::BuildCanceled {
                                 resource_name: container_id.clone()
                             })));
                         }
-                        
+
                         // Build for all targets - reuse build logic since containers use same toolchains
                         let result = tokio::select! {
                             result = build_resource(
@@ -476,7 +468,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 }))
                             }
                         };
-                        
+
                         match &result {
                             Ok(image_uri) => {
                                 if containers_group.len() > 1 {
@@ -495,14 +487,17 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 info!("Failed to build container '{}': {}", container_id, e);
                             }
                         }
-                        
+
                         (dedupe_key, containers_group, result)
                     };
-                    
+
                     match bus {
                         Some(bus) => bus.run(|| build_work).await,
                         None => {
-                            tracing::warn!("No event bus context available for parallel build of container '{}'", container_id_for_warning);
+                            tracing::debug!(
+                                "No event bus context available for parallel build of container '{}'",
+                                container_id_for_warning
+                            );
                             build_work.await
                         }
                     }
@@ -1147,6 +1142,42 @@ fn generate_unique_tag() -> String {
         .to_lowercase()
 }
 
+fn temp_artifact_dir(build_output_dir: &Path, resource_name: &str) -> PathBuf {
+    build_output_dir.join(format!(".{}-tmp-{}", resource_name, generate_unique_tag()))
+}
+
+async fn finalize_artifact_dir(
+    temp_dir: &Path,
+    final_dir: &Path,
+    artifact_kind: &str,
+) -> Result<String> {
+    match fs::rename(temp_dir, final_dir).await {
+        Ok(()) => Ok(final_dir.to_string_lossy().into_owned()),
+        Err(_rename_error) if final_dir.exists() => {
+            let _ = fs::remove_dir_all(temp_dir).await;
+            info!(
+                "Reusing existing {} artifacts at {}",
+                artifact_kind,
+                final_dir.display()
+            );
+            Ok(final_dir.to_string_lossy().into_owned())
+        }
+        Err(rename_error) => {
+            Err(rename_error)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "rename directory".to_string(),
+                    file_path: temp_dir.display().to_string(),
+                    reason: format!(
+                        "Failed to rename {} directory to {}",
+                        artifact_kind,
+                        final_dir.display()
+                    ),
+                })
+        }
+    }
+}
+
 /// Build a resource (function, container, or worker) for one or more OS/architecture targets
 ///
 /// Always saves OCI tarballs to a consistent directory structure:
@@ -1177,38 +1208,9 @@ async fn build_resource(
         targets
     );
 
-    // Clean up old hashed build directories for this function
-    // This prevents accumulation of stale builds (e.g., agent-a3f2c1b8, agent-f7e4d2a9, etc.)
-    if build_output_dir.exists() {
-        let prefix = format!("{}-", function_name);
-        let mut entries = fs::read_dir(&build_output_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read directory".to_string(),
-                file_path: build_output_dir.display().to_string(),
-                reason: "Failed to read build output directory for cleanup".to_string(),
-            })?;
-
-        while let Some(entry) = entries.next_entry().await.into_alien_error().context(
-            ErrorData::FileOperationFailed {
-                operation: "read directory entry".to_string(),
-                file_path: build_output_dir.display().to_string(),
-                reason: "Failed to iterate build output directory entries".to_string(),
-            },
-        )? {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with(&prefix) {
-                    let old_dir = entry.path();
-                    info!("Cleaning up old build directory: {}", old_dir.display());
-                    let _ = fs::remove_dir_all(&old_dir).await; // Best effort cleanup
-                }
-            }
-        }
-    }
-
-    // Build into a temporary directory (will be renamed with content hash after)
-    let function_dir = build_output_dir.join(function_name);
+    // Build into a unique staging directory so concurrent builds do not race on
+    // the same path before the hashed output is finalized.
+    let function_dir = temp_artifact_dir(build_output_dir, function_name);
     fs::create_dir_all(&function_dir)
         .await
         .into_alien_error()
@@ -1286,30 +1288,7 @@ async fn build_resource(
     let hashed_dir_name = format!("{}-{}", function_name, short_hash);
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
-    // Remove any existing directory with the same hash (shouldn't happen, but be safe)
-    if final_output_dir.exists() {
-        fs::remove_dir_all(&final_output_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "remove directory".to_string(),
-                file_path: final_output_dir.display().to_string(),
-                reason: "Failed to remove existing hashed build directory".to_string(),
-            })?;
-    }
-
-    // Rename from temp dir to hashed dir
-    fs::rename(&function_dir, &final_output_dir)
-        .await
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "rename directory".to_string(),
-            file_path: function_dir.display().to_string(),
-            reason: format!(
-                "Failed to rename build directory to {}",
-                final_output_dir.display()
-            ),
-        })?;
+    let finalized_dir = finalize_artifact_dir(&function_dir, &final_output_dir, "build").await?;
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
@@ -1318,7 +1297,7 @@ async fn build_resource(
         final_output_dir.display(),
         short_hash
     );
-    Ok(final_output_dir.to_string_lossy().into_owned())
+    Ok(finalized_dir)
 }
 
 /// Build a specific OS/architecture target to an OCI tarball file
@@ -1625,36 +1604,7 @@ async fn pull_and_export_image(
         targets
     );
 
-    // Clean up old hashed build directories for this container
-    if build_output_dir.exists() {
-        let prefix = format!("{}-", container_name);
-        let mut entries = fs::read_dir(&build_output_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read directory".to_string(),
-                file_path: build_output_dir.display().to_string(),
-                reason: "Failed to read build output directory for cleanup".to_string(),
-            })?;
-
-        while let Some(entry) = entries.next_entry().await.into_alien_error().context(
-            ErrorData::FileOperationFailed {
-                operation: "read directory entry".to_string(),
-                file_path: build_output_dir.display().to_string(),
-                reason: "Failed to iterate build output directory entries".to_string(),
-            },
-        )? {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with(&prefix) {
-                    let old_dir = entry.path();
-                    info!("Cleaning up old export directory: {}", old_dir.display());
-                    let _ = fs::remove_dir_all(&old_dir).await;
-                }
-            }
-        }
-    }
-
-    let container_dir = build_output_dir.join(container_name);
+    let container_dir = temp_artifact_dir(build_output_dir, container_name);
     fs::create_dir_all(&container_dir)
         .await
         .into_alien_error()
@@ -1746,28 +1696,7 @@ async fn pull_and_export_image(
     let hashed_dir_name = format!("{}-{}", container_name, short_hash);
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
-    if final_output_dir.exists() {
-        fs::remove_dir_all(&final_output_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "remove directory".to_string(),
-                file_path: final_output_dir.display().to_string(),
-                reason: "Failed to remove existing hashed export directory".to_string(),
-            })?;
-    }
-
-    fs::rename(&container_dir, &final_output_dir)
-        .await
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "rename directory".to_string(),
-            file_path: container_dir.display().to_string(),
-            reason: format!(
-                "Failed to rename export directory to {}",
-                final_output_dir.display()
-            ),
-        })?;
+    let finalized_dir = finalize_artifact_dir(&container_dir, &final_output_dir, "export").await?;
 
     info!(
         "Completed export for container '{}'. Images directory: {} (hash: {})",
@@ -1776,7 +1705,7 @@ async fn pull_and_export_image(
         short_hash
     );
 
-    Ok(final_output_dir.to_string_lossy().into_owned())
+    Ok(finalized_dir)
 }
 
 /// Compute a content hash of all OCI tarballs in a directory.
@@ -2009,5 +1938,55 @@ mod tests {
         // which is exactly why we hash - to detect changes!)
         let tarball_path = path.join("linux-x64.oci.tar");
         assert!(tarball_path.exists(), "Tarball should exist");
+    }
+
+    #[tokio::test]
+    async fn finalize_artifact_dir_reuses_existing_final_directory() {
+        let temp_root = tempdir().unwrap();
+        let temp_dir = temp_root.path().join(".agent-tmp-1234");
+        let final_dir = temp_root.path().join("agent-abcdef12");
+
+        fs::create_dir_all(&temp_dir).await.unwrap();
+        fs::write(temp_dir.join("linux-x64.oci.tar"), b"new-build")
+            .await
+            .unwrap();
+
+        fs::create_dir_all(&final_dir).await.unwrap();
+        fs::write(final_dir.join("linux-x64.oci.tar"), b"existing-build")
+            .await
+            .unwrap();
+
+        let resolved = finalize_artifact_dir(&temp_dir, &final_dir, "build")
+            .await
+            .unwrap();
+
+        assert_eq!(resolved, final_dir.to_string_lossy());
+        assert!(final_dir.exists());
+        assert!(!temp_dir.exists());
+        assert_eq!(
+            fs::read(final_dir.join("linux-x64.oci.tar")).await.unwrap(),
+            b"existing-build"
+        );
+    }
+
+    #[test]
+    fn temp_artifact_dir_is_hidden_and_unique() {
+        let build_output_dir = PathBuf::from("/tmp/build-output");
+
+        let first = temp_artifact_dir(&build_output_dir, "agent");
+        let second = temp_artifact_dir(&build_output_dir, "agent");
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent().unwrap(), build_output_dir.as_path());
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".agent-tmp-"));
+        assert!(second
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".agent-tmp-"));
     }
 }

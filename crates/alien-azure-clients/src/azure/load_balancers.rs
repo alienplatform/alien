@@ -75,7 +75,11 @@ impl AzureLoadBalancerClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -95,13 +99,14 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, load_balancer_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let body = serde_json::to_string(load_balancer)
             .into_alien_error()
@@ -136,13 +141,14 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, load_balancer_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
 
@@ -194,13 +200,14 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, load_balancer_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
 

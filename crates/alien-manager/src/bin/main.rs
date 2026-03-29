@@ -248,9 +248,9 @@ async fn build_platform_server(
     use alien_manager::builder::{bootstrap_manager_identity, build_standalone_providers};
     use alien_manager::providers::platform_api::{
         extension::{build_platform_client, resolve_base_url},
-        DeepStoreTelemetryBackend, ImpersonationCredentialResolver, ManagedCommandDispatcher,
-        NullTokenStore, PlatformApiDeploymentStore, PlatformApiReleaseStore,
-        PlatformCommandRegistry, PlatformState, PlatformTokenValidator,
+        DeepStoreTelemetryBackend, ImpersonationCredentialResolver, NullTokenStore,
+        PlatformApiDeploymentStore, PlatformApiReleaseStore, PlatformCommandRegistry,
+        PlatformState, PlatformTokenValidator,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -371,13 +371,11 @@ async fn build_platform_server(
         .expect("Failed to load command-storage binding");
 
     let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> = Arc::new(
-        ManagedCommandDispatcher::new(
-            &pc.api_url,
-            &pc.api_key,
-            bindings.clone(),
-            target_bindings.clone(),
-        )
-        .expect("Failed to create command dispatcher"),
+        alien_manager::commands::DefaultCommandDispatcher::new(
+            deployment_store.clone(),
+            release_store.clone(),
+            credential_resolver.clone(),
+        ),
     );
 
     let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(

@@ -55,8 +55,8 @@ pub use dev_status::*;
 pub mod presigned;
 pub use presigned::*;
 
-pub mod sync;
 pub mod embedded_config;
+pub mod sync;
 
 pub mod commands_types;
 pub use commands_types::*;

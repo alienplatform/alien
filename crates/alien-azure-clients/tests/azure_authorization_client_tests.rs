@@ -7,8 +7,8 @@ use alien_azure_clients::models::authorization_role_assignments::{
 use alien_azure_clients::models::authorization_role_definitions::{
     Permission, RoleDefinition, RoleDefinitionProperties,
 };
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::{Error, ErrorData};
 use reqwest::Client;
 use std::collections::HashSet;
@@ -69,7 +69,10 @@ impl AsyncTestContext for AuthorizationTestContext {
 
         let client = Client::new();
         AuthorizationTestContext {
-            authorization_client: AzureAuthorizationClient::new(client, AzureTokenCache::new(client_config)),
+            authorization_client: AzureAuthorizationClient::new(
+                client,
+                AzureTokenCache::new(client_config),
+            ),
             subscription_id,
             resource_group_name,
             created_role_definitions: Mutex::new(Vec::new()),

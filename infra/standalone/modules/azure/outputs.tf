@@ -31,3 +31,16 @@ output "managed_environment" {
 output "acr_name" {
   value = azurerm_container_registry.test.name
 }
+
+output "management_sp_client_id" {
+  value = azuread_service_principal.manager.application_id
+}
+
+output "management_sp_client_secret" {
+  value     = azuread_application_password.manager.value
+  sensitive = true
+}
+
+output "management_sp_object_id" {
+  value = azuread_service_principal.manager.object_id
+}

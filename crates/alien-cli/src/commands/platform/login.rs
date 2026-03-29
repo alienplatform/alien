@@ -3,6 +3,7 @@ use crate::commands::platform::workspace::{prompt_workspace, validate_workspace_
 use crate::error::Result;
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
+use crate::ui::{command, contextual_heading, dim_label, success_line};
 use clap::Parser;
 use serde::Serialize;
 
@@ -51,9 +52,14 @@ pub async fn login_task(args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
             used_api_key,
         })?;
     } else {
-        println!("Logged in.");
-        println!("Default workspace: {workspace}");
-        println!("Next: run `alien link` in a project directory or `alien release --project <name>`.");
+        println!("{}", contextual_heading("Logged in to", &workspace, &[]));
+        println!("{}", success_line("Workspace ready."));
+        println!(
+            "{} run {} in a project directory or {}.",
+            dim_label("Next"),
+            command("alien link"),
+            command("alien release --project <name>")
+        );
     }
 
     Ok(())

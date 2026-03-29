@@ -87,7 +87,10 @@ pub struct SqsClient {
 
 impl SqsClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     /// Get the account ID for this SQS client (used by tests)

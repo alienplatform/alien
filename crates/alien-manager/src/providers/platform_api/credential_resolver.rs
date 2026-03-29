@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::traits::{CredentialResolver, DeploymentRecord};
 use alien_bindings::traits::ImpersonationRequest;
-use alien_bindings::BindingsProviderApi;
-use alien_core::{ClientConfig, DeploymentStatus, Platform};
+use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
+use alien_core::{ClientConfig, DeploymentStatus, ManagementConfig, Platform};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
@@ -97,6 +97,31 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 ),
             })
     }
+
+    async fn resolve_management_config(
+        &self,
+        platform: Platform,
+    ) -> Result<Option<ManagementConfig>, AlienError> {
+        let provider = self.provider_for_target(platform);
+
+        let service_account = match provider.load_service_account("management").await {
+            Ok(sa) => sa,
+            Err(_) => return Ok(None),
+        };
+
+        let info = service_account
+            .get_info()
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: format!(
+                    "Failed to get management service account info for {:?}",
+                    platform
+                ),
+            })?;
+
+        Ok(Some(management_config_from_info(info, platform)?))
+    }
 }
 
 /// Impersonate the management service account to get base credentials.
@@ -139,6 +164,42 @@ pub async fn impersonate_management_service_account(
     }
 
     Ok(client_config)
+}
+
+/// Derive ManagementConfig from ServiceAccountInfo.
+fn management_config_from_info(
+    info: ServiceAccountInfo,
+    platform: Platform,
+) -> Result<ManagementConfig, AlienError> {
+    match info {
+        ServiceAccountInfo::Aws(aws_info) => {
+            Ok(ManagementConfig::Aws(alien_core::AwsManagementConfig {
+                managing_role_arn: aws_info.role_arn,
+            }))
+        }
+        ServiceAccountInfo::Gcp(gcp_info) => {
+            Ok(ManagementConfig::Gcp(alien_core::GcpManagementConfig {
+                service_account_email: gcp_info.email,
+            }))
+        }
+        ServiceAccountInfo::Azure(azure_info) => {
+            let tenant_id = std::env::var("AZURE_TENANT_ID").map_err(|_| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "AZURE_TENANT_ID required for Azure management config on {:?}",
+                        platform
+                    ),
+                })
+            })?;
+
+            Ok(ManagementConfig::Azure(
+                alien_core::AzureManagementConfig {
+                    managing_tenant_id: tenant_id,
+                    management_principal_id: azure_info.principal_id,
+                },
+            ))
+        }
+    }
 }
 
 fn parse_status(status: &str) -> DeploymentStatus {

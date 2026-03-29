@@ -86,12 +86,7 @@ pub fn prompt_confirm(prompt: &str, default_yes: bool) -> Result<bool> {
             reason: "Failed to read user input".to_string(),
         })?;
 
-    let value = input.trim().to_ascii_lowercase();
-    if value.is_empty() {
-        return Ok(default_yes);
-    }
-
-    Ok(matches!(value.as_str(), "y" | "yes"))
+    Ok(parse_confirm_response(&input, default_yes))
 }
 
 pub fn prompt_select(prompt: &str, choices: &[String]) -> Result<String> {
@@ -120,21 +115,8 @@ pub fn prompt_select(prompt: &str, choices: &[String]) -> Result<String> {
             reason: "Failed to read user input".to_string(),
         })?;
 
-    let index: usize =
-        input
-            .trim()
-            .parse()
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "selection".to_string(),
-                message: "Expected a number".to_string(),
-            })?;
-
-    if index == 0 || index > choices.len() {
-        return Err(AlienError::new(ErrorData::UserCancelled));
-    }
-
-    Ok(choices[index - 1].clone())
+    let index = parse_select_response(&input, choices.len())?;
+    Ok(choices[index].clone())
 }
 
 pub fn prompt_text(prompt: &str, default_value: Option<&str>) -> Result<String> {
@@ -166,10 +148,89 @@ pub fn prompt_text(prompt: &str, default_value: Option<&str>) -> Result<String> 
             reason: "Failed to read user input".to_string(),
         })?;
 
-    let value = input.trim();
+    Ok(parse_text_response(&input, default_value))
+}
+
+pub(crate) fn parse_confirm_response(input: &str, default_yes: bool) -> bool {
+    let value = input.trim().to_ascii_lowercase();
     if value.is_empty() {
-        return Ok(default_value.unwrap_or_default().to_string());
+        return default_yes;
     }
 
-    Ok(value.to_string())
+    matches!(value.as_str(), "y" | "yes")
+}
+
+pub(crate) fn parse_select_response(input: &str, choices_len: usize) -> Result<usize> {
+    let index: usize =
+        input
+            .trim()
+            .parse()
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "selection".to_string(),
+                message: "Expected a number".to_string(),
+            })?;
+
+    if index == 0 || index > choices_len {
+        return Err(AlienError::new(ErrorData::UserCancelled));
+    }
+
+    Ok(index - 1)
+}
+
+pub(crate) fn parse_text_response(input: &str, default_value: Option<&str>) -> String {
+    let value = input.trim();
+    if value.is_empty() {
+        return default_value.unwrap_or_default().to_string();
+    }
+
+    value.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Serialize;
+    use tempfile::TempDir;
+
+    #[derive(Serialize)]
+    struct TestPayload {
+        hello: &'static str,
+    }
+
+    #[test]
+    fn parse_confirm_response_honors_default() {
+        assert!(parse_confirm_response("", true));
+        assert!(!parse_confirm_response("", false));
+        assert!(parse_confirm_response("yes", false));
+        assert!(!parse_confirm_response("n", true));
+    }
+
+    #[test]
+    fn parse_select_response_validates_choice() {
+        assert_eq!(parse_select_response("2", 3).unwrap(), 1);
+        assert!(parse_select_response("0", 3).is_err());
+        assert!(parse_select_response("abc", 3).is_err());
+    }
+
+    #[test]
+    fn parse_text_response_uses_default() {
+        assert_eq!(parse_text_response("", Some("default")), "default");
+        assert_eq!(parse_text_response(" value ", None), "value");
+    }
+
+    #[test]
+    fn write_json_file_creates_parent_and_replaces_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("nested").join("status.json");
+
+        write_json_file(&path, &TestPayload { hello: "world" }).unwrap();
+        assert!(path.exists());
+        assert!(!path.with_extension("tmp").exists());
+
+        write_json_file(&path, &TestPayload { hello: "again" }).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("\"hello\": \"again\""));
+    }
 }

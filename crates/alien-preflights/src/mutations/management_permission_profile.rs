@@ -168,7 +168,7 @@ fn generate_auto_management_profile(
             valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
         } else {
             // Log warning but continue - allows system to work even if some permission sets are missing
-            tracing::warn!(
+            tracing::debug!(
                 permission_set_id = %permission_set_id,
                 "Management permission set not found in registry, skipping"
             );

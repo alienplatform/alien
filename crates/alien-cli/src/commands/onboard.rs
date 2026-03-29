@@ -1,8 +1,10 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
-use alien_error::{AlienError, Context, IntoAlienError};
+use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
+use alien_error::{AlienError, Context};
 use alien_manager_api::types::CreateDeploymentGroupRequest;
+use alien_manager_api::SdkResultExt;
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -42,7 +44,19 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     // Resolve manager (discovers URL in Platform mode, known in Standalone/Dev)
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
 
-    println!("Creating deployment group '{}'...", name);
+    if !args.json {
+        println!(
+            "{}",
+            contextual_heading("Creating deployment group", &name, &[])
+        );
+    }
+    let steps = if args.json {
+        None
+    } else {
+        let steps = FixedSteps::new(&["Create deployment group", "Generate deployment token"]);
+        steps.activate(0, Some(name.clone()));
+        Some(steps)
+    };
 
     let response = mgr
         .client
@@ -53,21 +67,18 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
         })
         .send()
         .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Failed to create deployment group: {}", e),
-                url: None,
-            })
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create deployment group".to_string(),
+            url: None,
         })?;
 
     let deployment_group_id = response.id.clone();
 
-    println!(
-        "Deployment group '{}' created successfully (ID: {})",
-        name, deployment_group_id
-    );
-
-    println!("Generating deployment token...");
+    if let Some(steps) = &steps {
+        steps.complete(0, Some(deployment_group_id.clone()));
+        steps.activate(1, Some("Creating deployment token".to_string()));
+    }
 
     let token_response = mgr
         .client
@@ -75,11 +86,10 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
         .id(&deployment_group_id)
         .send()
         .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Failed to create deployment group token: {}", e),
-                url: None,
-            })
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create deployment group token".to_string(),
+            url: None,
         })?;
 
     let deploy_link = format!(
@@ -99,33 +109,39 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
         return Ok(());
     }
 
-    println!();
-    println!("  \x1b[1;32mDeployment group created successfully!\x1b[0m");
-    println!();
-    println!("  \x1b[1;4mDeploy Link\x1b[0m");
-    println!();
-    println!("    \x1b[36m{}\x1b[0m", deploy_link);
-    println!();
-    println!("  Share this link with your team. They can open it in a browser");
-    println!("  to see install and deploy instructions for their platform.");
-    println!();
-    println!("  \x1b[1;4mDirect CLI Usage\x1b[0m");
-    println!();
+    if let Some(steps) = &steps {
+        steps.complete(1, Some("Deployment token ready".to_string()));
+    }
+    println!("{}", success_line("Deployment token ready."));
+    println!("{} {}", dim_label("Group"), deployment_group_id);
+    println!("{} {}", dim_label("Deploy link"), accent(&deploy_link));
     println!(
-        "    curl -fsSL {}/install | bash",
+        "{}",
+        dim_label("Share this link with your team to open install and deploy instructions.")
+    );
+    println!("{}", dim_label("CLI"));
+    println!(
+        "  curl -fsSL {}/install | bash",
         mgr.manager_url.trim_end_matches('/')
     );
-    println!("    alien-deploy up \\");
-    println!("      --token {} \\", token_response.token);
-    println!("      --platform <aws|gcp|azure|kubernetes|local> \\");
+    println!("  alien-deploy up \\");
+    println!("    --token {} \\", token_response.token);
+    println!("    --platform <aws|gcp|azure|kubernetes|local> \\");
     println!(
-        "      --manager-url {}",
+        "    --manager-url {}",
         mgr.manager_url.trim_end_matches('/')
     );
-    println!();
     println!(
-        "  \x1b[2mGroup: {} | Max deployments: {}\x1b[0m",
-        name, args.max_deployments
+        "{} {} | {} {}",
+        dim_label("Name"),
+        name,
+        dim_label("Max"),
+        args.max_deployments
+    );
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command("open the deploy link or run alien-deploy up")
     );
 
     Ok(())

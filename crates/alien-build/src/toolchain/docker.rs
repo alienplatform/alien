@@ -49,6 +49,19 @@ impl DockerToolchain {
 
         format!("alien-build-{}:{}", function_name, random_suffix)
     }
+
+    fn humanize_buildx_failure(stderr_output: &str) -> String {
+        let lower = stderr_output.to_ascii_lowercase();
+
+        if lower.contains("cannot connect to the docker daemon")
+            || lower.contains("is the docker daemon running")
+            || lower.contains("docker.sock")
+        {
+            return "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry.".to_string();
+        }
+
+        "docker buildx build failed".to_string()
+    }
 }
 
 #[async_trait]
@@ -178,7 +191,7 @@ impl Toolchain for DockerToolchain {
                 let stderr_output = stderr_lines.join("\n");
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     function_name: "docker-build".to_string(),
-                    reason: "docker buildx build failed".to_string(),
+                    reason: Self::humanize_buildx_failure(&stderr_output),
                     build_output: Some(stderr_output),
                 }));
             }

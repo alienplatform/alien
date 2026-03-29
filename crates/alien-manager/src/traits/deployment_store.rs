@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    DeploymentState, EnvironmentInfo, EnvironmentVariable, Platform, RuntimeMetadata,
-    StackSettings, StackState,
+    DeploymentState, EnvironmentInfo, EnvironmentVariable, ManagementConfig, Platform,
+    RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -23,6 +23,10 @@ pub struct DeploymentRecord {
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
     pub user_environment_variables: Option<Vec<EnvironmentVariable>>,
+    /// Management config from the platform API (platform mode only).
+    /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_config: Option<ManagementConfig>,
     pub retry_requested: bool,
     pub locked_by: Option<String>,
     pub locked_at: Option<DateTime<Utc>>,

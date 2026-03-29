@@ -185,7 +185,7 @@ impl BinaryTarget {
             crate::Platform::Gcp => vec![Self::LinuxX64],
             crate::Platform::Azure => vec![Self::LinuxX64],
             crate::Platform::Kubernetes => vec![Self::LinuxArm64],
-            crate::Platform::Local => Self::all(),
+            crate::Platform::Local => vec![Self::current_os()],
             crate::Platform::Test => vec![Self::LinuxX64],
         }
     }
@@ -238,5 +238,39 @@ impl std::str::FromStr for BinaryTarget {
             "darwin-arm64" => Ok(BinaryTarget::DarwinArm64),
             _ => Err(format!("Unknown binary target: {}", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BinaryTarget;
+    use crate::Platform;
+
+    #[test]
+    fn local_platform_defaults_to_current_host_target() {
+        assert_eq!(
+            BinaryTarget::defaults_for_platform(Platform::Local),
+            vec![BinaryTarget::current_os()]
+        );
+    }
+
+    #[test]
+    fn cloud_platform_defaults_remain_stable() {
+        assert_eq!(
+            BinaryTarget::defaults_for_platform(Platform::Aws),
+            vec![BinaryTarget::LinuxArm64]
+        );
+        assert_eq!(
+            BinaryTarget::defaults_for_platform(Platform::Gcp),
+            vec![BinaryTarget::LinuxX64]
+        );
+        assert_eq!(
+            BinaryTarget::defaults_for_platform(Platform::Azure),
+            vec![BinaryTarget::LinuxX64]
+        );
+        assert_eq!(
+            BinaryTarget::defaults_for_platform(Platform::Kubernetes),
+            vec![BinaryTarget::LinuxArm64]
+        );
     }
 }

@@ -12,6 +12,7 @@ pub mod platform;
 pub mod releases;
 pub mod sync;
 pub mod telemetry;
+pub mod vault;
 pub mod whoami;
 
 mod auth;
@@ -94,7 +95,9 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         // Sync (acquire / reconcile / release / agent-sync)
         .merge(sync::router())
         // Credentials
-        .merge(credentials::router());
+        .merge(credentials::router())
+        // Vault secrets
+        .merge(vault::router());
 
     if options.include_deploy_page {
         router = router.merge(deploy_page::router());

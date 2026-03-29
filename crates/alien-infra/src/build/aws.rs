@@ -55,7 +55,10 @@ impl AwsBuildController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_codebuild_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_codebuild_client(aws_cfg)
+            .await?;
         let cfg = ctx.desired_resource_config::<Build>()?;
 
         info!(name=%cfg.id, "Initiating CodeBuild project creation");
@@ -198,7 +201,10 @@ phases:
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_codebuild_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_codebuild_client(aws_cfg)
+            .await?;
         let config = ctx.desired_resource_config::<Build>()?;
 
         // Heartbeat check: verify CodeBuild project still exists and check basic properties
@@ -255,7 +261,10 @@ phases:
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_codebuild_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_codebuild_client(aws_cfg)
+            .await?;
         let current_config = ctx.desired_resource_config::<Build>()?;
         let aws_project_name = get_aws_project_name(ctx.resource_prefix, &current_config.id);
 
@@ -372,7 +381,10 @@ phases:
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_codebuild_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_codebuild_client(aws_cfg)
+            .await?;
         let build_config = ctx.desired_resource_config::<Build>()?;
         let aws_project_name = get_aws_project_name(ctx.resource_prefix, &build_config.id);
 
@@ -447,12 +459,14 @@ phases:
         {
             let binding =
                 BuildBinding::codebuild(project_name.clone(), build_env_vars.clone(), None);
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

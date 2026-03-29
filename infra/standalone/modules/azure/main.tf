@@ -5,6 +5,10 @@ terraform {
       version               = "~> 3.0"
       configuration_aliases = [azurerm.management]
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
@@ -77,5 +81,37 @@ resource "azurerm_role_assignment" "manager_acr_push" {
 
 data "azurerm_client_config" "management" {
   provider = azurerm.management
+}
+
+# ── Management: Service Principal ─────────────────────────────────────────
+# The management SP is the identity that customers trust (used for Lighthouse
+# cross-subscription access). It must NOT have AcrPush/AcrPull — those belong
+# to the execution identity (the Terraform SP above).
+
+resource "azuread_application" "manager" {
+  display_name = "alien-test-manager"
+}
+
+resource "azuread_service_principal" "manager" {
+  client_id = azuread_application.manager.client_id
+}
+
+resource "azuread_application_password" "manager" {
+  application_id = azuread_application.manager.id
+  display_name   = "alien-test"
+}
+
+resource "azurerm_role_assignment" "mgmt_sp_contributor" {
+  provider             = azurerm.management
+  scope                = "/subscriptions/${var.management_subscription_id}"
+  role_definition_name = "Contributor"
+  principal_id         = azuread_service_principal.manager.object_id
+}
+
+resource "azurerm_role_assignment" "mgmt_sp_user_access_admin" {
+  provider             = azurerm.management
+  scope                = "/subscriptions/${var.management_subscription_id}"
+  role_definition_name = "User Access Administrator"
+  principal_id         = azuread_service_principal.manager.object_id
 }
 

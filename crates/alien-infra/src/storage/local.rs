@@ -183,12 +183,14 @@ impl LocalStorageController {
             let storage_url = format!("file://{}/", storage_path);
 
             let binding = StorageBinding::local(BindingValue::value(storage_url));
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

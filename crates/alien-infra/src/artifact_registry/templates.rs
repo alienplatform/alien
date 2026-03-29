@@ -84,7 +84,9 @@ async fn extract_account_id_from_stack_name(
     aws_config: &AwsClientConfig,
     stack_name: &str,
 ) -> Option<String> {
-    let credentials = AwsCredentialProvider::from_config(aws_config.clone()).await.ok()?;
+    let credentials = AwsCredentialProvider::from_config(aws_config.clone())
+        .await
+        .ok()?;
     let cfn_client = CloudFormationClient::new(reqwest::Client::new(), credentials);
 
     let describe_request = DescribeStacksRequest::builder()

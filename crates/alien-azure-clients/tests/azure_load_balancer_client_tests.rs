@@ -12,8 +12,8 @@ use alien_azure_clients::models::public_ip_address::{
     PublicIpAddressSkuName, PublicIpAddressSkuTier,
 };
 use alien_azure_clients::network::{AzureNetworkClient, NetworkApi};
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::ErrorData;
 use anyhow::Result;
 use reqwest::Client;
@@ -81,9 +81,13 @@ impl AsyncTestContext for LoadBalancerTestContext {
             service_overrides: None,
         };
 
-        let client = AzureLoadBalancerClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let client = AzureLoadBalancerClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
 
-        let network_client = AzureNetworkClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let network_client =
+            AzureNetworkClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         info!(
             "🔧 Using subscription: {} and resource group: {} for load balancer testing",

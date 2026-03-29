@@ -116,7 +116,11 @@ impl AzureKeyVaultManagementClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -140,7 +144,9 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}",
-                self.token_cache.config().subscription_id, resource_group_name, vault_name
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                vault_name
             ),
             Some(vec![("api-version", "2022-07-01".into())]),
         );
@@ -200,7 +206,9 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}",
-                self.token_cache.config().subscription_id, resource_group_name, vault_name
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                vault_name
             ),
             Some(vec![("api-version", "2022-07-01".into())]),
         );
@@ -227,7 +235,9 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}",
-                self.token_cache.config().subscription_id, resource_group_name, vault_name
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                vault_name
             ),
             Some(vec![("api-version", "2022-07-01".into())]),
         );
@@ -277,7 +287,9 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}",
-                self.token_cache.config().subscription_id, resource_group_name, vault_name
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                vault_name
             ),
             Some(vec![("api-version", "2022-07-01".into())]),
         );
@@ -353,18 +365,18 @@ impl AzureKeyVaultSecretsClient {
         path: &str,
         query_params: Option<Vec<(&str, String)>>,
     ) -> Result<url::Url> {
-        let base_url =
-            if let Some(override_url) = self.token_cache.get_service_endpoint("keyvault") {
-                override_url.trim_end_matches('/').to_string()
+        let base_url = if let Some(override_url) = self.token_cache.get_service_endpoint("keyvault")
+        {
+            override_url.trim_end_matches('/').to_string()
+        } else {
+            let trimmed = vault_base_url.trim_end_matches('/');
+            // Add https:// protocol if not present
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                trimmed.to_string()
             } else {
-                let trimmed = vault_base_url.trim_end_matches('/');
-                // Add https:// protocol if not present
-                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                    trimmed.to_string()
-                } else {
-                    format!("https://{}", trimmed)
-                }
-            };
+                format!("https://{}", trimmed)
+            }
+        };
 
         let mut url = url::Url::parse(&format!("{}{}", base_url, path))
             .into_alien_error()
@@ -728,18 +740,18 @@ impl AzureKeyVaultCertificatesClient {
         path: &str,
         query_params: Option<Vec<(&str, String)>>,
     ) -> Result<url::Url> {
-        let base_url =
-            if let Some(override_url) = self.token_cache.get_service_endpoint("keyvault") {
-                override_url.trim_end_matches('/').to_string()
+        let base_url = if let Some(override_url) = self.token_cache.get_service_endpoint("keyvault")
+        {
+            override_url.trim_end_matches('/').to_string()
+        } else {
+            let trimmed = vault_base_url.trim_end_matches('/');
+            // Add https:// protocol if not present
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                trimmed.to_string()
             } else {
-                let trimmed = vault_base_url.trim_end_matches('/');
-                // Add https:// protocol if not present
-                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                    trimmed.to_string()
-                } else {
-                    format!("https://{}", trimmed)
-                }
-            };
+                format!("https://{}", trimmed)
+            }
+        };
 
         let mut url = url::Url::parse(&format!("{}{}", base_url, path))
             .into_alien_error()

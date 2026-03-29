@@ -189,8 +189,7 @@ mod tests {
     #[test]
     fn test_no_embedded_config() {
         let binary = b"just a regular binary";
-        let result: Option<DeployCliConfig> =
-            load_embedded_config_from_path_bytes(binary).unwrap();
+        let result: Option<DeployCliConfig> = load_embedded_config_from_path_bytes(binary).unwrap();
         assert!(result.is_none());
     }
 
@@ -199,7 +198,7 @@ mod tests {
         let config = AgentConfig {
             manager_url: Some("https://manager.example.com".into()),
             token: Some("tok_agent123".into()),
-            deployment_id: Some("dep_abc".into()),
+            deployment_id: Some("ag_abc".into()),
             sync_interval_secs: 60,
             name: Some("acme-agent".into()),
             display_name: Some("Acme Agent".into()),
@@ -208,8 +207,7 @@ mod tests {
         let binary = b"agent binary";
         let embedded = append_embedded_config(binary, &config).unwrap();
 
-        let loaded: Option<AgentConfig> =
-            load_embedded_config_from_path_bytes(&embedded).unwrap();
+        let loaded: Option<AgentConfig> = load_embedded_config_from_path_bytes(&embedded).unwrap();
         let loaded = loaded.unwrap();
 
         assert_eq!(loaded.manager_url, config.manager_url);

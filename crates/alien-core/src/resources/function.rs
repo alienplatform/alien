@@ -411,6 +411,12 @@ pub struct FunctionOutputs {
     /// Used by the DNS controller to create custom domain mappings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_balancer_endpoint: Option<LoadBalancerEndpoint>,
+    /// Push target for commands delivery. Platform-specific:
+    /// - AWS: Lambda function name or ARN
+    /// - GCP: Full Pub/Sub topic path (projects/{project}/topics/{topic})
+    /// - Azure: Service Bus "{namespace}/{queue}"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands_push_target: Option<String>,
 }
 
 impl ResourceOutputsDefinition for FunctionOutputs {
@@ -716,5 +722,4 @@ mod tests {
         assert_eq!(function.ingress, Ingress::Public);
         assert_eq!(function.commands_enabled, true);
     }
-
 }

@@ -20,6 +20,8 @@ aws_management_region=$(jq_val management_aws_region)
 aws_management_access_key_id=$(jq_val management_aws_access_key_id)
 aws_management_secret_access_key=$(jq_val management_aws_secret_access_key)
 aws_management_account_id=$(jq_val management_aws_account_id)
+aws_management_role_arn=$(jq_val management_aws_role_arn)
+aws_management_role_name=$(jq_val management_aws_role_name)
 
 aws_target_region=$(jq_val target_aws_region)
 aws_target_access_key_id=$(jq_val target_aws_access_key_id)
@@ -41,6 +43,9 @@ gcp_target_sa_key=$(jq_val target_gcp_service_account_key)
 gcp_target_project_id=$(jq_val target_gcp_project_id)
 gcp_target_region=$(jq_val target_gcp_region)
 
+gcp_management_identity_email=$(jq_val gcp_management_identity_email)
+gcp_management_identity_unique_id=$(jq_val gcp_management_identity_unique_id)
+
 gcp_gcs_bucket=$(jq_val gcp_gcs_bucket)
 gcp_cloudrun_image=$(jq_val gcp_cloudrun_image_uri)
 gcp_gar_repository=$(echo "$gcp_cloudrun_image" | cut -d: -f1)
@@ -50,6 +55,10 @@ azure_management_tenant_id=$(jq_val management_azure_tenant_id)
 azure_management_client_id=$(jq_val management_azure_client_id)
 azure_management_client_secret=$(jq_val management_azure_client_secret)
 azure_management_region=$(jq_val management_azure_region)
+
+azure_management_sp_client_id=$(jq_val management_azure_sp_client_id)
+azure_management_sp_client_secret=$(jq_val management_azure_sp_client_secret)
+azure_management_sp_object_id=$(jq_val management_azure_sp_object_id)
 
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)
@@ -70,6 +79,8 @@ AWS_MANAGEMENT_REGION='${aws_management_region}'
 AWS_MANAGEMENT_ACCESS_KEY_ID='${aws_management_access_key_id}'
 AWS_MANAGEMENT_SECRET_ACCESS_KEY='${aws_management_secret_access_key}'
 AWS_MANAGEMENT_ACCOUNT_ID='${aws_management_account_id}'
+AWS_MANAGEMENT_ROLE_ARN='${aws_management_role_arn}'
+AWS_MANAGEMENT_ROLE_NAME='${aws_management_role_name}'
 
 # AWS - Target
 AWS_TARGET_REGION='${aws_target_region}'
@@ -95,6 +106,10 @@ GOOGLE_TARGET_SERVICE_ACCOUNT_KEY='${gcp_target_sa_key}'
 GOOGLE_TARGET_PROJECT_ID='${gcp_target_project_id}'
 GOOGLE_TARGET_REGION='${gcp_target_region}'
 
+# GCP - Management Identity
+GOOGLE_MANAGEMENT_IDENTITY_EMAIL='${gcp_management_identity_email}'
+GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID='${gcp_management_identity_unique_id}'
+
 # GCP test resources
 ALIEN_TEST_GCP_GCS_BUCKET='${gcp_gcs_bucket}'
 ALIEN_TEST_GCP_CLOUDRUN_IMAGE='${gcp_cloudrun_image}'
@@ -106,6 +121,11 @@ AZURE_MANAGEMENT_TENANT_ID='${azure_management_tenant_id}'
 AZURE_MANAGEMENT_CLIENT_ID='${azure_management_client_id}'
 AZURE_MANAGEMENT_CLIENT_SECRET='${azure_management_client_secret}'
 AZURE_MANAGEMENT_REGION='${azure_management_region}'
+
+# Azure - Management Service Principal
+AZURE_MANAGEMENT_SP_CLIENT_ID='${azure_management_sp_client_id}'
+AZURE_MANAGEMENT_SP_CLIENT_SECRET='${azure_management_sp_client_secret}'
+AZURE_MANAGEMENT_SP_OBJECT_ID='${azure_management_sp_object_id}'
 
 # Azure - Target
 AZURE_TARGET_SUBSCRIPTION_ID='${azure_target_subscription_id}'

@@ -174,7 +174,11 @@ impl AzureContainerAppsClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -209,7 +213,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -270,7 +276,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -313,7 +321,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -377,7 +387,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, container_app_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                container_app_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -640,7 +652,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -675,7 +689,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -736,7 +752,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );
@@ -773,7 +791,9 @@ impl ContainerAppsApi for AzureContainerAppsClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/jobs/{}/start",
-                &self.token_cache.config().subscription_id, resource_group_name, job_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                job_name
             ),
             Some(vec![("api-version", "2025-01-01".into())]),
         );

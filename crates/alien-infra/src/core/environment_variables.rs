@@ -128,26 +128,22 @@ impl EnvironmentVariableBuilder {
                     match ctx.deployment_config.external_bindings.get(binding_name) {
                         Some(external) => {
                             let value = match external {
-                                alien_core::ExternalBinding::Storage(b) => {
-                                    serde_json::to_value(b)
-                                }
-                                alien_core::ExternalBinding::Queue(b) => {
-                                    serde_json::to_value(b)
-                                }
+                                alien_core::ExternalBinding::Storage(b) => serde_json::to_value(b),
+                                alien_core::ExternalBinding::Queue(b) => serde_json::to_value(b),
                                 alien_core::ExternalBinding::Kv(b) => serde_json::to_value(b),
                                 alien_core::ExternalBinding::ArtifactRegistry(b) => {
                                     serde_json::to_value(b)
                                 }
-                                alien_core::ExternalBinding::Vault(b) => {
-                                    serde_json::to_value(b)
-                                }
+                                alien_core::ExternalBinding::Vault(b) => serde_json::to_value(b),
                             }
                             .into_alien_error()
-                            .context(ErrorData::ResourceStateSerializationFailed {
-                                resource_id: binding_name.to_string(),
-                                message: "Failed to serialize external binding parameters"
-                                    .to_string(),
-                            })?;
+                            .context(
+                                ErrorData::ResourceStateSerializationFailed {
+                                    resource_id: binding_name.to_string(),
+                                    message: "Failed to serialize external binding parameters"
+                                        .to_string(),
+                                },
+                            )?;
                             Some(value)
                         }
                         None => None,

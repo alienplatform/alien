@@ -523,6 +523,7 @@ impl TestFunctionController {
                 url: url.cloned(),
                 identifier: Some(identifier.clone()),
                 load_balancer_endpoint: None, // Test functions don't have load balancers
+                commands_push_target: None,
             }))
         } else {
             None

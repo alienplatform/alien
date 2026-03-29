@@ -162,9 +162,7 @@ fn install(args: InstallArgs) -> Result<()> {
     output::step(2, 2, "Starting service");
 
     manager
-        .start(ServiceStartCtx {
-            label: label(),
-        })
+        .start(ServiceStartCtx { label: label() })
         .map_err(|e| {
             AlienError::new(ErrorData::AgentServiceError {
                 message: format!("Failed to start service: {}", e),
@@ -183,9 +181,7 @@ fn install(args: InstallArgs) -> Result<()> {
 fn start() -> Result<()> {
     let manager = get_manager()?;
     manager
-        .start(ServiceStartCtx {
-            label: label(),
-        })
+        .start(ServiceStartCtx { label: label() })
         .map_err(|e| {
             AlienError::new(ErrorData::AgentServiceError {
                 message: format!("Failed to start service: {}", e),
@@ -198,9 +194,7 @@ fn start() -> Result<()> {
 fn stop() -> Result<()> {
     let manager = get_manager()?;
     manager
-        .stop(ServiceStopCtx {
-            label: label(),
-        })
+        .stop(ServiceStopCtx { label: label() })
         .map_err(|e| {
             AlienError::new(ErrorData::AgentServiceError {
                 message: format!("Failed to stop service: {}", e),
@@ -251,14 +245,10 @@ fn uninstall() -> Result<()> {
     let manager = get_manager()?;
 
     // Stop first (ignore errors if not running)
-    let _ = manager.stop(ServiceStopCtx {
-        label: label(),
-    });
+    let _ = manager.stop(ServiceStopCtx { label: label() });
 
     manager
-        .uninstall(ServiceUninstallCtx {
-            label: label(),
-        })
+        .uninstall(ServiceUninstallCtx { label: label() })
         .map_err(|e| {
             AlienError::new(ErrorData::AgentServiceError {
                 message: format!("Failed to uninstall service: {}", e),
@@ -281,7 +271,10 @@ pub fn which_agent_binary() -> Result<PathBuf> {
             return Ok(p);
         }
         return Err(AlienError::new(ErrorData::AgentServiceError {
-            message: format!("ALIEN_AGENT_BINARY set to '{}' but file not found", env_path),
+            message: format!(
+                "ALIEN_AGENT_BINARY set to '{}' but file not found",
+                env_path
+            ),
         }));
     }
 
@@ -318,10 +311,7 @@ pub fn which_agent_binary() -> Result<PathBuf> {
     let common_paths = if cfg!(windows) {
         vec![r"C:\Program Files\alien\alien-agent.exe"]
     } else {
-        vec![
-            "/usr/local/bin/alien-agent",
-            "/usr/bin/alien-agent",
-        ]
+        vec!["/usr/local/bin/alien-agent", "/usr/bin/alien-agent"]
     };
 
     for path in &common_paths {
@@ -333,7 +323,8 @@ pub fn which_agent_binary() -> Result<PathBuf> {
 
     Err(AlienError::new(ErrorData::AgentServiceError {
         message: "alien-agent binary not found. Set ALIEN_AGENT_BINARY=/path/to/alien-agent, \
-                  build with 'cargo build -p alien-agent', or install it first.".to_string(),
+                  build with 'cargo build -p alien-agent', or install it first."
+            .to_string(),
     }))
 }
 

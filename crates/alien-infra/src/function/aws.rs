@@ -14,8 +14,8 @@ use alien_aws_clients::apigatewayv2::{
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
 use alien_aws_clients::lambda::{
-    AddPermissionRequest, CreateFunctionRequest, Environment,
-    FunctionCode, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
+    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -321,14 +321,13 @@ impl AwsFunctionController {
 
         if is_active {
             if function_config.ingress == Ingress::Public {
-                let next_state =
-                    if self.uses_custom_domain || self.certificate_id.is_some() {
-                        // Platform mode: wait for certificate then create API Gateway + custom domain
-                        WaitingForCertificate
-                    } else {
-                        // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
-                        CreatingApiGateway
-                    };
+                let next_state = if self.uses_custom_domain || self.certificate_id.is_some() {
+                    // Platform mode: wait for certificate then create API Gateway + custom domain
+                    WaitingForCertificate
+                } else {
+                    // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
+                    CreatingApiGateway
+                };
                 Ok(HandlerAction::Continue {
                     state: next_state,
                     suggested_delay: Some(Duration::from_secs(2)),
@@ -464,7 +463,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api = client
@@ -508,7 +510,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -565,7 +570,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -614,7 +622,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -674,7 +685,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let fqdn = self.fqdn.clone().ok_or_else(|| {
@@ -739,7 +753,10 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigatewayv2_client(aws_cfg)
+            .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
@@ -1679,7 +1696,10 @@ impl AwsFunctionController {
         if let (Some(domain_name), Some(api_mapping_id)) =
             (self.domain_name.as_ref(), self.api_mapping_id.as_ref())
         {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+            let client = ctx
+                .service_provider
+                .get_aws_apigatewayv2_client(aws_cfg)
+                .await?;
             match client.delete_api_mapping(domain_name, api_mapping_id).await {
                 Ok(()) => info!(function=%function_config.id, "API mapping deleted"),
                 Err(e)
@@ -1701,7 +1721,10 @@ impl AwsFunctionController {
         self.api_mapping_id = None;
 
         if let Some(domain_name) = self.domain_name.as_ref() {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+            let client = ctx
+                .service_provider
+                .get_aws_apigatewayv2_client(aws_cfg)
+                .await?;
             match client.delete_domain_name(domain_name).await {
                 Ok(()) => {
                     info!(function=%function_config.id, domain=%domain_name, "Custom domain deleted")
@@ -1726,7 +1749,10 @@ impl AwsFunctionController {
 
         // Deleting the API cascades to routes, integrations, and stages.
         if let Some(api_id) = self.api_id.as_ref() {
-            let client = ctx.service_provider.get_aws_apigatewayv2_client(aws_cfg).await?;
+            let client = ctx
+                .service_provider
+                .get_aws_apigatewayv2_client(aws_cfg)
+                .await?;
             match client.delete_api(api_id).await {
                 Ok(()) => {
                     info!(function=%function_config.id, api_id=%api_id, "API Gateway deleted")
@@ -1975,6 +2001,7 @@ impl AwsFunctionController {
                 url: self.url.clone(),
                 identifier: Some(arn.clone()),
                 load_balancer_endpoint,
+                commands_push_target: self.function_name.clone(),
             })
         })
     }
@@ -1991,12 +2018,14 @@ impl AwsFunctionController {
                 region: BindingValue::Value(region),
                 url: self.url.as_ref().map(|u| BindingValue::Value(u.clone())),
             });
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

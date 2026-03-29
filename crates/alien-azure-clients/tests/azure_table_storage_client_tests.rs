@@ -6,8 +6,8 @@ use alien_azure_clients::tables::{
     AzureTableManagementClient, AzureTableStorageClient, EntityQueryOptions, TableEntity,
     TableManagementApi, TableStorageApi,
 };
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::ErrorData;
 use anyhow::{bail, Result};
 use reqwest::Client;
@@ -71,12 +71,16 @@ impl AsyncTestContext for TableStorageTestContext {
             service_overrides: None,
         };
 
-        let management_client =
-            AzureTableManagementClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let management_client = AzureTableManagementClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
 
         // Fetch storage account key for the data plane client
-        let storage_accounts_client =
-            AzureStorageAccountsClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let storage_accounts_client = AzureStorageAccountsClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
         let keys_result = storage_accounts_client
             .list_storage_account_keys(&resource_group_name, &storage_account_name)
             .await
@@ -89,8 +93,11 @@ impl AsyncTestContext for TableStorageTestContext {
             .and_then(|key| key.value)
             .expect("No access key found for storage account in test");
 
-        let storage_client =
-            AzureTableStorageClient::new(Client::new(), AzureTokenCache::new(client_config), storage_account_key);
+        let storage_client = AzureTableStorageClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config),
+            storage_account_key,
+        );
 
         TableStorageTestContext {
             management_client,

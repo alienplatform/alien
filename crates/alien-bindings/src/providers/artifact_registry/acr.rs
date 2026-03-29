@@ -79,7 +79,8 @@ impl AcrArtifactRegistry {
         // Derive registry endpoint from registry name
         let registry_endpoint = format!("{}.azurecr.io", registry_name);
         let client = crate::http_client::create_http_client();
-        let acr_client = AzureContainerRegistryClient::new(client, AzureTokenCache::new(azure_config.clone()));
+        let acr_client =
+            AzureContainerRegistryClient::new(client, AzureTokenCache::new(azure_config.clone()));
 
         Ok(Self {
             acr_client,

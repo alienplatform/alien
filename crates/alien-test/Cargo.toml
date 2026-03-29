@@ -48,6 +48,10 @@ uuid = { workspace = true, features = ["v4"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+# Deployment stepping (for setup_target cross-account flow)
+alien-deployment = { workspace = true }
+alien-infra = { workspace = true }
+
 # Error handling (for e2e orchestration)
 anyhow = { workspace = true }
 
@@ -60,3 +64,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+test-context = { workspace = true }
+async-trait = { workspace = true }

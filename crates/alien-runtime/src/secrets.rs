@@ -93,10 +93,8 @@ pub async fn load_secrets_from_vault(
                 }
                 Err(e) => {
                     if attempt < MAX_RETRIES {
-                        let delay = std::cmp::min(
-                            INITIAL_DELAY_SECS * 2u64.pow(attempt),
-                            MAX_DELAY_SECS,
-                        );
+                        let delay =
+                            std::cmp::min(INITIAL_DELAY_SECS * 2u64.pow(attempt), MAX_DELAY_SECS);
                         warn!(
                             secret_name = %secret_key,
                             attempt = attempt + 1,
@@ -115,7 +113,10 @@ pub async fn load_secrets_from_vault(
         if let Some(e) = last_error {
             return Err(AlienError::from(e)).context(ErrorData::SecretLoadFailed {
                 secret_name: secret_key.clone(),
-                message: format!("Failed to fetch secret '{}' from vault after {} retries", secret_key, MAX_RETRIES),
+                message: format!(
+                    "Failed to fetch secret '{}' from vault after {} retries",
+                    secret_key, MAX_RETRIES
+                ),
             });
         }
 

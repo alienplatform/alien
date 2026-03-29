@@ -48,7 +48,10 @@ pub struct CodeBuildClient {
 
 impl CodeBuildClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     /// Get the region for this CodeBuild client
@@ -69,7 +72,10 @@ impl CodeBuildClient {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("codebuild") {
             override_url.to_string()
         } else {
-            format!("https://codebuild.{}.amazonaws.com", self.credentials.region())
+            format!(
+                "https://codebuild.{}.amazonaws.com",
+                self.credentials.region()
+            )
         }
     }
 
@@ -88,7 +94,10 @@ impl CodeBuildClient {
         let builder = self
             .client
             .post(&url)
-            .host(&format!("codebuild.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "codebuild.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .header("X-Amz-Target", format!("CodeBuild_20161006.{}", action))
             .header("Content-Type", "application/x-amz-json-1.1")
             .body(body.clone());
@@ -107,7 +116,10 @@ impl CodeBuildClient {
         let builder = self
             .client
             .post(&url)
-            .host(&format!("codebuild.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "codebuild.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .header("X-Amz-Target", format!("CodeBuild_20161006.{}", action))
             .header("Content-Type", "application/x-amz-json-1.1")
             .body(body.clone());

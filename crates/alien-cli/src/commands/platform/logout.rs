@@ -1,5 +1,6 @@
 use crate::auth::logout;
 use crate::error::Result;
+use crate::ui::success_line;
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -11,6 +12,6 @@ pub struct LogoutArgs {}
 
 pub async fn logout_task(_args: LogoutArgs) -> Result<()> {
     logout();
-    println!("Logged out!");
+    println!("{}", success_line("Logged out."));
     Ok(())
 }

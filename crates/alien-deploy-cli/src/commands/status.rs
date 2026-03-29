@@ -3,7 +3,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
-use alien_error::{AlienError, IntoAlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]

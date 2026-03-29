@@ -17,7 +17,11 @@ pub struct LambdaFunction {
 }
 
 impl LambdaFunction {
-    pub fn new(client: Client, credentials: AwsCredentialProvider, binding: LambdaFunctionBinding) -> Self {
+    pub fn new(
+        client: Client,
+        credentials: AwsCredentialProvider,
+        binding: LambdaFunctionBinding,
+    ) -> Self {
         let lambda_client = LambdaClient::new(client, credentials);
         Self {
             client: lambda_client,

@@ -57,9 +57,8 @@ impl AzureVaultController {
 
         // Generate vault name and look up resource group from infra requirements
         self.vault_name = Some(format!("{}-{}", ctx.resource_prefix, config.id));
-        self.resource_group_name = Some(
-            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?,
-        );
+        self.resource_group_name =
+            Some(crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?);
         self.vault_uri = Some(format!(
             "https://{}.vault.azure.net",
             self.vault_name.as_ref().unwrap()
@@ -273,12 +272,14 @@ impl AzureVaultController {
         if let Some(vault_name) = &self.vault_name {
             let binding = VaultBinding::key_vault(vault_name.clone());
 
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }
@@ -394,28 +395,29 @@ impl AzureVaultController {
     ) -> Result<()> {
         use alien_azure_clients::authorization::{AuthorizationApi, Scope};
         use alien_azure_clients::extract_oid_from_token;
-        use alien_azure_clients::AzureClientConfigExt;
         use alien_azure_clients::models::authorization_role_assignments::{
-            RoleAssignment, RoleAssignmentProperties,
-            RoleAssignmentPropertiesPrincipalType,
+            RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
         };
+        use alien_azure_clients::AzureClientConfigExt;
 
         let vault_name = self.vault_name.as_deref().unwrap_or("unknown");
         let resource_group_name = self.resource_group_name.as_deref().unwrap_or("unknown");
 
         // Get a management token and extract the caller's object ID
-        let token = azure_config
-            .get_bearer_token()
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get bearer token for controller identity".to_string(),
+        let token =
+            azure_config
+                .get_bearer_token()
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get bearer token for controller identity".to_string(),
+                    resource_id: Some(vault_name.to_string()),
+                })?;
+
+        let controller_oid =
+            extract_oid_from_token(&token).context(ErrorData::CloudPlatformError {
+                message: "Failed to extract controller object ID from token".to_string(),
                 resource_id: Some(vault_name.to_string()),
             })?;
-
-        let controller_oid = extract_oid_from_token(&token).context(ErrorData::CloudPlatformError {
-            message: "Failed to extract controller object ID from token".to_string(),
-            resource_id: Some(vault_name.to_string()),
-        })?;
 
         info!(
             vault_name = %vault_name,

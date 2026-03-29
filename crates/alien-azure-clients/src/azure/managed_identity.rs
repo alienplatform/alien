@@ -66,7 +66,11 @@ impl AzureManagedIdentityClient {
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }

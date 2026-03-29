@@ -73,7 +73,10 @@ pub struct S3Client {
 
 impl S3Client {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     /// Get the region for this S3 client (used by tests)
@@ -128,7 +131,9 @@ impl S3Client {
         } else {
             format!(
                 "https://{}.s3.{}.amazonaws.com{}",
-                bucket, self.credentials.region(), path
+                bucket,
+                self.credentials.region(),
+                path
             )
         }
     }

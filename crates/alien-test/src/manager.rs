@@ -11,9 +11,9 @@ use sha2::{Digest, Sha256};
 use tracing::info;
 
 use alien_manager::{
-    AlienManagerBuilder, ManagerConfig,
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{CreateTokenParams, TokenStore, TokenType},
+    AlienManagerBuilder, ManagerConfig,
 };
 
 use crate::config::TestConfig;
@@ -43,6 +43,8 @@ pub struct TestManager {
     client: alien_manager_api::Client,
     /// Snapshot of the `TestConfig` used to start this manager (if provided).
     config: Option<TestConfig>,
+    /// Management config for cross-account deployment (if configured).
+    management_config: Option<alien_core::ManagementConfig>,
     /// Temp directory backing the SQLite database. Dropped after the manager
     /// shuts down so the directory is cleaned up.
     _state_dir: tempfile::TempDir,
@@ -162,7 +164,18 @@ impl TestManager {
             Self::inject_credential_env_vars(cfg, platforms);
         }
 
-        // 6. Build the manager configuration
+        // 6b. Build ManagementConfig (used by setup_target to simulate alien-deploy)
+        //     and inject management binding env vars for cross-account mode.
+        //     The manager itself derives ManagementConfig per-platform from the
+        //     bindings via resolve_management_config() — no static config needed.
+        let management_config = config.and_then(|cfg| {
+            Self::build_management_config(cfg, platforms.first().copied()?)
+        });
+        if let Some(cfg) = config {
+            Self::inject_management_binding_env_vars(cfg, platforms);
+        }
+
+        // 7. Build the manager configuration
         let targets: Vec<Platform> = platforms.to_vec();
         let manager_config = ManagerConfig {
             port,
@@ -208,9 +221,7 @@ impl TestManager {
                     attempts += 1;
                     if attempts > 50 {
                         server_handle.abort();
-                        return Err(
-                            "TestManager: health check timed out after 50 attempts".into()
-                        );
+                        return Err("TestManager: health check timed out after 50 attempts".into());
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -225,11 +236,8 @@ impl TestManager {
                 let mut headers = reqwest::header::HeaderMap::new();
                 headers.insert(
                     reqwest::header::AUTHORIZATION,
-                    reqwest::header::HeaderValue::from_str(&format!(
-                        "Bearer {}",
-                        raw_token
-                    ))
-                    .expect("valid header value"),
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", raw_token))
+                        .expect("valid header value"),
                 );
                 headers
             })
@@ -243,6 +251,7 @@ impl TestManager {
             admin_token: raw_token,
             client: sdk_client,
             config: config.cloned(),
+            management_config,
             _state_dir: state_dir,
             server_handle: Some(server_handle),
             _ngrok_tunnel: ngrok_tunnel,
@@ -260,6 +269,11 @@ impl TestManager {
         self.config.as_ref()
     }
 
+    /// Get the management config for cross-account deployment, if configured.
+    pub fn management_config(&self) -> Option<alien_core::ManagementConfig> {
+        self.management_config.clone()
+    }
+
     /// Build an authenticated `reqwest::Client` with the admin token set as the
     /// `Authorization: Bearer` header. Useful for hitting raw HTTP endpoints
     /// that are not covered by the SDK.
@@ -269,11 +283,8 @@ impl TestManager {
                 let mut h = reqwest::header::HeaderMap::new();
                 h.insert(
                     reqwest::header::AUTHORIZATION,
-                    reqwest::header::HeaderValue::from_str(&format!(
-                        "Bearer {}",
-                        self.admin_token
-                    ))
-                    .expect("valid header value"),
+                    reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.admin_token))
+                        .expect("valid header value"),
                 );
                 h
             })
@@ -286,6 +297,125 @@ impl TestManager {
         if let Some(handle) = self.server_handle.take() {
             handle.abort();
             let _ = handle.await;
+        }
+    }
+
+    /// Build a `ManagementConfig` from the management credentials for the given platform.
+    ///
+    /// For AWS: extracts a role ARN from `AWS_MANAGEMENT_ROLE_ARN` env var (set by Terraform).
+    /// For GCP: extracts the SA email from the management key JSON.
+    fn build_management_config(
+        config: &TestConfig,
+        platform: Platform,
+    ) -> Option<alien_core::ManagementConfig> {
+        match platform {
+            Platform::Aws => {
+                let role_arn = std::env::var("AWS_MANAGEMENT_ROLE_ARN").ok()?;
+                Some(alien_core::ManagementConfig::Aws(
+                    alien_core::AwsManagementConfig {
+                        managing_role_arn: role_arn,
+                    },
+                ))
+            }
+            Platform::Gcp => {
+                let mgmt = config.gcp_mgmt.as_ref()?;
+                let email = mgmt.management_identity_email.as_ref()?;
+                Some(alien_core::ManagementConfig::Gcp(
+                    alien_core::GcpManagementConfig {
+                        service_account_email: email.clone(),
+                    },
+                ))
+            }
+            Platform::Azure => {
+                let mgmt = config.azure_mgmt.as_ref()?;
+                let object_id = mgmt.management_sp_object_id.as_ref()?;
+                Some(alien_core::ManagementConfig::Azure(
+                    alien_core::AzureManagementConfig {
+                        managing_tenant_id: mgmt.tenant_id.clone(),
+                        management_principal_id: object_id.clone(),
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Set per-platform `ALIEN_{AWS,GCP,AZURE}_MANAGEMENT_BINDING` env vars so
+    /// that `build_standalone_providers()` creates target providers with management
+    /// bindings — exactly mirroring the production EKS setup where each cloud has
+    /// its own management binding.
+    fn inject_management_binding_env_vars(config: &TestConfig, platforms: &[Platform]) {
+        use alien_core::bindings::{BindingValue, ServiceAccountBinding};
+
+        for platform in platforms {
+            let (env_var_name, binding) = match platform {
+                Platform::Aws => {
+                    let role_arn = match std::env::var("AWS_MANAGEMENT_ROLE_ARN") {
+                        Ok(arn) => arn,
+                        Err(_) => continue,
+                    };
+                    let role_name = std::env::var("AWS_MANAGEMENT_ROLE_NAME")
+                        .unwrap_or_else(|_| "alien-test-management".to_string());
+                    (
+                        "ALIEN_AWS_MANAGEMENT_BINDING",
+                        ServiceAccountBinding::aws_iam(
+                            BindingValue::value(role_name),
+                            BindingValue::value(role_arn),
+                        ),
+                    )
+                }
+                Platform::Gcp => {
+                    let mgmt = match config.gcp_mgmt.as_ref() {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    let email = match mgmt.management_identity_email.as_ref() {
+                        Some(e) => e.clone(),
+                        None => continue,
+                    };
+                    let unique_id = match mgmt.management_identity_unique_id.as_ref() {
+                        Some(u) => u.clone(),
+                        None => continue,
+                    };
+                    (
+                        "ALIEN_GCP_MANAGEMENT_BINDING",
+                        ServiceAccountBinding::gcp_service_account(
+                            BindingValue::value(email),
+                            BindingValue::value(unique_id),
+                        ),
+                    )
+                }
+                Platform::Azure => {
+                    let mgmt = match config.azure_mgmt.as_ref() {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    let client_id = match mgmt.management_sp_client_id.as_ref() {
+                        Some(id) => id.clone(),
+                        None => continue,
+                    };
+                    let object_id = match mgmt.management_sp_object_id.as_ref() {
+                        Some(id) => id.clone(),
+                        None => continue,
+                    };
+                    // resource_id is not meaningful for SP-based impersonation in
+                    // standalone tests, but the binding schema requires it.
+                    let resource_id = format!("/subscriptions/{}/resourceGroups/alien-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}", mgmt.subscription_id, client_id);
+                    (
+                        "ALIEN_AZURE_MANAGEMENT_BINDING",
+                        ServiceAccountBinding::azure_managed_identity(
+                            BindingValue::value(client_id),
+                            BindingValue::value(resource_id),
+                            BindingValue::value(object_id),
+                        ),
+                    )
+                }
+                _ => continue,
+            };
+
+            let binding_json = serde_json::to_string(&binding)
+                .expect("ServiceAccountBinding serialization should not fail");
+            std::env::set_var(env_var_name, binding_json);
         }
     }
 
@@ -318,11 +448,19 @@ impl TestManager {
                 }
                 Platform::Azure => {
                     if let Some(ref mgmt) = config.azure_mgmt {
+                        // Execution identity: Terraform SP (has ACR push, storage access)
                         std::env::set_var("AZURE_SUBSCRIPTION_ID", &mgmt.subscription_id);
                         std::env::set_var("AZURE_TENANT_ID", &mgmt.tenant_id);
                         std::env::set_var("AZURE_CLIENT_ID", &mgmt.client_id);
                         std::env::set_var("AZURE_CLIENT_SECRET", &mgmt.client_secret);
                         std::env::set_var("AZURE_REGION", &mgmt.region);
+                        // Management SP secret for impersonate() credential swap
+                        if let Some(ref sp_secret) = mgmt.management_sp_client_secret {
+                            std::env::set_var(
+                                "ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET",
+                                sp_secret,
+                            );
+                        }
                     }
                 }
                 _ => {}

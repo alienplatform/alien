@@ -1,7 +1,10 @@
 use crate::error::{ErrorData, Result};
 use crate::get_current_dir;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::prompt_confirm;
 use crate::project_link::{get_project_link_status, remove_project_link, ProjectLinkStatus};
-use alien_error::{AlienError, Context, IntoAlienError};
+use crate::ui::{dim_label, success_line};
+use alien_error::AlienError;
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -24,36 +27,28 @@ pub async fn unlink_task(args: UnlinkArgs) -> Result<()> {
 fn unlink_project(dir: &std::path::Path, force: bool) -> Result<()> {
     match get_project_link_status(dir) {
         ProjectLinkStatus::Linked(link) => {
-            if !force {
-                // Confirm unlinking
-                print!(
-                    "Unlink directory from project '{}'? [y/N] ",
-                    link.project_name
-                );
-                use std::io::{self, Write};
-                io::stdout().flush().ok();
-
-                let mut input = String::new();
-                io::stdin()
-                    .read_line(&mut input)
-                    .into_alien_error()
-                    .context(ErrorData::FileOperationFailed {
-                        operation: "read".to_string(),
-                        file_path: "stdin".to_string(),
-                        reason: "Failed to read user input".to_string(),
-                    })?;
-
-                if input.trim().to_lowercase() != "y" && input.trim().to_lowercase() != "yes" {
-                    println!("Unlink cancelled");
-                    return Ok(());
-                }
+            let confirmation_mode = unlink_confirmation_mode(force)?;
+            if matches!(confirmation_mode, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!("Unlink directory from project '{}'?", link.project_name),
+                    false,
+                )?
+            {
+                println!("{}", dim_label("Unlink cancelled."));
+                return Ok(());
             }
 
             remove_project_link(dir)?;
-            println!("✅ Directory unlinked from project '{}'", link.project_name);
+            println!(
+                "{}",
+                success_line(&format!("Unlinked from {}.", link.project_name))
+            );
         }
         ProjectLinkStatus::NotLinked => {
-            println!("❌ Directory is not linked to any project");
+            println!(
+                "{}",
+                dim_label("This directory is not linked to a project.")
+            );
         }
         ProjectLinkStatus::Error(err) => {
             return Err(AlienError::new(ErrorData::GenericError {
@@ -63,4 +58,47 @@ fn unlink_project(dir: &std::path::Path, force: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn unlink_confirmation_mode(force: bool) -> Result<ConfirmationMode> {
+    InteractionMode::current(false).confirmation_mode(
+        force,
+        "Unlink requires a real terminal. Re-run with `--force`.",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project_link::{save_project_link, ProjectLink};
+    use tempfile::TempDir;
+
+    #[test]
+    fn unlink_project_force_removes_link_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let link = ProjectLink::new(
+            "workspace".to_string(),
+            "project_123".to_string(),
+            "demo".to_string(),
+        );
+        save_project_link(temp_dir.path(), &link).unwrap();
+
+        unlink_project(temp_dir.path(), true).unwrap();
+
+        match get_project_link_status(temp_dir.path()) {
+            ProjectLinkStatus::NotLinked => {}
+            status => panic!("expected directory to be unlinked, got {status:?}"),
+        }
+    }
+
+    #[test]
+    fn unlink_confirmation_mode_requires_force_in_machine_mode() {
+        let err = InteractionMode::new(false, false)
+            .confirmation_mode(
+                false,
+                "Unlink requires a real terminal. Re-run with `--force`.",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Re-run with `--force`"));
+    }
 }

@@ -1,8 +1,9 @@
+use alien_core::{new_id, IdType};
 use sha2::{Digest, Sha256};
 
-/// Generate a deployment ID with "dp_" prefix.
+/// Generate a deployment ID that matches the platform schema.
 pub fn deployment_id() -> String {
-    format!("dp_{}", nanoid::nanoid!())
+    new_id(IdType::Deployment)
 }
 
 /// Generate a raw token value with the given prefix.

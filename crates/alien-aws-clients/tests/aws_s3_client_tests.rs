@@ -68,7 +68,10 @@ impl AsyncTestContext for S3TestContext {
             service_overrides: None,
         };
 
-        let client = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = S3Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         S3TestContext {
             client,
@@ -1143,7 +1146,10 @@ async fn test_concurrent_object_operations(ctx: &mut S3TestContext) {
             },
             service_overrides: None,
         };
-        let client_clone = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client_clone = S3Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
         let bucket_name_clone = bucket_name.clone();
 
         let handle = tokio::spawn(async move {
@@ -1353,7 +1359,10 @@ async fn test_get_bucket_location_us_east_1_special_case(ctx: &mut S3TestContext
         },
         service_overrides: None,
     };
-    ctx.client = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+    ctx.client = S3Client::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     let bucket_name = ctx.generate_unique_bucket_name();
     ctx.create_test_bucket(&bucket_name)
@@ -1439,9 +1448,12 @@ async fn test_get_bucket_location_multiple_buckets(ctx: &mut S3TestContext) {
         let region = location_output.region();
 
         assert_eq!(
-            region, ctx.client.region(),
+            region,
+            ctx.client.region(),
             "Bucket {} region '{}' doesn't match client region '{}'",
-            bucket_name, region, ctx.client.region()
+            bucket_name,
+            region,
+            ctx.client.region()
         );
     }
 }
@@ -1479,7 +1491,10 @@ async fn test_get_bucket_location_concurrent_requests(ctx: &mut S3TestContext) {
             },
             service_overrides: None,
         };
-        let client_clone = S3Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client_clone = S3Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
         let bucket_name_clone = bucket_name.clone();
 
         let handle = tokio::spawn(async move {

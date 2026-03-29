@@ -355,6 +355,7 @@ mod tests {
                 "arn:aws:lambda:us-east-1:123456789012:function:test-function".to_string(),
             ),
             load_balancer_endpoint: None,
+            commands_push_target: None,
         };
 
         let test_function = Function::new("test-function".to_string())
@@ -506,7 +507,11 @@ mod tests {
         }) = error_data
         {
             assert_eq!(resource_id, "test-storage");
-            assert!(expected.0.contains("FunctionOutputs"), "expected should reference FunctionOutputs, got: {}", expected.0);
+            assert!(
+                expected.0.contains("FunctionOutputs"),
+                "expected should reference FunctionOutputs, got: {}",
+                expected.0
+            );
             assert_eq!(*actual, ResourceType::from_static("storage"));
         } else {
             panic!(
@@ -528,6 +533,7 @@ mod tests {
                 "arn:aws:lambda:us-east-1:123456789012:function:test-alien-function".to_string(),
             ),
             load_balancer_endpoint: None,
+            commands_push_target: None,
         };
 
         let test_alien_function = Function::new("test-alien-function".to_string())

@@ -37,10 +37,7 @@ impl S3Storage {
     /// Creates a new `S3Storage` instance from bucket configuration.
     ///
     /// Uses AWS config for credentials.
-    pub fn new(
-        bucket_name: String,
-        credentials: AwsCredentialProvider,
-    ) -> Result<Self, Error> {
+    pub fn new(bucket_name: String, credentials: AwsCredentialProvider) -> Result<Self, Error> {
         let s3_url = format!("s3://{}", bucket_name);
         let url =
             Url::parse(&s3_url)

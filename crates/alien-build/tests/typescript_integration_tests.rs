@@ -450,14 +450,14 @@ async fn test_build_stack_with_source_code() {
                 match &f.code {
                     FunctionCode::Image { image } => {
                         // After push, image should be registry URL with format: {repo}:{function_name}-{tag}
-                        assert!(image.starts_with(&format!("{}/test/build:", local_registry_host)) && image.contains("my-func-to-build"), 
+                        assert!(image.starts_with(&format!("{}/test/build:", local_registry_host)) && image.contains("my-func-to-build"),
                             "Image URI '{}' should contain function name and be in registry format", image);
                         tracing::info!("Built and pushed function image URI: {}", image);
 
                         // Verify the OCI tarball exists in the build output directory
                         let function_dir = find_function_dir(&platform_output_dir, "my-func-to-build");
                         assert!(function_dir.exists(), "Function directory '{}' not found", function_dir.display());
-                        
+
                         // Check for at least one OCI tarball
                         let mut found_tarball = false;
                         if let Ok(mut entries) = std::fs::read_dir(&function_dir) {

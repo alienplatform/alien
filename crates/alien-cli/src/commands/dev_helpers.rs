@@ -32,6 +32,7 @@ use alien_manager::{
 };
 use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
 use alien_manager_api::Client as AlienManagerClient;
+use alien_manager_api::SdkResultExt;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -71,11 +72,32 @@ pub async fn ensure_server_running(port: u16) -> Result<()> {
     ensure_server_running_with_env(port, None, Vec::new()).await
 }
 
+/// Ensure the dev server is running for the full `alien dev` session.
+///
+/// When we need to start a fresh embedded manager, clear stale runtime state so
+/// deployment recovery from older sessions does not leak into the new run.
+pub async fn ensure_server_running_for_dev_session(
+    port: u16,
+    status_file: Option<PathBuf>,
+    user_env_vars: Vec<CliEnvVar>,
+) -> Result<()> {
+    ensure_server_running_internal(port, status_file, user_env_vars, true).await
+}
+
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
 pub async fn ensure_server_running_with_env(
     port: u16,
     status_file: Option<PathBuf>,
+    user_env_vars: Vec<CliEnvVar>,
+) -> Result<()> {
+    ensure_server_running_internal(port, status_file, user_env_vars, false).await
+}
+
+async fn ensure_server_running_internal(
+    port: u16,
+    status_file: Option<PathBuf>,
     _user_env_vars: Vec<CliEnvVar>,
+    reset_state_on_start: bool,
 ) -> Result<()> {
     if check_server_health(port).await {
         info!("Dev server already running on port {}", port);
@@ -83,12 +105,7 @@ pub async fn ensure_server_running_with_env(
         if let Some(status_file) = status_file {
             write_dev_status(
                 &status_file,
-                &build_dev_status(
-                    port,
-                    DevStatusState::Initializing,
-                    None,
-                    None,
-                ),
+                &build_dev_status(port, DevStatusState::Initializing, None, None),
             )?;
         }
         return Ok(());
@@ -97,16 +114,82 @@ pub async fn ensure_server_running_with_env(
     if let Some(status_file) = status_file {
         write_dev_status(
             &status_file,
-            &build_dev_status(
-                port,
-                DevStatusState::Initializing,
-                None,
-                None,
-            ),
+            &build_dev_status(port, DevStatusState::Initializing, None, None),
         )?;
     }
 
+    if reset_state_on_start {
+        reset_local_dev_runtime_state()?;
+    }
+
     start_embedded_dev_manager(port).await
+}
+
+fn reset_local_dev_runtime_state() -> Result<()> {
+    let state_dir = get_current_dir()?.join(".alien");
+    if !state_dir.exists() {
+        return Ok(());
+    }
+
+    for db_file in ["dev-server.db", "dev-server.db-shm", "dev-server.db-wal"] {
+        let path = state_dir.join(db_file);
+        if path.exists() {
+            std::fs::remove_file(&path).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "remove file".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to reset local dev manager database".to_string(),
+                },
+            )?;
+        }
+    }
+
+    for runtime_dir in ["commands_kv", "commands_storage"] {
+        let path = state_dir.join(runtime_dir);
+        if path.exists() {
+            std::fs::remove_dir_all(&path).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "remove directory".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to reset local dev runtime state".to_string(),
+                },
+            )?;
+        }
+    }
+
+    let entries = std::fs::read_dir(&state_dir).into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read directory".to_string(),
+            file_path: state_dir.display().to_string(),
+            reason: "Failed to scan local dev state directory".to_string(),
+        },
+    )?;
+
+    for entry in entries {
+        let entry = entry
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read directory entry".to_string(),
+                file_path: state_dir.display().to_string(),
+                reason: "Failed to inspect local dev state entry".to_string(),
+            })?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if name.starts_with("ag_") || name.starts_with("dep_") {
+            std::fs::remove_dir_all(&path).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "remove directory".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to remove stale local deployment state".to_string(),
+                },
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Build the embedded dev manager instance used by `alien dev`.
@@ -171,7 +254,7 @@ pub async fn build_embedded_dev_manager(
         command_kv,
         command_storage,
         command_dispatcher: Arc::new(NullCommandDispatcher),
-        command_registry: Arc::new(SqliteCommandRegistry::new(db)),
+        command_registry: Arc::new(SqliteCommandRegistry::new(db, deployment_store.clone())),
         artifact_registry: None,
         bindings_provider: None,
     };
@@ -403,11 +486,10 @@ pub async fn build_and_post_release_simple(
         })
         .send()
         .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Failed to create release on dev server: {}", e),
-                url: None,
-            })
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create release on dev server".to_string(),
+            url: None,
         })?;
 
     Ok(response.id.clone())
@@ -428,12 +510,15 @@ pub async fn create_initial_deployment(
     let base_url = format!("http://localhost:{}", port);
 
     // Check if deployment exists
-    let list_response = client.list_deployments().send().await.map_err(|e| {
-        AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!("Failed to list deployments: {}", e),
+    let list_response = client
+        .list_deployments()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list deployments".to_string(),
             url: None,
-        })
-    })?;
+        })?;
 
     let exists = list_response
         .items
@@ -494,14 +579,15 @@ pub async fn create_initial_deployment(
         }));
     }
 
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "deserialize".to_string(),
-            reason: "Failed to parse deployment creation response".to_string(),
-        })?;
+    let body: serde_json::Value =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialize".to_string(),
+                reason: "Failed to parse deployment creation response".to_string(),
+            })?;
 
     let deployment_id = body
         .get("deployment")
@@ -517,6 +603,102 @@ pub async fn create_initial_deployment(
 
     info!("Deployment '{}' created", deployment_name);
     Ok(deployment_id.to_string())
+}
+
+/// Prepare the deployment used by the full `alien dev` session.
+///
+/// Unlike ad hoc deployment subcommands, the main dev loop should own a fresh
+/// deployment so stale local processes and incompatible stack state do not leak
+/// across runs.
+pub async fn prepare_dev_session_deployment(
+    deployment_name: &str,
+    port: u16,
+    environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
+) -> Result<String> {
+    let base_url = format!("http://localhost:{port}");
+    let http_client = reqwest::Client::new();
+
+    if let Some(existing) = find_named_local_deployment(port, deployment_name).await? {
+        info!(
+            "Refreshing existing local deployment '{}' ({})",
+            deployment_name, existing.id
+        );
+
+        let response = http_client
+            .delete(format!("{base_url}/v1/deployments/{}", existing.id))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Failed to delete existing local deployment '{}'",
+                    deployment_name
+                ),
+                url: None,
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Failed to delete existing local deployment '{}' ({}): {}",
+                    deployment_name, status, body_text
+                ),
+                url: None,
+            }));
+        }
+
+        wait_for_local_deployment_absent(port, deployment_name).await?;
+    }
+
+    create_initial_deployment(deployment_name, port, environment_variables).await
+}
+
+async fn find_named_local_deployment(
+    port: u16,
+    deployment_name: &str,
+) -> Result<Option<DevDeploymentListItem>> {
+    let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
+    let list_response = client
+        .list_deployments()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list deployments".to_string(),
+            url: None,
+        })?;
+
+    Ok(list_response
+        .items
+        .iter()
+        .find(|deployment| deployment.name == deployment_name)
+        .map(|deployment| DevDeploymentListItem {
+            id: deployment.id.clone(),
+            name: deployment.name.clone(),
+            status: deployment.status.clone(),
+        }))
+}
+
+async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> Result<()> {
+    for _ in 0..30 {
+        if find_named_local_deployment(port, deployment_name)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "Timed out deleting existing local deployment '{}'",
+            deployment_name
+        ),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -602,14 +784,13 @@ pub async fn wait_for_dev_deployment_ready(
                     })?;
 
                 if info_response.status().is_success() {
-                    let info: DevDeploymentInfoResponse = info_response
-                        .json()
-                        .await
-                        .into_alien_error()
-                        .context(ErrorData::JsonError {
-                            operation: "deserialize".to_string(),
-                            reason: "Failed to parse local deployment info".to_string(),
-                        })?;
+                    let info: DevDeploymentInfoResponse =
+                        info_response.json().await.into_alien_error().context(
+                            ErrorData::JsonError {
+                                operation: "deserialize".to_string(),
+                                reason: "Failed to parse local deployment info".to_string(),
+                            },
+                        )?;
 
                     let snapshot = DevDeploymentSnapshot {
                         deployment_id: info.commands.deployment_id,
@@ -639,7 +820,10 @@ pub async fn wait_for_dev_deployment_ready(
                         } else {
                             DevStatusState::Initializing
                         };
-                        write_dev_status(status_file, &build_dev_status(port, state, Some(&snapshot), None))?;
+                        write_dev_status(
+                            status_file,
+                            &build_dev_status(port, state, Some(&snapshot), None),
+                        )?;
                     }
 
                     if snapshot.status == DeploymentStatus::Running {
@@ -647,9 +831,8 @@ pub async fn wait_for_dev_deployment_ready(
                     }
 
                     if snapshot.status.is_failed() {
-                        let error_detail = info.error
-                            .map(|e| format!(": {}", e))
-                            .unwrap_or_default();
+                        let error_detail =
+                            info.error.map(|e| format!(": {}", e)).unwrap_or_default();
                         return Err(AlienError::new(ErrorData::ConfigurationError {
                             message: format!(
                                 "Local deployment '{}' failed with status {:?}{}",
@@ -733,5 +916,71 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
             field: "deployment_status".to_string(),
             message: format!("Unknown local deployment status '{other}'"),
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_deployment_status_rejects_unknown_values() {
+        let err = parse_deployment_status("mystery").unwrap_err();
+        assert!(err.to_string().contains("Unknown local deployment status"));
+    }
+
+    #[test]
+    fn build_dev_status_includes_snapshot_agent() {
+        let mut resources = HashMap::new();
+        resources.insert(
+            "web".to_string(),
+            DevResourceInfo {
+                url: "http://localhost:3000".to_string(),
+                resource_type: Some("http-server".to_string()),
+            },
+        );
+        let snapshot = DevDeploymentSnapshot {
+            deployment_id: "ag_123".to_string(),
+            deployment_name: "default".to_string(),
+            status: DeploymentStatus::Running,
+            commands_url: "http://localhost:9090/commands".to_string(),
+            resources: resources.clone(),
+        };
+
+        let status = build_dev_status(9090, DevStatusState::Ready, Some(&snapshot), None);
+
+        assert_eq!(status.api_url, "http://localhost:9090");
+        assert_eq!(status.platform, "local");
+        assert!(matches!(status.status, DevStatusState::Ready));
+        assert_eq!(status.agents["default"].id, "ag_123");
+        assert_eq!(
+            status.agents["default"].commands_url.as_deref(),
+            Some("http://localhost:9090/commands")
+        );
+        assert_eq!(
+            status.agents["default"].resources["web"].url,
+            "http://localhost:3000"
+        );
+        assert_eq!(
+            status.agents["default"].resources["web"]
+                .resource_type
+                .as_deref(),
+            Some("http-server")
+        );
+    }
+
+    #[test]
+    fn write_dev_status_writes_json_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let status_path = temp_dir.path().join("nested").join("status.json");
+        let status = build_dev_status(9090, DevStatusState::Initializing, None, None);
+
+        write_dev_status(&status_path, &status).unwrap();
+
+        let written = fs::read_to_string(&status_path).unwrap();
+        assert!(written.contains("\"apiUrl\": \"http://localhost:9090\""));
+        assert!(written.contains("\"status\": \"initializing\""));
     }
 }

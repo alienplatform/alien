@@ -116,7 +116,10 @@ pub struct AutoScalingClient {
 impl AutoScalingClient {
     /// Create a new Auto Scaling client.
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -132,7 +135,10 @@ impl AutoScalingClient {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("autoscaling") {
             override_url.to_string()
         } else {
-            format!("https://autoscaling.{}.amazonaws.com", self.credentials.region())
+            format!(
+                "https://autoscaling.{}.amazonaws.com",
+                self.credentials.region()
+            )
         }
     }
 

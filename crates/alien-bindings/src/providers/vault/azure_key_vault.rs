@@ -67,11 +67,7 @@ impl crate::traits::Vault for AzureKeyVault {
         };
 
         self.client
-            .set_secret(
-                self.vault_base_url.clone(),
-                sanitized,
-                parameters,
-            )
+            .set_secret(self.vault_base_url.clone(), sanitized, parameters)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(

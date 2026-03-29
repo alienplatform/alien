@@ -8,6 +8,14 @@ output "management_secret_access_key" {
   sensitive = true
 }
 
+output "management_role_arn" {
+  value = aws_iam_role.management.arn
+}
+
+output "management_role_name" {
+  value = aws_iam_role.management.name
+}
+
 output "target_access_key_id" {
   value     = aws_iam_access_key.target.id
   sensitive = true

@@ -2,9 +2,10 @@ use crate::commands::deployments::MonitoringMode;
 use crate::deployment_tracking::{validate_token, DeploymentToken, DeploymentTracker};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::{ClientConfig, Platform};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt;
 use clap::Parser;
@@ -151,6 +152,17 @@ fn create_authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClien
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     info!("Starting deploy command");
+    println!(
+        "{}",
+        contextual_heading("Deploying", &args.name, &[("to", &args.platform)])
+    );
+    let steps = FixedSteps::new(&[
+        "Resolve deployment",
+        "Acquire deployment",
+        "Apply deployment",
+        "Finalize",
+    ]);
+    steps.activate(0, Some(format!("Deployment {}", args.name)));
 
     // Parse platform
     let platform = Platform::from_str(&args.platform).map_err(|e| {
@@ -159,8 +171,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             message: e,
         })
     })?;
-
-    info!("🚀 Deploying application to deployment '{}'", args.name);
 
     let base_url = ctx.base_url();
 
@@ -369,8 +379,13 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         }
     };
 
-    info!("   Deployment ID: {}", tracked_deployment.deployment_id);
-    info!("   Workspace ID: {}", tracked_deployment.workspace_id);
+    steps.complete(
+        0,
+        Some(format!(
+            "{} ({})",
+            args.name, tracked_deployment.deployment_id
+        )),
+    );
 
     // Resolve workspace name for API calls that require it.
     // tracked_deployment.workspace_id is an ID (e.g. "ws_..."), but sync APIs expect a workspace name.
@@ -394,16 +409,12 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         })?;
 
     let deployment = deployment_response.into_inner();
-    info!("📊 Current deployment status: {:?}", deployment.status);
-
     // Generate unique session ID
     let hostname = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "unknown".to_string());
     let session_id = format!("cli-{}-{}", hostname, Uuid::new_v4());
-
-    info!("📋 Session ID: {}", session_id);
 
     // Resolve manager ID from --manager flag
     // None (omitted): platform auto-resolves from deployment record
@@ -473,7 +484,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         session_id.clone(),
     );
 
-    info!("📊 Deployment acquired for deployment");
+    steps.activate(1, Some(tracked_deployment.deployment_id.clone()));
 
     // Extract deployment config
     let mut config: alien_deployment::DeploymentConfig = serde_json::from_value(
@@ -519,6 +530,12 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         current.retry_requested = true;
     }
 
+    steps.complete(1, Some(format!("{:?}", deployment.status)));
+    steps.activate(2, Some(format!("{:?}", current.status)));
+    if let Some(stack_state) = current.stack_state.as_ref() {
+        steps.sync_deployment_resources(&stack_state.resources);
+    }
+
     // Deployment loop
     let max_steps = 400;
     let mut step_count = 0;
@@ -531,11 +548,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             }));
         }
 
-        info!(
-            "Step {}: Deployment status = {:?}",
-            step_count, current.status
-        );
-
         // Call alien_deployment::step() directly
         let step_result = alien_deployment::step(
             current.clone(),
@@ -547,6 +559,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         .context(ErrorData::GenericError {
             message: "deployment step failed".to_string(),
         })?;
+
+        steps.activate(2, Some(format!("{:?}", step_result.state.status)));
+        if let Some(stack_state) = step_result.state.stack_state.as_ref() {
+            steps.sync_deployment_resources(&stack_state.resources);
+        }
 
         // Check if deployment is complete
         let is_success_release = step_result.state.status.is_synced()
@@ -634,6 +651,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         // Handle failures AFTER the platform has been updated
         if is_failure {
             let failed_status = step_result.state.status;
+            steps.fail(2, Some(format!("{failed_status:?}")));
 
             let operation = match failed_status {
                 alien_deployment::DeploymentStatus::InitialSetupFailed => "initial setup",
@@ -644,18 +662,21 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             };
 
             if let Some(error) = step_result.error {
-                return Err(AlienError::new(ErrorData::DeploymentFailed {
-                    message: format!("{}: {}", operation, error),
+                return Err(error.context(ErrorData::DeploymentFailed {
+                    message: format!("{operation} failed"),
                 }));
             } else {
                 return Err(AlienError::new(ErrorData::DeploymentFailed {
-                    message: operation.to_string(),
+                    message: format!("{operation} failed"),
                 }));
             }
         }
 
         // Handle success
         if is_success_release {
+            steps.complete(2, Some("Resources ready".to_string()));
+            steps.activate(3, Some("Promoting release".to_string()));
+            steps.complete(3, Some("Deployment is running".to_string()));
             break;
         }
 
@@ -694,6 +715,22 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             sleep(Duration::from_millis(delay_ms)).await;
         }
     }
+
+    println!("{}", success_line("Deployment is running."));
+    println!(
+        "{} {} ({})",
+        dim_label("Deployment"),
+        args.name,
+        tracked_deployment.deployment_id
+    );
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!(
+            "alien deployments get {}",
+            tracked_deployment.deployment_id
+        ))
+    );
 
     Ok(())
 }

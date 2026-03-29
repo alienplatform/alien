@@ -223,14 +223,21 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 external_id: None,
             })
             .await
-            .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR push role".to_string(), Some(repo_name.to_string())))?;
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    "Failed to assume ECR push role".to_string(),
+                    Some(repo_name.to_string()),
+                )
+            })?;
         let ecr_client = alien_aws_clients::ecr::EcrClient::new(
             crate::http_client::create_http_client(),
             AwsCredentialProvider::from_config(impersonated)
                 .await
                 .context(ErrorData::BindingSetupFailed {
                     binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                    reason: "Failed to create credential provider for impersonated role"
+                        .to_string(),
                 })?,
         );
 
@@ -238,16 +245,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .repository_name(full_repo_name.clone())
             .build();
 
-        let response = ecr_client
-            .create_repository(request)
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to create ECR repository '{}'", full_repo_name),
-                    Some(repo_name.to_string()),
-                )
-            })?;
+        let response = ecr_client.create_repository(request).await.map_err(|e| {
+            map_cloud_client_error(
+                e,
+                format!("Failed to create ECR repository '{}'", full_repo_name),
+                Some(repo_name.to_string()),
+            )
+        })?;
 
         info!(
             repo_name = %repo_name,
@@ -296,14 +300,21 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 external_id: None,
             })
             .await
-            .map_err(|e| map_cloud_client_error(e, "Failed to assume ECR pull role".to_string(), Some(repo_id.to_string())))?;
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    "Failed to assume ECR pull role".to_string(),
+                    Some(repo_id.to_string()),
+                )
+            })?;
         let ecr_client = alien_aws_clients::ecr::EcrClient::new(
             crate::http_client::create_http_client(),
             AwsCredentialProvider::from_config(impersonated)
                 .await
                 .context(ErrorData::BindingSetupFailed {
                     binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                    reason: "Failed to create credential provider for impersonated role"
+                        .to_string(),
                 })?,
         );
 
@@ -673,7 +684,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .await
                 .context(ErrorData::BindingSetupFailed {
                     binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for impersonated role".to_string(),
+                    reason: "Failed to create credential provider for impersonated role"
+                        .to_string(),
                 })?,
         );
 

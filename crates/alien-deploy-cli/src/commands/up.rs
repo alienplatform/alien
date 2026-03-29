@@ -108,7 +108,14 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         Platform::Local | Platform::Kubernetes => {
             // Pull model: install agent as OS service (or print Helm commands for K8s)
             output::step(2, 3, "Setting up agent (pull model)...");
-            run_pull_model(&args, &manager_url, &effective_token, &deployment_id, platform).await?;
+            run_pull_model(
+                &args,
+                &manager_url,
+                &effective_token,
+                &deployment_id,
+                platform,
+            )
+            .await?;
         }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             // Push model: run initial setup, then let manager continue
@@ -269,12 +276,8 @@ async fn run_pull_model(
     platform: Platform,
 ) -> Result<()> {
     match platform {
-        Platform::Kubernetes => {
-            run_kubernetes_pull_model(manager_url, token, deployment_id).await
-        }
-        _ => {
-            run_local_pull_model(args, manager_url, token, &platform.to_string()).await
-        }
+        Platform::Kubernetes => run_kubernetes_pull_model(manager_url, token, deployment_id).await,
+        _ => run_local_pull_model(args, manager_url, token, &platform.to_string()).await,
     }
 }
 
@@ -295,7 +298,8 @@ async fn run_local_pull_model(
     output::info(&format!("Agent binary: {}", binary_path.display()));
 
     if args.foreground {
-        return run_agent_foreground(&binary_path, manager_url, token, platform, &encryption_key).await;
+        return run_agent_foreground(&binary_path, manager_url, token, platform, &encryption_key)
+            .await;
     }
 
     output::info("Installing alien-agent as a system service...");
@@ -375,9 +379,7 @@ async fn run_kubernetes_pull_model(
     println!("  helm install alien-agent ./charts/alien-agent \\");
     println!("    --set syncUrl={} \\", manager_url);
     println!("    --set syncToken={} \\", token);
-    println!(
-        "    --set encryptionKey=$(openssl rand -hex 32) \\",
-    );
+    println!("    --set encryptionKey=$(openssl rand -hex 32) \\",);
     println!("    --set namespace=<your-app-namespace>");
     println!();
     output::info(&format!("Deployment ID: {}", deployment_id));
@@ -414,8 +416,8 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
 
     let binary_path = bin_dir.join("alien-agent");
 
-    let releases_url = std::env::var("ALIEN_RELEASES_URL")
-        .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
+    let releases_url =
+        std::env::var("ALIEN_RELEASES_URL").unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
 
     let (os, arch) = detect_os_arch()?;
     let url = format!(
@@ -425,29 +427,28 @@ async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
 
     output::info(&format!("Downloading alien-agent from {}...", url));
 
-    let response = reqwest::get(&url)
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to download alien-agent from {}", url),
-        })?;
+    let response =
+        reqwest::get(&url)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to download alien-agent from {}", url),
+            })?;
 
     if !response.status().is_success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "Failed to download alien-agent: HTTP {}",
-                response.status()
-            ),
+            message: format!("Failed to download alien-agent: HTTP {}", response.status()),
         }));
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to read alien-agent download response".to_string(),
-        })?;
+    let bytes =
+        response
+            .bytes()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to read alien-agent download response".to_string(),
+            })?;
 
     std::fs::write(&binary_path, &bytes)
         .into_alien_error()
@@ -528,13 +529,12 @@ async fn run_push_model(
         .into_inner();
 
     // Reconstruct DeploymentState from flat API response
-    let status: DeploymentStatus = serde_json::from_value(
-        serde_json::Value::String(deployment.status.clone()),
-    )
-    .into_alien_error()
-    .context(ErrorData::ConfigurationError {
-        message: format!("Unknown deployment status: {}", deployment.status),
-    })?;
+    let status: DeploymentStatus =
+        serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Unknown deployment status: {}", deployment.status),
+            })?;
 
     let stack_state = deployment
         .stack_state
@@ -614,16 +614,12 @@ async fn run_push_model(
         info!("Step {}: status = {:?}", step_count, state.status);
         output::info(&format!("Step {}: {:?}", step_count, state.status));
 
-        let step_result = alien_deployment::step(
-            state.clone(),
-            config.clone(),
-            client_config.clone(),
-            None,
-        )
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "initial setup".to_string(),
-        })?;
+        let step_result =
+            alien_deployment::step(state.clone(), config.clone(), client_config.clone(), None)
+                .await
+                .context(ErrorData::DeploymentFailed {
+                    operation: "initial setup".to_string(),
+                })?;
 
         state = step_result.state;
 

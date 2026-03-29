@@ -98,3 +98,9 @@ This runs `terraform apply` (first run ~10-20 min due to Docker image builds), g
 ## Updating infrastructure
 
 After any change to `infra/standalone/`: push to a branch touching those paths and the `cloud-tests.yml` workflow will automatically pick it up, apply changes, and regenerate `.env.test`.
+
+## Cleanup
+
+For inspection and cleanup of leaked cloud resources after failed test runs, see [Cloud Test Resource Cleanup](./03-cloud-resource-cleanup.md).
+
+Important: routine cleanup must not manually delete resources owned by `infra/standalone`. Those are shared baseline test resources and should be treated as protected unless you are intentionally changing them through Terraform.

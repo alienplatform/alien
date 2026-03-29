@@ -46,7 +46,6 @@ pub async fn forward_http_request(
     request: Request<Body>,
     app_port: u16,
 ) -> Response<Body> {
-
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();

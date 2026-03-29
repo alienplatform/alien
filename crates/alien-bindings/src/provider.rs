@@ -952,11 +952,11 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "azure")]
             KvBinding::TableStorage(config) => {
                 use crate::providers::kv::azure_table_storage::AzureTableStorageKv;
-                use alien_azure_clients::AzureTokenCache;
                 use alien_azure_clients::storage_accounts::{
                     AzureStorageAccountsClient, StorageAccountsApi,
                 };
                 use alien_azure_clients::tables::AzureTableStorageClient;
+                use alien_azure_clients::AzureTokenCache;
 
                 let azure_config = self.client_config.azure_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1150,12 +1150,17 @@ impl BindingsProviderApi for BindingsProvider {
                 })?;
 
                 // Pass short names — PubSubClient methods prepend the project prefix
-                let topic = if let Some(short) = topic_name.strip_prefix(&format!("projects/{}/topics/", gcp_config.project_id)) {
+                let topic = if let Some(short) =
+                    topic_name.strip_prefix(&format!("projects/{}/topics/", gcp_config.project_id))
+                {
                     short.to_string()
                 } else {
                     topic_name
                 };
-                let subscription = if let Some(short) = subscription_name.strip_prefix(&format!("projects/{}/subscriptions/", gcp_config.project_id)) {
+                let subscription = if let Some(short) = subscription_name.strip_prefix(&format!(
+                    "projects/{}/subscriptions/",
+                    gcp_config.project_id
+                )) {
                     short.to_string()
                 } else {
                     subscription_name

@@ -44,13 +44,11 @@ pub fn get_current_platform() -> Result<Platform> {
 
 /// Gets the platform from a HashMap of environment variables.
 pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) -> Result<Platform> {
-    let deployment_type = env
-        .get("ALIEN_DEPLOYMENT_TYPE")
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::EnvironmentVariableMissing {
-                variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
-            })
-        })?;
+    let deployment_type = env.get("ALIEN_DEPLOYMENT_TYPE").ok_or_else(|| {
+        AlienError::new(ErrorData::EnvironmentVariableMissing {
+            variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
+        })
+    })?;
 
     deployment_type.parse().map_err(|_| {
         AlienError::new(ErrorData::InvalidEnvironmentVariable {

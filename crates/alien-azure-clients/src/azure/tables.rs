@@ -210,7 +210,11 @@ impl AzureTableManagementClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -442,11 +446,7 @@ pub struct AzureTableStorageClient {
 }
 
 impl AzureTableStorageClient {
-    pub fn new(
-        client: Client,
-        token_cache: AzureTokenCache,
-        storage_account_key: String,
-    ) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache, storage_account_key: String) -> Self {
         Self {
             client,
             token_cache,
@@ -461,8 +461,7 @@ impl AzureTableStorageClient {
         path: &str,
         query_params: Option<Vec<(&str, String)>>,
     ) -> Result<url::Url> {
-        let base_url = if let Some(override_url) = self.token_cache.get_service_endpoint("table")
-        {
+        let base_url = if let Some(override_url) = self.token_cache.get_service_endpoint("table") {
             override_url.trim_end_matches('/').to_string()
         } else {
             format!("https://{}.table.core.windows.net", storage_account_name)

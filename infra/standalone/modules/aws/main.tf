@@ -32,6 +32,31 @@ resource "aws_iam_user_policy_attachment" "manager_admin" {
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
+# ── Management: IAM role for SA impersonation ────────────────────────────────
+# The management IAM user assumes this role via STS AssumeRole to get short-lived
+# credentials. This mirrors the platform flow where the ServiceAccount resource
+# creates an IAM role that the manager impersonates.
+
+resource "aws_iam_role" "management" {
+  provider = aws.management
+  name     = "alien-test-management"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = aws_iam_user.manager.arn }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "management_admin" {
+  provider   = aws.management
+  role       = aws_iam_role.management.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
 # ── Management: S3 bucket ─────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "test" {

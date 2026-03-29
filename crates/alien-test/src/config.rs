@@ -36,6 +36,10 @@ pub struct GcpConfig {
     pub project_id: String,
     pub region: String,
     pub credentials_json: Option<String>,
+    /// Separate management SA email (for cross-project impersonation).
+    pub management_identity_email: Option<String>,
+    /// Separate management SA unique ID.
+    pub management_identity_unique_id: Option<String>,
 }
 
 /// GCP-specific test resources provisioned by Terraform.
@@ -56,6 +60,12 @@ pub struct AzureConfig {
     pub client_id: String,
     pub client_secret: String,
     pub region: String,
+    /// Management SP client ID (separate identity for Lighthouse access).
+    pub management_sp_client_id: Option<String>,
+    /// Management SP client secret (for SP→SP impersonation).
+    pub management_sp_client_secret: Option<String>,
+    /// Management SP object/principal ID.
+    pub management_sp_object_id: Option<String>,
 }
 
 /// Azure-specific test resources provisioned by Terraform.
@@ -177,6 +187,12 @@ impl TestConfig {
             project_id,
             region,
             credentials_json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").ok(),
+            management_identity_email: env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            management_identity_unique_id: env::var("GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -187,6 +203,8 @@ impl TestConfig {
             project_id,
             region,
             credentials_json: env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY").ok(),
+            management_identity_email: None,
+            management_identity_unique_id: None,
         })
     }
 
@@ -204,6 +222,15 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            management_sp_client_id: env::var("AZURE_MANAGEMENT_SP_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            management_sp_client_secret: env::var("AZURE_MANAGEMENT_SP_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            management_sp_object_id: env::var("AZURE_MANAGEMENT_SP_OBJECT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -222,6 +249,9 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            management_sp_client_id: None,
+            management_sp_client_secret: None,
+            management_sp_object_id: None,
         })
     }
 

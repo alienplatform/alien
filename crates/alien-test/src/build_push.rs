@@ -74,20 +74,14 @@ pub async fn build_and_push_stack(
 ///
 /// Uses platform defaults for target architecture (AWS=arm64, GCP/Azure=x64)
 /// and enables debug mode for faster test builds.
-fn create_build_settings(
-    platform: Platform,
-    config: &TestConfig,
-) -> anyhow::Result<BuildSettings> {
+fn create_build_settings(platform: Platform, config: &TestConfig) -> anyhow::Result<BuildSettings> {
     let output_dir = tempfile::tempdir()
         .context("Failed to create temp dir for build output")?
         .keep();
 
     let platform_settings = match platform {
         Platform::Aws => PlatformBuildSettings::Aws {
-            managing_account_id: config
-                .aws_mgmt
-                .as_ref()
-                .and_then(|m| m.account_id.clone()),
+            managing_account_id: config.aws_mgmt.as_ref().and_then(|m| m.account_id.clone()),
         },
         Platform::Gcp => PlatformBuildSettings::Gcp {},
         Platform::Azure => PlatformBuildSettings::Azure {},

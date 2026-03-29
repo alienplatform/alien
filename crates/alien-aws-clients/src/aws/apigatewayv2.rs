@@ -72,7 +72,10 @@ pub struct ApiGatewayV2Client {
 
 impl ApiGatewayV2Client {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -88,7 +91,10 @@ impl ApiGatewayV2Client {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("apigateway") {
             override_url.to_string()
         } else {
-            format!("https://apigateway.{}.amazonaws.com", self.credentials.region())
+            format!(
+                "https://apigateway.{}.amazonaws.com",
+                self.credentials.region()
+            )
         }
     }
 
@@ -107,7 +113,10 @@ impl ApiGatewayV2Client {
         let mut builder = self
             .client
             .request(method, &url)
-            .host(&format!("apigateway.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "apigateway.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .content_type_json();
 
         if let Some(body) = body {
@@ -137,7 +146,10 @@ impl ApiGatewayV2Client {
         let builder = self
             .client
             .request(method, &url)
-            .host(&format!("apigateway.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "apigateway.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .content_type_json()
             .content_sha256("");
 

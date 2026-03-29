@@ -43,7 +43,6 @@ pub trait AwsClientConfigExt {
     fn mock() -> Self;
 }
 
-pub mod credential_provider;
 pub mod acm;
 pub mod apigatewayv2;
 pub mod autoscaling;
@@ -51,6 +50,7 @@ pub mod aws_request_utils;
 pub mod cloudformation;
 pub mod cloudwatch_logs;
 pub mod codebuild;
+pub mod credential_provider;
 pub mod dynamodb;
 pub mod ec2;
 pub mod ecr;

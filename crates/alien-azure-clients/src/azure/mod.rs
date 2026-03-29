@@ -526,15 +526,16 @@ impl AzureClientConfigExt for AzureClientConfig {
                         ),
                     })?;
 
-                let token_response: TokenResponse =
-                    response.json().await.into_alien_error().context(
-                        ErrorData::AuthenticationError {
-                            message: format!(
-                                "Failed to parse Azure managed identity token response for resource '{}'",
-                                resource
-                            ),
-                        },
-                    )?;
+                let token_response: TokenResponse = response
+                    .json()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::AuthenticationError {
+                    message: format!(
+                        "Failed to parse Azure managed identity token response for resource '{}'",
+                        resource
+                    ),
+                })?;
 
                 Ok(token_response.access_token)
             }

@@ -117,10 +117,8 @@ impl Queue for AzureServiceBusQueue {
                     };
 
                     // Encode both message_id and lock_token in receipt_handle for ack()
-                    let broker_props = received_msg
-                        .broker_properties
-                        .as_ref()
-                        .ok_or_else(|| {
+                    let broker_props =
+                        received_msg.broker_properties.as_ref().ok_or_else(|| {
                             alien_error::AlienError::new(ErrorData::BindingSetupFailed {
                                 binding_type: "queue.servicebus".to_string(),
                                 reason: "Received message without broker properties".to_string(),

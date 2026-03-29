@@ -26,8 +26,8 @@ use alien_azure_clients::models::keyvault::{
     VaultCreateOrUpdateParameters, VaultProperties,
 };
 use alien_azure_clients::models::secrets::SecretSetParameters;
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::{Error, ErrorData};
 use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose, Engine as _};
@@ -84,9 +84,12 @@ impl AsyncTestContext for KeyVaultTestContext {
             subscription_id, resource_group_name
         );
 
-        let management_client = AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
-        let secrets_client = AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
-        let certificates_client = AzureKeyVaultCertificatesClient::new(Client::new(), AzureTokenCache::new(config));
+        let management_client =
+            AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let secrets_client =
+            AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let certificates_client =
+            AzureKeyVaultCertificatesClient::new(Client::new(), AzureTokenCache::new(config));
 
         KeyVaultTestContext {
             management_client,
@@ -760,7 +763,8 @@ async fn test_invalid_credentials(_ctx: &mut KeyVaultTestContext) {
         },
         service_overrides: None,
     };
-    let invalid_client = AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(invalid_config));
+    let invalid_client =
+        AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(invalid_config));
 
     let result = invalid_client
         .get_vault("fake-rg".to_string(), "fake-vault".to_string())

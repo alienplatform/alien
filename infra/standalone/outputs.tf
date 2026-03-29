@@ -17,6 +17,14 @@ output "management_aws_account_id" {
   value = data.aws_caller_identity.management.account_id
 }
 
+output "management_aws_role_arn" {
+  value = module.aws.management_role_arn
+}
+
+output "management_aws_role_name" {
+  value = module.aws.management_role_name
+}
+
 # AWS - Target
 output "target_aws_region" {
   value = var.aws_target_region
@@ -85,6 +93,14 @@ output "target_gcp_region" {
   value = var.google_target_region
 }
 
+output "gcp_management_identity_email" {
+  value = module.gcp.management_identity_email
+}
+
+output "gcp_management_identity_unique_id" {
+  value = module.gcp.management_identity_unique_id
+}
+
 # GCP resources
 output "gcp_gcs_bucket" {
   value = module.gcp.gcs_bucket
@@ -136,6 +152,20 @@ output "target_azure_client_id" {
 output "target_azure_client_secret" {
   value     = module.azure.target_client_secret
   sensitive = true
+}
+
+# Azure - Management Service Principal
+output "management_azure_sp_client_id" {
+  value = module.azure.management_sp_client_id
+}
+
+output "management_azure_sp_client_secret" {
+  value     = module.azure.management_sp_client_secret
+  sensitive = true
+}
+
+output "management_azure_sp_object_id" {
+  value = module.azure.management_sp_object_id
 }
 
 # Azure resources

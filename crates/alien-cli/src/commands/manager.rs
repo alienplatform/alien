@@ -6,6 +6,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::interaction::{ConfirmationMode, InteractionMode};
 use crate::output::{print_json, prompt_confirm};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
@@ -118,6 +119,19 @@ pub enum ManagerCmd {
 }
 
 pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ManagerCmd::Events { follow: true, .. } = &args.cmd {
+        if args.json {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "follow".to_string(),
+                message: "`alien manager events --json` does not support `--follow`; rerun without `--json` for streaming output".to_string(),
+            }));
+        }
+    }
+
+    if let ManagerCmd::Destroy { yes, .. } = &args.cmd {
+        destroy_confirmation_mode(*yes, args.json)?;
+    }
+
     let client = ctx.sdk_client().await?;
     let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
 
@@ -127,8 +141,15 @@ pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
             platform,
             targets,
         } => {
-            deploy_manager_task(&client, &workspace_name, &name, &platform, targets, args.json)
-                .await?;
+            deploy_manager_task(
+                &client,
+                &workspace_name,
+                &name,
+                &platform,
+                targets,
+                args.json,
+            )
+            .await?;
         }
         ManagerCmd::Status { id } => {
             status_manager_task(&client, &workspace_name, &id, args.json).await?;
@@ -233,7 +254,11 @@ async fn deploy_manager_task(
         id: manager.id.as_str().to_string(),
         name: manager.name.clone(),
         status: manager.status.to_string(),
-        targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+        targets: manager
+            .targets
+            .iter()
+            .map(|target| target.to_string())
+            .collect(),
         managed_deployment_count: None,
         created_at: None,
         url: None,
@@ -306,7 +331,11 @@ async fn status_manager_task(
         id: manager.id.as_str().to_string(),
         name: manager.name.clone(),
         status: manager.status.to_string(),
-        targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+        targets: manager
+            .targets
+            .iter()
+            .map(|target| target.to_string())
+            .collect(),
         managed_deployment_count: Some(manager.managed_deployment_count as i64),
         created_at: Some(manager.created_at.to_string()),
         url: manager.url.as_ref().map(|value| value.to_string()),
@@ -382,7 +411,11 @@ async fn list_managers_task(
             id: manager.id.as_str().to_string(),
             name: manager.name.clone(),
             status: manager.status.to_string(),
-            targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+            targets: manager
+                .targets
+                .iter()
+                .map(|target| target.to_string())
+                .collect(),
             managed_deployment_count: Some(manager.managed_deployment_count as i64),
             created_at: Some(manager.created_at.to_string()),
             url: manager.url.as_ref().map(|value| value.to_string()),
@@ -485,13 +518,6 @@ async fn events_manager_task(
     follow: bool,
     json: bool,
 ) -> Result<()> {
-    if json && follow {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "follow".to_string(),
-            message: "`alien manager events --json` does not support `--follow`; rerun without `--json` for streaming output".to_string(),
-        }));
-    }
-
     let workspace_param = ListManagerEventsWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -584,6 +610,8 @@ async fn destroy_manager_task(
     yes: bool,
     json: bool,
 ) -> Result<()> {
+    let confirmation_mode = destroy_confirmation_mode(yes, json)?;
+
     // Get manager details first for confirmation
     let workspace_param_get = GetManagerWorkspace::try_from(workspace)
         .into_alien_error()
@@ -632,16 +660,9 @@ async fn destroy_manager_task(
     }
 
     // Confirm destruction
-    if json && !yes {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "yes".to_string(),
-            message:
-                "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode"
-                    .to_string(),
-        }));
-    }
-
-    if !yes && !prompt_confirm("Destroy this manager?", false)? {
+    if matches!(confirmation_mode, ConfirmationMode::Prompt)
+        && !prompt_confirm("Destroy this manager?", false)?
+    {
         println!("Destruction cancelled.");
         return Ok(());
     }
@@ -688,4 +709,56 @@ async fn destroy_manager_task(
     );
 
     Ok(())
+}
+
+fn destroy_confirmation_mode(yes: bool, json: bool) -> Result<ConfirmationMode> {
+    InteractionMode::current(json).confirmation_mode(
+        yes,
+        "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_manager_platform_rejects_unknown_values() {
+        let err = parse_manager_platform("local").unwrap_err();
+        assert!(err.to_string().contains("Managers can be deployed on"));
+    }
+
+    #[test]
+    fn parse_target_platform_accepts_aliases() {
+        assert_eq!(
+            parse_target_platform("k8s").unwrap(),
+            NewManagerRequestTargetsItem::Kubernetes
+        );
+        assert_eq!(
+            parse_target_platform("local").unwrap(),
+            NewManagerRequestTargetsItem::Local
+        );
+    }
+
+    #[test]
+    fn format_event_state_maps_variants() {
+        use alien_platform_api::types::EventState;
+
+        assert_eq!(format_event_state(&EventState::Started), "started");
+        assert_eq!(
+            format_event_state(&EventState::Failed { error: None }),
+            "FAILED"
+        );
+    }
+
+    #[test]
+    fn destroy_confirmation_mode_requires_yes_in_machine_mode() {
+        let err = InteractionMode::new(true, false)
+            .confirmation_mode(
+                false,
+                "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("requires `--yes`"));
+    }
 }

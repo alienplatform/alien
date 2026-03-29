@@ -168,6 +168,7 @@ pub enum ErrorData {
     #[error(
         code = "AUTH_CREDENTIALS_MISSING",
         message = "Missing required credential: {field}",
+        hint = "Provide `{field}` explicitly or run `alien login` if this command targets the Alien platform.",
         retryable = "false",
         internal = "false"
     )]
@@ -194,6 +195,7 @@ pub enum ErrorData {
     #[error(
         code = "PROJECT_LINK_INVALID",
         message = "Project link invalid: {message}",
+        hint = "Run `alien link` to recreate the local project link for this directory.",
         retryable = "false",
         internal = "false"
     )]
@@ -207,7 +209,8 @@ pub enum ErrorData {
         code = "BUILD_FAILED",
         message = "Build failed",
         retryable = "inherit",
-        internal = "inherit"
+        internal = "inherit",
+        human = "transparent"
     )]
     BuildFailed,
 
@@ -216,7 +219,8 @@ pub enum ErrorData {
         code = "RELEASE_FAILED",
         message = "Release failed: {message}",
         retryable = "inherit",
-        internal = "inherit"
+        internal = "inherit",
+        human = "transparent"
     )]
     ReleaseFailed {
         /// Description of the release failure
@@ -228,7 +232,8 @@ pub enum ErrorData {
         code = "DEPLOYMENT_FAILED",
         message = "Deployment failed: {message}",
         retryable = "inherit",
-        internal = "inherit"
+        internal = "inherit",
+        human = "transparent"
     )]
     DeploymentFailed {
         /// Description of the deployment failure

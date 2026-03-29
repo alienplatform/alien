@@ -10,8 +10,8 @@ use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::PermissionSetReference;
-use alien_core::RemoteStackManagement;
 use alien_core::PermissionSet;
+use alien_core::RemoteStackManagement;
 use alien_error::{AlienError, Context, ContextError as _};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
@@ -463,7 +463,10 @@ impl ResourcePermissionsHelper {
             }
 
             if let Some(wildcard_refs) = profile.0.get("*") {
-                for r in wildcard_refs.iter().filter(|r| r.id().starts_with(&type_prefix)) {
+                for r in wildcard_refs
+                    .iter()
+                    .filter(|r| r.id().starts_with(&type_prefix))
+                {
                     if seen_ids.insert(r.id().to_string()) {
                         combined_refs.push(r.clone());
                     }
@@ -678,10 +681,7 @@ impl ResourcePermissionsHelper {
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Permission set '{}' not found",
-                            permission_set_ref.id()
-                        ),
+                        message: format!("Permission set '{}' not found", permission_set_ref.id()),
                         resource_id: Some(resource_id.to_string()),
                     })
                 })?;
@@ -728,7 +728,10 @@ impl ResourcePermissionsHelper {
         }
 
         if let Some(wildcard_refs) = management_profile.0.get("*") {
-            for r in wildcard_refs.iter().filter(|r| r.id().starts_with(&type_prefix)) {
+            for r in wildcard_refs
+                .iter()
+                .filter(|r| r.id().starts_with(&type_prefix))
+            {
                 if seen_ids.insert(r.id().to_string()) {
                     combined_refs.push(r.clone());
                 }
@@ -845,11 +848,9 @@ impl ResourcePermissionsHelper {
         if let Some(aws_management) = ctx.get_aws_management_config()? {
             permission_context =
                 permission_context.with_managing_role_arn(aws_management.managing_role_arn.clone());
-            if let Some(managing_account_id) =
-                PermissionContext::extract_account_id_from_role_arn(
-                    &aws_management.managing_role_arn,
-                )
-            {
+            if let Some(managing_account_id) = PermissionContext::extract_account_id_from_role_arn(
+                &aws_management.managing_role_arn,
+            ) {
                 permission_context =
                     permission_context.with_managing_account_id(managing_account_id);
             }
@@ -931,8 +932,7 @@ impl ResourcePermissionsHelper {
     ) -> Result<()> {
         let aws_config = ctx.get_aws_config()?;
 
-        let service_account_role_name =
-            Self::get_aws_service_account_role_name(ctx, profile_name)?;
+        let service_account_role_name = Self::get_aws_service_account_role_name(ctx, profile_name)?;
 
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
@@ -1157,9 +1157,7 @@ impl ResourcePermissionsHelper {
     }
 
     /// Get the AWS management IAM role name from the RemoteStackManagement controller
-    fn get_aws_management_role_name(
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Option<String>> {
+    fn get_aws_management_role_name(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
         for (_resource_id, resource_entry) in &ctx.desired_stack.resources {
             if resource_entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
                 let controller = ctx

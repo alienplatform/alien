@@ -112,13 +112,13 @@ fn load_deployments(path: &PathBuf) -> Result<HashMap<String, TrackedDeployment>
         return Ok(HashMap::new());
     }
 
-    let content = std::fs::read_to_string(path)
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
+    let content = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::FileOperationFailed {
             operation: "read".to_string(),
             file_path: path.display().to_string(),
             reason: "Failed to read deployments file".to_string(),
-        })?;
+        },
+    )?;
 
     serde_json::from_str(&content)
         .into_alien_error()
@@ -132,13 +132,13 @@ fn save_deployments(
     deployments: &HashMap<String, TrackedDeployment>,
 ) -> Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
+        std::fs::create_dir_all(dir).into_alien_error().context(
+            ErrorData::FileOperationFailed {
                 operation: "create directory".to_string(),
                 file_path: dir.display().to_string(),
                 reason: "Failed to create config directory".to_string(),
-            })?;
+            },
+        )?;
     }
 
     let content = serde_json::to_string_pretty(deployments)
@@ -265,10 +265,22 @@ mod tests {
         let mut tracker = DeploymentTracker::with_path(path.clone()).unwrap();
 
         tracker
-            .track("a".into(), "dep_a".into(), "t".into(), "u".into(), "aws".into())
+            .track(
+                "a".into(),
+                "dep_a".into(),
+                "t".into(),
+                "u".into(),
+                "aws".into(),
+            )
             .unwrap();
         tracker
-            .track("b".into(), "dep_b".into(), "t".into(), "u".into(), "gcp".into())
+            .track(
+                "b".into(),
+                "dep_b".into(),
+                "t".into(),
+                "u".into(),
+                "gcp".into(),
+            )
             .unwrap();
 
         let list = tracker.list();
@@ -283,10 +295,22 @@ mod tests {
         let mut tracker = DeploymentTracker::with_path(path.clone()).unwrap();
 
         tracker
-            .track("prod".into(), "dep_old".into(), "t".into(), "u".into(), "aws".into())
+            .track(
+                "prod".into(),
+                "dep_old".into(),
+                "t".into(),
+                "u".into(),
+                "aws".into(),
+            )
             .unwrap();
         tracker
-            .track("prod".into(), "dep_new".into(), "t".into(), "u".into(), "aws".into())
+            .track(
+                "prod".into(),
+                "dep_new".into(),
+                "t".into(),
+                "u".into(),
+                "aws".into(),
+            )
             .unwrap();
 
         assert_eq!(tracker.list().len(), 1);

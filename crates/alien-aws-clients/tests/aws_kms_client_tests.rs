@@ -80,7 +80,10 @@ impl AsyncTestContext for KmsTestContext {
             },
             service_overrides: None,
         };
-        let client = KmsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = KmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         KmsTestContext {
             client,
@@ -320,7 +323,10 @@ async fn test_kms_client_with_invalid_credentials(ctx: &mut KmsTestContext) {
         },
         service_overrides: None,
     };
-    let kms_client = KmsClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
+    let kms_client = KmsClient::new(
+        client_invalid,
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     info!("🔐 Testing KMS client with invalid credentials");
 

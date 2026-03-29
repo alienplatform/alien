@@ -3,7 +3,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Detected package manager for a TypeScript/JavaScript project
 #[derive(Debug, Clone, PartialEq)]
@@ -229,7 +229,7 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
     if !install_output.status.success() {
         let stderr = String::from_utf8_lossy(&install_output.stderr);
         let stdout = String::from_utf8_lossy(&install_output.stdout);
-        error!(
+        debug!(
             "Failed to install dependencies - stderr: {}, stdout: {}",
             stderr, stdout
         );

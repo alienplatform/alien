@@ -15,3 +15,11 @@ output "gcs_bucket" {
 output "cloudrun_image_uri" {
   value = "${local.image_repository}:latest"
 }
+
+output "management_identity_email" {
+  value = google_service_account.management.email
+}
+
+output "management_identity_unique_id" {
+  value = google_service_account.management.unique_id
+}

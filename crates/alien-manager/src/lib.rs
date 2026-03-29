@@ -21,6 +21,7 @@
 //! server.start(addr).await?;
 //! ```
 
+pub mod commands;
 pub mod config;
 pub mod error;
 pub(crate) mod ids;

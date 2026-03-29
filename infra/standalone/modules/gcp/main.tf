@@ -87,6 +87,31 @@ resource "google_artifact_registry_repository" "test" {
   depends_on = [google_project_service.management_apis]
 }
 
+# ── Management: Separate management identity ──────────────────────────────
+# The management SA is the identity that customers trust (impersonated during
+# cross-project operations). It must NOT have artifact registry access.
+# The execution SA (manager) can impersonate it via serviceAccountTokenCreator.
+
+resource "google_service_account" "management" {
+  provider     = google.management
+  account_id   = "alien-test-management"
+  display_name = "Alien Test Management Identity"
+}
+
+resource "google_project_iam_member" "management_owner" {
+  provider = google.management
+  project  = var.management_project_id
+  role     = "roles/owner"
+  member   = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_service_account_iam_member" "execution_impersonates_management" {
+  provider           = google.management
+  service_account_id = google_service_account.management.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.manager.email}"
+}
+
 # ── Target: Service account + key ─────────────────────────────────────────────
 # Dedicated test project — roles/owner is safe here.
 

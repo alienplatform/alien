@@ -1,8 +1,10 @@
 use crate::auth::{load_workspace, save_workspace};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::interaction::InteractionMode;
 use crate::output::{can_prompt, print_json, prompt_select};
-use alien_error::{AlienError, Context, IntoAlienError};
+use crate::ui::{command, dim_label, success_line};
+use alien_error::{AlienError, Context};
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -63,7 +65,12 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
                 println!("{workspace}");
             } else {
                 println!("<none>");
-                println!("Run `alien workspaces set <name>` or `alien login` to choose one.");
+                println!(
+                    "{} run {} or {} to choose one.",
+                    dim_label("Next"),
+                    command("alien workspaces set <name>"),
+                    command("alien login")
+                );
             }
         }
         WorkspaceCmd::Set { name } => {
@@ -81,7 +88,10 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
                     saved: true,
                 })?;
             } else {
-                println!("Default workspace set to: {workspace_name}");
+                println!(
+                    "{}",
+                    success_line(&format!("Using workspace {}.", workspace_name))
+                );
             }
         }
         WorkspaceCmd::Ls => {
@@ -123,7 +133,10 @@ pub async fn list_workspace_names(http: &crate::auth::AuthHttp) -> Result<Vec<St
         .collect())
 }
 
-pub async fn validate_workspace_name(http: &crate::auth::AuthHttp, workspace: &str) -> Result<String> {
+pub async fn validate_workspace_name(
+    http: &crate::auth::AuthHttp,
+    workspace: &str,
+) -> Result<String> {
     let workspaces = list_workspace_names(http).await?;
     if workspaces.iter().any(|candidate| candidate == workspace) {
         Ok(workspace.to_string())
@@ -146,13 +159,9 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
         return Ok(workspaces[0].clone());
     }
 
-    if json_mode || !can_prompt() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message:
-                "Workspace selection requires a real terminal. Pass `--workspace <name>` or run `alien workspaces set <name>` first."
-                    .to_string(),
-        }));
-    }
+    InteractionMode::new(json_mode, can_prompt()).require_prompt(
+        "Workspace selection requires a real terminal. Pass `--workspace <name>` or run `alien workspaces set <name>` first.",
+    )?;
 
     prompt_select("Select a workspace:", &workspaces)
 }

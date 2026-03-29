@@ -31,9 +31,11 @@ pub mod setup;
 
 // Re-exports for convenience
 pub use agent::TestAlienAgent;
-pub use cleanup::{cleanup_agent_containers, cleanup_all, cleanup_deployments, cleanup_helm_release};
+pub use cleanup::{
+    cleanup_agent_containers, cleanup_all, cleanup_deployments, cleanup_helm_release,
+};
 pub use config::TestConfig;
 pub use deployment::TestDeployment;
-pub use e2e::{Binding, DeploymentModel, E2eContext, Language};
+pub use e2e::{Binding, DeploymentModel, Language, TestContext};
 pub use manager::TestManager;
 pub use setup::setup_target;

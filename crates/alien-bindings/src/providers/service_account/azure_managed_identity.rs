@@ -98,6 +98,14 @@ impl ServiceAccount for AzureManagedIdentityServiceAccount {
         // Override the client_id to select the target managed identity
         env_vars.insert("AZURE_CLIENT_ID".to_string(), client_id.clone());
 
+        // For SP→SP impersonation: also swap client_secret so the Azure Identity SDK
+        // authenticates as the management SP rather than the execution SP.
+        // On-Azure (UAMI→UAMI): env var absent → current behavior unchanged.
+        // Off-Azure (SP→SP): env var present → swaps both client_id and client_secret.
+        if let Some(mgmt_secret) = env_vars.remove("ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET") {
+            env_vars.insert("AZURE_CLIENT_SECRET".to_string(), mgmt_secret);
+        }
+
         // Use from_env to create the config - it will handle all the credential setup
         let impersonated_config =
             CoreAzureClientConfig::from_env(&env_vars)

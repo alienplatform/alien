@@ -35,9 +35,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
         http_status_code_match_arms,
         context_match_arms,
         message_match_arms,
+        hint_match_arms,
         retryable_inherit_match_arms,
         internal_inherit_match_arms,
         http_status_code_inherit_match_arms,
+        human_layer_presentation_match_arms,
     ) = match input.data {
         Data::Enum(ref data_enum) => {
             let mut code_arms = Vec::new();
@@ -46,9 +48,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
             let mut http_status_code_arms = Vec::new();
             let mut context_arms = Vec::new();
             let mut message_arms = Vec::new();
+            let mut hint_arms = Vec::new();
             let mut retryable_inherit_arms = Vec::new();
             let mut internal_inherit_arms = Vec::new();
             let mut http_status_code_inherit_arms = Vec::new();
+            let mut human_layer_presentation_arms = Vec::new();
 
             for variant in &data_enum.variants {
                 let ident = &variant.ident;
@@ -59,9 +63,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                     internal_val,
                     http_status_code_val,
                     message_val,
+                    hint_val,
                     retryable_inherit,
                     internal_inherit,
                     http_status_code_inherit,
+                    human_layer_presentation,
                 ) = parse_error_attrs(&variant.attrs, ident.to_string());
 
                 let matcher = if variant.fields.is_empty() {
@@ -83,6 +89,8 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                 internal_inherit_arms.push(quote! { #matcher => #internal_inherit });
                 http_status_code_inherit_arms
                     .push(quote! { #matcher => #http_status_code_inherit });
+                human_layer_presentation_arms
+                    .push(quote! { #matcher => #human_layer_presentation });
 
                 // Generate message arm with field interpolation
                 match &variant.fields {
@@ -100,11 +108,14 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                         let interpolated_message =
                             generate_message_interpolation(&message_val, &field_idents);
                         message_arms.push(quote! { #matcher => #interpolated_message });
+                        let interpolated_hint =
+                            generate_optional_interpolation(&hint_val, &field_idents);
+                        hint_arms.push(quote! { #matcher => #interpolated_hint });
 
                         context_arms.push(quote! { #matcher => {
                             let mut map = serde_json::Map::new();
                             #( map.insert(
-                                stringify!(#field_idents).to_string(), 
+                                stringify!(#field_idents).to_string(),
                                 serde_json::to_value(#field_idents)
                                     .expect(&format!("Failed to serialize field '{}' to JSON. This field must implement Serialize correctly.", stringify!(#field_idents)))
                             ); )*
@@ -118,6 +129,8 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                             quote! { #name::#ident { .. } }
                         };
                         message_arms.push(quote! { #matcher => #message_val.to_string() });
+                        let interpolated_hint = generate_optional_interpolation(&hint_val, &[]);
+                        hint_arms.push(quote! { #matcher => #interpolated_hint });
                         context_arms.push(quote! { #matcher => None });
                     }
                 }
@@ -129,9 +142,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                 http_status_code_arms,
                 context_arms,
                 message_arms,
+                hint_arms,
                 retryable_inherit_arms,
                 internal_inherit_arms,
                 http_status_code_inherit_arms,
+                human_layer_presentation_arms,
             )
         }
         _ => {
@@ -167,6 +182,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
                     #(#message_match_arms),*
                 }
             }
+            fn hint(&self) -> Option<String> {
+                match self {
+                    #(#hint_match_arms),*
+                }
+            }
             fn context(&self) -> Option<serde_json::Value> {
                 match self {
                     #(#context_match_arms),*
@@ -185,6 +205,11 @@ pub fn derive_alien_error(input: TokenStream) -> TokenStream {
             fn http_status_code_inherit(&self) -> Option<u16> {
                 match self {
                     #(#http_status_code_inherit_match_arms),*
+                }
+            }
+            fn human_layer_presentation(&self) -> alien_error::HumanLayerPresentation {
+                match self {
+                    #(#human_layer_presentation_match_arms),*
                 }
             }
         }
@@ -208,6 +233,8 @@ fn parse_error_attrs(
     proc_macro2::TokenStream,
     proc_macro2::TokenStream,
     String,
+    Option<String>,
+    proc_macro2::TokenStream,
     proc_macro2::TokenStream,
     proc_macro2::TokenStream,
     proc_macro2::TokenStream,
@@ -217,6 +244,8 @@ fn parse_error_attrs(
     let mut internal: Option<String> = None;
     let mut http_status_code: Option<String> = None;
     let mut message: Option<String> = None;
+    let mut hint: Option<String> = None;
+    let mut human: Option<String> = None;
 
     for attr in attrs {
         if !attr.path().is_ident("error") {
@@ -263,6 +292,14 @@ fn parse_error_attrs(
                 let lit: syn::LitStr = meta.value()?.parse()?;
                 message = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("hint") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                hint = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("human") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                human = Some(lit.value());
+                Ok(())
             } else {
                 Err(meta.error("unsupported error attribute key"))
             }
@@ -274,6 +311,8 @@ fn parse_error_attrs(
                 syn::Error::new(e.span(), e.to_string()).to_compile_error(),
                 syn::Error::new(e.span(), e.to_string()).to_compile_error(),
                 String::new(),
+                None,
+                syn::Error::new(e.span(), e.to_string()).to_compile_error(),
                 syn::Error::new(e.span(), e.to_string()).to_compile_error(),
                 syn::Error::new(e.span(), e.to_string()).to_compile_error(),
                 syn::Error::new(e.span(), e.to_string()).to_compile_error(),
@@ -349,6 +388,18 @@ fn parse_error_attrs(
     };
 
     let message_str = message.unwrap_or_else(|| code.clone());
+    let human_ts = match human.as_deref() {
+        None | Some("normal") => quote! { alien_error::HumanLayerPresentation::Normal },
+        Some("transparent") => quote! { alien_error::HumanLayerPresentation::Transparent },
+        Some(other) => syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!(
+                "human must be \"normal\" or \"transparent\", got \"{}\"",
+                other
+            ),
+        )
+        .to_compile_error(),
+    };
 
     (
         code_ts,
@@ -356,9 +407,11 @@ fn parse_error_attrs(
         internal_ts,
         http_status_code_ts,
         message_str,
+        hint,
         retryable_inherit_ts,
         internal_inherit_ts,
         http_status_code_inherit_ts,
+        human_ts,
     )
 }
 
@@ -389,5 +442,18 @@ fn generate_message_interpolation(
             // Use named parameters - only pass fields that are actually used
             quote! { format!(#message_template, #(#used_fields = #used_fields),*) }
         }
+    }
+}
+
+fn generate_optional_interpolation(
+    template: &Option<String>,
+    field_idents: &[&syn::Ident],
+) -> proc_macro2::TokenStream {
+    match template {
+        Some(template) => {
+            let interpolated = generate_message_interpolation(template, field_idents);
+            quote! { Some(#interpolated) }
+        }
+        None => quote! { None },
     }
 }

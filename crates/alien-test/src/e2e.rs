@@ -171,12 +171,8 @@ pub fn exclusion_reason(
     binding: Binding,
 ) -> Option<&'static str> {
     match binding {
-        Binding::Function => {
-            Some("Function binding test app endpoint not yet implemented")
-        }
-        Binding::Container => {
-            Some("Container binding test app endpoint not yet implemented")
-        }
+        Binding::Function => Some("Function binding test app endpoint not yet implemented"),
+        Binding::Container => Some("Container binding test app endpoint not yet implemented"),
         _ => None,
     }
 }
@@ -224,11 +220,11 @@ pub fn to_api_platform(platform: Platform) -> alien_manager_api::types::Platform
 }
 
 // ---------------------------------------------------------------------------
-// E2eContext
+// TestContext
 // ---------------------------------------------------------------------------
 
 /// Context for a running E2E test, holding the deployment, manager, and agent.
-pub struct E2eContext {
+pub struct TestContext {
     /// The deployed test application.
     pub deployment: TestDeployment,
     /// The in-process manager.
@@ -241,11 +237,66 @@ pub struct E2eContext {
     pub agent: Option<crate::agent::TestAlienAgent>,
 }
 
-impl Drop for E2eContext {
-    fn drop(&mut self) {
-        // Best-effort: agent cleanup handled by TestAlienAgent if present.
-        // The agent's container is cleaned up via cleanup_agent_containers()
-        // or helm_uninstall() in the test teardown.
+impl TestContext {
+    /// Best-effort cleanup: destroy the deployment and stop any agent.
+    ///
+    /// Designed to be called from `AsyncTestContext::teardown()` so that
+    /// resources are released even when a test panics. Errors are logged
+    /// but never propagated.
+    pub async fn cleanup(mut self) {
+        // 1. Stop the agent (pull model).
+        if let Some(agent) = self.agent.take() {
+            agent.cleanup().await;
+        }
+
+        // 2. Destroy the deployment and wait for terminal status.
+        if let Err(e) = self.deployment.destroy().await {
+            tracing::warn!(
+                deployment = %self.deployment.id,
+                error = %e,
+                "cleanup: failed to trigger destroy (may already be destroyed)"
+            );
+            return;
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let poll_interval = Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match self
+                .manager
+                .client()
+                .get_deployment()
+                .id(&self.deployment.id)
+                .send()
+                .await
+            {
+                Ok(dep) => {
+                    let status = dep.status.as_str();
+                    if status == "destroyed" || status == "deleted" {
+                        info!(deployment = %self.deployment.id, "cleanup: deployment destroyed");
+                        return;
+                    }
+                    if status == "failed" || status.ends_with("-failed") {
+                        tracing::warn!(
+                            deployment = %self.deployment.id,
+                            %status,
+                            "cleanup: deployment entered failed state during destroy"
+                        );
+                        return;
+                    }
+                }
+                Err(_) => {
+                    // 404 or connection error — deployment likely gone
+                    info!(deployment = %self.deployment.id, "cleanup: deployment gone");
+                    return;
+                }
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+        tracing::warn!(
+            deployment = %self.deployment.id,
+            "cleanup: timed out waiting for destroy"
+        );
     }
 }
 
@@ -289,8 +340,8 @@ console.log(JSON.stringify(stack));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stack_json: serde_json::Value =
-        serde_json::from_str(stdout.trim()).context("Failed to parse Stack JSON from bun output")?;
+    let stack_json: serde_json::Value = serde_json::from_str(stdout.trim())
+        .context("Failed to parse Stack JSON from bun output")?;
 
     // Wrap in StackByPlatform: { "<platform>": <stack> }
     let platform_key = platform.as_str();
@@ -343,7 +394,9 @@ fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
         if candidate.exists() {
             return Ok(dir.join("tests/e2e"));
         }
-        dir = dir.parent().context("Could not locate tests/e2e/ directory")?;
+        dir = dir
+            .parent()
+            .context("Could not locate tests/e2e/ directory")?;
     }
 }
 
@@ -409,8 +462,8 @@ pub async fn deploy_test_app(
     info!("Stack built and pushed to registry");
 
     // Step 3: Re-serialize the pushed stack into StackByPlatform and create a release
-    let pushed_stack_json = serde_json::to_value(&pushed_stack)
-        .context("Failed to serialize pushed stack")?;
+    let pushed_stack_json =
+        serde_json::to_value(&pushed_stack).context("Failed to serialize pushed stack")?;
     let stack_by_platform = serde_json::json!({
         platform_key: pushed_stack_json,
     });
@@ -540,6 +593,59 @@ pub fn is_platform_available(
 }
 
 // ---------------------------------------------------------------------------
+// External secret provisioning
+// ---------------------------------------------------------------------------
+
+/// Provision the `EXTERNAL_TEST_SECRET` in the deployment's `alien-vault` vault
+/// via the manager's vault API. This must be called after the deployment reaches
+/// Running (so the vault resource is provisioned in the cloud).
+async fn provision_external_secret(
+    manager: &Arc<TestManager>,
+    deployment: &TestDeployment,
+) -> anyhow::Result<()> {
+    let http = manager.http_client();
+    let vault_name = "alien-vault";
+    let secret_key = "EXTERNAL_TEST_SECRET";
+    let secret_value = "e2e-test-external-secret-value";
+
+    let url = format!(
+        "{}/v1/deployments/{}/vault/{}/secrets/{}",
+        manager.url, deployment.id, vault_name, secret_key,
+    );
+
+    info!(
+        deployment_id = %deployment.id,
+        vault_name,
+        secret_key,
+        "Provisioning external test secret via manager vault API"
+    );
+
+    let resp = http
+        .put(&url)
+        .json(&serde_json::json!({ "value": secret_value }))
+        .send()
+        .await
+        .context("Failed to call vault set secret API")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "Failed to provision external secret ({}): {}",
+            status,
+            body
+        );
+    }
+
+    info!(
+        deployment_id = %deployment.id,
+        "External test secret provisioned"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -551,15 +657,15 @@ pub fn is_platform_available(
 /// 2. Pushes a release (Stack JSON) to the manager
 /// 3. Creates a deployment group and deployment
 /// 4. Waits for the deployment to become healthy
-/// 5. Runs all binding checks (via the returned `E2eContext`)
+/// 5. Runs all binding checks (via the returned `TestContext`)
 /// 6. The caller is responsible for running checks and cleanup
 ///
-/// Returns an `E2eContext` with the running deployment ready for checks.
+/// Returns an `TestContext` with the running deployment ready for checks.
 pub async fn setup(
     platform: Platform,
     model: DeploymentModel,
     language: Language,
-) -> anyhow::Result<E2eContext> {
+) -> anyhow::Result<TestContext> {
     init_tracing();
 
     let test_name = format!("{}_{}_{}", model, platform.as_str(), language);
@@ -576,9 +682,11 @@ pub async fn setup(
 
     // Start the in-process manager with cloud credentials
     let manager = if platform == Platform::Local {
-        Arc::new(TestManager::start().await.map_err(|e| {
-            anyhow::anyhow!("Failed to start TestManager: {}", e)
-        })?)
+        Arc::new(
+            TestManager::start()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to start TestManager: {}", e))?,
+        )
     } else {
         Arc::new(
             TestManager::start_with_config(&config, &[platform])
@@ -595,6 +703,21 @@ pub async fn setup(
         "Deployment created, waiting for running status"
     );
 
+    // Cross-account setup: if management + target credentials are both
+    // configured, run InitialSetup with target credentials (mirrors the
+    // production alien-deploy-cli push model flow). The manager's
+    // deployment loop will pick up from Provisioning using management SA
+    // impersonation + RSM cross-account role.
+    if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        let management_config = manager.management_config();
+        info!(
+            deployment_id = %deployment.id,
+            has_management_config = management_config.is_some(),
+            "Running setup_target for cross-account deployment"
+        );
+        crate::setup::setup_target(&config, platform, &deployment, &manager, management_config).await?;
+    }
+
     // Wait for the deployment to be running (populates URL)
     deployment
         .wait_until_running(Duration::from_secs(600))
@@ -605,6 +728,12 @@ pub async fn setup(
         url = ?deployment.url,
         "Deployment is running"
     );
+
+    // Provision the external test secret via the manager vault API.
+    // Cloud platforms have vault resources that are now provisioned and ready.
+    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        provision_external_secret(&manager, &deployment).await?;
+    }
 
     // For pull model: start alien-agent container
     let agent = if model == DeploymentModel::Pull {
@@ -638,7 +767,7 @@ pub async fn setup(
         None
     };
 
-    Ok(E2eContext {
+    Ok(TestContext {
         deployment,
         manager,
         platform,
@@ -656,6 +785,6 @@ pub async fn run_e2e_test(
     platform: Platform,
     model: DeploymentModel,
     language: Language,
-) -> anyhow::Result<E2eContext> {
+) -> anyhow::Result<TestContext> {
     setup(platform, model, language).await
 }

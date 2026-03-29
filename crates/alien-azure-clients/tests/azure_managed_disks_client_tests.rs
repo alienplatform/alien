@@ -3,8 +3,8 @@ use alien_azure_clients::long_running_operation::LongRunningOperationClient;
 use alien_azure_clients::models::disk_rp::{
     CreationData, Disk, DiskCreateOption, DiskProperties, DiskSku, DiskStorageAccountTypes,
 };
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::ErrorData;
 use anyhow::Result;
 use reqwest::Client;
@@ -64,7 +64,10 @@ impl AsyncTestContext for ManagedDisksTestContext {
             service_overrides: None,
         };
 
-        let client = AzureManagedDisksClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let client = AzureManagedDisksClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
 
         info!(
             "🔧 Using subscription: {} and resource group: {} for managed disks testing",

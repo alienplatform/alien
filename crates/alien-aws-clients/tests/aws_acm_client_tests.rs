@@ -63,7 +63,10 @@ impl AsyncTestContext for AcmTestContext {
             service_overrides: None,
         };
 
-        let client = AcmClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = AcmClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         AcmTestContext {
             client,

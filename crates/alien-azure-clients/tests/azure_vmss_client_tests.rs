@@ -18,8 +18,8 @@ use alien_azure_clients::models::virtual_network::{
     AddressSpace, Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
 };
 use alien_azure_clients::network::{AzureNetworkClient, NetworkApi};
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::ErrorData;
 use anyhow::Result;
 use reqwest::Client;
@@ -102,11 +102,16 @@ impl AsyncTestContext for VmssTestContext {
             service_overrides: None,
         };
 
-        let client = AzureVmssClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let client =
+            AzureVmssClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
-        let disk_client = AzureManagedDisksClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let disk_client = AzureManagedDisksClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
 
-        let network_client = AzureNetworkClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let network_client =
+            AzureNetworkClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
 
         info!(
             "🔧 Using subscription: {} and resource group: {} for VMSS testing",

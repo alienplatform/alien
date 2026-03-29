@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
 
 use crate::{error::Result, types::Envelope};
@@ -48,8 +48,8 @@ mod platform_dispatchers {
         service_bus::{
             AzureServiceBusDataPlaneClient, SendMessageParameters, ServiceBusDataPlaneApi,
         },
-        AzureClientConfig,
         token_cache::AzureTokenCache,
+        AzureClientConfig,
     };
     use alien_gcp_clients::gcp::{
         pubsub::{PubSubApi, PubSubClient, PublishRequest, PubsubMessage},
@@ -63,10 +63,15 @@ mod platform_dispatchers {
     #[derive(Debug)]
     pub struct LambdaCommandDispatcher {
         lambda_client: LambdaClient,
+        function_name: String,
     }
 
     impl LambdaCommandDispatcher {
-        pub async fn new(client: Client, config: AwsClientConfig) -> Result<Self> {
+        pub async fn new(
+            client: Client,
+            config: AwsClientConfig,
+            function_name: String,
+        ) -> Result<Self> {
             let credentials = AwsCredentialProvider::from_config(config)
                 .await
                 .into_alien_error()
@@ -77,6 +82,7 @@ mod platform_dispatchers {
                 })?;
             Ok(Self {
                 lambda_client: LambdaClient::new(client, credentials),
+                function_name,
             })
         }
     }
@@ -93,10 +99,7 @@ mod platform_dispatchers {
                 },
             )?;
 
-            // The function name should be provided via configuration or extracted from context
-            // For now, we use the command_id as a placeholder - in practice this would come from
-            // agent configuration
-            let function_name = envelope.command_id.clone();
+            let function_name = self.function_name.clone();
 
             // Use async invocation to send the envelope to the Lambda function
             // The Lambda function should have alien-runtime configured to handle command envelopes
@@ -135,14 +138,16 @@ mod platform_dispatchers {
         pubsub_client: PubSubClient,
         #[allow(dead_code)]
         project_id: String,
+        topic_id: String,
     }
 
     impl PubSubCommandDispatcher {
-        pub fn new(client: Client, config: GcpClientConfig) -> Self {
+        pub fn new(client: Client, config: GcpClientConfig, topic_id: String) -> Self {
             let project_id = config.project_id.clone();
             Self {
                 pubsub_client: PubSubClient::new(client, config),
                 project_id,
+                topic_id,
             }
         }
     }
@@ -162,9 +167,7 @@ mod platform_dispatchers {
             // Base64 encode the JSON payload as required by Pub/Sub
             let data = BASE64_STANDARD.encode(envelope_json.as_bytes());
 
-            // The topic_id should come from agent configuration
-            // For now, we use the command_id as a placeholder
-            let topic_id = envelope.command_id.clone();
+            let topic_id = self.topic_id.clone();
 
             // Create the Pub/Sub message with command envelope metadata
             let mut attributes = HashMap::new();
@@ -207,12 +210,24 @@ mod platform_dispatchers {
     #[derive(Debug)]
     pub struct ServiceBusCommandDispatcher {
         servicebus_client: AzureServiceBusDataPlaneClient,
+        namespace_name: String,
+        queue_name: String,
     }
 
     impl ServiceBusCommandDispatcher {
-        pub fn new(client: Client, config: AzureClientConfig) -> Self {
+        pub fn new(
+            client: Client,
+            config: AzureClientConfig,
+            namespace_name: String,
+            queue_name: String,
+        ) -> Self {
             Self {
-                servicebus_client: AzureServiceBusDataPlaneClient::new(client, AzureTokenCache::new(config)),
+                servicebus_client: AzureServiceBusDataPlaneClient::new(
+                    client,
+                    AzureTokenCache::new(config),
+                ),
+                namespace_name,
+                queue_name,
             }
         }
     }
@@ -229,22 +244,8 @@ mod platform_dispatchers {
                 },
             )?;
 
-            // Parse namespace and queue from command_id (placeholder)
-            // In practice, this would come from agent configuration
-            let command_id = &envelope.command_id;
-            let (namespace_name, queue_name) = if command_id.contains('/') {
-                let parts: Vec<&str> = command_id.splitn(2, '/').collect();
-                (parts[0].to_string(), parts[1].to_string())
-            } else {
-                return Err(AlienError::new(crate::ErrorData::TransportDispatchFailed {
-                    message: format!(
-                        "Service Bus target must include namespace: expected 'namespace/queue', got '{}'",
-                        command_id
-                    ),
-                    transport_type: Some("servicebus".to_string()),
-                    target: Some(envelope.command_id.clone()),
-                }));
-            };
+            let namespace_name = self.namespace_name.clone();
+            let queue_name = self.queue_name.clone();
 
             // Create custom properties for command metadata
             let mut custom_properties = HashMap::new();

@@ -127,10 +127,7 @@ impl GcpArtifactRegistryController {
 
                 let repository = Repository {
                     format: Some(RepositoryFormat::Docker),
-                    description: Some(format!(
-                        "Alien Artifact Registry for {}",
-                        config.id
-                    )),
+                    description: Some(format!("Alien Artifact Registry for {}", config.id)),
                     ..Default::default()
                 };
 
@@ -160,8 +157,7 @@ impl GcpArtifactRegistryController {
                         suggested_delay: None,
                     })
                 } else {
-                    self.repository_operation_name =
-                        operation.name.clone();
+                    self.repository_operation_name = operation.name.clone();
                     Ok(HandlerAction::Continue {
                         state: CreatingRepository,
                         suggested_delay: Some(std::time::Duration::from_secs(2)),
@@ -695,12 +691,14 @@ impl GcpArtifactRegistryController {
                 self.push_service_account_email.clone(),
             );
 
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

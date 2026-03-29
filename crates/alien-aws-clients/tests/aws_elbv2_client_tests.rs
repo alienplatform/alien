@@ -101,8 +101,14 @@ impl AsyncTestContext for Elbv2TestContext {
             service_overrides: None,
         };
 
-        let elbv2_client = Elbv2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
-        let ec2_client = Ec2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let elbv2_client = Elbv2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
+        let ec2_client = Ec2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         // Find default VPC and subnets
         let (default_vpc_id, default_subnet_ids) =
@@ -851,7 +857,10 @@ async fn test_elbv2_client_with_invalid_credentials(_ctx: &mut Elbv2TestContext)
         },
         service_overrides: None,
     };
-    let invalid_client = Elbv2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
+    let invalid_client = Elbv2Client::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(invalid_config),
+    );
 
     info!("🔐 Testing ELBv2 client with invalid credentials");
 

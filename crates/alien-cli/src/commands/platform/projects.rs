@@ -1,6 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
+use crate::ui::dim_label;
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::types::ListProjectsWorkspace;
 use alien_platform_api::SdkResultExt;
@@ -69,7 +70,7 @@ async fn list_projects_task(
     if json {
         print_json(&items)?;
     } else if items.is_empty() {
-        println!("(no projects)");
+        println!("{}", dim_label("No projects found."));
     } else {
         for project in items {
             println!("{} ({})", project.name.as_str(), project.id.as_str());

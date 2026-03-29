@@ -276,7 +276,11 @@ impl AzureServiceBusManagementClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -297,13 +301,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
                 self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
-            Some(vec![("api-version", "2024-01-01".into())]),
-        );
+                Some(vec![("api-version", "2024-01-01".into())]),
+            );
 
         // Get location from platform config, defaulting to "eastus" if not specified
         let location = self
@@ -378,13 +383,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
                 self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
-            Some(vec![("api-version", "2024-01-01".into())]),
-        );
+                Some(vec![("api-version", "2024-01-01".into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
 
@@ -432,7 +438,8 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces",
-                self.token_cache.config().subscription_id, resource_group_name
+                self.token_cache.config().subscription_id,
+                resource_group_name
             ),
             Some(vec![("api-version", "2024-01-01".into())]),
         );
@@ -487,13 +494,14 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
                 self.token_cache.config().subscription_id, resource_group_name, namespace_name
             ),
-            Some(vec![("api-version", "2024-01-01".into())]),
-        );
+                Some(vec![("api-version", "2024-01-01".into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url.clone()).content_length("");
 
@@ -899,31 +907,34 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         }
 
         // Parse BrokerProperties header
-        let broker_properties =
-            if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
-                let broker_props_str = broker_props_header
-                    .to_str()
-                    .into_alien_error()
-                    .context(ErrorData::HttpResponseError {
-                        message: "BrokerProperties header contains non-ASCII characters".to_string(),
-                        url: url.to_string(),
-                        http_status: 200,
-                        http_request_text: None,
-                        http_response_text: None,
-                    })?;
-                let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
-                    .into_alien_error()
-                    .context(ErrorData::HttpResponseError {
-                        message: format!("Failed to parse BrokerProperties header: {}", broker_props_str),
-                        url: url.to_string(),
-                        http_status: 200,
-                        http_request_text: None,
-                        http_response_text: Some(broker_props_str.to_string()),
-                    })?;
-                Some(broker_properties)
-            } else {
-                None
-            };
+        let broker_properties = if let Some(broker_props_header) =
+            resp.headers().get("BrokerProperties")
+        {
+            let broker_props_str = broker_props_header.to_str().into_alien_error().context(
+                ErrorData::HttpResponseError {
+                    message: "BrokerProperties header contains non-ASCII characters".to_string(),
+                    url: url.to_string(),
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: None,
+                },
+            )?;
+            let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: format!(
+                        "Failed to parse BrokerProperties header: {}",
+                        broker_props_str
+                    ),
+                    url: url.to_string(),
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: Some(broker_props_str.to_string()),
+                })?;
+            Some(broker_properties)
+        } else {
+            None
+        };
 
         // Parse custom properties from headers
         let mut custom_properties = HashMap::new();
@@ -1024,31 +1035,34 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         }
 
         // Parse BrokerProperties header
-        let broker_properties =
-            if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
-                let broker_props_str = broker_props_header
-                    .to_str()
-                    .into_alien_error()
-                    .context(ErrorData::HttpResponseError {
-                        message: "BrokerProperties header contains non-ASCII characters".to_string(),
-                        url: url.to_string(),
-                        http_status: 200,
-                        http_request_text: None,
-                        http_response_text: None,
-                    })?;
-                let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
-                    .into_alien_error()
-                    .context(ErrorData::HttpResponseError {
-                        message: format!("Failed to parse BrokerProperties header: {}", broker_props_str),
-                        url: url.to_string(),
-                        http_status: 200,
-                        http_request_text: None,
-                        http_response_text: Some(broker_props_str.to_string()),
-                    })?;
-                Some(broker_properties)
-            } else {
-                None
-            };
+        let broker_properties = if let Some(broker_props_header) =
+            resp.headers().get("BrokerProperties")
+        {
+            let broker_props_str = broker_props_header.to_str().into_alien_error().context(
+                ErrorData::HttpResponseError {
+                    message: "BrokerProperties header contains non-ASCII characters".to_string(),
+                    url: url.to_string(),
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: None,
+                },
+            )?;
+            let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: format!(
+                        "Failed to parse BrokerProperties header: {}",
+                        broker_props_str
+                    ),
+                    url: url.to_string(),
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: Some(broker_props_str.to_string()),
+                })?;
+            Some(broker_properties)
+        } else {
+            None
+        };
 
         // Parse custom properties from headers
         let mut custom_properties = HashMap::new();

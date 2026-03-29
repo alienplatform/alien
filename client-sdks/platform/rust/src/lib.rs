@@ -21,7 +21,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
 
-use alien_error::{AlienError, GenericError};
+use alien_error::{AlienError, GenericError, HumanLayerPresentation};
 
 /// Extension trait for converting SDK API results to `AlienError`.
 ///
@@ -73,10 +73,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
                 code: api_error.code.to_string(),
                 message: api_error.message.to_string(),
                 context: api_error.context,
+                hint: None,
                 retryable: api_error.retryable,
                 internal: false, // API errors sent to clients are external by nature
                 http_status_code: Some(status),
                 source: api_error.source.and_then(parse_source_error),
+                human_layer_presentation: HumanLayerPresentation::Normal,
                 error: Some(GenericError {
                     message: api_error.message.to_string(),
                 }),
@@ -92,10 +94,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
                 code: "COMMUNICATION_ERROR".to_string(),
                 message: format!("Communication Error: {}", reqwest_err),
                 context: None,
+                hint: None,
                 retryable,
                 internal: false,
                 http_status_code: reqwest_err.status().map(|s| s.as_u16()),
                 source: build_reqwest_source(&reqwest_err),
+                human_layer_presentation: HumanLayerPresentation::Normal,
                 error: Some(GenericError {
                     message: format!("Communication Error: {}", reqwest_err),
                 }),
@@ -107,10 +111,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
             code: "INVALID_REQUEST".to_string(),
             message: format!("Invalid Request: {}", msg),
             context: None,
+            hint: None,
             retryable: false,
             internal: false,
             http_status_code: Some(400),
             source: None,
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(GenericError {
                 message: format!("Invalid Request: {}", msg),
             }),
@@ -121,10 +127,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
             code: "RESPONSE_BODY_ERROR".to_string(),
             message: format!("Error reading response body: {}", reqwest_err),
             context: None,
+            hint: None,
             retryable: true, // Transient network issue
             internal: false,
             http_status_code: reqwest_err.status().map(|s| s.as_u16()),
             source: build_reqwest_source(&reqwest_err),
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(GenericError {
                 message: format!("Error reading response body: {}", reqwest_err),
             }),
@@ -151,12 +159,14 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
                     "parseError": json_err.to_string(),
                     "responseBody": truncated,
                 })),
+                hint: None,
                 retryable: false,
                 internal: false,
                 http_status_code: None,
                 source: Some(Box::new(AlienError::new(GenericError {
                     message: json_err.to_string(),
                 }))),
+                human_layer_presentation: HumanLayerPresentation::Normal,
                 error: Some(GenericError {
                     message: format!("Failed to parse response: {}", json_err),
                 }),
@@ -168,10 +178,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
             code: "INVALID_UPGRADE".to_string(),
             message: format!("Connection upgrade failed: {}", reqwest_err),
             context: None,
+            hint: None,
             retryable: false,
             internal: false,
             http_status_code: reqwest_err.status().map(|s| s.as_u16()),
             source: build_reqwest_source(&reqwest_err),
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(GenericError {
                 message: format!("Connection upgrade failed: {}", reqwest_err),
             }),
@@ -191,10 +203,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
                     "status": status,
                     "url": response.url().to_string(),
                 })),
+                hint: None,
                 retryable: status >= 500, // Server errors are typically retryable
                 internal: false,
                 http_status_code: Some(status),
                 source: None,
+                human_layer_presentation: HumanLayerPresentation::Normal,
                 error: Some(GenericError {
                     message: format!("Unexpected response status: {}", status),
                 }),
@@ -206,10 +220,12 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
             code: "SDK_HOOK_ERROR".to_string(),
             message: msg.clone(),
             context: None,
+            hint: None,
             retryable: false,
             internal: false,
             http_status_code: None,
             source: None,
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(GenericError { message: msg }),
         },
     }
@@ -239,10 +255,12 @@ fn build_reqwest_source(err: &reqwest::Error) -> Option<Box<AlienError<GenericEr
             code: "GENERIC_ERROR".to_string(),
             message: msg.clone(),
             context: None,
+            hint: None,
             retryable: false,
             internal: false,
             http_status_code: None,
             source: result,
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(GenericError { message: msg }),
         };
         result = Some(Box::new(error));
@@ -280,10 +298,12 @@ fn parse_source_error(value: serde_json::Value) -> Option<Box<AlienError<Generic
         code,
         message: message.clone(),
         context,
+        hint: None,
         retryable,
         internal: false,
         http_status_code: None,
         source: nested_source,
+        human_layer_presentation: HumanLayerPresentation::Normal,
         error: Some(GenericError { message }),
     }))
 }

@@ -17,11 +17,18 @@ use super::migrations::Commands;
 
 pub struct SqliteCommandRegistry {
     db: Arc<SqliteDatabase>,
+    deployment_store: Arc<dyn crate::traits::DeploymentStore>,
 }
 
 impl SqliteCommandRegistry {
-    pub fn new(db: Arc<SqliteDatabase>) -> Self {
-        Self { db }
+    pub fn new(
+        db: Arc<SqliteDatabase>,
+        deployment_store: Arc<dyn crate::traits::DeploymentStore>,
+    ) -> Self {
+        Self {
+            db,
+            deployment_store,
+        }
     }
 
     fn parse_command_status(row: &turso::Row) -> alien_commands::error::Result<CommandStatus> {
@@ -112,8 +119,16 @@ impl CommandRegistry for SqliteCommandRegistry {
         let now = Utc::now();
 
         let state_str = serialize_enum(&initial_state);
-        // Single-project OSS: deployment model is always Pull, project_id is implicit
-        let deployment_model = DeploymentModel::Pull;
+        // Look up real deployment model from the deployment record
+        let deployment_model = match self.deployment_store.get_deployment(deployment_id).await {
+            Ok(Some(record)) => match record.platform {
+                alien_core::Platform::Kubernetes | alien_core::Platform::Local => {
+                    DeploymentModel::Pull
+                }
+                _ => record.stack_settings.deployment_model,
+            },
+            _ => DeploymentModel::Pull, // fallback
+        };
         let deployment_model_str = serialize_enum(&deployment_model);
 
         let sql = Query::insert()

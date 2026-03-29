@@ -98,7 +98,10 @@ impl AsyncTestContext for DynamoDbTestContext {
             },
             service_overrides: None,
         };
-        let client = DynamoDbClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = DynamoDbClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         DynamoDbTestContext {
             client,
@@ -577,7 +580,10 @@ async fn test_error_scenarios(ctx: &mut DynamoDbTestContext) {
         },
         service_overrides: None,
     };
-    let dynamodb_client = DynamoDbClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
+    let dynamodb_client = DynamoDbClient::new(
+        client_invalid,
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     let auth_test_key = ctx.get_test_key("auth");
     let auth_get_request = GetItemRequest::builder()

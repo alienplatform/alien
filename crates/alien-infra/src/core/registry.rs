@@ -5,9 +5,9 @@ use std::marker::PhantomData;
 use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
-    AzureServiceBusNamespace, AzureStorageAccount, Build, Container, ContainerCluster, Function,
-    Kv, Network, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Build, Container, ContainerCluster, Function, Kv, Network,
+    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;

@@ -81,7 +81,10 @@ pub struct IamClient {
 
 impl IamClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {

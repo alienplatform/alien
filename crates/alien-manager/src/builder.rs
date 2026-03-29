@@ -139,7 +139,6 @@ impl AlienManagerBuilder {
     #[cfg(feature = "sqlite")]
     pub async fn with_standalone_defaults(mut self) -> crate::error::Result<Self> {
         use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
-        use alien_commands::server::NullCommandDispatcher;
 
         // --- SQLite database (shared by all default stores) ---
         let db_path = self
@@ -179,9 +178,38 @@ impl AlienManagerBuilder {
 
         // --- Credential resolver ---
         if self.credential_resolver.is_none() {
-            self.credential_resolver = Some(Arc::new(
-                crate::providers::environment_credentials::EnvironmentCredentialResolver::new(),
-            ));
+            let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+            let has_management_binding = env
+                .keys()
+                .any(|k| k.contains("MANAGEMENT_BINDING"));
+
+            #[cfg(feature = "platform")]
+            if has_management_binding {
+                // Cross-account mode: use ImpersonationCredentialResolver with
+                // SA impersonation for short-lived credentials.
+                let primary_platform = self
+                    .config
+                    .targets
+                    .first()
+                    .copied()
+                    .unwrap_or(alien_core::Platform::Aws);
+                let (primary, targets) =
+                    build_standalone_providers(primary_platform, &env).await?;
+                self.credential_resolver = Some(Arc::new(
+                    crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
+                        primary, targets,
+                    ),
+                ));
+                info!("Cross-account mode: using ImpersonationCredentialResolver");
+            }
+
+            if self.credential_resolver.is_none() {
+                // Simple mode: use environment credentials directly.
+                let _ = has_management_binding; // suppress unused warning when platform disabled
+                self.credential_resolver = Some(Arc::new(
+                    crate::providers::environment_credentials::EnvironmentCredentialResolver::new(),
+                ));
+            }
         }
 
         // --- Telemetry backend ---
@@ -236,14 +264,23 @@ impl AlienManagerBuilder {
                 })?,
             );
 
-            let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(
-                crate::stores::sqlite::SqliteCommandRegistry::new(db.clone()),
-            );
+            let command_registry: Arc<dyn alien_commands::server::CommandRegistry> =
+                Arc::new(crate::stores::sqlite::SqliteCommandRegistry::new(
+                    db.clone(),
+                    self.deployment_store.clone().unwrap(),
+                ));
+
+            let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> =
+                Arc::new(crate::commands::DefaultCommandDispatcher::new(
+                    self.deployment_store.clone().unwrap(),
+                    self.release_store.clone().unwrap(),
+                    self.credential_resolver.clone().unwrap(),
+                ));
 
             self.server_bindings = Some(ServerBindings {
                 command_kv,
                 command_storage,
-                command_dispatcher: Arc::new(NullCommandDispatcher),
+                command_dispatcher,
                 command_registry,
                 artifact_registry: None,
                 bindings_provider: None,
@@ -484,7 +521,6 @@ pub async fn bootstrap_manager_identity(
     })
 }
 
-#[cfg(feature = "platform")]
 pub async fn build_standalone_providers(
     primary_platform: alien_core::Platform,
     env: &std::collections::HashMap<String, String>,
@@ -580,7 +616,6 @@ pub async fn build_standalone_providers(
     ))
 }
 
-#[cfg(feature = "platform")]
 pub fn parse_standard_bindings(
     env: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashMap<String, serde_json::Value> {
@@ -615,7 +650,6 @@ pub fn parse_standard_bindings(
     bindings
 }
 
-#[cfg(feature = "platform")]
 pub fn parse_target_bindings(
     env: &std::collections::HashMap<String, String>,
     platform: alien_core::Platform,

@@ -357,7 +357,7 @@ impl Toolchain for TypeScriptToolchain {
         let cleanup_bootstrap = |bootstrap_dir: PathBuf| async move {
             if bootstrap_dir.exists() {
                 if let Err(e) = fs::remove_dir_all(&bootstrap_dir).await {
-                    tracing::warn!(
+                    tracing::debug!(
                         "Failed to clean up bootstrap directory {}: {}",
                         bootstrap_dir.display(),
                         e

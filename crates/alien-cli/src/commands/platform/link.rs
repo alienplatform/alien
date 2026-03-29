@@ -6,6 +6,7 @@ use crate::project_link::{
     choose_or_create_project, get_project_by_name, get_project_link_status, save_project_link,
     suggest_project_name, ProjectLink, ProjectLinkStatus,
 };
+use crate::ui::{accent, contextual_heading, dim_label, success_line};
 use clap::Parser;
 use serde::Serialize;
 
@@ -50,7 +51,10 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
             return print_link_result(&link, &current_dir.display().to_string(), args.json);
         }
         ProjectLinkStatus::Linked(link) if args.force && !args.json => {
-            println!("Re-linking directory currently linked to '{}'.", link.project_name);
+            println!(
+                "Re-linking directory currently linked to '{}'.",
+                link.project_name
+            );
         }
         _ => {}
     }
@@ -106,10 +110,18 @@ fn print_link_result(link: &ProjectLink, path: &str, json: bool) -> Result<()> {
             path: path.to_string(),
         })?;
     } else {
-        println!("Linked directory: {path}");
-        println!("Workspace: {}", link.workspace);
-        println!("Project: {} ({})", link.project_name, link.project_id);
-        println!("Stored in .alien/project.json");
+        println!(
+            "{}",
+            contextual_heading("Linked", &link.project_name, &[("from", path)])
+        );
+        println!("{} {}", dim_label("Workspace"), link.workspace);
+        println!("{} {}", dim_label("Project ID"), link.project_id);
+        println!(
+            "{} {}",
+            dim_label("Stored in"),
+            accent(".alien/project.json")
+        );
+        println!("{}", success_line("Project link saved."));
     }
 
     Ok(())

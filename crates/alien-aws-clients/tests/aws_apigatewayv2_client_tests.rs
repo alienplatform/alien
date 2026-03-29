@@ -78,8 +78,14 @@ impl AsyncTestContext for ApiGatewayV2TestContext {
             service_overrides: None,
         };
 
-        let client = ApiGatewayV2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
-        let lambda_client = LambdaClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = ApiGatewayV2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
+        let lambda_client = LambdaClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         let (lambda_arn, created_lambda) = match std::env::var("ALIEN_TEST_APIGW_LAMBDA_ARN") {
             Ok(value) => (value, None),

@@ -46,7 +46,10 @@ pub struct DynamoDbClient {
 
 impl DynamoDbClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -62,7 +65,10 @@ impl DynamoDbClient {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("dynamodb") {
             override_url.to_string()
         } else {
-            format!("https://dynamodb.{}.amazonaws.com", self.credentials.region())
+            format!(
+                "https://dynamodb.{}.amazonaws.com",
+                self.credentials.region()
+            )
         }
     }
 
@@ -82,7 +88,10 @@ impl DynamoDbClient {
         let builder = self
             .client
             .request(Method::POST, url)
-            .host(&format!("dynamodb.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "dynamodb.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .header("X-Amz-Target", target)
             .content_type_json();
 

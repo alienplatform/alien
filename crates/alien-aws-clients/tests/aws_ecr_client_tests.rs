@@ -77,7 +77,10 @@ impl AsyncTestContext for EcrTestContext {
             },
             service_overrides: None,
         };
-        let client = EcrClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = EcrClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         EcrTestContext {
             client,
@@ -749,7 +752,10 @@ async fn test_ecr_client_with_invalid_credentials(ctx: &mut EcrTestContext) {
         },
         service_overrides: None,
     };
-    let ecr_client = EcrClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
+    let ecr_client = EcrClient::new(
+        client_invalid,
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     info!("🔐 Testing ECR client with invalid credentials");
 

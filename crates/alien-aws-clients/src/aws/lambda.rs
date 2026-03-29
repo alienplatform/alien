@@ -103,7 +103,10 @@ pub struct LambdaClient {
 
 impl LambdaClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -158,7 +161,10 @@ impl LambdaClient {
         let builder = self
             .client
             .request(method.clone(), &url)
-            .host(&format!("lambda.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "lambda.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .content_type_json();
 
         let builder = if let Some(ref b) = body {
@@ -205,7 +211,10 @@ impl LambdaClient {
         let builder = self
             .client
             .request(method, &url)
-            .host(&format!("lambda.{}.amazonaws.com", self.credentials.region()))
+            .host(&format!(
+                "lambda.{}.amazonaws.com",
+                self.credentials.region()
+            ))
             .content_sha256("");
 
         let result =
@@ -629,10 +638,10 @@ impl LambdaApi for LambdaClient {
             ));
         }
 
-        let mut builder = self
-            .client
-            .request(Method::POST, &url)
-            .host(&format!("lambda.{}.amazonaws.com", self.credentials.region()));
+        let mut builder = self.client.request(Method::POST, &url).host(&format!(
+            "lambda.{}.amazonaws.com",
+            self.credentials.region()
+        ));
 
         // Set invocation type header
         match request.invocation_type {

@@ -1,7 +1,8 @@
-//! Vault command for local dev mode
+//! Vault commands for managing secrets.
 //!
-//! Manages vault secrets for local development deployments.
-//! This is a dev-only command - there is no `alien vault` for production.
+//! Two entry points:
+//! - `alien dev vault` — local dev mode, reads/writes local filesystem
+//! - `alien vault` — standalone/platform mode, calls manager vault API
 
 use crate::{
     error::{ErrorData, Result},
@@ -259,4 +260,203 @@ async fn list_secrets(vault_name: &str, vault_base_path: &PathBuf) -> Result<Vec
     let mut keys: Vec<String> = secrets.keys().cloned().collect();
     keys.sort();
     Ok(keys)
+}
+
+// ---------------------------------------------------------------------------
+// Remote vault command (standalone / platform mode)
+// ---------------------------------------------------------------------------
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    about = "Manage vault secrets for a deployment",
+    long_about = "Manage vault secrets for a deployment via the manager API.
+
+Vaults store sensitive data like API keys, tokens, and credentials that your
+functions need at runtime. Each deployment has isolated vault state backed by
+the cloud provider's secret management service (AWS SSM, GCP Secret Manager,
+Azure Key Vault).
+
+EXAMPLES:
+    # Set a secret
+    alien vault set --deployment my-deployment customer-secrets GITHUB_TOKEN ghp_xxx
+
+    # Get a secret
+    alien vault get --deployment my-deployment customer-secrets GITHUB_TOKEN
+
+See also: https://alien.dev/docs/vaults"
+)]
+pub struct VaultRemoteArgs {
+    #[command(subcommand)]
+    pub action: VaultAction,
+
+    /// Target deployment ID or name
+    #[arg(long)]
+    pub deployment: String,
+}
+
+/// Execute vault command via the manager API (standalone/platform mode).
+pub async fn vault_remote_task(
+    args: VaultRemoteArgs,
+    ctx: crate::execution_context::ExecutionMode,
+) -> Result<()> {
+    let manager_url = ctx.manager_url();
+    let http = ctx.auth_http().await?.client;
+
+    // Resolve deployment ID: if the user passed a name, look it up.
+    let deployment_id = resolve_deployment_id(&args.deployment, &http, &manager_url).await?;
+
+    match args.action {
+        VaultAction::Set {
+            vault_name,
+            secret_name,
+            value,
+        } => {
+            let url = format!(
+                "{}/v1/deployments/{}/vault/{}/secrets/{}",
+                manager_url, deployment_id, vault_name, secret_name,
+            );
+            let resp = http
+                .put(&url)
+                .json(&serde_json::json!({ "value": value }))
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to set vault secret".to_string(),
+                    url: Some(url.clone()),
+                })?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to set secret ({status}): {body}"),
+                    url: Some(url),
+                }));
+            }
+
+            println!(
+                "Secret '{}' set in vault '{}' for deployment '{}'",
+                secret_name, vault_name, args.deployment,
+            );
+        }
+        VaultAction::Get {
+            vault_name,
+            secret_name,
+        } => {
+            let url = format!(
+                "{}/v1/deployments/{}/vault/{}/secrets/{}",
+                manager_url, deployment_id, vault_name, secret_name,
+            );
+            let resp = http.get(&url).send().await.into_alien_error().context(
+                ErrorData::ApiRequestFailed {
+                    message: "Failed to get vault secret".to_string(),
+                    url: Some(url.clone()),
+                },
+            )?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to get secret ({status}): {body}"),
+                    url: Some(url),
+                }));
+            }
+
+            let body: serde_json::Value =
+                resp.json()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: "Failed to parse vault secret response".to_string(),
+                        url: Some(url),
+                    })?;
+
+            if let Some(value) = body.get("value").and_then(|v| v.as_str()) {
+                println!("{}", value);
+            } else {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: "Secret response missing 'value' field".to_string(),
+                    url: None,
+                }));
+            }
+        }
+        VaultAction::List { vault_name: _ } => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "action".to_string(),
+                message: "List is not supported via the manager API. Use 'get' to retrieve individual secrets.".to_string(),
+            }));
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve a deployment ID from a name or ID string.
+///
+/// If the input looks like a UUID, use it directly. Otherwise, list deployments
+/// from the manager and find a match by name.
+async fn resolve_deployment_id(
+    name_or_id: &str,
+    http: &reqwest::Client,
+    manager_url: &str,
+) -> Result<String> {
+    // If it looks like a UUID, use it directly.
+    if uuid::Uuid::try_parse(name_or_id).is_ok() {
+        return Ok(name_or_id.to_string());
+    }
+
+    // Otherwise, list deployments and find by name.
+    let url = format!("{}/v1/deployments", manager_url);
+    let resp =
+        http.get(&url)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to list deployments".to_string(),
+                url: Some(url.clone()),
+            })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("Failed to list deployments ({status}): {body}"),
+            url: Some(url),
+        }));
+    }
+
+    let body: serde_json::Value =
+        resp.json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to parse deployments response".to_string(),
+                url: Some(url),
+            })?;
+
+    let items = body
+        .get("items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: "Deployments response missing 'items' array".to_string(),
+                url: None,
+            })
+        })?;
+
+    for item in items {
+        if item.get("name").and_then(|v| v.as_str()) == Some(name_or_id) {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                return Ok(id.to_string());
+            }
+        }
+    }
+
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "deployment".to_string(),
+        message: format!("Deployment '{}' not found", name_or_id),
+    }))
 }

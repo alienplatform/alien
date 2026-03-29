@@ -114,10 +114,8 @@ impl CompileTimeCheck for DnsTlsRequiredCheck {
             // Check for public ingress functions
             if let Some(function) = entry.config.downcast_ref::<Function>() {
                 if function.ingress == Ingress::Public {
-                    public_resources.push(format!(
-                        "function '{}' (public HTTPS ingress)",
-                        resource_id,
-                    ));
+                    public_resources
+                        .push(format!("function '{}' (public HTTPS ingress)", resource_id,));
                 }
             }
 
@@ -128,10 +126,8 @@ impl CompileTimeCheck for DnsTlsRequiredCheck {
                     .iter()
                     .any(|p| p.expose == Some(ExposeProtocol::Http));
                 if has_exposed_http {
-                    public_resources.push(format!(
-                        "container '{}' (exposed HTTP port)",
-                        resource_id,
-                    ));
+                    public_resources
+                        .push(format!("container '{}' (exposed HTTP port)", resource_id,));
                 }
             }
         }
@@ -155,9 +151,8 @@ impl CompileTimeCheck for DnsTlsRequiredCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerCode, FunctionCode, ResourceSpec,
-        permissions::PermissionsConfig,
-        Container, Function, Resource, ResourceEntry, ResourceLifecycle,
+        permissions::PermissionsConfig, Container, ContainerCode, Function, FunctionCode, Resource,
+        ResourceEntry, ResourceLifecycle, ResourceSpec,
     };
     use indexmap::IndexMap;
 

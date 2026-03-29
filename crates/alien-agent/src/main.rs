@@ -251,8 +251,7 @@ async fn run(args: Args) -> Result<()> {
         args.external_bindings,
         "external bindings",
     )?;
-    let public_urls =
-        parse_json_opt::<HashMap<String, String>>(args.public_urls, "public URLs")?;
+    let public_urls = parse_json_opt::<HashMap<String, String>>(args.public_urls, "public URLs")?;
     let stack_settings =
         parse_json_opt::<alien_core::StackSettings>(args.stack_settings, "stack settings")?;
 
@@ -582,11 +581,11 @@ fn parse_json_opt<T: serde::de::DeserializeOwned>(
 ) -> Result<Option<T>> {
     match json_str {
         Some(json) => {
-            let value: T = serde_json::from_str(&json)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
+            let value: T = serde_json::from_str(&json).into_alien_error().context(
+                ErrorData::ConfigurationError {
                     message: format!("Invalid {} JSON", label),
-                })?;
+                },
+            )?;
             Ok(Some(value))
         }
         None => Ok(None),

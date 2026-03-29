@@ -70,7 +70,11 @@ impl AzureManagedDisksClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -93,7 +97,9 @@ impl ManagedDisksApi for AzureManagedDisksClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/disks/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, disk_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                disk_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -126,7 +132,9 @@ impl ManagedDisksApi for AzureManagedDisksClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/disks/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, disk_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                disk_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -181,7 +189,9 @@ impl ManagedDisksApi for AzureManagedDisksClient {
         let url = self.base.build_url(
             &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/disks/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, disk_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                disk_name
             ),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );

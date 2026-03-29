@@ -49,7 +49,10 @@ impl AwsKvController {
 
         info!(id=%config.id, table_name=%table_name, "Creating DynamoDB table for KV store");
 
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         // Create table with a simple key schema for KV store
         // pk (partition key) = hash bucket for load distribution
@@ -114,7 +117,10 @@ impl AwsKvController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         debug!(table_name=%table_name, "Checking DynamoDB table status");
 
@@ -196,7 +202,10 @@ impl AwsKvController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         info!(table_name=%table_name, "Enabling TTL on DynamoDB table");
 
@@ -243,7 +252,10 @@ impl AwsKvController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         // Heartbeat check: verify table still exists and is active
         let describe_table_request = DescribeTableRequest::builder()
@@ -334,7 +346,10 @@ impl AwsKvController {
         info!(table_name=%table_name, "Deleting DynamoDB table");
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         let delete_table_request = DeleteTableRequest::builder()
             .table_name(table_name.clone())
@@ -386,7 +401,10 @@ impl AwsKvController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_dynamodb_client(aws_config).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(aws_config)
+            .await?;
 
         debug!(table_name=%table_name, "Checking DynamoDB table deletion status");
 
@@ -479,12 +497,14 @@ impl AwsKvController {
                 BindingValue::value(table_name.clone()),
                 BindingValue::value(region),
             );
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

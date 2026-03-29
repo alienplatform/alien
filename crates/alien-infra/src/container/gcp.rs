@@ -3354,12 +3354,14 @@ impl GcpContainerController {
             )
         };
 
-        Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-            ErrorData::ResourceStateSerializationFailed {
-                resource_id: "binding".to_string(),
-                message: "Failed to serialize binding parameters".to_string(),
-            },
-        )?))
+        Ok(Some(
+            serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?,
+        ))
     }
 }
 

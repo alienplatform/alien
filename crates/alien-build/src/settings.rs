@@ -57,7 +57,7 @@ pub struct BuildSettings {
     /// GCP default: [LinuxX64]
     /// Azure default: [LinuxX64]
     /// Kubernetes default: [LinuxArm64]
-    /// Local default: [WindowsX64, LinuxX64, LinuxArm64, DarwinArm64]
+    /// Local default: [current host target]
     pub targets: Option<Vec<BinaryTarget>>,
     /// Optional cache URL for build caching (e.g., s3://bucket/path, gcs://bucket/path).
     /// If None, no build caching will be used.

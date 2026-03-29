@@ -158,7 +158,10 @@ impl AsyncTestContext for LambdaTestContext {
             },
             service_overrides: None,
         };
-        let client = LambdaClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = LambdaClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         let image_uri = std::env::var("ALIEN_TEST_AWS_LAMBDA_IMAGE")
             .expect("ALIEN_TEST_AWS_LAMBDA_IMAGE must be set in .env.test");
@@ -659,7 +662,10 @@ async fn test_lambda_client_with_invalid_credentials(ctx: &mut LambdaTestContext
         },
         service_overrides: None,
     };
-    let lambda_client = LambdaClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
+    let lambda_client = LambdaClient::new(
+        client_invalid,
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     info!("🔐 Testing Lambda client with invalid credentials");
 

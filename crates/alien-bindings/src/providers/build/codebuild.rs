@@ -36,8 +36,10 @@ impl CodebuildBuild {
         binding: BuildBinding,
         credentials: &AwsCredentialProvider,
     ) -> Result<Self, Error> {
-        let client =
-            CodeBuildClient::new(crate::http_client::create_http_client(), credentials.clone());
+        let client = CodeBuildClient::new(
+            crate::http_client::create_http_client(),
+            credentials.clone(),
+        );
 
         // Extract values from binding
         let config = match binding {

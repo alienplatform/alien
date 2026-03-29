@@ -1,7 +1,8 @@
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
-use crate::output::{can_prompt, print_json, prompt_confirm};
+use crate::output::print_json;
+use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{alien_event, AlienEvent};
@@ -10,6 +11,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
+use alien_manager_api::SdkResultExt;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -29,14 +31,11 @@ use tracing::info;
     # Release for specific project (skip linking)
     alien release --project my-project
 
-    # Release without confirmation prompt
-    alien release --yes
-
     # Release specific platform only
     alien release --platform aws
 
     # Output JSON (for scripting/automation)
-    alien release --json --yes
+    alien release --json
 
     # Manual registry override (for deploying manager or custom setups)
     alien release --image-repo my-registry.com/my-app --registry-auth basic --registry-username user --registry-password pass
@@ -56,10 +55,6 @@ pub struct ReleaseArgs {
     /// Project ID or name to use for release (skips project linking)
     #[arg(long)]
     pub project: Option<String>,
-
-    /// Skip confirmation prompt
-    #[arg(long)]
-    pub yes: bool,
 
     /// Emit structured JSON output
     #[arg(long)]
@@ -96,8 +91,6 @@ struct ReleaseJsonOutput {
     project: String,
     workspace: String,
     platforms: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
 type ReleaseResult = String;
@@ -105,23 +98,9 @@ type ReleaseResult = String;
 /// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
     if args.json {
-        match release_task_json(args, ctx).await {
-            Ok(output) => {
-                print_json(&output)?;
-                Ok(())
-            }
-            Err(error) => {
-                print_json(&ReleaseJsonOutput {
-                    success: false,
-                    release_id: None,
-                    project: String::new(),
-                    workspace: String::new(),
-                    platforms: vec![],
-                    error: Some(format!("{}", error)),
-                })?;
-                Err(error)
-            }
-        }
+        let output = release_task_json(args, ctx).await?;
+        print_json(&output)?;
+        Ok(())
     } else {
         release_task(args, ctx).await.map(|_| ())
     }
@@ -129,7 +108,7 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
 
 /// Release task that returns JSON-serializable output
 async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseJsonOutput> {
-    let config = load_release_config(&args, &ctx, false).await?;
+    let config = load_release_config(&args, &ctx, false, false).await?;
 
     let project_name = config.project_link.project_name.clone();
     let workspace_name = config.workspace_name.clone();
@@ -142,7 +121,6 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
             project: project_name,
             workspace: workspace_name,
             platforms,
-            error: None,
         }),
         Err(err) => Err(err),
     }
@@ -164,11 +142,14 @@ async fn load_release_config(
     args: &ReleaseArgs,
     ctx: &ExecutionMode,
     allow_bootstrap: bool,
+    show_human_output: bool,
 ) -> Result<ReleaseConfig> {
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
-    let workspace_name = ctx.resolve_workspace_with_bootstrap(allow_bootstrap).await?;
+    let workspace_name = ctx
+        .resolve_workspace_with_bootstrap(allow_bootstrap)
+        .await?;
 
     // Resolve project
     let (_project_id, project_link) = ctx
@@ -195,10 +176,14 @@ async fn load_release_config(
         .join(first_platform)
         .join("stack.json");
     if !stack_file.exists() {
-        println!(
-            "No build found for {} platform, building...",
-            first_platform
-        );
+        if show_human_output {
+            println!(
+                "{} No build found for {}. Running {} first.",
+                dim_label("Note"),
+                first_platform,
+                command(&format!("alien build --platform {first_platform}"))
+            );
+        }
 
         let platform = Platform::from_str(first_platform).map_err(|e| {
             AlienError::new(ErrorData::ValidationError {
@@ -287,31 +272,37 @@ async fn load_release_config(
     })
 }
 
-/// Core release logic for console mode (with validation and confirmation)
+/// Core release logic for console mode.
 async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseResult> {
-    println!("Preparing release...");
-
     let config = AlienEvent::LoadingConfiguration
-        .in_scope(|_| async {
-            let config = load_release_config(&args, &ctx, true).await?;
-
-            print_release_summary_new(
-                &config.platforms,
-                &config.project_link.project_name,
-                &config.git_metadata,
-            );
-
-            if !confirm_release(args.yes, false)? {
-                return Err(AlienError::new(ErrorData::UserCancelled));
-            }
-
-            Ok(config)
-        })
+        .in_scope(|_| async { load_release_config(&args, &ctx, true, true).await })
         .await?;
 
+    let platforms_label = format_platform_summary(&config.platforms);
+    println!(
+        "{}",
+        contextual_heading(
+            "Releasing",
+            &config.project_link.project_name,
+            &[("for", &platforms_label)],
+        )
+    );
+
+    print_release_summary_new(
+        &config.platforms,
+        &config.project_link.project_name,
+        &config.git_metadata,
+    );
+
     let release_id = release_task_core(args, config).await?;
-    println!("Release created: {release_id}");
-    println!("Next: run `alien deployments create ...` or `alien deploy ...` as needed.");
+    println!("{}", success_line("Release created."));
+    println!("{} {}", dim_label("Release"), release_id);
+    println!(
+        "{} run {} or {} as needed.",
+        dim_label("Next"),
+        command("alien deployments create ..."),
+        command("alien deploy ...")
+    );
     Ok(release_id)
 }
 
@@ -427,11 +418,10 @@ async fn create_manager_release(
         })
         .send()
         .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Failed to create release: {}", e),
-                url: None,
-            })
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create release".to_string(),
+            url: None,
         })?;
 
     let release_id = response.id.clone();
@@ -718,17 +708,17 @@ fn print_release_summary_new(
     project_name: &str,
     git_metadata: &Option<GitMetadata>,
 ) {
-    println!("📦 Release Summary");
-    println!("   Project: {}", project_name);
+    println!("{}", dim_label("Release plan"));
+    println!("  {} {}", dim_label("Project"), project_name);
 
     if let Some(git_meta) = git_metadata {
         if let Some(ref inner) = git_meta.0 {
             if let Some(ref branch) = inner.commit_ref {
-                println!("   Branch: {}", **branch);
+                println!("  {} {}", dim_label("Branch"), **branch);
             }
             if let Some(ref sha) = inner.commit_sha {
                 let short_sha = if sha.len() > 7 { &sha[..7] } else { sha };
-                println!("   Commit: {}", short_sha);
+                println!("  {} {}", dim_label("Commit"), short_sha);
             }
             if let Some(ref message) = inner.commit_message {
                 // Truncate long commit messages
@@ -737,38 +727,34 @@ fn print_release_summary_new(
                 } else {
                     message.to_string()
                 };
-                println!("   Message: {}", message_str);
+                println!("  {} {}", dim_label("Message"), message_str);
             }
         }
     }
 
-    println!("   Platforms:");
+    println!("  {}", dim_label("Platforms"));
     for platform in platforms {
-        let display_name = match platform.as_str() {
-            "aws" => "AWS",
-            "gcp" => "Google Cloud Platform",
-            "azure" => "Azure",
-            "kubernetes" => "Kubernetes",
-            "local" => "Local",
-            other => other,
-        };
-        println!("     • {}", display_name);
+        let display_name = display_platform_name(platform);
+        println!("    - {}", display_name);
     }
     println!();
 }
 
-/// Confirm release creation with user
-fn confirm_release(yes: bool, json_mode: bool) -> Result<bool> {
-    if yes {
-        return Ok(true);
+fn display_platform_name(platform: &str) -> &str {
+    match platform {
+        "aws" => "AWS",
+        "gcp" => "Google Cloud Platform",
+        "azure" => "Azure",
+        "kubernetes" => "Kubernetes",
+        "local" => "Local",
+        other => other,
     }
+}
 
-    if json_mode || !can_prompt() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Release confirmation requires a real terminal. Re-run with `--yes`."
-                .to_string(),
-        }));
-    }
-
-    prompt_confirm("Create this release?", true)
+fn format_platform_summary(platforms: &[String]) -> String {
+    platforms
+        .iter()
+        .map(|platform| display_platform_name(platform).to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }

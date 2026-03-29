@@ -391,10 +391,7 @@ impl AzureServiceAccountController {
                     principal_id: principal_id.clone(),
                     principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                     role_definition_id: full_role_definition_id,
-                    scope: Some(format!(
-                        "/subscriptions/{}",
-                        azure_cfg.subscription_id
-                    )),
+                    scope: Some(format!("/subscriptions/{}", azure_cfg.subscription_id)),
                     updated_by: None,
                     updated_on: None,
                 }),
@@ -798,12 +795,14 @@ impl AzureServiceAccountController {
                 BindingValue::Value(resource_id.clone()),
                 BindingValue::Value(principal_id.clone()),
             );
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }
@@ -834,11 +833,10 @@ impl AzureServiceAccountController {
 
         // Compute storage account name deterministically (needed by kv/* and storage/* permission sets).
         // We can't read from state because the storage account may still be provisioning concurrently.
-        let storage_account_name =
-            crate::infra_requirements::generate_storage_account_name(
-                ctx.resource_prefix,
-                "default-storage-account",
-            );
+        let storage_account_name = crate::infra_requirements::generate_storage_account_name(
+            ctx.resource_prefix,
+            "default-storage-account",
+        );
         permission_context = permission_context.with_storage_account_name(storage_account_name);
 
         // Managing subscription/resource group: used by function/execute and container-cluster/execute
@@ -885,10 +883,8 @@ impl AzureServiceAccountController {
     ];
 
     /// Permission set IDs that require ACR push access (push implies pull).
-    const ACR_PUSH_PERMISSION_SETS: &'static [&'static str] = &[
-        "artifact-registry/push",
-        "artifact-registry/provision",
-    ];
+    const ACR_PUSH_PERMISSION_SETS: &'static [&'static str] =
+        &["artifact-registry/push", "artifact-registry/provision"];
 
     /// Determine which Azure built-in ACR roles are needed based on permission sets.
     /// Returns a deduplicated list of (role_name, role_id) pairs.

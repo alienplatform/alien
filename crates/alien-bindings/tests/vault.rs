@@ -480,8 +480,10 @@ impl AsyncTestContext for AzureProviderTestContext {
             subscription_id, resource_group_name
         );
 
-        let management_client = AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
-        let secrets_client = AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let management_client =
+            AzureKeyVaultManagementClient::new(Client::new(), AzureTokenCache::new(config.clone()));
+        let secrets_client =
+            AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config.clone()));
 
         // Create the actual Azure Key Vault
         Self::create_azure_key_vault(&management_client, &resource_group_name, &test_vault_name)

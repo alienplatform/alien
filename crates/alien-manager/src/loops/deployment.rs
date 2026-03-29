@@ -216,9 +216,32 @@ impl DeploymentLoop {
             .await?;
 
         // 5. Build deployment config.
+        // Management config resolution:
+        //   1. From platform API (per-deployment, on DeploymentRecord — e.g. private managers)
+        //   2. From credential resolver (per-platform, derived from target provider's management binding)
+        let management_config = if let Some(mc) = deployment.management_config.clone() {
+            Some(mc)
+        } else {
+            match self
+                .credential_resolver
+                .resolve_management_config(deployment.platform)
+                .await
+            {
+                Ok(mc) => mc,
+                Err(e) => {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error = %e,
+                        "Failed to resolve management config from bindings"
+                    );
+                    None
+                }
+            }
+        };
+
         let config = DeploymentConfig {
             stack_settings: deployment.stack_settings.clone(),
-            management_config: None,
+            management_config,
             environment_variables,
             allow_frozen_changes: false,
             artifact_registry: None,
@@ -419,29 +442,39 @@ impl DeploymentLoop {
             });
         }
 
-        // 3. Commands polling configuration.
-        let commands_base = self.config.commands_base_url();
-        vars.push(EnvironmentVariable {
-            name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
-            value: "true".to_string(),
-            var_type: EnvironmentVariableType::Plain,
-            target_resources: None,
-        });
-        vars.push(EnvironmentVariable {
-            name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
-            value: commands_base,
-            var_type: EnvironmentVariableType::Plain,
-            target_resources: None,
-        });
-        // Token for commands polling — in dev/standalone mode, use deployment_id as token
-        // (permissive auth). Plain type so it's available during InitialSetup when
-        // secrets are skipped (vault doesn't exist yet).
-        vars.push(EnvironmentVariable {
-            name: "ALIEN_COMMANDS_TOKEN".to_string(),
-            value: deployment_id.to_string(),
-            var_type: EnvironmentVariableType::Plain,
-            target_resources: None,
-        });
+        // 3. Commands configuration — only inject polling for K8s/Local.
+        // Cloud functions (Lambda, Cloud Run, Container Apps) receive commands via
+        // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
+        // regardless of deployment model. K8s/Local run as containers that must poll.
+        let needs_polling = matches!(
+            deployment.platform,
+            alien_core::Platform::Kubernetes | alien_core::Platform::Local
+        );
+
+        if needs_polling {
+            let commands_base = self.config.commands_base_url();
+            vars.push(EnvironmentVariable {
+                name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                value: "true".to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+            vars.push(EnvironmentVariable {
+                name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                value: commands_base,
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+            // Token for commands polling — in dev/standalone mode, use deployment_id as token
+            // (permissive auth). Plain type so it's available during InitialSetup when
+            // secrets are skipped (vault doesn't exist yet).
+            vars.push(EnvironmentVariable {
+                name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                value: deployment_id.to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        }
 
         // 4. User-provided environment variables from the deployment record.
         if let Some(ref user_vars) = deployment.user_environment_variables {

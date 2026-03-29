@@ -216,7 +216,11 @@ impl AzureNetworkClient {
         let endpoint = token_cache.management_endpoint().to_string();
 
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -495,13 +499,14 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let body = serde_json::to_string(nat_gateway)
             .into_alien_error()
@@ -536,13 +541,14 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
 
@@ -594,13 +600,14 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
+        let url =
+            self.base.build_url(
+                &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
                 &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
             ),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
 

@@ -46,7 +46,10 @@ pub struct SecretsManagerClient {
 
 impl SecretsManagerClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -59,7 +62,10 @@ impl SecretsManagerClient {
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.credentials.get_service_endpoint_option("secretsmanager") {
+        if let Some(override_url) = self
+            .credentials
+            .get_service_endpoint_option("secretsmanager")
+        {
             override_url.to_string()
         } else {
             format!(

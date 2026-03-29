@@ -324,7 +324,10 @@ impl AsyncTestContext for AwsProviderTestContext {
             project_number: None,
         };
 
-        let dynamodb_client = DynamoDbClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let dynamodb_client = DynamoDbClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         info!("🚀 Creating DynamoDB table for KV test: {}", table_name);
 
@@ -886,8 +889,10 @@ impl AsyncTestContext for AzureProviderTestContext {
             project_number: None,
         };
 
-        let management_client =
-            AzureTableManagementClient::new(Client::new(), AzureTokenCache::new(client_config.clone()));
+        let management_client = AzureTableManagementClient::new(
+            Client::new(),
+            AzureTokenCache::new(client_config.clone()),
+        );
 
         info!("🚀 Creating Azure table for KV test: {}", table_name);
 

@@ -1,9 +1,16 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::get_current_dir;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::prompt_confirm;
+use crate::ui::{
+    command, contextual_heading, deployment_resource_detail, dim_label, format_resource_status,
+    heading, render_human_error, success_line,
+};
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Telemetry (monitoring) mode for a deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -22,8 +29,6 @@ use alien_platform_api::types::{
     RedeployDeploymentWorkspace, RetryDeploymentId, RetryDeploymentWorkspace,
 };
 use alien_platform_api::SdkResultExt as _;
-use std::io::{self, Write};
-
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Deployment commands",
@@ -137,8 +142,16 @@ pub enum DeploymentsCmd {
 }
 
 pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Result<()> {
+    if let DeploymentsCmd::Delete { yes, .. } = &args.cmd {
+        delete_confirmation_mode(*yes)?;
+    }
+
     // Ensure server is ready (dev mode only)
     ctx.ensure_ready().await?;
+
+    if let ExecutionMode::Dev { port } = ctx {
+        return deployments_task_dev(args, port).await;
+    }
 
     // Get client
     let client = ctx.sdk_client().await?;
@@ -216,6 +229,31 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
     }
 
     Ok(())
+}
+
+async fn deployments_task_dev(args: DeploymentsArgs, port: u16) -> Result<()> {
+    match args.cmd {
+        DeploymentsCmd::Create { .. } => Err(AlienError::new(ErrorData::ValidationError {
+            field: "command".to_string(),
+            message:
+                "Use `alien dev deploy --name <deployment> --platform local` to create deployments in dev mode."
+                    .to_string(),
+        })),
+        DeploymentsCmd::Ls { .. } => list_local_deployments_task(port).await,
+        DeploymentsCmd::Get { id } => get_local_deployment_task(port, &id).await,
+        DeploymentsCmd::Delete { id, yes } => delete_local_deployment_task(port, &id, yes).await,
+        DeploymentsCmd::Retry { id } => retry_local_deployment_task(port, &id).await,
+        DeploymentsCmd::Redeploy { id } => redeploy_local_deployment_task(port, &id).await,
+        DeploymentsCmd::Pin { .. } => Err(AlienError::new(ErrorData::ValidationError {
+            field: "command".to_string(),
+            message: "`alien dev deployments pin` is not supported in local dev mode.".to_string(),
+        })),
+        DeploymentsCmd::Token { .. } => Err(AlienError::new(ErrorData::ValidationError {
+            field: "command".to_string(),
+            message:
+                "`alien dev deployments token` is not supported in local dev mode.".to_string(),
+        })),
+    }
 }
 
 // Deployment creation task - creates a new deployment with environment variables
@@ -732,6 +770,172 @@ async fn list_deployments_task(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalDeploymentsResponse {
+    items: Vec<LocalDeploymentResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalDeploymentResponse {
+    id: String,
+    name: String,
+    platform: String,
+    status: String,
+    current_release_id: Option<String>,
+    created_at: String,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalActionResponse {
+    #[allow(dead_code)]
+    success: Option<bool>,
+    #[allow(dead_code)]
+    message: Option<String>,
+}
+
+async fn list_local_deployments_task(port: u16) -> Result<()> {
+    let response: LocalDeploymentsResponse =
+        local_manager_request(port, reqwest::Method::GET, "/v1/deployments", None).await?;
+
+    if response.items.is_empty() {
+        println!("(no deployments)");
+        return Ok(());
+    }
+
+    for deployment in response.items {
+        print_local_deployment(&deployment);
+        println!();
+    }
+
+    Ok(())
+}
+
+async fn get_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
+    let path = format!("/v1/deployments/{deployment_id}");
+    let response: LocalDeploymentResponse =
+        local_manager_request(port, reqwest::Method::GET, &path, None).await?;
+    print_local_deployment(&response);
+    Ok(())
+}
+
+async fn delete_local_deployment_task(port: u16, deployment_id: &str, yes: bool) -> Result<()> {
+    if !yes {
+        let confirmed = prompt_confirm(
+            &format!("Delete deployment '{deployment_id}' from the local manager?"),
+            false,
+        )?;
+        if !confirmed {
+            return Err(AlienError::new(ErrorData::UserCancelled));
+        }
+    }
+
+    let path = format!("/v1/deployments/{deployment_id}");
+    let response: LocalActionResponse =
+        local_manager_request(port, reqwest::Method::DELETE, &path, None).await?;
+
+    println!(
+        "{}",
+        response
+            .message
+            .as_deref()
+            .unwrap_or("Deployment deletion enqueued")
+    );
+
+    Ok(())
+}
+
+async fn retry_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
+    let path = format!("/v1/deployments/{deployment_id}/retry");
+    let _: LocalActionResponse =
+        local_manager_request(port, reqwest::Method::POST, &path, None).await?;
+    println!("Retry requested for deployment '{deployment_id}'.");
+    Ok(())
+}
+
+async fn redeploy_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
+    let path = format!("/v1/deployments/{deployment_id}/redeploy");
+    let _: LocalActionResponse =
+        local_manager_request(port, reqwest::Method::POST, &path, None).await?;
+    println!("Redeploy requested for deployment '{deployment_id}'.");
+    Ok(())
+}
+
+fn print_local_deployment(deployment: &LocalDeploymentResponse) {
+    println!("Deployment ID: {}", deployment.id);
+    println!("  Name: {}", deployment.name);
+    println!("  Status: {}", deployment.status);
+    println!("  Platform: {}", deployment.platform);
+
+    if let Some(current_release_id) = &deployment.current_release_id {
+        println!("  Current Release: {}", current_release_id);
+    }
+
+    println!("  Created: {}", deployment.created_at);
+
+    if let Some(updated_at) = &deployment.updated_at {
+        println!("  Updated: {}", updated_at);
+    }
+}
+
+async fn local_manager_request<T: DeserializeOwned>(
+    port: u16,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<T> {
+    let url = format!("http://localhost:{port}{path}");
+    let client = reqwest::Client::new();
+    let request = client.request(method, &url);
+    let request = if let Some(body) = body {
+        request.json(&body)
+    } else {
+        request
+    };
+
+    let response =
+        request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("calling local manager endpoint {path}"),
+                url: Some(url.clone()),
+            })?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("reading local manager response from {path}"),
+            url: Some(url.clone()),
+        })?;
+
+    if !status.is_success() {
+        let message = if body.trim().is_empty() {
+            format!("local manager returned HTTP {}", status.as_u16())
+        } else {
+            body
+        };
+
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message,
+            url: Some(url),
+        }));
+    }
+
+    serde_json::from_str(&body)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "deserialization".to_string(),
+            reason: format!("Failed to parse local manager response from {path}"),
+        })
+}
+
 async fn get_deployment_task(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -762,56 +966,54 @@ async fn get_deployment_task(
         })?;
     let deployment = response.into_inner();
 
-    // Print detailed deployment information
-    println!("Deployment Details:");
-    println!("  ID: {}", *deployment.id);
-    println!("  Name: {}", *deployment.name);
-
-    println!("  Status: {:?}", deployment.status);
-    println!("  Project ID: {}", *deployment.project_id);
-    println!("  Workspace ID: {}", *deployment.workspace_id);
-    println!("  Created: {}", deployment.created_at);
+    println!(
+        "{}",
+        contextual_heading("Showing deployment", deployment.name.as_ref(), &[])
+    );
+    println!("{} {}", dim_label("ID"), *deployment.id);
+    println!("{} {:?}", dim_label("Status"), deployment.status);
+    println!("{} {:?}", dim_label("Platform"), deployment.platform);
+    println!("{} {}", dim_label("Project"), *deployment.project_id);
+    println!("{} {}", dim_label("Workspace"), *deployment.workspace_id);
+    println!("{} {}", dim_label("Created"), deployment.created_at);
 
     if let Some(last_heartbeat) = &deployment.last_heartbeat_at {
-        println!("  Last Heartbeat: {}", last_heartbeat);
+        println!("{} {}", dim_label("Last heartbeat"), last_heartbeat);
     }
 
-    // Show platform
-    println!("  Platform: {:?}", deployment.platform);
-
     if let Some(current_release_id) = &deployment.current_release_id {
-        println!("  Current Release ID: {}", **current_release_id);
+        println!("{} {}", dim_label("Current release"), **current_release_id);
     }
 
     if let Some(pinned_release_id) = &deployment.pinned_release_id {
-        println!("  Pinned Release ID: {}", **pinned_release_id);
+        println!("{} {}", dim_label("Pinned release"), **pinned_release_id);
     }
 
     if let Some(desired_release_id) = &deployment.desired_release_id {
-        println!("  Desired Release ID: {}", **desired_release_id);
+        println!("{} {}", dim_label("Desired release"), **desired_release_id);
     }
 
     if let Some(manager_id) = &deployment.manager_id {
-        println!("  Manager ID: {:?}", manager_id);
+        println!("{} {:?}", dim_label("Manager"), manager_id);
     }
 
     if let Some(error) = &deployment.error {
-        let error_str = serde_json::to_string_pretty(error)
-            .into_alien_error()
-            .context(ErrorData::JsonError {
-                operation: "serialization".to_string(),
-                reason: "Failed to serialize deployment error".to_string(),
-            })?;
-        println!("  Error: {}", error_str);
+        let error: alien_error::AlienError = convert_via_json(
+            error,
+            "deployment error",
+            "Failed to convert deployment error",
+        )?;
+        println!("{}", render_human_error(&error));
     }
 
-    let state_str = serde_json::to_string_pretty(&deployment.stack_state)
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "serialization".to_string(),
-            reason: "Failed to serialize deployment stack state".to_string(),
-        })?;
-    println!("  Stack State: {}", state_str);
+    if let Some(stack_state) = &deployment.stack_state {
+        let stack_state: alien_core::StackState = convert_via_json(
+            stack_state,
+            "deployment stack state",
+            "Failed to convert deployment stack state",
+        )?;
+        print_stack_resources(&stack_state);
+    }
 
     if let Some(env_info) = &deployment.environment_info {
         let env_str = serde_json::to_string_pretty(env_info)
@@ -832,6 +1034,8 @@ async fn delete_deployment_task(
     deployment_id: &str,
     yes: bool,
 ) -> Result<()> {
+    let confirmation_mode = delete_confirmation_mode(yes)?;
+
     // Get deployment details first for confirmation
     let workspace_param = GetDeploymentWorkspace::try_from(workspace)
         .into_alien_error()
@@ -858,44 +1062,21 @@ async fn delete_deployment_task(
         })?;
     let deployment = response.into_inner();
 
-    // Show what we're about to delete
-    println!("🗑️  About to delete deployment:");
-    println!("   ID: {}", *deployment.id);
-    println!("   Name: {}", *deployment.name);
-    println!("   Status: {:?}", deployment.status);
+    println!(
+        "{}",
+        contextual_heading("Deleting deployment", deployment.name.as_ref(), &[])
+    );
+    println!("{} {}", dim_label("ID"), *deployment.id);
+    println!("{} {:?}", dim_label("Status"), deployment.status);
 
     // Confirm deletion
-    if !yes {
-        print!("Are you sure you want to delete this deployment? [y/N] ");
-        io::stdout()
-            .flush()
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "flush".to_string(),
-                file_path: "stdout".to_string(),
-                reason: "could not write output".to_string(),
-            })
-            .ok();
-
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: "stdin".to_string(),
-                reason: "could not read input".to_string(),
-            })?;
-
-        let input = input.trim().to_lowercase();
-        if input != "y" && input != "yes" {
-            println!("Deletion cancelled.");
-            return Ok(());
-        }
+    if matches!(confirmation_mode, ConfirmationMode::Prompt)
+        && !prompt_confirm("Are you sure you want to delete this deployment?", false)?
+    {
+        println!("{}", dim_label("Deletion cancelled."));
+        return Ok(());
     }
 
-    // Delete the deployment
-    println!("🗑️  Deleting deployment...");
     let delete_workspace_param = DeleteDeploymentWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -920,9 +1101,21 @@ async fn delete_deployment_task(
             url: None,
         })?;
 
-    println!("✅ Deployment deleted successfully!");
+    println!("{}", success_line("Delete requested."));
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!("alien deployments get {}", deployment_id))
+    );
 
     Ok(())
+}
+
+fn delete_confirmation_mode(yes: bool) -> Result<ConfirmationMode> {
+    InteractionMode::current(false).confirmation_mode(
+        yes,
+        "Deployment deletion requires a real terminal. Re-run with `--yes`.",
+    )
 }
 
 async fn retry_deployment_task(
@@ -956,14 +1149,12 @@ async fn retry_deployment_task(
         })?;
     let deployment = response.into_inner();
 
-    // Show what we're about to retry
-    println!("🔄 About to retry deployment:");
-    println!("   ID: {}", *deployment.id);
-    println!("   Name: {}", *deployment.name);
-    println!("   Status: {:?}", deployment.status);
-
-    // Retry the deployment
-    println!("🔄 Retrying deployment...");
+    println!(
+        "{}",
+        contextual_heading("Retrying deployment", deployment.name.as_ref(), &[])
+    );
+    println!("{} {}", dim_label("ID"), *deployment.id);
+    println!("{} {:?}", dim_label("Status"), deployment.status);
     let retry_workspace_param = RetryDeploymentWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -991,8 +1182,13 @@ async fn retry_deployment_task(
         })?;
     let retry_response = response.into_inner();
 
-    println!("✅ Deployment retry initiated successfully!");
-    println!("   Message: {}", retry_response.message);
+    println!("{}", success_line("Retry requested."));
+    println!("{} {}", dim_label("Status"), retry_response.message);
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!("alien deployments get {}", deployment_id))
+    );
 
     Ok(())
 }
@@ -1028,17 +1224,15 @@ async fn redeploy_deployment_task(
         })?;
     let deployment = response.into_inner();
 
-    // Show what we're about to redeploy
-    println!("🔄 About to redeploy deployment:");
-    println!("   ID: {}", *deployment.id);
-    println!("   Name: {}", *deployment.name);
-    println!("   Status: {:?}", deployment.status);
+    println!(
+        "{}",
+        contextual_heading("Redeploying deployment", deployment.name.as_ref(), &[])
+    );
+    println!("{} {}", dim_label("ID"), *deployment.id);
+    println!("{} {:?}", dim_label("Status"), deployment.status);
     if let Some(current_release_id) = &deployment.current_release_id {
-        println!("   Current Release: {}", **current_release_id);
+        println!("{} {}", dim_label("Current release"), **current_release_id);
     }
-
-    // Redeploy the deployment
-    println!("🔄 Triggering redeployment...");
     let redeploy_workspace_param = RedeployDeploymentWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -1064,10 +1258,51 @@ async fn redeploy_deployment_task(
         })?;
     let redeploy_response = response.into_inner();
 
-    println!("✅ Deployment redeployment triggered successfully!");
-    println!("   Message: {}", redeploy_response.message);
+    println!("{}", success_line("Redeploy requested."));
+    println!("{} {}", dim_label("Status"), redeploy_response.message);
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!("alien deployments get {}", deployment_id))
+    );
 
     Ok(())
+}
+
+fn print_stack_resources(stack_state: &alien_core::StackState) {
+    println!("{}", heading("Resources"));
+    let mut resources: Vec<_> = stack_state.resources.iter().collect();
+    resources.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+
+    for (resource_name, resource) in resources {
+        println!(
+            "  - {} ({}): {}",
+            resource_name,
+            resource.resource_type,
+            format_resource_status(resource.status)
+        );
+        if let Some(detail) = deployment_resource_detail(resource) {
+            println!("    {}", detail);
+        }
+    }
+}
+
+fn convert_via_json<T, U>(value: &T, operation_target: &str, reason: &str) -> Result<U>
+where
+    T: Serialize,
+    U: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(serde_json::to_value(value).into_alien_error().context(
+        ErrorData::JsonError {
+            operation: "serialization".to_string(),
+            reason: format!("Failed to serialize {operation_target}"),
+        },
+    )?)
+    .into_alien_error()
+    .context(ErrorData::JsonError {
+        operation: "deserialization".to_string(),
+        reason: reason.to_string(),
+    })
 }
 
 async fn pin_deployment_task(

@@ -124,7 +124,10 @@ pub struct Elbv2Client {
 impl Elbv2Client {
     /// Create a new ELBv2 client.
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -151,7 +154,10 @@ impl Elbv2Client {
     }
 
     fn get_host(&self) -> String {
-        format!("elasticloadbalancing.{}.amazonaws.com", self.credentials.region())
+        format!(
+            "elasticloadbalancing.{}.amazonaws.com",
+            self.credentials.region()
+        )
     }
 
     // ------------------------- Internal Helpers -------------------------

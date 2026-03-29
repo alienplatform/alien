@@ -22,7 +22,8 @@ impl ContainerAppFunction {
         config: AzureClientConfig,
         binding: ContainerAppFunctionBinding,
     ) -> Self {
-        let container_apps_client = AzureContainerAppsClient::new(client.clone(), AzureTokenCache::new(config));
+        let container_apps_client =
+            AzureContainerAppsClient::new(client.clone(), AzureTokenCache::new(config));
         Self {
             client,
             container_apps_client,

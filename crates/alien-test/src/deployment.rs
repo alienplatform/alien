@@ -81,7 +81,9 @@ impl TestDeployment {
                 // Extract the public URL from stack_state resource outputs.
                 // StackState is: { resources: { <id>: { type, status, outputs: { url, ... } } } }
                 if let Some(ref stack_state) = resp.stack_state {
-                    if let Some(resources) = stack_state.get("resources").and_then(|v| v.as_object()) {
+                    if let Some(resources) =
+                        stack_state.get("resources").and_then(|v| v.as_object())
+                    {
                         for (_resource_id, resource_state) in resources {
                             let resource_type = resource_state
                                 .get("type")
@@ -178,9 +180,7 @@ impl TestDeployment {
         if !create_resp.status().is_success() {
             let status = create_resp.status();
             let body_text = create_resp.text().await.unwrap_or_default();
-            return Err(
-                format!("Command create failed ({}): {}", status, body_text).into(),
-            );
+            return Err(format!("Command create failed ({}): {}", status, body_text).into());
         }
 
         let create_result: Value = create_resp.json().await?;
@@ -289,11 +289,9 @@ impl TestDeployment {
 
         let status = resp.status.as_str();
         if status != "running" {
-            return Err(format!(
-                "Deployment {} is not healthy (status: {})",
-                self.id, status
-            )
-            .into());
+            return Err(
+                format!("Deployment {} is not healthy (status: {})", self.id, status).into(),
+            );
         }
 
         Ok(())

@@ -1,10 +1,16 @@
 // This module is auto-generated with scripts/download_azure_openapi_specs.sh & build.rs
 
 pub mod authorization_role_assignments {
-    include!(concat!(env!("OUT_DIR"), "/authorization_role_assignments.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/authorization_role_assignments.rs"
+    ));
 }
 pub mod authorization_role_definitions {
-    include!(concat!(env!("OUT_DIR"), "/authorization_role_definitions.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/authorization_role_definitions.rs"
+    ));
 }
 pub mod blob {
     include!(concat!(env!("OUT_DIR"), "/blob.rs"));
@@ -37,7 +43,10 @@ pub mod managed_environments {
     include!(concat!(env!("OUT_DIR"), "/managed_environments.rs"));
 }
 pub mod managed_environments_dapr_components {
-    include!(concat!(env!("OUT_DIR"), "/managed_environments_dapr_components.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/managed_environments_dapr_components.rs"
+    ));
 }
 pub mod managed_identity {
     include!(concat!(env!("OUT_DIR"), "/managed_identity.rs"));

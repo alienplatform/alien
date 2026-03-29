@@ -128,13 +128,17 @@ impl GcpQueueController {
                             .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
                             .await
                             .context(ErrorData::CloudPlatformError {
-                                message: format!("Failed to apply IAM policy to Pub/Sub topic '{}'", topic_name_owned),
+                                message: format!(
+                                    "Failed to apply IAM policy to Pub/Sub topic '{}'",
+                                    topic_name_owned
+                                ),
                                 resource_id: Some(config_id_owned),
                             })?;
                         info!(topic = %topic_name_owned, "Applied IAM policy to topic");
                         Ok(())
                     },
-                ).await?;
+                )
+                .await?;
             }
 
             // Apply IAM permissions to the subscription
@@ -154,13 +158,17 @@ impl GcpQueueController {
                             .set_subscription_iam_policy(sub_name_owned.clone(), iam_policy)
                             .await
                             .context(ErrorData::CloudPlatformError {
-                                message: format!("Failed to apply IAM policy to Pub/Sub subscription '{}'", sub_name_owned),
+                                message: format!(
+                                    "Failed to apply IAM policy to Pub/Sub subscription '{}'",
+                                    sub_name_owned
+                                ),
                                 resource_id: Some(config_id_owned),
                             })?;
                         info!(subscription = %sub_name_owned, "Applied IAM policy to subscription");
                         Ok(())
                     },
-                ).await?;
+                )
+                .await?;
             }
         }
 
@@ -308,12 +316,14 @@ impl GcpQueueController {
                 BindingValue::value(topic.clone()),
                 BindingValue::value(sub.clone()),
             );
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

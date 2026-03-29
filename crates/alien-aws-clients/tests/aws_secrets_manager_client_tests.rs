@@ -81,7 +81,10 @@ impl AsyncTestContext for SecretsManagerTestContext {
             service_overrides: None,
         };
 
-        let client = SecretsManagerClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = SecretsManagerClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         SecretsManagerTestContext {
             client,
@@ -618,7 +621,10 @@ async fn test_secrets_manager_with_invalid_credentials(_ctx: &mut SecretsManager
         },
         service_overrides: None,
     };
-    let invalid_client = SecretsManagerClient::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
+    let invalid_client = SecretsManagerClient::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(invalid_config),
+    );
 
     info!("🔐 Testing Secrets Manager client with invalid credentials");
 

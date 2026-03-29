@@ -1,6 +1,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt;
@@ -60,7 +61,9 @@ fn create_authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClien
 /// Core destroy logic
 pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     info!("Starting destroy command");
-    info!("🗑️  Destroying resources from deployment '{}'", args.name);
+    println!("{}", contextual_heading("Destroying", &args.name, &[]));
+    let steps = FixedSteps::new(&["Resolve deployment", "Validate state", "Request destroy"]);
+    steps.activate(0, Some(format!("Deployment {}", args.name)));
 
     let base_url = ctx.base_url();
 
@@ -90,9 +93,14 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         }));
     }
 
-    info!("✅ Found tracked deployment '{}'", args.name);
-    info!("   Deployment ID: {}", tracked_deployment.deployment_id);
-    info!("   Workspace ID: {}", tracked_deployment.workspace_id);
+    steps.complete(
+        0,
+        Some(format!(
+            "{} ({})",
+            args.name, tracked_deployment.deployment_id
+        )),
+    );
+    steps.activate(1, None::<String>);
 
     // Create authenticated client
     let sdk_client = create_authenticated_client(&args.token, &base_url)?;
@@ -109,8 +117,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         })?;
 
     let deployment = deployment_response.into_inner();
-
-    info!("📊 Current deployment status: {}", deployment.status);
+    steps.complete(1, Some(deployment.status.to_string()));
 
     // Verify deployment can be destroyed
     use alien_platform_api::types::DeploymentDetailResponseStatus;
@@ -128,7 +135,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     }
 
     // Call the platform API delete endpoint
-    info!("🚀 Starting deployment destruction...");
+    steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
 
     sdk_client
         .delete_deployment()
@@ -140,9 +147,22 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to start deployment destruction".to_string(),
         })?;
 
-    info!("✅ Deployment deletion initiated successfully!");
-    info!("   The platform controller will handle the destruction process.");
-    info!("   Next: run `alien deployments get {}` to monitor status.", args.name);
+    steps.complete(2, Some("Deletion requested".to_string()));
+    println!("{}", success_line("Destroy requested."));
+    println!(
+        "{} {} ({})",
+        dim_label("Deployment"),
+        args.name,
+        tracked_deployment.deployment_id
+    );
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!(
+            "alien deployments get {}",
+            tracked_deployment.deployment_id
+        ))
+    );
 
     Ok(())
 }

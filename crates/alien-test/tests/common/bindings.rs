@@ -80,8 +80,10 @@ pub async fn check_health(deployment: &TestDeployment) -> anyhow::Result<()> {
             bail!("Health check returned {}: {}", status, body);
         }
 
-        let data: serde_json::Value =
-            resp.json().await.context("Failed to parse health response")?;
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .context("Failed to parse health response")?;
         let health_status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
         if health_status != "ok" {
             bail!("Health check status not 'ok': {:?}", data);
@@ -115,7 +117,10 @@ pub async fn check_hello(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Hello check returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse hello response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse hello response")?;
     let message = data.get("message").and_then(|v| v.as_str()).unwrap_or("");
     if !message.contains("Hello") {
         bail!("Hello response does not contain 'Hello': {:?}", data);
@@ -203,7 +208,10 @@ pub async fn check_environment(deployment: &TestDeployment) -> anyhow::Result<()
     let data: serde_json::Value = resp.json().await.context("Failed to parse env response")?;
     let value = data.get("value").and_then(|v| v.as_str()).unwrap_or("");
     if value.is_empty() {
-        bail!("NODE_ENV environment variable is empty or missing: {:?}", data);
+        bail!(
+            "NODE_ENV environment variable is empty or missing: {:?}",
+            data
+        );
     }
 
     info!(value = %value, "Environment check passed");
@@ -237,7 +245,10 @@ pub async fn check_inspect(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Inspect returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse inspect response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse inspect response")?;
     // The test app returns { success: true, requestBody: <echo> }
     let echoed = data
         .get("requestBody")
@@ -282,7 +293,10 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
     // Treat as non-fatal since vault binding was already validated separately.
     if status == reqwest::StatusCode::BAD_GATEWAY {
         let body = resp.text().await.unwrap_or_default();
-        info!("External secret returned 502 (runtime proxy timeout, non-fatal): {}", body);
+        info!(
+            "External secret returned 502 (runtime proxy timeout, non-fatal): {}",
+            body
+        );
         return Ok(());
     }
 
@@ -291,13 +305,22 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
         bail!("External secret returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse external secret response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse external secret response")?;
     // The endpoint returns { exists: bool, value?: string }
-    let exists = data.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exists = data
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !exists {
-        // External secret may not be provisioned in standalone test environments.
-        // Log a warning but don't fail — the endpoint working is the real test.
-        info!("External secret not found (may not be provisioned): {:?}", data);
+        bail!(
+            "External secret EXTERNAL_TEST_SECRET not found. \
+             It should have been provisioned via the manager vault API after deployment. \
+             Response: {:?}",
+            data
+        );
     }
 
     info!("External secret check passed");
@@ -325,10 +348,16 @@ pub async fn check_events(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Events list returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse events response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse events response")?;
     // Verify the response has event arrays (even if empty, the handler is registered)
     if data.get("storageEvents").is_none() && data.get("queueMessages").is_none() {
-        bail!("Events response missing storageEvents/queueMessages: {:?}", data);
+        bail!(
+            "Events response missing storageEvents/queueMessages: {:?}",
+            data
+        );
     }
 
     info!("Events check passed");
@@ -356,7 +385,10 @@ pub async fn check_storage(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Storage test returned {}: {}", status, body);
     }
 
-    let data: BindingTestResponse = resp.json().await.context("Failed to parse storage response")?;
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse storage response")?;
     if !data.success {
         bail!("Storage test reported failure");
     }
@@ -430,7 +462,10 @@ pub async fn check_vault(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Vault test returned {}: {}", status, body);
     }
 
-    let data: BindingTestResponse = resp.json().await.context("Failed to parse vault response")?;
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse vault response")?;
     if !data.success {
         bail!("Vault test reported failure");
     }
@@ -467,7 +502,10 @@ pub async fn check_queue(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Queue test returned {}: {}", status, body);
     }
 
-    let data: BindingTestResponse = resp.json().await.context("Failed to parse queue response")?;
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse queue response")?;
     if !data.success {
         bail!("Queue test reported failure");
     }
@@ -507,7 +545,10 @@ pub async fn check_function(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Function invoke test returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Failed to parse function response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse function response")?;
     if data.get("success") != Some(&serde_json::Value::Bool(true)) {
         bail!("Function invoke test reported failure: {:?}", data);
     }
@@ -540,8 +581,10 @@ pub async fn check_container(deployment: &TestDeployment) -> anyhow::Result<()> 
         bail!("Container call test returned {}: {}", status, body);
     }
 
-    let data: serde_json::Value =
-        resp.json().await.context("Failed to parse container response")?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse container response")?;
     if data.get("success") != Some(&serde_json::Value::Bool(true)) {
         bail!("Container call test reported failure: {:?}", data);
     }

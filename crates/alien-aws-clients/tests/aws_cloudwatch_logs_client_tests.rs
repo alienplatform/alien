@@ -82,7 +82,10 @@ impl AsyncTestContext for CloudWatchLogsTestContext {
             },
             service_overrides: None,
         };
-        let client = CloudWatchLogsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = CloudWatchLogsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         CloudWatchLogsTestContext {
             client,

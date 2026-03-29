@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
 use crate::error::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_error::{Context, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use tracing::info;
 
@@ -191,12 +191,14 @@ impl TestVaultController {
         if let (Some(vault_id), Some(data_dir)) = (&self.vault_id, &self.data_dir) {
             let binding =
                 alien_core::bindings::VaultBinding::local(vault_id.clone(), data_dir.clone());
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

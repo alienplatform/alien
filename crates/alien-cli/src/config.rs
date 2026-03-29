@@ -380,7 +380,7 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        error!(
+        debug!(
             "{} execution failed - stderr: {}, stdout: {}",
             runtime.name(),
             stderr,

@@ -69,9 +69,7 @@ pub async fn cleanup_deployments(
 ///
 /// Looks for containers matching a label or name pattern and removes them.
 /// Best-effort: errors are logged but do not fail the cleanup.
-pub async fn cleanup_agent_containers(
-    label: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn cleanup_agent_containers(label: &str) -> Result<(), Box<dyn std::error::Error>> {
     info!(%label, "cleaning up alien-agent containers");
 
     // List containers with the test label
@@ -91,7 +89,10 @@ pub async fn cleanup_agent_containers(
         return Ok(());
     }
 
-    info!(count = container_ids.len(), "removing alien-agent containers");
+    info!(
+        count = container_ids.len(),
+        "removing alien-agent containers"
+    );
 
     for id in &container_ids {
         match tokio::process::Command::new("docker")

@@ -99,7 +99,10 @@ impl AsyncTestContext for SqsTestContext {
             },
             service_overrides: None,
         };
-        let client = SqsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = SqsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         SqsTestContext {
             client,

@@ -80,10 +80,7 @@ impl AwsQueueController {
         if let Some(queue_name) = &self.queue_name {
             use crate::core::ResourcePermissionsHelper;
             ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
-                ctx,
-                &config.id,
-                queue_name,
-                "queue",
+                ctx, &config.id, queue_name, "queue",
             )
             .await?;
         }
@@ -307,12 +304,14 @@ impl AwsQueueController {
         use alien_core::bindings::{BindingValue, QueueBinding};
         if let Some(url) = &self.queue_url {
             let binding = QueueBinding::sqs(BindingValue::value(url.clone()));
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

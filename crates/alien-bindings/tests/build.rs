@@ -247,8 +247,14 @@ impl AsyncTestContext for AwsProviderBuildTestContext {
             service_overrides: None,
         };
 
-        let codebuild_client = CodeBuildClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
-        let iam_client = IamClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
+        let codebuild_client = CodeBuildClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
+        let iam_client = IamClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
 
         // Create IAM role for CodeBuild
         let role_name = format!("alien-test-build-role-{}", Uuid::new_v4().simple());

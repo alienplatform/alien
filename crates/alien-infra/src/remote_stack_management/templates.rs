@@ -1,5 +1,5 @@
-use alien_aws_clients::IamApi as _;
 use alien_aws_clients::AwsCredentialProvider;
+use alien_aws_clients::IamApi as _;
 use async_trait::async_trait;
 
 use crate::error::{ErrorData, Result};

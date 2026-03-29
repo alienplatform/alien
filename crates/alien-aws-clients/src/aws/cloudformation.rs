@@ -47,7 +47,10 @@ pub struct CloudFormationClient {
 
 impl CloudFormationClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
-        Self { client, credentials }
+        Self {
+            client,
+            credentials,
+        }
     }
 
     fn sign_config(&self) -> AwsSignConfig {
@@ -60,7 +63,10 @@ impl CloudFormationClient {
     }
 
     fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.credentials.get_service_endpoint_option("cloudformation") {
+        if let Some(override_url) = self
+            .credentials
+            .get_service_endpoint_option("cloudformation")
+        {
             override_url.to_string()
         } else {
             format!(

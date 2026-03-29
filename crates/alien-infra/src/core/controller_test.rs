@@ -390,8 +390,10 @@ impl SingleControllerExecutor {
         if let Some(resource_state) = self.stack_state.resources.get_mut(&self.resource_id) {
             resource_state.status = self.controller.get_status();
             resource_state.outputs = self.controller.get_outputs();
-            resource_state.internal_state =
-                Some(crate::core::serialize_controller(&*self.controller).expect("controller serialization"));
+            resource_state.internal_state = Some(
+                crate::core::serialize_controller(&*self.controller)
+                    .expect("controller serialization"),
+            );
         }
 
         Ok(step_result)
@@ -826,7 +828,8 @@ impl SingleControllerExecutorBuilder {
                 None
             } else {
                 Some(
-                    crate::core::serialize_controller(&**dep_controller).expect("controller serialization"),
+                    crate::core::serialize_controller(&**dep_controller)
+                        .expect("controller serialization"),
                 )
             };
 
@@ -975,7 +978,8 @@ impl SingleControllerExecutorBuilder {
                     None
                 } else {
                     Some(
-                        crate::core::serialize_controller(&*mock_controller).expect("controller serialization"),
+                        crate::core::serialize_controller(&*mock_controller)
+                            .expect("controller serialization"),
                     )
                 };
 

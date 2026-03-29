@@ -20,7 +20,6 @@ pub use workspace::{workspace_task, WorkspaceArgs};
 
 use clap::Subcommand;
 
-/// All platform-specific subcommands, flattened into the top-level CLI.
 #[derive(Subcommand, Debug, Clone)]
 pub enum PlatformCommand {
     /// Perform login & select default workspace

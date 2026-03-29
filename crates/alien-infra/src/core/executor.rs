@@ -836,8 +836,8 @@ impl StackExecutor {
                         Some(serde_json::to_value(binding).into_alien_error().context(
                             ErrorData::ResourceStateSerializationFailed {
                                 resource_id: resource_id.clone(),
-                                message: "Failed to serialize external binding parameters"
-                                    .to_string(),
+                                message:
+                                    "Failed to serialize external binding parameters".to_string(),
                             },
                         )?);
                 }

@@ -98,10 +98,7 @@ pub async fn step(
     // Pending, UpdatePending, Delete*, and *Failed handlers that receive the
     // stack directly; InitialSetup/Provisioning/Running/Updating get it from
     // runtime_metadata.prepared_stack instead).
-    let target_stack = current
-        .target_release
-        .as_ref()
-        .map(|r| r.stack.clone());
+    let target_stack = current.target_release.as_ref().map(|r| r.stack.clone());
 
     // Use provided service provider or default
     let service_provider = service_provider.unwrap_or_else(|| {

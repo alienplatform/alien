@@ -63,7 +63,11 @@ impl AzureResourcesClient {
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -87,7 +91,8 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.token_cache.config().subscription_id, resource_group_name
+            self.token_cache.config().subscription_id,
+            resource_group_name
         );
         let url = self
             .base
@@ -170,7 +175,8 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<crate::azure::long_running_operation::OperationResult<()>> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.token_cache.config().subscription_id, resource_group_name
+            self.token_cache.config().subscription_id,
+            resource_group_name
         );
         let url = self
             .base
@@ -212,7 +218,8 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.token_cache.config().subscription_id, resource_group_name
+            self.token_cache.config().subscription_id,
+            resource_group_name
         );
         let url = self
             .base
@@ -291,7 +298,8 @@ impl ResourcesApi for AzureResourcesClient {
     async fn get_resource_group(&self, resource_group_name: &str) -> Result<ResourceGroup> {
         let path = format!(
             "/subscriptions/{}/resourcegroups/{}",
-            self.token_cache.config().subscription_id, resource_group_name
+            self.token_cache.config().subscription_id,
+            resource_group_name
         );
         let url = self
             .base
@@ -357,7 +365,8 @@ impl ResourcesApi for AzureResourcesClient {
     async fn get_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}",
-            self.token_cache.config().subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id,
+            resource_provider_namespace
         );
         let url = self
             .base
@@ -428,7 +437,8 @@ impl ResourcesApi for AzureResourcesClient {
     ) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}/register",
-            self.token_cache.config().subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id,
+            resource_provider_namespace
         );
         let url = self
             .base
@@ -511,7 +521,8 @@ impl ResourcesApi for AzureResourcesClient {
     async fn unregister_provider(&self, resource_provider_namespace: &str) -> Result<Provider> {
         let path = format!(
             "/subscriptions/{}/providers/{}/unregister",
-            self.token_cache.config().subscription_id, resource_provider_namespace
+            self.token_cache.config().subscription_id,
+            resource_provider_namespace
         );
         let url = self
             .base

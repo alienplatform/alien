@@ -36,8 +36,8 @@ use alien_azure_clients::models::managedservices::{
     RegistrationAssignmentPropertiesProvisioningState, RegistrationDefinition,
     RegistrationDefinitionProperties,
 };
-use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_azure_clients::AzureTokenCache;
+use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 use alien_client_core::{Error, ErrorData};
 use alien_error::AlienError;
 use reqwest::Client;
@@ -134,27 +134,36 @@ impl AsyncTestContext for ManagedServicesTestContext {
         };
 
         let client = Client::new();
-        let management_client =
-            AzureManagedServicesClient::new(client.clone(), AzureTokenCache::new(management_client_config.clone()));
-        let management_identity_client =
-            AzureManagedIdentityClient::new(client.clone(), AzureTokenCache::new(management_client_config));
-        let target_client = AzureManagedServicesClient::new(client, AzureTokenCache::new(target_client_config));
+        let management_client = AzureManagedServicesClient::new(
+            client.clone(),
+            AzureTokenCache::new(management_client_config.clone()),
+        );
+        let management_identity_client = AzureManagedIdentityClient::new(
+            client.clone(),
+            AzureTokenCache::new(management_client_config),
+        );
+        let target_client =
+            AzureManagedServicesClient::new(client, AzureTokenCache::new(target_client_config));
 
         info!("🔧 Azure Lighthouse Test Setup:");
         info!(
             "   Management Tenant: {} (Subscription: {})",
-            management_client.token_cache.config().tenant_id, management_subscription_id
+            management_client.token_cache.config().tenant_id,
+            management_subscription_id
         );
         info!(
             "   Target Tenant: {} (Subscription: {})",
-            target_client.token_cache.config().tenant_id, target_subscription_id
+            target_client.token_cache.config().tenant_id,
+            target_subscription_id
         );
         info!("   ⚠️  REQUIRED: Target service principal must have Owner or User Access Administrator role on target subscription");
         info!("   ⚠️  To grant permissions, run in target subscription:");
         info!("       az role assignment create --assignee <target-service-principal-id> --role Owner --scope /subscriptions/{}", target_subscription_id);
 
         // Validate that we have different tenants and subscriptions for proper Lighthouse testing
-        if management_client.token_cache.config().tenant_id == target_client.token_cache.config().tenant_id {
+        if management_client.token_cache.config().tenant_id
+            == target_client.token_cache.config().tenant_id
+        {
             panic!("❌ Management and target tenants must be different for Azure Lighthouse testing. Both are: {}", management_client.token_cache.config().tenant_id);
         }
 

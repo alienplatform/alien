@@ -3,6 +3,7 @@
 use crate::auth::AuthHttp;
 use crate::error::{ErrorData, Result};
 use crate::git_utils;
+use crate::interaction::InteractionMode;
 use crate::output::{can_prompt, prompt_confirm, prompt_select, prompt_text};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types;
@@ -59,7 +60,9 @@ pub fn get_project_link_status<P: AsRef<Path>>(dir: P) -> ProjectLinkStatus {
             Ok(link) => ProjectLinkStatus::Linked(link),
             Err(error) => ProjectLinkStatus::Error(format!("Invalid project link file: {error}")),
         },
-        Err(error) => ProjectLinkStatus::Error(format!("Failed to read project link file: {error}")),
+        Err(error) => {
+            ProjectLinkStatus::Error(format!("Failed to read project link file: {error}"))
+        }
     }
 }
 
@@ -97,13 +100,13 @@ pub fn save_project_link<P: AsRef<Path>>(dir: P, link: &ProjectLink) -> Result<(
 pub fn remove_project_link<P: AsRef<Path>>(dir: P) -> Result<()> {
     let project_file = dir.as_ref().join(ALIEN_DIR).join(PROJECT_FILE);
     if project_file.exists() {
-        fs::remove_file(&project_file)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
+        fs::remove_file(&project_file).into_alien_error().context(
+            ErrorData::FileOperationFailed {
                 operation: "remove".to_string(),
                 file_path: project_file.display().to_string(),
                 reason: "Failed to remove project link".to_string(),
-            })?;
+            },
+        )?;
     }
 
     Ok(())
@@ -151,6 +154,7 @@ pub async fn choose_or_create_project(
     dir: &Path,
     allow_prompt: bool,
 ) -> Result<types::ProjectListItemResponse> {
+    let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let client = http.sdk_client();
     let workspace_param = types::ListProjectsWorkspace::try_from(workspace)
         .into_alien_error()
@@ -175,13 +179,9 @@ pub async fn choose_or_create_project(
         return create_new_project(client, workspace, suggested_name, dir, allow_prompt).await;
     }
 
-    if !allow_prompt || !can_prompt() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message:
-                "Project selection requires a real terminal. Pass `--project <name>` to use an existing project or run `alien link` interactively."
-                    .to_string(),
-        }));
-    }
+    interaction.require_prompt(
+        "Project selection requires a real terminal. Pass `--project <name>` to use an existing project or run `alien link` interactively.",
+    )?;
 
     let mut choices: Vec<String> = existing_projects
         .iter()
@@ -211,10 +211,11 @@ pub async fn create_new_project(
     dir: &Path,
     allow_prompt: bool,
 ) -> Result<types::ProjectListItemResponse> {
+    let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let project_name = match suggested_name {
-        Some(name) if allow_prompt && can_prompt() => prompt_text("Project name", Some(name))?,
+        Some(name) if !interaction.is_machine() => prompt_text("Project name", Some(name))?,
         Some(name) => name.to_string(),
-        None if allow_prompt && can_prompt() => prompt_text("Project name", None)?,
+        None if !interaction.is_machine() => prompt_text("Project name", None)?,
         None => {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message:
@@ -316,23 +317,25 @@ pub async fn create_new_project(
             .transpose()?,
         git_repository: response
             .git_repository
-            .map(|git_repository| -> Result<types::ProjectListItemResponseGitRepository> {
-                Ok(types::ProjectListItemResponseGitRepository {
-                    repo: types::ProjectListItemResponseGitRepositoryRepo::try_from(
-                        git_repository.repo.as_str(),
-                    )
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "git_repository_repo".to_string(),
-                        message: "Invalid git repository in response".to_string(),
-                    })?,
-                    type_: match git_repository.type_ {
-                        types::CreateProjectResponseGitRepositoryType::Github => {
-                            types::ProjectListItemResponseGitRepositoryType::Github
-                        }
-                    },
-                })
-            })
+            .map(
+                |git_repository| -> Result<types::ProjectListItemResponseGitRepository> {
+                    Ok(types::ProjectListItemResponseGitRepository {
+                        repo: types::ProjectListItemResponseGitRepositoryRepo::try_from(
+                            git_repository.repo.as_str(),
+                        )
+                        .into_alien_error()
+                        .context(ErrorData::ValidationError {
+                            field: "git_repository_repo".to_string(),
+                            message: "Invalid git repository in response".to_string(),
+                        })?,
+                        type_: match git_repository.type_ {
+                            types::CreateProjectResponseGitRepositoryType::Github => {
+                                types::ProjectListItemResponseGitRepositoryType::Github
+                            }
+                        },
+                    })
+                },
+            )
             .transpose()?,
         deployment_page_background: None,
         packages_config: None,
@@ -356,16 +359,15 @@ pub async fn ensure_project_linked<P: AsRef<Path>>(
     workspace: &str,
     allow_prompt: bool,
 ) -> Result<ProjectLink> {
+    let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     match get_project_link_status(&dir) {
-        ProjectLinkStatus::Linked(link) => validate_linked_project(http, workspace, link, allow_prompt).await,
+        ProjectLinkStatus::Linked(link) => {
+            validate_linked_project(http, workspace, link, allow_prompt).await
+        }
         ProjectLinkStatus::NotLinked => {
-            if !allow_prompt || !can_prompt() {
-                return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message:
-                        "No project is linked to this directory. Run `alien link`, or pass `--project <name>`."
-                            .to_string(),
-                }));
-            }
+            interaction.require_prompt(
+                "No project is linked to this directory. Run `alien link`, or pass `--project <name>`.",
+            )?;
 
             let dir = dir.as_ref();
             if !prompt_confirm(&format!("Set up and link \"{}\"?", dir.display()), true)? {
@@ -401,6 +403,7 @@ async fn validate_linked_project(
     link: ProjectLink,
     allow_prompt: bool,
 ) -> Result<ProjectLink> {
+    let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let client = http.sdk_client();
     let workspace_param = types::GetProjectWorkspace::try_from(workspace)
         .into_alien_error()
@@ -424,7 +427,7 @@ async fn validate_linked_project(
         .await
     {
         Ok(_) => Ok(link),
-        Err(_) if allow_prompt && can_prompt() => Err(AlienError::new(ErrorData::ConfigurationError {
+        Err(_) if !interaction.is_machine() => Err(AlienError::new(ErrorData::ConfigurationError {
             message:
                 "The linked project no longer exists. Run `alien link --force` to choose a new project."
                     .to_string(),
@@ -465,7 +468,9 @@ pub async fn get_project_by_name(
         .into_inner()
         .items
         .into_iter()
-        .find(|project| project.name.as_str() == project_name || project.id.as_str() == project_name)
+        .find(|project| {
+            project.name.as_str() == project_name || project.id.as_str() == project_name
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::InvalidProjectName {
                 project_name: project_name.to_string(),
@@ -478,4 +483,102 @@ pub async fn get_project_by_name(
         project.id.as_str().to_string(),
         project.name.as_str().to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn get_project_link_status_reports_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        assert!(matches!(
+            get_project_link_status(temp_dir.path()),
+            ProjectLinkStatus::NotLinked
+        ));
+    }
+
+    #[test]
+    fn save_project_link_writes_file_and_gitignore() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join(".gitignore"), "node_modules\n").unwrap();
+        let link = ProjectLink::new(
+            "workspace".to_string(),
+            "project_123".to_string(),
+            "demo".to_string(),
+        );
+
+        save_project_link(temp_dir.path(), &link).unwrap();
+
+        let stored =
+            fs::read_to_string(temp_dir.path().join(".alien").join("project.json")).unwrap();
+        assert!(stored.contains("\"projectId\": \"project_123\""));
+
+        let gitignore = fs::read_to_string(temp_dir.path().join(".gitignore")).unwrap();
+        assert!(gitignore.contains(".alien"));
+    }
+
+    #[test]
+    fn save_project_link_updates_gitignore_idempotently() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join(".gitignore"), ".alien\n").unwrap();
+        let link = ProjectLink::new(
+            "workspace".to_string(),
+            "project_123".to_string(),
+            "demo".to_string(),
+        );
+
+        save_project_link(temp_dir.path(), &link).unwrap();
+
+        let gitignore = fs::read_to_string(temp_dir.path().join(".gitignore")).unwrap();
+        assert_eq!(
+            gitignore.lines().filter(|line| *line == ".alien").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn get_project_link_status_reports_invalid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let alien_dir = temp_dir.path().join(".alien");
+        fs::create_dir_all(&alien_dir).unwrap();
+        fs::write(alien_dir.join("project.json"), "{not-json").unwrap();
+
+        match get_project_link_status(temp_dir.path()) {
+            ProjectLinkStatus::Error(message) => {
+                assert!(message.contains("Invalid project link file"));
+            }
+            status => panic!("expected invalid link error, got {status:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_project_link_is_idempotent() {
+        let temp_dir = TempDir::new().unwrap();
+        let link = ProjectLink::new(
+            "workspace".to_string(),
+            "project_123".to_string(),
+            "demo".to_string(),
+        );
+        save_project_link(temp_dir.path(), &link).unwrap();
+
+        remove_project_link(temp_dir.path()).unwrap();
+        remove_project_link(temp_dir.path()).unwrap();
+
+        assert!(matches!(
+            get_project_link_status(temp_dir.path()),
+            ProjectLinkStatus::NotLinked
+        ));
+    }
+
+    #[test]
+    fn suggest_project_name_normalizes_directory_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path().join("My Demo App");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        assert_eq!(suggest_project_name(&project_dir), "my-demo-app");
+    }
 }

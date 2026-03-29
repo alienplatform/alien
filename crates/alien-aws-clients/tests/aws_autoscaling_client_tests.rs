@@ -93,8 +93,14 @@ impl AsyncTestContext for AutoScalingTestContext {
             service_overrides: None,
         };
 
-        let asg_client = AutoScalingClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config.clone()));
-        let ec2_client = Ec2Client::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let asg_client = AutoScalingClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
+        let ec2_client = Ec2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         // Find a default subnet for ASG tests
         let default_subnet_id = Self::find_default_subnet(&ec2_client).await;
@@ -705,7 +711,10 @@ async fn test_auto_scaling_client_with_invalid_credentials(_ctx: &mut AutoScalin
         },
         service_overrides: None,
     };
-    let invalid_client = AutoScalingClient::new(Client::new(), AwsCredentialProvider::from_config_sync(invalid_config));
+    let invalid_client = AutoScalingClient::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(invalid_config),
+    );
 
     info!("🔐 Testing Auto Scaling client with invalid credentials");
 

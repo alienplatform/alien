@@ -81,7 +81,10 @@ impl AsyncTestContext for CloudFormationTestContext {
             },
             service_overrides: None,
         };
-        let client = CloudFormationClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = CloudFormationClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         CloudFormationTestContext {
             client,
@@ -834,7 +837,10 @@ async fn test_cloudformation_client_with_invalid_credentials(ctx: &mut CloudForm
         },
         service_overrides: None,
     };
-    let cf_client = CloudFormationClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+    let cf_client = CloudFormationClient::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     info!("🔐 Testing CloudFormation client with invalid credentials");
 

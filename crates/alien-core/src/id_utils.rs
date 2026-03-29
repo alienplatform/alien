@@ -5,6 +5,7 @@ use regex::Regex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdType {
     Event,
+    Deployment,
 }
 
 /// Configuration for ID generation
@@ -29,6 +30,7 @@ impl IdConfig {
 const fn get_id_config(id_type: IdType) -> IdConfig {
     match id_type {
         IdType::Event => IdConfig::new("event", false, 28),
+        IdType::Deployment => IdConfig::new("ag", true, 28),
     }
 }
 
@@ -141,4 +143,17 @@ pub fn id_error_message(id_type: IdType) -> String {
         config.prefix,
         alphabet_desc
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_ids_match_platform_schema_shape() {
+        let id = new_id(IdType::Deployment);
+        let pattern = Regex::new(&id_regex_pattern(IdType::Deployment)).unwrap();
+        assert!(pattern.is_match(&id), "unexpected deployment id: {id}");
+        assert!(id.starts_with("ag_"));
+    }
 }

@@ -72,6 +72,27 @@ use std::{error::Error as StdError, fmt};
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HumanLayerPresentation {
+    #[default]
+    Normal,
+    Transparent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanErrorCause {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanErrorReport {
+    pub code: String,
+    pub message: String,
+    pub hint: Option<String>,
+    pub causes: Vec<HumanErrorCause>,
+}
+
 /// Data every public-facing error variant must expose.
 pub trait AlienErrorData {
     /// Short machine-readable identifier ("NOT_FOUND", "TIMEOUT", …).
@@ -107,6 +128,16 @@ pub trait AlienErrorData {
     /// Returns None if this error should inherit from source, Some(value) for explicit value.
     fn http_status_code_inherit(&self) -> Option<u16> {
         Some(self.http_status_code())
+    }
+
+    /// Controls whether this error layer should be shown in the default human CLI renderer.
+    fn human_layer_presentation(&self) -> HumanLayerPresentation {
+        HumanLayerPresentation::Normal
+    }
+
+    /// Optional actionable hint for human-facing CLI output.
+    fn hint(&self) -> Option<String> {
+        None
     }
 }
 
@@ -188,6 +219,11 @@ where
     #[cfg_attr(feature = "openapi", schema(nullable = true))]
     pub context: Option<serde_json::Value>,
 
+    /// Optional human-facing remediation hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = true))]
+    pub hint: Option<String>,
+
     /// Indicates whether the operation that caused the error should be retried.
     ///
     /// When `true`, the error is transient and the operation might succeed
@@ -220,6 +256,10 @@ where
     #[cfg_attr(feature = "openapi", schema(value_type = Option<serde_json::Value>))]
     pub source: Option<Box<AlienError<GenericError>>>,
 
+    #[serde(skip, default)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub human_layer_presentation: HumanLayerPresentation,
+
     /// The original error for pattern matching
     #[serde(
         rename = "_error_for_pattern_matching",
@@ -239,10 +279,12 @@ where
             code: meta.code().to_string(),
             message: meta.message(),
             context: meta.context(),
+            hint: meta.hint(),
             retryable: meta.retryable(),
             internal: meta.internal(),
             http_status_code: Some(meta.http_status_code()),
             source: None,
+            human_layer_presentation: meta.human_layer_presentation(),
             error: Some(meta),
         }
     }
@@ -262,10 +304,12 @@ impl AlienError<GenericError> {
             code: generic.code().to_string(),
             message: generic.message(),
             context: generic.context(),
+            hint: generic.hint(),
             retryable: generic.retryable(),
             internal: generic.internal(),
             http_status_code: Some(generic.http_status_code()),
             source,
+            human_layer_presentation: HumanLayerPresentation::Normal,
             error: Some(generic),
         }
     }
@@ -346,9 +390,11 @@ where
                 code: err.code.clone(),
                 message: err.message.clone(),
                 context: err.context.clone(),
+                hint: err.hint.clone(),
                 retryable: err.retryable,
                 internal: err.internal,
                 source: err.source,
+                human_layer_presentation: err.human_layer_presentation,
                 error: None,
                 http_status_code: err.http_status_code,
             };
@@ -396,9 +442,11 @@ where
             code: self.code.clone(),
             message: self.message.clone(),
             context: self.context.clone(),
+            hint: self.hint.clone(),
             retryable: self.retryable,
             internal: self.internal,
             source: self.source,
+            human_layer_presentation: self.human_layer_presentation,
             error: None,
             http_status_code: self.http_status_code,
         };
@@ -451,12 +499,103 @@ where
             code: self.code,
             message: self.message,
             context: self.context,
+            hint: self.hint,
             retryable: self.retryable,
             internal: self.internal,
             source: self.source,
+            human_layer_presentation: self.human_layer_presentation,
             error: None,
             http_status_code: self.http_status_code,
         }
+    }
+
+    pub fn human_report(&self) -> HumanErrorReport {
+        let mut layers = Vec::new();
+        collect_human_layers(
+            &self.code,
+            &self.message,
+            self.hint.as_deref(),
+            self.human_layer_presentation,
+            self.source.as_deref(),
+            &mut layers,
+        );
+
+        let headline_index = layers
+            .iter()
+            .position(|layer| layer.presentation == HumanLayerPresentation::Normal)
+            .unwrap_or(0);
+        let headline = &layers[headline_index];
+
+        let mut causes = Vec::new();
+        for (index, layer) in layers.iter().enumerate() {
+            if index == headline_index || layer.presentation == HumanLayerPresentation::Transparent
+            {
+                continue;
+            }
+
+            if causes.iter().any(|cause: &HumanErrorCause| {
+                cause.code == layer.code && cause.message == layer.message
+            }) {
+                continue;
+            }
+
+            causes.push(HumanErrorCause {
+                code: layer.code.clone(),
+                message: layer.message.clone(),
+            });
+        }
+
+        HumanErrorReport {
+            code: headline.code.clone(),
+            message: headline.message.clone(),
+            hint: headline.hint.clone().or_else(|| {
+                layers
+                    .iter()
+                    .enumerate()
+                    .find(|(index, layer)| {
+                        *index != headline_index
+                            && layer.presentation == HumanLayerPresentation::Normal
+                            && layer.hint.is_some()
+                    })
+                    .and_then(|(_, layer)| layer.hint.clone())
+            }),
+            causes,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HumanLayer {
+    code: String,
+    message: String,
+    hint: Option<String>,
+    presentation: HumanLayerPresentation,
+}
+
+fn collect_human_layers(
+    code: &str,
+    message: &str,
+    hint: Option<&str>,
+    presentation: HumanLayerPresentation,
+    source: Option<&AlienError<GenericError>>,
+    layers: &mut Vec<HumanLayer>,
+) {
+    layers.push(HumanLayer {
+        code: code.to_string(),
+        message: message.to_string(),
+        hint: hint.map(ToOwned::to_owned),
+        presentation,
+    });
+
+    if let Some(source) = source {
+        collect_human_layers(
+            &source.code,
+            &source.message,
+            source.hint.as_deref(),
+            source.human_layer_presentation,
+            source.source.as_deref(),
+            layers,
+        );
     }
 }
 
@@ -549,5 +688,106 @@ where
 
         // Return JSON response with the error
         (status_code, Json(response_error)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize)]
+    enum TestError {
+        Normal,
+        Transparent,
+        Hint,
+    }
+
+    impl AlienErrorData for TestError {
+        fn code(&self) -> &'static str {
+            match self {
+                Self::Normal => "NORMAL",
+                Self::Transparent => "WRAPPER",
+                Self::Hint => "HINT",
+            }
+        }
+
+        fn retryable(&self) -> bool {
+            false
+        }
+
+        fn internal(&self) -> bool {
+            false
+        }
+
+        fn message(&self) -> String {
+            match self {
+                Self::Normal => "Inner failure".to_string(),
+                Self::Transparent => "Wrapper failure".to_string(),
+                Self::Hint => "Action required".to_string(),
+            }
+        }
+
+        fn human_layer_presentation(&self) -> HumanLayerPresentation {
+            match self {
+                Self::Normal => HumanLayerPresentation::Normal,
+                Self::Transparent => HumanLayerPresentation::Transparent,
+                Self::Hint => HumanLayerPresentation::Normal,
+            }
+        }
+
+        fn hint(&self) -> Option<String> {
+            match self {
+                Self::Hint => Some("Run the setup command first.".to_string()),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn human_report_skips_transparent_wrappers() {
+        let err = Err::<(), _>(AlienError::new(TestError::Normal))
+            .context(TestError::Transparent)
+            .unwrap_err();
+
+        let report = err.human_report();
+        assert_eq!(report.code, "NORMAL");
+        assert_eq!(report.message, "Inner failure");
+        assert!(report.causes.is_empty());
+    }
+
+    #[test]
+    fn human_report_keeps_distinct_non_transparent_causes() {
+        let source = AlienError::new(GenericError {
+            message: "Socket closed".to_string(),
+        });
+        let err = Err::<(), _>(source).context(TestError::Normal).unwrap_err();
+
+        let report = err.human_report();
+        assert_eq!(report.code, "NORMAL");
+        assert_eq!(report.message, "Inner failure");
+        assert_eq!(report.causes.len(), 1);
+        assert_eq!(report.causes[0].code, "GENERIC_ERROR");
+        assert_eq!(report.causes[0].message, "Socket closed");
+    }
+
+    #[test]
+    fn human_report_uses_headline_hint_when_present() {
+        let err = AlienError::new(TestError::Hint);
+        let report = err.human_report();
+
+        assert_eq!(report.code, "HINT");
+        assert_eq!(report.message, "Action required");
+        assert_eq!(report.hint.as_deref(), Some("Run the setup command first."));
+    }
+
+    #[test]
+    fn human_report_uses_first_visible_hint_from_causes() {
+        let err = Err::<(), _>(AlienError::new(TestError::Hint))
+            .context(TestError::Transparent)
+            .unwrap_err();
+        let report = err.human_report();
+
+        assert_eq!(report.code, "HINT");
+        assert_eq!(report.hint.as_deref(), Some("Run the setup command first."));
     }
 }

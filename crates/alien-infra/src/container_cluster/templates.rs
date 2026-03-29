@@ -15,8 +15,8 @@ use tracing::info;
 use crate::error::{ErrorData, Result};
 use crate::{AwsContainerClusterController, AwsContainerClusterState, ResourceController};
 use alien_aws_clients::iam::IamClient;
-use alien_aws_clients::IamApi;
 use alien_aws_clients::AwsCredentialProvider;
+use alien_aws_clients::IamApi;
 use alien_core::{ContainerCluster, Resource};
 use alien_error::{AlienError, Context};
 

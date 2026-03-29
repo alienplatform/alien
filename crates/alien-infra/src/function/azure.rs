@@ -177,6 +177,14 @@ pub struct AzureFunctionController {
     pub(crate) uses_custom_domain: bool,
     /// Timestamp when certificate was issued (for renewal detection)
     pub(crate) certificate_issued_at: Option<String>,
+
+    // Commands infrastructure
+    /// Service Bus namespace name for commands delivery
+    pub(crate) commands_namespace_name: Option<String>,
+    /// Service Bus queue name for commands delivery
+    pub(crate) commands_queue_name: Option<String>,
+    /// Dapr component name for commands queue
+    pub(crate) commands_dapr_component: Option<String>,
 }
 
 // ≡ Lifecycle implementation ===================================================
@@ -717,7 +725,201 @@ impl AzureFunctionController {
             info!(function=%func_cfg.id, "No queue triggers found, skipping Dapr component creation");
         }
 
-        // Always go to readiness probe next (linear flow)
+        // Go to commands infrastructure next
+        Ok(HandlerAction::Continue {
+            state: CreatingCommandsInfrastructure,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingCommandsInfrastructure,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_commands_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+
+        if !func_cfg.commands_enabled {
+            debug!(function=%func_cfg.id, "Commands not enabled, skipping commands infrastructure");
+            return Ok(HandlerAction::Continue {
+                state: RunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
+        let azure_config = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+
+        // Get the Service Bus namespace from the dependent resource
+        let namespace_ref = ResourceRef::new(
+            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+            "default-service-bus-namespace",
+        );
+        let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
+        let namespace_name = namespace_controller
+            .namespace_name
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func_cfg.id.clone(),
+                    dependency_id: namespace_ref.id.clone(),
+                })
+            })?
+            .clone();
+
+        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: func_cfg.id.clone(),
+                message: "Container app name not set in state".to_string(),
+            })
+        })?;
+
+        // Create commands queue in the Service Bus namespace
+        let queue_name = format!("{}-rq", container_app_name);
+        let mgmt = ctx
+            .service_provider
+            .get_azure_service_bus_management_client(azure_config)?;
+
+        info!(
+            function=%func_cfg.id,
+            namespace=%namespace_name,
+            queue=%queue_name,
+            "Creating commands Service Bus queue"
+        );
+
+        mgmt.create_or_update_queue(
+            resource_group_name.clone(),
+            namespace_name.clone(),
+            queue_name.clone(),
+            alien_azure_clients::models::queue::SbQueueProperties {
+                accessed_at: None,
+                auto_delete_on_idle: None,
+                count_details: None,
+                created_at: None,
+                dead_lettering_on_message_expiration: None,
+                default_message_time_to_live: None,
+                duplicate_detection_history_time_window: None,
+                enable_batched_operations: None,
+                enable_express: None,
+                enable_partitioning: None,
+                forward_dead_lettered_messages_to: None,
+                forward_to: None,
+                lock_duration: None,
+                max_delivery_count: None,
+                max_message_size_in_kilobytes: None,
+                max_size_in_megabytes: None,
+                message_count: None,
+                requires_duplicate_detection: None,
+                requires_session: None,
+                size_in_bytes: None,
+                status: None,
+                updated_at: None,
+            },
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create commands Service Bus queue '{}'",
+                queue_name
+            ),
+            resource_id: Some(func_cfg.id.clone()),
+        })?;
+
+        // Create Dapr component for commands queue
+        use alien_azure_clients::models::managed_environments_dapr_components::{
+            DaprComponent, DaprComponentProperties, DaprMetadata,
+        };
+
+        let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
+        let component_name = format!("servicebus-{}-commands", func_cfg.id);
+
+        let mut metadata = vec![
+            DaprMetadata {
+                name: Some("namespaceName".into()),
+                value: Some(ns_fqdn),
+                secret_ref: None,
+            },
+            DaprMetadata {
+                name: Some("consumerID".into()),
+                value: Some(format!("{}-commands", func_cfg.id)),
+                secret_ref: None,
+            },
+        ];
+
+        // Add client ID for user-assigned managed identity
+        let service_account_id = format!("{}-sa", func_cfg.get_permissions());
+        let service_account_ref = alien_core::ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.to_string(),
+        );
+        if let Ok(sa_state) = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )
+        {
+            if let Some(client_id) = &sa_state.identity_client_id {
+                metadata.push(DaprMetadata {
+                    name: Some("azureClientId".into()),
+                    value: Some(client_id.clone()),
+                    secret_ref: None,
+                });
+            }
+        }
+
+        let dapr_component = DaprComponent {
+            name: Some(component_name.clone()),
+            properties: Some(DaprComponentProperties {
+                component_type: Some("pubsub.azure.servicebus.queues".to_string()),
+                ignore_errors: false,
+                init_timeout: None,
+                version: Some("v1".to_string()),
+                metadata,
+                scopes: vec![func_cfg.id.clone()],
+                secret_store_component: None,
+                secrets: vec![],
+            }),
+            id: None,
+            system_data: None,
+            type_: None,
+        };
+
+        info!(
+            function=%func_cfg.id,
+            component=%component_name,
+            "Creating commands Dapr Service Bus component"
+        );
+
+        let client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_config)?;
+
+        client
+            .create_or_update_dapr_component(
+                &resource_group_name,
+                &environment_name,
+                &component_name,
+                &dapr_component,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create commands Dapr component '{}'",
+                    component_name
+                ),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        self.commands_namespace_name = Some(namespace_name);
+        self.commands_queue_name = Some(queue_name);
+        self.commands_dapr_component = Some(component_name);
+
+        info!(function=%func_cfg.id, "Commands Service Bus infrastructure created");
+
         Ok(HandlerAction::Continue {
             state: RunningReadinessProbe,
             suggested_delay: None,
@@ -1238,7 +1440,64 @@ impl AzureFunctionController {
         // Delete all Dapr components using best-effort approach (ignore NotFound)
         self.delete_all_dapr_components(ctx).await?;
 
-        // Always continue to DeletingApp state (linear flow)
+        // Continue to commands infrastructure cleanup
+        Ok(HandlerAction::Continue {
+            state: DeletingCommandsInfrastructure,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingCommandsInfrastructure,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_commands_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let azure_config = ctx.get_azure_config()?;
+
+        // Delete commands Dapr component (best-effort)
+        if let Some(component_name) = self.commands_dapr_component.take() {
+            let _ = azure_config;
+            warn!(
+                component=%component_name,
+                "Skipping commands Dapr component deletion because the Azure Container Apps client does not expose a delete API"
+            );
+        }
+
+        // Delete commands Service Bus queue (best-effort)
+        if let (Some(namespace_name), Some(queue_name)) = (
+            self.commands_namespace_name.take(),
+            self.commands_queue_name.take(),
+        ) {
+            let resource_group_name = get_resource_group_name(ctx.state)?;
+            info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
+            let mgmt = ctx
+                .service_provider
+                .get_azure_service_bus_management_client(azure_config)?;
+            match mgmt
+                .delete_queue(
+                    resource_group_name,
+                    namespace_name.clone(),
+                    queue_name.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!(queue=%queue_name, "Commands Service Bus queue deleted");
+                }
+                Err(e) => {
+                    warn!(
+                        queue=%queue_name,
+                        error=%e,
+                        "Failed to delete commands Service Bus queue (may already be deleted)"
+                    );
+                }
+            }
+        }
+
         Ok(HandlerAction::Continue {
             state: DeletingApp,
             suggested_delay: None,
@@ -1462,6 +1721,13 @@ impl AzureFunctionController {
                 url: self.url.clone(),
                 identifier: Some(id.clone()),
                 load_balancer_endpoint,
+                commands_push_target: match (
+                    &self.commands_namespace_name,
+                    &self.commands_queue_name,
+                ) {
+                    (Some(ns), Some(q)) => Some(format!("{}/{}", ns, q)),
+                    _ => None,
+                },
             })
         })
     }
@@ -1487,12 +1753,14 @@ impl AzureFunctionController {
                 private_url: BindingValue::Value("unknown-private-url".to_string()), // TODO: Store in controller
                 public_url: self.url.as_ref().map(|u| BindingValue::Value(u.clone())),
             });
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }
@@ -1851,9 +2119,8 @@ impl AzureFunctionController {
             // Use the permission-based service account identity for ACR pull
             if let Ok(service_account_state) = ctx
                 .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                    &service_account_ref,
-                )
-            {
+                &service_account_ref,
+            ) {
                 if let Some(identity_id) = &service_account_state.identity_resource_id {
                     registries.push(RegistryCredentials {
                         identity: Some(identity_id.clone()),
@@ -2168,6 +2435,9 @@ impl AzureFunctionController {
             keyvault_cert_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            commands_namespace_name: None,
+            commands_queue_name: None,
+            commands_dapr_component: None,
             _internal_stay_count: None,
         }
     }

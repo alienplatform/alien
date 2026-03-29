@@ -79,7 +79,10 @@ impl AsyncTestContext for IamTestContext {
             },
             service_overrides: None,
         };
-        let client = IamClient::new(Client::new(), AwsCredentialProvider::from_config_sync(aws_config));
+        let client = IamClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
 
         IamTestContext {
             client,
@@ -706,7 +709,10 @@ async fn test_iam_client_with_invalid_credentials(ctx: &mut IamTestContext) {
         },
         service_overrides: None,
     };
-    let iam_client = IamClient::new(client_invalid, AwsCredentialProvider::from_config_sync(aws_config));
+    let iam_client = IamClient::new(
+        client_invalid,
+        AwsCredentialProvider::from_config_sync(aws_config),
+    );
 
     info!("🔐 Testing IAM client with invalid credentials");
 

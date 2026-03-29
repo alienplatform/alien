@@ -70,8 +70,8 @@ fn try_lock_exclusive(file: &File, path: &Path) -> std::io::Result<()> {
     use fs2::FileExt;
 
     file.try_lock_exclusive().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::WouldBlock
-            || e.raw_os_error() == Some(33) /* ERROR_LOCK_VIOLATION */
+        if e.kind() == std::io::ErrorKind::WouldBlock || e.raw_os_error() == Some(33)
+        /* ERROR_LOCK_VIOLATION */
         {
             std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,

@@ -58,6 +58,8 @@ hostname = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 urlencoding = { workspace = true }
 futures = { workspace = true }
+console = "0.16"
+indicatif = "0.18.4"
 
 # Platform dependencies (behind "platform" feature)
 keyring = { version = "2", optional = true }

@@ -180,12 +180,23 @@ impl TestAlienAgent {
             .as_deref()
             .ok_or("Missing Helm namespace")?;
 
-        crate::cleanup::cleanup_helm_release(
-            release,
-            namespace,
-            self.kubeconfig.as_deref(),
-        )
-        .await
+        crate::cleanup::cleanup_helm_release(release, namespace, self.kubeconfig.as_deref()).await
+    }
+}
+
+impl TestAlienAgent {
+    /// Best-effort cleanup: stop container or helm uninstall. Errors are logged
+    /// but never propagated, making this safe for teardown paths.
+    pub async fn cleanup(self) {
+        if self.container_id.is_some() {
+            if let Err(e) = self.stop().await {
+                tracing::warn!(error = %e, "cleanup: failed to stop agent container");
+            }
+        } else if self.helm_release.is_some() {
+            if let Err(e) = self.helm_uninstall().await {
+                tracing::warn!(error = %e, "cleanup: failed to uninstall agent helm release");
+            }
+        }
     }
 }
 

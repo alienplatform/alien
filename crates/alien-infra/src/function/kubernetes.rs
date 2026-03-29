@@ -565,6 +565,7 @@ impl KubernetesFunctionController {
                 url: None, // URL comes from Helm-created Service/Ingress, not managed here
                 identifier: Some(format!("deployment/{}", deployment_name)),
                 load_balancer_endpoint: None,
+                commands_push_target: None, // Kubernetes uses polling
             }))
         } else {
             None
@@ -590,12 +591,14 @@ impl KubernetesFunctionController {
             };
 
             // Serialize to JSON
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }

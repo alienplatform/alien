@@ -11,6 +11,7 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use super::database::{db_error, RowParser, SqliteDatabase};
 use super::migrations::{DeploymentGroups, Deployments};
+use crate::ids;
 use crate::traits::deployment_store::*;
 
 pub struct SqliteDeploymentStore {
@@ -68,6 +69,7 @@ impl SqliteDeploymentStore {
             current_release_id: p.optional_string(9, "current_release_id")?,
             desired_release_id: p.optional_string(10, "desired_release_id")?,
             user_environment_variables,
+            management_config: None,
             retry_requested: retry_requested_int != 0,
             locked_by: p.optional_string(13, "locked_by")?,
             locked_at: p.optional_datetime(14, "locked_at")?,
@@ -95,7 +97,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError> {
-        let id = format!("dep_{}", Uuid::new_v4());
+        let id = ids::deployment_id();
         let now = Utc::now();
 
         let stack_settings_json = serde_json::to_string(&params.stack_settings)
@@ -177,6 +179,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             current_release_id: None,
             desired_release_id: None,
             user_environment_variables: params.environment_variables,
+            management_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,

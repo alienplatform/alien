@@ -19,7 +19,7 @@ use alien_gcp_clients::compute::{
     TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription};
+use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - functions now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, Network,
@@ -77,6 +77,12 @@ pub struct GcpFunctionController {
     pub(crate) global_address_name: Option<String>,
     /// The forwarding rule name
     pub(crate) forwarding_rule_name: Option<String>,
+
+    // Commands infrastructure
+    /// Pub/Sub topic name for commands delivery (projects/{project}/topics/{name})
+    pub(crate) commands_topic_name: Option<String>,
+    /// Pub/Sub subscription name for commands delivery
+    pub(crate) commands_subscription_name: Option<String>,
 }
 
 #[controller]
@@ -874,7 +880,159 @@ impl GcpFunctionController {
             info!(function=%cfg.id, "No queue triggers found, skipping push subscription creation");
         }
 
-        // Always go to SettingIamPolicy next (linear flow)
+        // Go to commands infrastructure next
+        Ok(HandlerAction::Continue {
+            state: CreatingCommandsInfrastructure,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingCommandsInfrastructure,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_commands_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Function>()?;
+
+        if !cfg.commands_enabled {
+            debug!(function=%cfg.id, "Commands not enabled, skipping commands infrastructure");
+            return Ok(HandlerAction::Continue {
+                state: SettingIamPolicy,
+                suggested_delay: None,
+            });
+        }
+
+        let gcp_config = ctx.get_gcp_config()?;
+        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+
+        let service_name = self.service_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Service name not set in state".to_string(),
+            })
+        })?;
+
+        // Create commands Pub/Sub topic
+        let topic_short_name = format!("{}-rq", service_name);
+        let topic_full_name = format!(
+            "projects/{}/topics/{}",
+            gcp_config.project_id, topic_short_name
+        );
+
+        info!(
+            function=%cfg.id,
+            topic=%topic_full_name,
+            "Creating commands Pub/Sub topic"
+        );
+
+        pubsub_client
+            .create_topic(topic_short_name.clone(), Topic::default())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create commands Pub/Sub topic '{}'",
+                    topic_short_name
+                ),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+
+        // Create push subscription that delivers to the Cloud Run service
+        let subscription_name = format!("{}-rq-sub", service_name);
+        let service_url = self.url.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Service URL not available for commands push subscription".to_string(),
+            })
+        })?;
+
+        let push_endpoint = format!("{}/", service_url.trim_end_matches('/'));
+
+        // Get service account email for OIDC authentication
+        let service_account_id = format!("{}-sa", cfg.get_permissions());
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.to_string(),
+        );
+
+        let service_account_state = ctx
+            .require_dependency::<crate::service_account::GcpServiceAccountController>(
+                &service_account_ref,
+            )?;
+        let service_account_email = service_account_state
+            .service_account_email
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: cfg.id().to_string(),
+                    dependency_id: service_account_id.to_string(),
+                })
+            })?
+            .to_string();
+
+        let oidc_token = OidcToken {
+            service_account_email: service_account_email.clone(),
+            audience: Some(push_endpoint.clone()),
+        };
+
+        let push_config = PushConfig {
+            push_endpoint: Some(push_endpoint.clone()),
+            attributes: Some(std::collections::HashMap::new()),
+            oidc_token: Some(oidc_token),
+            pubsub_wrapper: None,
+            no_wrapper: None,
+        };
+
+        let subscription = Subscription {
+            name: Some(subscription_name.clone()),
+            topic: Some(topic_full_name.clone()),
+            push_config: Some(push_config),
+            ack_deadline_seconds: Some(cfg.timeout_seconds as i32),
+            retain_acked_messages: Some(false),
+            message_retention_duration: None,
+            labels: Some(std::collections::HashMap::from([
+                ("alien-commands".to_string(), cfg.id.clone()),
+                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
+            ])),
+            enable_message_ordering: Some(false),
+            expiration_policy: None,
+            filter: None,
+            dead_letter_policy: None,
+            retry_policy: None,
+            detached: Some(false),
+            state: None,
+            analytics_hub_subscription_info: None,
+            bigquery_config: None,
+            cloud_storage_config: None,
+        };
+
+        info!(
+            function=%cfg.id,
+            topic=%topic_full_name,
+            subscription=%subscription_name,
+            endpoint=%push_endpoint,
+            "Creating commands Pub/Sub push subscription"
+        );
+
+        pubsub_client
+            .create_subscription(subscription_name.clone(), subscription)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create commands push subscription '{}'",
+                    subscription_name
+                ),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+
+        self.commands_topic_name = Some(topic_full_name);
+        self.commands_subscription_name = Some(subscription_name);
+
+        info!(function=%cfg.id, "Commands Pub/Sub infrastructure created");
+
         Ok(HandlerAction::Continue {
             state: SettingIamPolicy,
             suggested_delay: None,
@@ -1717,7 +1875,68 @@ impl GcpFunctionController {
         // Delete all push subscriptions using best-effort approach (ignore NotFound)
         self.delete_all_push_subscriptions(ctx, gcp_config).await?;
 
-        // Always continue to DeletingService state (linear flow)
+        // Continue to commands infrastructure cleanup
+        Ok(HandlerAction::Continue {
+            state: DeletingCommandsInfrastructure,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingCommandsInfrastructure,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_commands_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let gcp_config = ctx.get_gcp_config()?;
+        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+
+        // Delete commands subscription (best-effort)
+        if let Some(subscription_name) = self.commands_subscription_name.take() {
+            info!(subscription=%subscription_name, "Deleting commands push subscription");
+            match pubsub_client
+                .delete_subscription(subscription_name.clone())
+                .await
+            {
+                Ok(_) => {
+                    info!(subscription=%subscription_name, "Commands push subscription deleted");
+                }
+                Err(e) => {
+                    warn!(
+                        subscription=%subscription_name,
+                        error=%e,
+                        "Failed to delete commands push subscription (may already be deleted)"
+                    );
+                }
+            }
+        }
+
+        // Delete commands topic (best-effort)
+        if let Some(topic_name) = self.commands_topic_name.take() {
+            // Extract short topic name from full path
+            let topic_short = topic_name
+                .split('/')
+                .last()
+                .unwrap_or(&topic_name)
+                .to_string();
+            info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
+            match pubsub_client.delete_topic(topic_short).await {
+                Ok(_) => {
+                    info!(topic=%topic_name, "Commands Pub/Sub topic deleted");
+                }
+                Err(e) => {
+                    warn!(
+                        topic=%topic_name,
+                        error=%e,
+                        "Failed to delete commands Pub/Sub topic (may already be deleted)"
+                    );
+                }
+            }
+        }
+
         Ok(HandlerAction::Continue {
             state: DeletingService,
             suggested_delay: None,
@@ -1957,6 +2176,7 @@ impl GcpFunctionController {
                 url: Some(url.clone()),
                 identifier: self.service_name.clone(),
                 load_balancer_endpoint,
+                commands_push_target: self.commands_topic_name.clone(),
             })
         })
     }
@@ -1974,12 +2194,14 @@ impl GcpFunctionController {
                 private_url: BindingValue::Value(url.clone()),
                 public_url: Some(BindingValue::Value(url.clone())),
             });
-            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: "binding".to_string(),
-                    message: "Failed to serialize binding parameters".to_string(),
-                },
-            )?))
+            Ok(Some(
+                serde_json::to_value(binding).into_alien_error().context(
+                    ErrorData::ResourceStateSerializationFailed {
+                        resource_id: "binding".to_string(),
+                        message: "Failed to serialize binding parameters".to_string(),
+                    },
+                )?,
+            ))
         } else {
             Ok(None)
         }
@@ -2752,6 +2974,8 @@ impl GcpFunctionController {
             target_https_proxy_name: None,
             global_address_name: None,
             forwarding_rule_name: None,
+            commands_topic_name: None,
+            commands_subscription_name: None,
             _internal_stay_count: None,
         }
     }

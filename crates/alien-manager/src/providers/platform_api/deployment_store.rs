@@ -149,6 +149,10 @@ impl DeploymentStore for PlatformApiDeploymentStore {
                 }
             });
 
+            let management_config = deployment_config
+                .as_ref()
+                .and_then(|c| c.management_config.clone());
+
             let record = DeploymentRecord {
                 id: deployment_id.clone(),
                 name: deployment_id.clone(),
@@ -168,6 +172,7 @@ impl DeploymentStore for PlatformApiDeploymentStore {
                     .as_ref()
                     .map(|r| r.release_id.clone()),
                 user_environment_variables: user_env_vars,
+                management_config,
                 retry_requested: current_state.retry_requested,
                 locked_by: None,
                 locked_at: None,
@@ -228,6 +233,7 @@ impl DeploymentStore for PlatformApiDeploymentStore {
             current_release_id: updated_state.current_release.map(|r| r.release_id),
             desired_release_id: updated_state.target_release.map(|r| r.release_id),
             user_environment_variables: None,
+            management_config: None,
             retry_requested: updated_state.retry_requested,
             locked_by: None,
             locked_at: None,

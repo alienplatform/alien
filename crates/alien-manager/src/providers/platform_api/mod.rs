@@ -4,7 +4,6 @@
 //! default SQLite-backed stores with implementations that delegate to the Alien
 //! Platform API (deployments, releases, tokens, credentials, telemetry, commands).
 
-pub mod command_dispatcher;
 pub mod command_registry;
 pub mod credential_resolver;
 pub mod deepstore_telemetry_backend;
@@ -16,7 +15,6 @@ pub mod release_store;
 pub mod token_validator;
 pub mod utils;
 
-pub use command_dispatcher::ManagedCommandDispatcher;
 pub use command_registry::PlatformCommandRegistry;
 pub use credential_resolver::ImpersonationCredentialResolver;
 pub use deepstore_telemetry_backend::DeepStoreTelemetryBackend;
