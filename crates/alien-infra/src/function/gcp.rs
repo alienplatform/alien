@@ -236,7 +236,7 @@ impl GcpFunctionController {
             })
         })?;
 
-        // Get the created service to extract the URL
+        // Get the created service to extract the URL and verify readiness
         let service = ctx
             .service_provider
             .get_gcp_cloudrun_client(gcp_config)?
@@ -246,6 +246,25 @@ impl GcpFunctionController {
                 message: "Failed to get Cloud Run service after creation".to_string(),
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
+
+        // Wait for the service to be Ready before proceeding. The create operation
+        // may complete before the first revision is fully serving traffic, so the
+        // Ready condition can still be false at this point.
+        let is_ready = service.conditions.iter().any(|c| {
+            c.r#type.as_deref() == Some("Ready")
+                && c.state
+                    .as_ref()
+                    .map(|s| s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded)
+                    .unwrap_or(false)
+        });
+
+        if !is_ready {
+            debug!(name=%service_name, "Service not yet ready after creation, waiting");
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
 
         let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
 
@@ -1135,7 +1154,9 @@ impl GcpFunctionController {
                 resource_id: Some(function_config.id.clone()),
             })?;
 
-        // Verify service is ready - drift is non-retryable
+        // Verify service is ready. A service can be temporarily not-Ready due to
+        // scaling events, GCP maintenance, or revision transitions. Use a retryable
+        // error to allow recovery instead of immediately failing the deployment.
         let is_ready = service.conditions.iter().any(|c| {
             c.r#type.as_deref() == Some("Ready")
                 && c.state
@@ -1145,10 +1166,13 @@ impl GcpFunctionController {
         });
 
         if !is_ready {
-            return Err(AlienError::new(ErrorData::ResourceDrift {
+            warn!(name=%function_config.id, "Cloud Run service is not in Ready state during heartbeat");
+            let mut err = AlienError::new(ErrorData::ResourceDrift {
                 resource_id: function_config.id.clone(),
                 message: "Cloud Run service is not in Ready state".to_string(),
-            }));
+            });
+            err.retryable = true;
+            return Err(err);
         }
 
         // Check for basic configuration drift - compare memory limits
