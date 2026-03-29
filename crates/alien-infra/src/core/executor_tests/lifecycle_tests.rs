@@ -464,7 +464,8 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
         ],
     );
 
-    // Delete Live first
+    // Phase 1: Delete Live — only E can be deleted.
+    // B and C cannot be deleted because D (Frozen) still depends on them.
     let live_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
     let state = run_to_synced(&live_deletion, state).await?;
 
@@ -474,6 +475,35 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
     );
     assert_eq!(
         get_status(&state, "resource-b"),
+        Some(ResourceStatus::Running),
+        "B should not be deleted — D (Frozen) still depends on it"
+    );
+    assert_eq!(
+        get_status(&state, "resource-c"),
+        Some(ResourceStatus::Running),
+        "C should not be deleted — D (Frozen) still depends on it"
+    );
+
+    // Phase 2: Delete Frozen — D can be deleted (E is gone). A stays (B, C depend on it).
+    let frozen_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
+    let state = run_to_synced(&frozen_deletion, state).await?;
+
+    assert_eq!(
+        get_status(&state, "resource-d"),
+        Some(ResourceStatus::Deleted)
+    );
+    assert_eq!(
+        get_status(&state, "resource-a"),
+        Some(ResourceStatus::Running),
+        "A should not be deleted — B, C (Live) still depend on it"
+    );
+
+    // Phase 3: Delete Live again — B and C can now be deleted (D is gone).
+    let live_deletion2 = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
+    let state = run_to_synced(&live_deletion2, state).await?;
+
+    assert_eq!(
+        get_status(&state, "resource-b"),
         Some(ResourceStatus::Deleted)
     );
     assert_eq!(
@@ -481,18 +511,14 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
         Some(ResourceStatus::Deleted)
     );
 
-    // Delete Frozen - D should be deleted, A should be deleted (no more dependents)
-    let frozen_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
-    let state = run_to_synced(&frozen_deletion, state).await?;
+    // Phase 4: Delete Frozen again — A can now be deleted (no more dependents).
+    let frozen_deletion2 = new_deletion_executor_with_filter(vec![ResourceLifecycle::Frozen])?;
+    let state = run_to_synced(&frozen_deletion2, state).await?;
 
     assert_eq!(
         get_status(&state, "resource-a"),
         Some(ResourceStatus::Deleted),
-        "Resource A should be deleted since Live dependents are gone"
-    );
-    assert_eq!(
-        get_status(&state, "resource-d"),
-        Some(ResourceStatus::Deleted)
+        "A should be deleted since all dependents are gone"
     );
 
     Ok(())
