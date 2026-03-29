@@ -39,17 +39,23 @@ pub async fn handle_running(
         })
     })?;
 
-    // Use the prepared stack (already mutated)
-    // Note: We do NOT inject environment variables during health checks.
-    // Health checks are read-only operations that verify resources are healthy.
-    // Environment variables are only injected during actual deployment phases
-    // (Pending, InitialSetup, Provisioning, Updating) where functions are being
-    // deployed or reconfigured. Changing env vars requires redeployment.
-    let target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+    // Use the prepared stack (already mutated in Pending phase)
+    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Prepared stack not found in runtime metadata".to_string(),
         })
     })?;
+
+    // Inject environment variables so the executor sees the same Function config
+    // as what was deployed during Provisioning. Without this, the executor detects
+    // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
+    // and incorrectly triggers an update flow.
+    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+
+    // Inject OTLP monitoring env vars if monitoring is configured
+    if let Some(monitoring) = &config.monitoring {
+        crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
+    }
 
     // TODO: Add mechanism to limit executor to only perform read-only health checks
     // and prevent any mutable operations on cloud resources during refresh.
