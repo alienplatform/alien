@@ -120,7 +120,11 @@ jobs:
           provenance: false
 
       - name: Generate .env.test
-        run: ./scripts/gen-env-test.sh
+        run: |
+          ./scripts/gen-env-test.sh
+          echo "--- verifying .env.test exists ---"
+          ls -la .env.test
+          wc -l .env.test
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
@@ -130,6 +134,7 @@ jobs:
         with:
           name: env-test-e2e
           path: .env.test
+          if-no-files-found: error
           retention-days: 1
 
   test:
