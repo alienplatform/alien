@@ -3023,6 +3023,7 @@ mod tests {
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation};
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi, Role};
+    use alien_gcp_clients::pubsub::MockPubSubApi;
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use httpmock::{prelude::*, Mock};
@@ -3340,6 +3341,12 @@ mod tests {
         mock_provider
             .expect_get_gcp_iam_client()
             .returning(move |_| Ok(mock_iam.clone()));
+
+        // Mock PubSub client for commands infrastructure cleanup
+        let mock_pubsub = Arc::new(MockPubSubApi::new());
+        mock_provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(mock_pubsub.clone()));
 
         Arc::new(mock_provider)
     }
