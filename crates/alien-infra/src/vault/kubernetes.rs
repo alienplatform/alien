@@ -4,7 +4,7 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 
 /// Kubernetes Vault controller that uses Kubernetes Secrets as the backing store.
@@ -160,7 +160,7 @@ impl KubernetesVaultController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Binding params for Kubernetes vault using native Kubernetes Secrets
         // The runtime will use these to read/write secrets via the K8s API
         if let (Some(namespace), Some(vault_prefix)) = (&self.namespace, &self.vault_prefix) {
@@ -168,9 +168,14 @@ impl KubernetesVaultController {
                 namespace.clone(),
                 vault_prefix.clone(),
             );
-            serde_json::to_value(&binding).ok()
+            Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

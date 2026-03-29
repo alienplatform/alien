@@ -1,9 +1,9 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::output::{can_prompt, print_json, prompt_text};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::CreateDeploymentGroupRequest;
 use clap::Parser;
-use std::io::{self, Write};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -25,33 +25,19 @@ pub struct OnboardArgs {
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
-    // Determine deployment group name
     let name = if let Some(ref name) = args.name {
         name.clone()
+    } else if args.json || !can_prompt() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message:
+                "Deployment group name is required in non-interactive mode. Pass `alien onboard <name>`."
+                    .to_string(),
+        }));
     } else {
-        print!("Enter deployment group name: ");
-        io::stdout()
-            .flush()
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "flush stdout".to_string(),
-                file_path: "stdout".to_string(),
-                reason: "Failed to flush stdout".to_string(),
-            })?;
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read line from stdin".to_string(),
-                file_path: "stdin".to_string(),
-                reason: "Failed to read from stdin".to_string(),
-            })?;
-        input.trim().to_string()
+        prompt_text("Deployment group name", None)?
     };
 
-    // Resolve project (discovers project in Platform mode, returns defaults in Standalone/Dev)
-    let (project_id, _project_link) = ctx.resolve_project(None).await?;
+    let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
 
     // Resolve manager (discovers URL in Platform mode, known in Standalone/Dev)
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
@@ -103,14 +89,13 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     );
 
     if args.json {
-        let output = serde_json::json!({
+        print_json(&serde_json::json!({
             "deploymentGroupId": deployment_group_id,
             "name": name,
             "deployLink": deploy_link,
             "token": token_response.token,
             "maxDeployments": args.max_deployments,
-        });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        }))?;
         return Ok(());
     }
 

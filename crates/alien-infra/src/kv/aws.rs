@@ -15,7 +15,7 @@ use alien_aws_clients::dynamodb::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Kv, KvOutputs, Resource, ResourceDefinition, ResourceOutputs, ResourceStatus};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 
 /// Generates the full, prefixed AWS DynamoDB table name.
@@ -464,7 +464,7 @@ impl AwsKvController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, KvBinding};
 
         if let (Some(table_name), Some(table_arn)) = (&self.table_name, &self.table_arn) {
@@ -479,9 +479,14 @@ impl AwsKvController {
                 BindingValue::value(table_name.clone()),
                 BindingValue::value(region),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

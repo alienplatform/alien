@@ -22,7 +22,7 @@ use tracing::info;
 #[cfg(feature = "platform")]
 use crate::auth::{get_auth_http, load_workspace, save_workspace, AuthOpts};
 #[cfg(feature = "platform")]
-use crate::commands::platform::workspace::prompt_workspace_with_tui;
+use crate::commands::platform::workspace::prompt_workspace;
 
 /// Resolved manager connection — the single way commands should interact with a manager.
 pub struct ManagerContext {
@@ -180,26 +180,36 @@ impl ExecutionMode {
         }
     }
 
-    /// Resolve workspace: flag override -> profile.json -> interactive prompt.
-    ///
-    /// In Standalone/Dev modes, returns a sensible default.
-    /// In Platform mode, resolves from flag/profile/interactive prompt.
-    pub async fn resolve_workspace(&self) -> Result<String> {
+    /// Resolve workspace from flags/profile and optionally prompt in a real TTY.
+    pub async fn resolve_workspace_with_bootstrap(&self, allow_prompt: bool) -> Result<String> {
         match self {
             Self::Dev { .. } => Ok("local-dev".to_string()),
             Self::Standalone { .. } => Ok("default".to_string()),
             #[cfg(feature = "platform")]
-            Self::Platform { workspace, .. } => match workspace.clone().or_else(load_workspace) {
-                Some(ws) => Ok(ws),
-                None => {
-                    let http = self.auth_http().await?;
-                    let ws = prompt_workspace_with_tui(&http).await?;
-                    save_workspace(&ws)?;
-                    println!("Default workspace set to: {}", ws);
-                    Ok(ws)
+            Self::Platform { workspace, .. } => {
+                if let Some(workspace) = workspace.clone().or_else(load_workspace) {
+                    return Ok(workspace);
                 }
-            },
+
+                if !allow_prompt {
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message:
+                            "No workspace is configured. Pass `--workspace <name>`, run `alien login --workspace <name>`, or run `alien workspaces set <name>`."
+                                .to_string(),
+                    }));
+                }
+
+                let http = self.auth_http().await?;
+                let workspace = prompt_workspace(&http, false).await?;
+                save_workspace(&workspace)?;
+                println!("Default workspace set to: {workspace}");
+                Ok(workspace)
+            }
         }
+    }
+
+    pub async fn resolve_workspace(&self) -> Result<String> {
+        self.resolve_workspace_with_bootstrap(true).await
     }
 
     /// Get global project override (if any).
@@ -321,7 +331,7 @@ impl ExecutionMode {
 
                 let http = self.auth_http().await?;
                 let platform_client = http.sdk_client();
-                let workspace = self.resolve_workspace().await?;
+                let workspace = self.resolve_workspace_with_bootstrap(true).await?;
 
                 let workspace_param = GetProjectBuildConfigWorkspace::try_from(workspace.as_str())
                     .map_err(|e| {
@@ -431,13 +441,14 @@ impl ExecutionMode {
         }
     }
 
-    /// Resolve project: --project flag > project link > interactive prompt.
+    /// Resolve project: --project flag > project link > optional interactive bootstrap.
     ///
     /// In Standalone/Dev modes, returns "default"/"local-dev".
     /// In Platform mode, resolves from flag/profile/interactive prompt and returns the project ID.
     pub async fn resolve_project(
         &self,
         project_override: Option<&str>,
+        allow_prompt: bool,
     ) -> Result<(String, crate::project_link::ProjectLink)> {
         match self {
             Self::Dev { .. } => {
@@ -459,7 +470,7 @@ impl ExecutionMode {
             #[cfg(feature = "platform")]
             Self::Platform { .. } => {
                 let http = self.auth_http().await?;
-                let workspace = self.resolve_workspace().await?;
+                let workspace = self.resolve_workspace_with_bootstrap(allow_prompt).await?;
                 let effective_project = project_override.or(self.project_override());
 
                 let link = if let Some(project_name) = effective_project {
@@ -467,8 +478,13 @@ impl ExecutionMode {
                         .await?
                 } else {
                     let current_dir = crate::get_current_dir()?;
-                    crate::project_link::ensure_project_linked(&current_dir, &http, &workspace)
-                        .await?
+                    crate::project_link::ensure_project_linked(
+                        &current_dir,
+                        &http,
+                        &workspace,
+                        allow_prompt,
+                    )
+                    .await?
                 };
 
                 let project_id = link.project_id.clone();

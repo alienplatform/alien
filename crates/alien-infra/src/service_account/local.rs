@@ -132,10 +132,10 @@ impl LocalServiceAccountController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Local platform doesn't use service account bindings
         // All resources are accessible without authentication
-        None
+        Ok(None)
     }
 }
 

@@ -135,6 +135,7 @@ impl AzureVaultController {
                 vault_name,
                 resource_scope,
                 "Vault",
+                "vault",
             )
             .await?;
         }
@@ -266,15 +267,20 @@ impl AzureVaultController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::VaultBinding;
 
         if let Some(vault_name) = &self.vault_name {
             let binding = VaultBinding::key_vault(vault_name.clone());
 
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

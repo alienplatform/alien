@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Describes the lifecycle of a resource within a stack, determining how it\'s managed and deployed.
  */
-export const ResourceLifecycleSchema = z.enum(["frozen", "live", "live-on-setup"]).describe("Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.")
+export const ResourceLifecycleSchema = z.enum(["frozen", "live"]).describe("Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.")
 
 export type ResourceLifecycle = z.infer<typeof ResourceLifecycleSchema>

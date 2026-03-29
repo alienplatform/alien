@@ -4,7 +4,7 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::pubsub::{Subscription, Topic};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use std::time::Duration;
@@ -121,6 +121,7 @@ impl GcpQueueController {
                     &config.id,
                     topic_name,
                     "Queue topic",
+                    "queue",
                     client,
                     |client, iam_policy| async move {
                         client
@@ -146,6 +147,7 @@ impl GcpQueueController {
                     &config.id,
                     subscription_name,
                     "Queue subscription",
+                    "queue",
                     client,
                     |client, iam_policy| async move {
                         client
@@ -296,7 +298,7 @@ impl GcpQueueController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, QueueBinding};
         if let (Some(topic), Some(sub)) = (&self.topic_name, &self.subscription_name) {
             // For runtime binding params, we can't know the project ID at controller level,
@@ -306,9 +308,14 @@ impl GcpQueueController {
                 BindingValue::value(topic.clone()),
                 BindingValue::value(sub.clone()),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

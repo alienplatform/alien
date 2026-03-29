@@ -142,7 +142,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
 
     info!("✅ Deployment deletion initiated successfully!");
     info!("   The platform controller will handle the destruction process.");
-    info!("   You can monitor the progress via the dashboard.");
+    info!("   Next: run `alien deployments get {}` to monitor status.", args.name);
 
     Ok(())
 }

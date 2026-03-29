@@ -183,10 +183,10 @@ impl TestServiceAccountController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Test platform doesn't use service account bindings
         // All resources are accessible without authentication
-        None
+        Ok(None)
     }
 }
 

@@ -1,214 +1,136 @@
 # Local Development
 
-`alien dev` embeds alien-manager inside the CLI, builds your stack, and deploys everything locally with Docker. No cloud credentials, no container registry, no external services.
-
-## What Happens
+`alien dev` is the product-facing local workflow. It starts a local manager, builds your app for the local platform, creates a local release, creates or updates the initial deployment, and then stays attached so the session remains alive.
 
 ```bash
 cd my-app
 alien dev
 ```
 
-1. Start an embedded alien-manager instance (SQLite at `.alien/dev-server.db`, port 9090)
-2. Build the stack for the local platform (`alien build --platform local`)
-3. Create a release from the built OCI tarballs
-4. Ensure the default `local-dev` deployment group exists, then create a deployment in it
-5. Deployment loop picks it up, loads images into Docker, runs containers
-6. CLI TUI shows deployment status and streams logs
+There is no local TUI. The command uses plain terminal output for humans and an explicit status-file contract for tooling.
 
-Everything runs on your machine. The deployment loop uses `ClientConfig::Local` — no cloud APIs, just Docker.
+## Bare `alien dev`
 
-## Dev Mode Differences
+The default flow is:
 
-| Aspect | Standalone | Dev Mode |
-|---|---|---|
-| Database | `{DATA_DIR}/alien.db` | `.alien/dev.db` |
-| Deployment loop interval | 10s | 1s |
-| Credential resolver | `EnvironmentCredentialResolver` | `LocalCredentialResolver` |
-| Telemetry | Forward to OTLP endpoint | In-memory LogBuffer |
-| Auth | Token validation (SHA-256) | Permissive (any token accepted) |
-| Container images | Pulled from registry | Loaded from local OCI tarballs |
+1. start the local manager on `http://localhost:9090`
+2. ensure local bootstrap state exists under `.alien/`
+3. build the current project for the local platform unless `--skip-build`
+4. create a local release
+5. create or update the initial deployment
+6. wait for the deployment to become ready
+7. print the release ID, deployment ID, commands URL, resource URLs, and suggested next commands
+8. remain running until interrupted with `Ctrl+C`
 
-## Log Streaming
-
-`alien dev` runs alien-manager in the same process. Logs flow through a shared in-memory buffer.
-
-### Architecture
-
-```
-Docker containers ──(stdout/stderr)──▶ ┐
-                                       ├── LogBuffer (Arc, in-process) ──▶ TUI
-alien-runtime containers ──(OTLP)────▶ ┘
-```
-
-The `LogBuffer` is a shared struct passed to both alien-manager and the TUI at startup:
-
-```rust
-struct LogBuffer {
-    entries: Mutex<VecDeque<LogEntry>>,   // ring buffer, max 10K entries
-    tx: broadcast::Sender<LogEntry>,      // notify TUI of new entries
-}
-```
-
-### Two ingestion paths
-
-1. **Docker log capture** — after the deployment loop starts a container, it spawns a task that tails Docker logs via the Docker API. `stdout` → INFO, `stderr` → ERROR. Works for all containers, even those without `alien-runtime`.
-
-2. **OTLP ingestion** — containers with `alien-runtime` send structured OTLP logs to `POST /v1/logs` on the embedded dev server. The CLI enables local log ingest explicitly, and `InMemoryTelemetryBackend` pushes entries into the same LogBuffer.
-
-```rust
-struct DevTelemetryBackend {
-    log_buffer: Arc<LogBuffer>,
-}
-
-impl TelemetryBackend for DevTelemetryBackend {
-    async fn ingest_logs(&self, data: Bytes, _scope: &str) -> Result<()> {
-        let entries = parse_otlp_logs(data);
-        self.log_buffer.push(entries);
-        Ok(())
-    }
-    // traces/metrics: discard
-}
-```
-
-### How the TUI reads logs
-
-The TUI subscribes to the broadcast channel at startup:
-
-```rust
-let mut rx = log_buffer.tx.subscribe();
-loop {
-    let entry = rx.recv().await?;
-    tui.append_log(entry);
-}
-```
-
-No polling, no SSE, no HTTP. Just an in-process broadcast channel.
-
-## Deployment Status
-
-The TUI needs to show deployment status (running, provisioning, error) and resource URLs. Since `alien dev` embeds alien-manager in the same process, this uses a `watch` channel — no files, no polling.
-
-### Architecture
-
-```
-Deployment loop ──(after reconcile)──▶ watch::Sender<DevStatus> ──▶ TUI
-```
-
-The CLI creates the channel and passes the sender to alien-manager:
-
-```rust
-let (status_tx, status_rx) = tokio::sync::watch::channel(DevStatus::default());
-
-let server = AlienManagerBuilder::new(config)
-    .dev_status(status_tx)
-    .build()
-    .await?;
-
-// TUI reads from status_rx
-```
-
-### Hook point
-
-After the deployment loop calls `reconcile()`, it checks if a `dev_status` sender is configured. If so, it reads deployment states from the store and publishes:
-
-```rust
-// In deployment loop, after reconcile
-if let Some(tx) = &self.dev_status_tx {
-    let deployments = self.store.list_deployments().await?;
-    let status = DevStatus::from_deployments(&deployments);
-    let _ = tx.send(status);
-}
-```
-
-The `DevStatus` struct:
-
-```rust
-struct DevStatus {
-    state: DevState,  // Initializing, Ready, Error
-    deployments: Vec<DeploymentStatus>,
-}
-
-struct DeploymentStatus {
-    name: String,
-    status: String,
-    resources: HashMap<String, ResourceStatus>,
-}
-
-struct ResourceStatus {
-    url: Option<String>,   // public URL if applicable
-    status: String,        // running, pending, error
-}
-```
-
-Overall state: `Ready` if any deployment is `running`, `Error` if any has an error, `Initializing` otherwise.
-
-### What AlienManagerBuilder needs
-
-One new optional field:
-
-```rust
-impl AlienManagerBuilder {
-    pub fn dev_status(mut self, tx: watch::Sender<DevStatus>) -> Self {
-        self.dev_status_tx = Some(tx);
-        self
-    }
-}
-```
-
-The deployment loop stores this and calls it after each reconcile. Standalone mode and managed mode don't set it — the field stays `None` and no work happens.
-
-### Optional status file for external consumers
-
-When `alien dev` is invoked by external tooling (e.g., the testing framework), the TUI is disabled and there's no in-process consumer for the `watch` channel. For these cases, `--status-file` writes the `DevStatus` as JSON after each update:
+Example:
 
 ```bash
-alien dev --no-tui --status-file .alien/dev-status.json
+alien dev --port 9090 --deployment-name default
 ```
 
-The CLI subscribes to the `watch::Receiver` and writes the JSON file atomically (write to `.tmp`, rename) on each change. The testing framework polls this file to discover deployment status and resource URLs.
+Useful flags:
 
-```json
-{
-  "state": "Ready",
-  "deployments": [
-    {
-      "name": "default",
-      "status": "running",
-      "resources": {
-        "api": { "url": "http://localhost:3000", "status": "running" },
-        "worker": { "status": "running" }
-      }
-    }
-  ]
-}
-```
+| Flag | Purpose |
+|---|---|
+| `--port <N>` | Choose the local manager port |
+| `--config <path>` | Use a specific `alien.ts` file |
+| `--skip-build` | Reuse existing local build artifacts |
+| `--status-file <path>` | Write machine-readable session status |
+| `--deployment-name <name>` | Choose the initial deployment name |
+| `--env KEY=VALUE[:targets]` | Add plain environment variables |
+| `--secret KEY=VALUE[:targets]` | Add secret environment variables |
 
-This is a CLI concern, not a server concern — the server only knows about the `watch` channel. The CLI decides whether to render to TUI, write to file, or both.
+## `alien dev server`
 
-## Environment Variables
-
-The deployment loop injects the same environment variables as standalone mode (see [Deployments — Environment Variables](01-deployments.md#environment-variables-injected-into-containers)), with localhost URLs:
+`alien dev server` starts only the local manager.
 
 ```bash
-ALIEN_DEPLOYMENT_ID=dp_xxx
-ALIEN_TOKEN=ax_deploy_...
-ALIEN_COMMANDS_POLLING_ENABLED=true
-ALIEN_COMMANDS_POLLING_URL=http://localhost:9090/v1/commands/leases
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:9090/v1/logs
-OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ax_deploy_...
+alien dev server --port 9090
 ```
 
-Plus user-supplied variables from `--env KEY=VALUE` and `--secret KEY=VALUE`.
+Use this when you want to debug the local manager itself or drive it with separate local commands such as:
 
-## State Directory
-
-All dev mode state lives in `.alien/`:
-
+```bash
+alien dev deployments ls
+alien dev release
+alien dev deploy --name preview
 ```
+
+## Machine Interface
+
+Tooling must not scrape human log lines. The supported machine channel is `--status-file`.
+
+```bash
+alien dev --status-file .alien/dev-status.json
+```
+
+The file is updated as JSON using the shared `DevStatus` contract from `alien-core` / `@alienplatform/core`.
+
+The status file includes:
+
+- overall session status
+- manager API URL
+- agent/deployment IDs
+- commands URL
+- public resource URLs when available
+- error information if startup fails
+
+Typical lifecycle states:
+
+- `initializing`
+- `ready`
+- `error`
+- `shuttingDown`
+
+This is the contract used by `@alienplatform/testing` local mode.
+
+## Local Namespace
+
+All local manager commands live under `alien dev ...`.
+
+Examples:
+
+```bash
+alien dev deployments ls
+alien dev whoami
+alien dev release
+alien dev deploy --name preview
+alien dev destroy --name preview --token <token>
+alien dev vault set my-vault API_KEY secret-value
+```
+
+Top-level commands such as `alien release` and `alien deploy` are for non-local managers. They do not silently switch into local mode.
+
+## State and Storage
+
+Local state lives under `.alien/`.
+
+Typical contents:
+
+```text
 .alien/
-  dev.db              # SQLite database
-  build/              # Built OCI tarballs
-  command_kv/         # Command server KV state
-  command_storage/    # Command server storage
+  build/
+  command_kv/
+  command_storage/
+  dev.db
+  testing-dev-status.json
 ```
+
+The exact files depend on which commands you run, but the local manager, build output, and command-server state all live under that directory.
+
+## Environment Variables Injected Into Local Deployments
+
+Local deployments receive the same core Alien runtime variables as other deployments, but with localhost endpoints. That includes the commands polling URL and OTLP log endpoint exposed by the local manager.
+
+User-supplied `--env` and `--secret` values are merged into the deployment environment as part of the local create/update flow.
+
+## What `alien dev` Does Not Do
+
+Current behavior is intentionally simple:
+
+- it does not launch a dashboard
+- it does not depend on a TUI
+- it does not auto-rebuild on file change
+- it does not require any cloud credentials
+
+If you want a new local release after changing code, rerun `alien dev release` or restart `alien dev`.

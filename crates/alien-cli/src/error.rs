@@ -152,15 +152,15 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// TUI operation failed.
+    /// Interactive CLI operation failed.
     #[error(
-        code = "TUI_OPERATION_FAILED",
-        message = "TUI operation failed: {message}",
+        code = "CLI_INTERACTION_FAILED",
+        message = "CLI interaction failed: {message}",
         retryable = "false",
         internal = "true"
     )]
-    TuiOperationFailed {
-        /// Description of the TUI failure
+    CliInteractionFailed {
+        /// Description of the interaction failure
         message: String,
     },
 

@@ -4,7 +4,7 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 
 #[controller]
@@ -175,7 +175,7 @@ impl LocalVaultController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::VaultBinding;
 
         if let Some(vault_path) = &self.vault_path {
@@ -187,9 +187,14 @@ impl LocalVaultController {
 
             let binding = VaultBinding::local(vault_name.to_string(), vault_path.clone());
 
-            serde_json::to_value(&binding).ok()
+            Ok(Some(serde_json::to_value(&binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

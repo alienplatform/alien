@@ -1,4 +1,4 @@
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -728,14 +728,19 @@ impl GcpStorageController {
         }))
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, StorageBinding};
 
         if let Some(bucket_name) = &self.bucket_name {
             let binding = StorageBinding::gcs(bucket_name.clone());
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -762,6 +767,7 @@ impl GcpStorageController {
             ctx,
             &config.id,
             bucket_name,
+            "storage",
             &mut all_bindings,
         )
         .await?;

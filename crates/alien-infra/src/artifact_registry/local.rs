@@ -4,7 +4,7 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 
 #[controller]
@@ -247,7 +247,7 @@ impl LocalArtifactRegistryController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{ArtifactRegistryBinding, BindingValue};
 
         if let Some(registry_url) = &self.registry_url {
@@ -255,9 +255,14 @@ impl LocalArtifactRegistryController {
                 BindingValue::value(registry_url.clone()),
                 BindingValue::value(None::<String>),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

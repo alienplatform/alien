@@ -57,6 +57,9 @@ pub struct AgentStatus {
     pub id: String,
     /// Agent name (from --agent-name flag)
     pub name: String,
+    /// Commands endpoint URL for the deployment
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands_url: Option<String>,
     /// Deployment status (running, provisioning, etc.)
     pub status: DeploymentStatus,
     /// Resources deployed by this agent (keyed by resource name)

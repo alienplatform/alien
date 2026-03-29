@@ -11,7 +11,7 @@ use alien_core::{
     Build, Container, ContainerCluster, Function, ResourceOutputs, ResourceStatus, ServiceAccount,
     ServiceAccountOutputs,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
@@ -510,7 +510,7 @@ impl AwsServiceAccountController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, ServiceAccountBinding};
 
         if let (Some(role_arn), Some(role_name)) = (&self.role_arn, &self.role_name) {
@@ -518,9 +518,14 @@ impl AwsServiceAccountController {
                 BindingValue::Value(role_name.clone()),
                 BindingValue::Value(role_arn.clone()),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

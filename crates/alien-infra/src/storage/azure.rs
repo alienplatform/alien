@@ -12,7 +12,7 @@ use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     Resource, ResourceDefinition, ResourceOutputs, ResourceStatus, Storage, StorageOutputs,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,7 @@ impl AzureStorageController {
                 container_name,
                 resource_scope,
                 "Storage",
+                "storage",
             )
             .await?;
         }
@@ -385,7 +386,7 @@ impl AzureStorageController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, StorageBinding};
 
         if let (Some(storage_account_name), Some(container_name)) =
@@ -393,9 +394,14 @@ impl AzureStorageController {
         {
             let binding =
                 StorageBinding::blob(storage_account_name.clone(), container_name.clone());
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

@@ -1,4 +1,4 @@
-use alien_error::{AlienError, Context, ContextError, IntoAlienErrorDirect};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use async_trait::async_trait;
 use std::any::Any;
@@ -449,7 +449,7 @@ impl AzureArtifactRegistryController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{ArtifactRegistryBinding, BindingValue};
 
         if let (Some(registry_name), Some(resource_group_name)) =
@@ -458,9 +458,14 @@ impl AzureArtifactRegistryController {
             let binding =
                 ArtifactRegistryBinding::acr(registry_name.clone(), resource_group_name.clone());
 
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -498,6 +503,7 @@ impl AzureArtifactRegistryController {
         AzurePermissionsHelper::apply_resource_scoped_permissions(
             ctx,
             &config.id,
+            "artifact-registry",
             resource_scope,
             &permission_context,
         )

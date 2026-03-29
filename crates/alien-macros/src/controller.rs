@@ -423,7 +423,7 @@ fn generate_controller_impl(
         // Include the user's implementation directly in the trait
         let method_block = &method.block;
         quote! {
-            fn get_binding_params(&self) -> Option<serde_json::Value> {
+            fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
                 #method_block
             }
         }

@@ -16,10 +16,12 @@ pub mod infrastructure_requirements;
 pub mod service_account_impersonate_validation;
 pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
+pub mod function_memory;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
+pub use function_memory::FunctionMemoryCheck;
 pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;

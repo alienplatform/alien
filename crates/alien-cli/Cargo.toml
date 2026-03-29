@@ -13,14 +13,8 @@ path = "src/lib.rs"
 name = "alien"
 path = "src/main.rs"
 
-[[bin]]
-name = "alien-cli-storybook"
-path = "src/storybook/main.rs"
-required-features = ["storybook"]
-
 [features]
 default = ["otlp", "platform"]
-storybook = ["dep:color-eyre"]
 otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open", "dep:keyring"]
 
@@ -54,8 +48,6 @@ url = { workspace = true }
 dockdash = { workspace = true }
 which = "6.0.1"
 tempfile = { workspace = true }
-ratatui = { workspace = true, features = ["all-widgets"] }
-crossterm = { workspace = true }
 async-trait = { workspace = true }
 workspace_root = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -82,9 +74,6 @@ axum = { workspace = true, features = ["tokio", "http2", "query"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 git-url-parse = { version = "0.4.4" }
-
-# Optional storybook dependency
-color-eyre = { version = "0.6.5", optional = true }
 
 [dev-dependencies]
 snapbox = "0.6.0"

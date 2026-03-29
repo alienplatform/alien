@@ -112,7 +112,7 @@ All three SQLite implementations share the same database file.
 
 **CredentialResolver** — provides credentials for the target remote environment where push-model deployments run. Default: `EnvironmentCredentialResolver` — reads `AWS_*`, `GOOGLE_*`, `AZURE_*` from environment variables.
 
-**TelemetryBackend** — receives OTLP logs, traces, and metrics from deployments. Default: `OtlpForwardingBackend` — forwards to an external observability endpoint. Dev mode: `InMemoryTelemetryBackend` — stores in a ring buffer for the CLI TUI. See [Telemetry](04-telemetry.md).
+**TelemetryBackend** — receives OTLP logs, traces, and metrics from deployments. Default: `OtlpForwardingBackend` — forwards to an external observability endpoint. Dev mode: `InMemoryTelemetryBackend` — stores logs in memory for the local CLI flow and status-file driven tooling. See [Telemetry](04-telemetry.md).
 
 **AuthValidator** — validates Bearer tokens and resolves the caller's identity. Default: `TokenDbValidator` — looks up hashed tokens via `TokenStore`. See [Authentication](05-auth.md).
 
@@ -156,7 +156,7 @@ AlienManager::builder(config)
 
 ### Dev
 
-Started by `alien dev`. The CLI embeds the library and wires local-only providers explicitly: `LocalCredentialResolver`, `PermissiveAuthValidator`, `InMemoryTelemetryBackend`, local SQLite stores, and local command bindings. The default `local-dev` deployment group is created by the CLI after startup, not by the manager builder.
+Started by `alien dev`. The CLI embeds the library and wires local-only providers explicitly: `LocalCredentialResolver`, `PermissiveAuthValidator`, `InMemoryTelemetryBackend`, local SQLite stores, and local command bindings. The default `local-dev` deployment group is created by the CLI after startup, not by the manager builder, and the CLI exposes local machine-readable session state through `--status-file`.
 
 ```rust
 AlienManager::builder(config)

@@ -212,6 +212,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::CapacityGroupProfileCheck));
         registry.add_compile_time_check(Box::new(compile_time::HorizonRequiredCheck));
         registry.add_compile_time_check(Box::new(compile_time::DnsTlsRequiredCheck));
+        registry.add_compile_time_check(Box::new(compile_time::FunctionMemoryCheck));
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));

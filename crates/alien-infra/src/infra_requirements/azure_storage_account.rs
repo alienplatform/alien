@@ -562,6 +562,7 @@ impl AzureStorageAccountController {
         AzurePermissionsHelper::apply_resource_scoped_permissions(
             ctx,
             &config.id,
+            "storage",
             resource_scope,
             &permission_context,
         )

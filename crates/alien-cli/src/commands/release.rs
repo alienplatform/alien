@@ -1,24 +1,21 @@
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
-use crate::tui::{ErrorPrinter, ReleaseResult, ReleaseUiComponent, ReleaseUiEvent, ReleaseUiProps};
+use crate::output::{can_prompt, print_json, prompt_confirm};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
-use alien_core::{alien_event, AlienEvent, EventChange, EventHandler, EventState};
+use alien_core::{alien_event, AlienEvent};
 use alien_core::{Platform, Stack};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
 use alien_platform_api::types::GitMetadata;
-use async_trait::async_trait;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
 use std::fs;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{mpsc, Arc};
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -64,13 +61,9 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub yes: bool,
 
-    /// Output JSON instead of human-readable text (implies --no-tui)
+    /// Emit structured JSON output
     #[arg(long)]
     pub json: bool,
-
-    /// Disable TUI and use console output instead
-    #[arg(long)]
-    pub no_tui: bool,
 
     // Manual registry override options (for manager deployment)
     /// Image repository URL (manual override - skips platform manager)
@@ -107,68 +100,43 @@ struct ReleaseJsonOutput {
     error: Option<String>,
 }
 
-/// Main entry point for release command - handles TUI vs console mode
+type ReleaseResult = String;
+
+/// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
-    // JSON mode: implies --no-tui and outputs structured JSON
     if args.json {
         match release_task_json(args, ctx).await {
             Ok(output) => {
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
-                if !output.success {
-                    std::process::exit(1);
-                }
+                print_json(&output)?;
                 Ok(())
             }
             Err(error) => {
-                // Even errors should be JSON in JSON mode
-                let output = ReleaseJsonOutput {
+                print_json(&ReleaseJsonOutput {
                     success: false,
                     release_id: None,
                     project: String::new(),
                     workspace: String::new(),
                     platforms: vec![],
                     error: Some(format!("{}", error)),
-                };
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
-                std::process::exit(1);
-            }
-        }
-    }
-    // Use TUI only if no_tui is false and we're in a TTY environment
-    else if !args.no_tui && std::io::stderr().is_terminal() && std::io::stdout().is_terminal() {
-        match run_release_with_tui(args, ctx).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let _ =
-                    ErrorPrinter::print_alien_error(&error.into_generic(), Some("RELEASE FAILED"));
-                std::process::exit(1);
+                })?;
+                Err(error)
             }
         }
     } else {
-        match release_task(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                let _ =
-                    ErrorPrinter::print_alien_error(&error.into_generic(), Some("RELEASE FAILED"));
-                std::process::exit(1);
-            }
-        }
+        release_task(args, ctx).await.map(|_| ())
     }
 }
 
 /// Release task that returns JSON-serializable output
 async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseJsonOutput> {
-    let config = load_release_config(&args, &ctx).await?;
+    let config = load_release_config(&args, &ctx, false).await?;
 
     let project_name = config.project_link.project_name.clone();
     let workspace_name = config.workspace_name.clone();
     let platforms = config.platforms.clone();
 
-    // Run core release logic
-    let result = release_task_core(args, config).await;
-
-    match result {
-        Ok(ReleaseResult::Success { release_id }) => Ok(ReleaseJsonOutput {
+    match release_task_core(args, config).await {
+        Ok(release_id) => Ok(ReleaseJsonOutput {
             success: true,
             release_id: Some(release_id),
             project: project_name,
@@ -176,102 +144,11 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
             platforms,
             error: None,
         }),
-        Ok(ReleaseResult::Failed(err)) => Ok(ReleaseJsonOutput {
-            success: false,
-            release_id: None,
-            project: project_name,
-            workspace: workspace_name,
-            platforms,
-            error: Some(format!("{}", err)),
-        }),
         Err(err) => Err(err),
     }
 }
 
-/// Event handler for alien events that forwards to ReleaseUiComponent
-struct ReleaseEventHandler {
-    tx: mpsc::Sender<ReleaseUiEvent>,
-}
-
-impl ReleaseEventHandler {
-    fn new(tx: mpsc::Sender<ReleaseUiEvent>) -> Self {
-        Self { tx }
-    }
-}
-
-#[async_trait]
-impl EventHandler for ReleaseEventHandler {
-    async fn on_event_change(&self, change: EventChange) -> alien_core::Result<()> {
-        let _ = self.tx.send(ReleaseUiEvent::AlienEventChange(change));
-        Ok(())
-    }
-}
-
-/// Run release with TUI using the ReleaseUiComponent
-async fn run_release_with_tui(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
-    let config = load_release_config(&args, &ctx).await?;
-
-    // Create the ReleaseUiComponent with props
-    let props = ReleaseUiProps {
-        platforms: config.platforms.clone(),
-        project_name: config.project_link.project_name.clone(),
-        on_result: None,
-        on_cancel: None,
-    };
-
-    let mut ui_component = ReleaseUiComponent::new(props);
-
-    // Start the component and get the event sender
-    let ui_event_tx = ui_component
-        .start()
-        .context(ErrorData::TuiOperationFailed {
-            message: "Failed to start release UI component".to_string(),
-        })?;
-
-    // Set up alien event handler that forwards to UI component
-    let event_handler = ReleaseEventHandler::new(ui_event_tx.clone());
-    let bus = alien_core::EventBus::with_handlers(vec![Arc::new(event_handler)]);
-
-    // Run the release task in the background
-    let release_ui_tx = ui_event_tx.clone();
-    let release_handle = tokio::spawn(async move {
-        let result = bus
-            .run(|| async {
-                // Emit LoadingConfiguration to mark first step as complete
-                let _ = AlienEvent::LoadingConfiguration
-                    .emit_with_state(EventState::Success)
-                    .await;
-
-                // Run core logic
-                release_task_core(args, config).await
-            })
-            .await;
-
-        let _ = release_ui_tx.send(ReleaseUiEvent::ReleaseFinished(result));
-    });
-
-    // Run the UI component event loop (this blocks until completion)
-    let ui_result = ui_component
-        .run_event_loop()
-        .context(ErrorData::TuiOperationFailed {
-            message: "Release UI component failed".to_string(),
-        });
-
-    // Handle release task completion
-    match release_handle.await {
-        Ok(_) => {}
-        Err(e) if e.is_cancelled() => {}
-        Err(e) => {
-            return Err(AlienError::new(ErrorData::TuiOperationFailed {
-                message: format!("Task join error: {}", e),
-            }))
-        }
-    }
-
-    ui_result
-}
-
-/// Resolved release configuration (shared across TUI, console, and JSON modes)
+/// Resolved release configuration shared across human and JSON output paths.
 struct ReleaseConfig {
     output_dir: PathBuf,
     manager: ManagerContext,
@@ -283,14 +160,20 @@ struct ReleaseConfig {
 
 /// Load and validate all release configuration from args + execution context.
 /// This is the single place where auth, workspace, project, and platform discovery happen.
-async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<ReleaseConfig> {
+async fn load_release_config(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    allow_bootstrap: bool,
+) -> Result<ReleaseConfig> {
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
-    let workspace_name = ctx.resolve_workspace().await?;
+    let workspace_name = ctx.resolve_workspace_with_bootstrap(allow_bootstrap).await?;
 
     // Resolve project
-    let (_project_id, project_link) = ctx.resolve_project(args.project.as_deref()).await?;
+    let (_project_id, project_link) = ctx
+        .resolve_project(args.project.as_deref(), allow_bootstrap)
+        .await?;
 
     // Determine platforms
     let platforms = if let Some(platform_str) = &args.platform {
@@ -406,34 +289,33 @@ async fn load_release_config(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<
 
 /// Core release logic for console mode (with validation and confirmation)
 async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseResult> {
-    info!("Starting release command");
+    println!("Preparing release...");
 
-    // Step 1: Load configuration (with event scope)
     let config = AlienEvent::LoadingConfiguration
         .in_scope(|_| async {
-            let config = load_release_config(&args, &ctx).await?;
+            let config = load_release_config(&args, &ctx, true).await?;
 
-            // Console mode: print summary and confirm
             print_release_summary_new(
                 &config.platforms,
                 &config.project_link.project_name,
                 &config.git_metadata,
             );
 
-            if !confirm_release(args.yes)? {
-                return Err(AlienError::new(ErrorData::GenericError {
-                    message: "Release cancelled.".to_string(),
-                }));
+            if !confirm_release(args.yes, false)? {
+                return Err(AlienError::new(ErrorData::UserCancelled));
             }
 
             Ok(config)
         })
         .await?;
 
-    release_task_core(args, config).await
+    let release_id = release_task_core(args, config).await?;
+    println!("Release created: {release_id}");
+    println!("Next: run `alien deployments create ...` or `alien deploy ...` as needed.");
+    Ok(release_id)
 }
 
-/// Core release logic (shared by TUI and console modes).
+/// Core release logic shared by all output modes.
 ///
 /// Always uses the manager SDK to create the release — no mode branching.
 async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<ReleaseResult> {
@@ -522,7 +404,7 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
     // Create release on the manager
     let release_id = create_manager_release(&manager, stack_by_platform, sdk_git_metadata).await?;
 
-    Ok(ReleaseResult::Success { release_id })
+    Ok(release_id)
 }
 
 /// Create a release on the manager
@@ -876,28 +758,17 @@ fn print_release_summary_new(
 }
 
 /// Confirm release creation with user
-fn confirm_release(yes: bool) -> Result<bool> {
+fn confirm_release(yes: bool, json_mode: bool) -> Result<bool> {
     if yes {
         return Ok(true);
     }
 
-    print!("Create this release? [Y/n] ");
-    use std::io::{self, Write};
-    io::stdout()
-        .flush()
-        .into_alien_error()
-        .context(ErrorData::TuiOperationFailed {
-            message: "Failed to flush stdout".to_string(),
-        })?;
+    if json_mode || !can_prompt() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Release confirmation requires a real terminal. Re-run with `--yes`."
+                .to_string(),
+        }));
+    }
 
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .into_alien_error()
-        .context(ErrorData::TuiOperationFailed {
-            message: "Failed to read user input".to_string(),
-        })?;
-
-    let input = input.trim().to_lowercase();
-    Ok(input.is_empty() || input == "y" || input == "yes")
+    prompt_confirm("Create this release?", true)
 }

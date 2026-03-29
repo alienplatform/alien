@@ -1677,9 +1677,9 @@ impl AwsNetworkController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Network doesn't have bindings - other resources access it via require_dependency
-        None
+        Ok(None)
     }
 }
 

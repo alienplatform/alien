@@ -1,5 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::output::print_json;
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::types::ListProjectsWorkspace;
 use alien_platform_api::SdkResultExt;
@@ -8,9 +9,17 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Project commands",
-    long_about = "Manage projects in the Alien platform."
+    long_about = "Manage projects in the Alien platform.",
+    after_help = "EXAMPLES:
+    alien projects ls
+    alien projects ls --json
+    alien --workspace my-workspace projects ls"
 )]
 pub struct ProjectArgs {
+    /// Emit structured JSON output
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub cmd: ProjectCmd,
 }
@@ -24,46 +33,47 @@ pub enum ProjectCmd {
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
     let http = ctx.auth_http().await?;
-    let workspace_name = ctx.resolve_workspace().await?;
+    let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
 
     match args.cmd {
-        ProjectCmd::Ls => {
-            list_projects_task(&http, &workspace_name).await?;
-        }
+        ProjectCmd::Ls => list_projects_task(&http, &workspace_name, args.json).await?,
     }
+
     Ok(())
 }
 
-async fn list_projects_task(http: &crate::auth::AuthHttp, workspace: &str) -> Result<()> {
-    let client = http.sdk_client();
-
+async fn list_projects_task(
+    http: &crate::auth::AuthHttp,
+    workspace: &str,
+    json: bool,
+) -> Result<()> {
     let workspace_param = ListProjectsWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: "Workspace name is not valid".to_string(),
         })?;
-    let response = client
+
+    let response = http
+        .sdk_client()
         .list_projects()
         .workspace(&workspace_param)
         .send()
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "listing projects".to_string(),
+            message: "Failed to list projects".to_string(),
             url: None,
         })?;
-    let projects_response = response.into_inner();
 
-    if projects_response.items.is_empty() {
+    let items = response.into_inner().items;
+    if json {
+        print_json(&items)?;
+    } else if items.is_empty() {
         println!("(no projects)");
     } else {
-        let json_str = serde_json::to_string_pretty(&projects_response.items)
-            .into_alien_error()
-            .context(ErrorData::JsonError {
-                operation: "serialization".to_string(),
-                reason: "Unable to format projects as JSON".to_string(),
-            })?;
-        println!("{}", json_str);
+        for project in items {
+            println!("{} ({})", project.name, project.id);
+        }
     }
 
     Ok(())

@@ -116,17 +116,29 @@ impl Queue for AzureServiceBusQueue {
                         Err(_) => MessagePayload::Text(body),
                     };
 
-                    // Use lock token as receipt handle for acknowledgment
-                    let receipt_handle = received_msg
+                    // Encode both message_id and lock_token in receipt_handle for ack()
+                    let broker_props = received_msg
                         .broker_properties
                         .as_ref()
-                        .and_then(|bp| bp.lock_token.clone())
                         .ok_or_else(|| {
                             alien_error::AlienError::new(ErrorData::BindingSetupFailed {
                                 binding_type: "queue.servicebus".to_string(),
-                                reason: "Received message without lock token".to_string(),
+                                reason: "Received message without broker properties".to_string(),
                             })
                         })?;
+                    let message_id = broker_props.message_id.as_deref().ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                            binding_type: "queue.servicebus".to_string(),
+                            reason: "Received message without message ID".to_string(),
+                        })
+                    })?;
+                    let lock_token = broker_props.lock_token.as_deref().ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                            binding_type: "queue.servicebus".to_string(),
+                            reason: "Received message without lock token".to_string(),
+                        })
+                    })?;
+                    let receipt_handle = format!("{}\n{}", message_id, lock_token);
 
                     messages.push(QueueMessage {
                         payload,
@@ -150,14 +162,20 @@ impl Queue for AzureServiceBusQueue {
     }
 
     async fn ack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
-        // For Azure Service Bus, receipt_handle is the lock token
-        // We use the lock token as both message ID and lock token for the complete_message call
+        // receipt_handle encodes "message_id\nlock_token" (set in receive())
+        let (message_id, lock_token) = receipt_handle.split_once('\n').ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "queue.servicebus".to_string(),
+                reason: "Invalid receipt handle format: expected message_id\\nlock_token"
+                    .to_string(),
+            })
+        })?;
         self.client
             .complete_message(
                 self.namespace.clone(),
                 self.queue_name.clone(),
-                receipt_handle.to_string(), // message_id
-                receipt_handle.to_string(), // lock_token
+                message_id.to_string(),
+                lock_token.to_string(),
             )
             .await
             .context(ErrorData::BindingSetupFailed {

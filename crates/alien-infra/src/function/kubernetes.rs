@@ -7,7 +7,7 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Function, FunctionCode, FunctionOutputs, ResourceOutputs, ResourceStatus};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
@@ -571,7 +571,7 @@ impl KubernetesFunctionController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::{BindingValue, KubernetesFunctionBinding};
 
         // Construct binding on-the-fly from stored fields (like other controllers)
@@ -590,9 +590,14 @@ impl KubernetesFunctionController {
             };
 
             // Serialize to JSON
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -645,7 +650,7 @@ impl KubernetesFunctionController {
             .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
-            .add_self_function_binding(&config.id, self.get_binding_params().as_ref())?;
+            .add_self_function_binding(&config.id, self.get_binding_params()?.as_ref())?;
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 

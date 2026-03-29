@@ -4,28 +4,34 @@
 alien dev
 ```
 
-Builds your stack and deploys it locally with Docker. Hot-reloads on code changes.
+This is the local Alien workflow. It starts the local manager, builds your app for the local platform, creates a local release, creates or updates the initial deployment, and prints the local URLs you can use.
 
-`alien dev` is local-only — it starts a local alien-manager in dev mode with permissive auth, no cloud credentials needed. For cloud deployment, use `alien deploy` with a standalone manager or the platform.
+`alien dev` is local-only. For non-local managers, use the top-level commands such as `alien release`, `alien deploy`, and `alien deployments ...`.
 
-## Dev Server
+## Server Only
 
-`alien dev` starts an interactive TUI showing deployment status, logs, and rebuild triggers.
-
-To start just the server without the TUI:
+If you only want the local manager:
 
 ```bash
 alien dev server
 ```
 
-## Dev Subcommands
+Then you can drive it with explicit local commands:
 
 ```bash
-alien dev deployments            # List dev deployments
-alien dev release                # Push a new release
-alien dev destroy                # Tear down dev deployment
+alien dev deployments ls
+alien dev release
+alien dev deploy --name preview
+```
+
+## Machine Interface
+
+For tooling, use the status file contract instead of parsing terminal output:
+
+```bash
+alien dev --status-file .alien/dev-status.json
 ```
 
 ## Next
 
-- [Onboarding Customers](04-onboarding.md) — deploy to your customers' environments
+- [Onboarding Customers](04-onboarding.md)

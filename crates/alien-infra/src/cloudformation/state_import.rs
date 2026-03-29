@@ -271,7 +271,7 @@ pub async fn import_stack_state_from_cloudformation_with_registry(
         let mut resource_state = StackResourceState {
             resource_type: format!("{:?}", resource_type),
             outputs: internal_state.get_outputs(),
-            remote_binding_params: internal_state.get_binding_params(),
+            remote_binding_params: internal_state.get_binding_params()?,
             internal_state: None, // Will be set below
             status: ResourceStatus::Running,
             config,

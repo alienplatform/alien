@@ -15,7 +15,7 @@ This starts a self-contained manager backed by SQLite. No external dependencies,
 - **Full independence** — zero dependency on any external service
 - **Contributing** — develop and test Alien itself
 
-For production use with cloud platforms, the [alien-hosted tier](https://alien.dev) or [private manager](08-private-manager.md) are recommended — they provide managed TLS, container orchestration, and the dashboard.
+For production use with cloud platforms, the [alien-hosted tier](https://alien.dev) or [private manager](08-private-manager.md) are recommended — they provide managed TLS, container orchestration, and the full hosted control plane.
 
 ## Setup
 
@@ -60,7 +60,7 @@ The `ALIEN_MANAGER_URL` variable tells the CLI to talk to your standalone manage
 | Containers on cloud VMs | — | Horizon orchestration |
 | Custom domains | — | Managed DNS + TLS |
 | White-labeled CLI / packages | — | Auto-generated |
-| Dashboard | — | Web UI |
+| Web UI | — | Hosted platform UI |
 | Telemetry | OTLP forwarding | DeepStore + dashboard |
 
 Public HTTPS endpoints on cloud platforms require managed TLS certificates and DNS — infrastructure that's genuinely hard to self-host. Containers on cloud VMs require Horizon, Alien's container orchestration system. These aren't artificial limitations.
@@ -113,8 +113,8 @@ export ALIEN_MANAGER_URL=http://localhost:8080
 export ALIEN_API_KEY=<token from above>
 
 cd examples/minimal-cloud-agent
-../../target/debug/alien build --platform local --no-tui
-../../target/debug/alien release --platform local --yes --no-tui
+../../target/debug/alien build --platform local
+../../target/debug/alien release --platform local --yes
 ../../target/debug/alien onboard my-fleet
 
 # In a third terminal

@@ -6,6 +6,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::output::{print_json, prompt_confirm};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     CreateManagerWorkspace, DeleteManagerWorkspace, GetManagerWorkspace,
@@ -14,7 +15,7 @@ use alien_platform_api::types::{
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand};
-use std::io::{self, Write};
+use serde::Serialize;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -22,8 +23,54 @@ use std::io::{self, Write};
     long_about = "Manage private managers deployed to your cloud."
 )]
 pub struct ManagerArgs {
+    /// Print machine-readable JSON
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub cmd: ManagerCmd,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerSummary {
+    id: String,
+    name: String,
+    status: String,
+    targets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_deployment_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deployment_link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_system: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerEventSummary {
+    id: String,
+    created_at: String,
+    state: String,
+    summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DestroyManagerOutput {
+    destroyed: bool,
+    id: String,
+    name: String,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -72,7 +119,7 @@ pub enum ManagerCmd {
 
 pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
     let client = ctx.sdk_client().await?;
-    let workspace_name = ctx.resolve_workspace().await?;
+    let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
 
     match args.cmd {
         ManagerCmd::Deploy {
@@ -80,19 +127,20 @@ pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
             platform,
             targets,
         } => {
-            deploy_manager_task(&client, &workspace_name, &name, &platform, targets).await?;
+            deploy_manager_task(&client, &workspace_name, &name, &platform, targets, args.json)
+                .await?;
         }
         ManagerCmd::Status { id } => {
-            status_manager_task(&client, &workspace_name, &id).await?;
+            status_manager_task(&client, &workspace_name, &id, args.json).await?;
         }
         ManagerCmd::Ls => {
-            list_managers_task(&client, &workspace_name).await?;
+            list_managers_task(&client, &workspace_name, args.json).await?;
         }
         ManagerCmd::Events { id, follow } => {
-            events_manager_task(&client, &workspace_name, &id, follow).await?;
+            events_manager_task(&client, &workspace_name, &id, follow, args.json).await?;
         }
         ManagerCmd::Destroy { id, yes } => {
-            destroy_manager_task(&client, &workspace_name, &id, yes).await?;
+            destroy_manager_task(&client, &workspace_name, &id, yes, args.json).await?;
         }
     }
 
@@ -137,6 +185,7 @@ async fn deploy_manager_task(
     name: &str,
     platform_str: &str,
     target_strs: Vec<String>,
+    json: bool,
 ) -> Result<()> {
     let platform = parse_manager_platform(platform_str)?;
 
@@ -180,29 +229,41 @@ async fn deploy_manager_task(
         })?;
 
     let manager = response.into_inner();
+    let summary = ManagerSummary {
+        id: manager.id.as_str().to_string(),
+        name: manager.name.clone(),
+        status: manager.status.to_string(),
+        targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+        managed_deployment_count: None,
+        created_at: None,
+        url: None,
+        version: None,
+        last_heartbeat_at: None,
+        deployment_link: Some(manager.deployment_link.to_string()),
+        token: Some(manager.token.to_string()),
+        is_system: None,
+    };
+
+    if json {
+        return print_json(&summary);
+    }
 
     println!("Manager created successfully!");
-    println!("  ID: {}", *manager.id);
-    println!("  Name: {}", manager.name);
+    println!("  ID: {}", summary.id);
+    println!("  Name: {}", summary.name);
     println!("  Platform: {}", platform_str);
-    println!(
-        "  Targets: {}",
-        manager
-            .targets
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    println!("  Status: {}", manager.status);
+    println!("  Targets: {}", summary.targets.join(", "));
+    println!("  Status: {}", summary.status);
     println!();
-    println!("  Deployment Link: {}", manager.deployment_link);
-    println!("  Token: {}", manager.token);
+    if let Some(deployment_link) = &summary.deployment_link {
+        println!("  Deployment Link: {}", deployment_link);
+    }
+    if let Some(token) = &summary.token {
+        println!("  Token: {}", token);
+        println!();
+        println!("Next: alien deploy --token {} --name <deployment>", token);
+    }
     println!();
-    println!(
-        "Deploy the manager using: alien deploy --token {}",
-        manager.token
-    );
 
     Ok(())
 }
@@ -211,6 +272,7 @@ async fn status_manager_task(
     client: &alien_platform_api::Client,
     workspace: &str,
     manager_id: &str,
+    json: bool,
 ) -> Result<()> {
     let workspace_param = GetManagerWorkspace::try_from(workspace)
         .into_alien_error()
@@ -240,41 +302,61 @@ async fn status_manager_task(
         })?;
 
     let manager = response.into_inner();
+    let summary = ManagerSummary {
+        id: manager.id.as_str().to_string(),
+        name: manager.name.clone(),
+        status: manager.status.to_string(),
+        targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+        managed_deployment_count: Some(manager.managed_deployment_count),
+        created_at: Some(manager.created_at.to_string()),
+        url: manager.url.as_ref().map(|value| value.to_string()),
+        version: manager.version.as_ref().map(|value| value.to_string()),
+        last_heartbeat_at: manager.last_heartbeat_at.map(|value| value.to_string()),
+        deployment_link: None,
+        token: None,
+        is_system: Some(manager.is_system),
+    };
+
+    if json {
+        return print_json(&summary);
+    }
 
     println!("Manager Details:");
-    println!("  ID: {}", *manager.id);
-    println!("  Name: {}", manager.name);
-    println!("  Status: {}", manager.status);
-    println!(
-        "  Targets: {}",
-        manager
-            .targets
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    println!("  System: {}", manager.is_system);
-    println!("  Deployments: {}", manager.managed_deployment_count);
+    println!("  ID: {}", summary.id);
+    println!("  Name: {}", summary.name);
+    println!("  Status: {}", summary.status);
+    println!("  Targets: {}", summary.targets.join(", "));
+    if let Some(is_system) = summary.is_system {
+        println!("  System: {}", is_system);
+    }
+    if let Some(managed_deployment_count) = summary.managed_deployment_count {
+        println!("  Deployments: {}", managed_deployment_count);
+    }
 
-    if let Some(url) = &manager.url {
+    if let Some(url) = &summary.url {
         println!("  URL: {}", url);
     }
 
-    if let Some(version) = &manager.version {
+    if let Some(version) = &summary.version {
         println!("  Version: {}", version);
     }
 
-    if let Some(last_heartbeat) = &manager.last_heartbeat_at {
+    if let Some(last_heartbeat) = &summary.last_heartbeat_at {
         println!("  Last Heartbeat: {}", last_heartbeat);
     }
 
-    println!("  Created: {}", manager.created_at);
+    if let Some(created_at) = &summary.created_at {
+        println!("  Created: {}", created_at);
+    }
 
     Ok(())
 }
 
-async fn list_managers_task(client: &alien_platform_api::Client, workspace: &str) -> Result<()> {
+async fn list_managers_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    json: bool,
+) -> Result<()> {
     let workspace_param = ListManagersWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -294,24 +376,39 @@ async fn list_managers_task(client: &alien_platform_api::Client, workspace: &str
         })?;
 
     let managers = response.into_inner();
+    let summaries: Vec<ManagerSummary> = managers
+        .iter()
+        .map(|manager| ManagerSummary {
+            id: manager.id.as_str().to_string(),
+            name: manager.name.clone(),
+            status: manager.status.to_string(),
+            targets: manager.targets.iter().map(|target| target.to_string()).collect(),
+            managed_deployment_count: Some(manager.managed_deployment_count),
+            created_at: Some(manager.created_at.to_string()),
+            url: manager.url.as_ref().map(|value| value.to_string()),
+            version: manager.version.as_ref().map(|value| value.to_string()),
+            last_heartbeat_at: manager.last_heartbeat_at.map(|value| value.to_string()),
+            deployment_link: None,
+            token: None,
+            is_system: Some(manager.is_system),
+        })
+        .collect();
 
-    if managers.is_empty() {
+    if json {
+        return print_json(&summaries);
+    }
+
+    if summaries.is_empty() {
         println!("(no managers)");
     } else {
-        for manager in &managers {
-            println!("Manager ID: {}", manager.id.as_str());
+        for manager in &summaries {
+            println!("Manager ID: {}", manager.id);
             println!("  Name: {}", manager.name);
             println!("  Status: {}", manager.status);
-            println!(
-                "  Targets: {}",
-                manager
-                    .targets
-                    .iter()
-                    .map(|t| t.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            println!("  Deployments: {}", manager.managed_deployment_count);
+            println!("  Targets: {}", manager.targets.join(", "));
+            if let Some(managed_deployment_count) = manager.managed_deployment_count {
+                println!("  Deployments: {}", managed_deployment_count);
+            }
 
             if let Some(version) = &manager.version {
                 println!("  Version: {}", version);
@@ -321,7 +418,9 @@ async fn list_managers_task(client: &alien_platform_api::Client, workspace: &str
                 println!("  Last Heartbeat: {}", last_heartbeat);
             }
 
-            println!("  Created: {}", manager.created_at);
+            if let Some(created_at) = &manager.created_at {
+                println!("  Created: {}", created_at);
+            }
             println!();
         }
     }
@@ -384,7 +483,15 @@ async fn events_manager_task(
     workspace: &str,
     manager_id: &str,
     follow: bool,
+    json: bool,
 ) -> Result<()> {
+    if json && follow {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "follow".to_string(),
+            message: "`alien manager events --json` does not support `--follow`; rerun without `--json` for streaming output".to_string(),
+        }));
+    }
+
     let workspace_param = ListManagerEventsWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -418,24 +525,33 @@ async fn events_manager_task(
 
         let events_response = response.into_inner();
         let events = &events_response.items;
-
-        if events.is_empty() && last_event_id.is_none() {
-            println!("(no events)");
-        }
-
-        // Find events newer than what we've already printed
         let new_events: Vec<_> = match &last_event_id {
             Some(seen_id) => {
-                // Find the position of the last seen event, then take everything after it.
-                // Events are assumed to come in chronological order.
                 let pos = events.iter().position(|e| *e.id == *seen_id);
                 match pos {
                     Some(idx) => events[idx + 1..].to_vec(),
-                    None => events.to_vec(), // If not found, print all
+                    None => events.to_vec(),
                 }
             }
             None => events.to_vec(),
         };
+
+        if events.is_empty() && last_event_id.is_none() && !json {
+            println!("(no events)");
+        }
+
+        if json {
+            let payload: Vec<ManagerEventSummary> = new_events
+                .iter()
+                .map(|event| ManagerEventSummary {
+                    id: (*event.id).clone(),
+                    created_at: event.created_at.to_string(),
+                    state: format_event_state(&event.state).to_string(),
+                    summary: format_event_data(&event.data),
+                })
+                .collect();
+            return print_json(&payload);
+        }
 
         for event in &new_events {
             let state = format_event_state(&event.state);
@@ -466,6 +582,7 @@ async fn destroy_manager_task(
     workspace: &str,
     manager_id: &str,
     yes: bool,
+    json: bool,
 ) -> Result<()> {
     // Get manager details first for confirmation
     let workspace_param_get = GetManagerWorkspace::try_from(workspace)
@@ -497,50 +614,36 @@ async fn destroy_manager_task(
 
     let manager = response.into_inner();
 
-    // Show what we're about to delete
-    println!("About to destroy manager:");
-    println!("  ID: {}", *manager.id);
-    println!("  Name: {}", manager.name);
-    println!("  Status: {}", manager.status);
-    println!("  Deployments: {}", manager.managed_deployment_count);
+    if !json {
+        println!("About to destroy manager:");
+        println!("  ID: {}", *manager.id);
+        println!("  Name: {}", manager.name);
+        println!("  Status: {}", manager.status);
+        println!("  Deployments: {}", manager.managed_deployment_count);
 
-    if manager.managed_deployment_count > 0 {
-        println!();
-        println!(
-            "  WARNING: This manager is currently managing {} deployment(s).",
-            manager.managed_deployment_count
-        );
-        println!("  Destroying it will leave those deployments unmanaged.");
+        if manager.managed_deployment_count > 0 {
+            println!();
+            println!(
+                "  WARNING: This manager is currently managing {} deployment(s).",
+                manager.managed_deployment_count
+            );
+            println!("  Destroying it will leave those deployments unmanaged.");
+        }
     }
 
     // Confirm destruction
-    if !yes {
-        print!("\nAre you sure you want to destroy this manager? [y/N] ");
-        io::stdout()
-            .flush()
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "flush".to_string(),
-                file_path: "stdout".to_string(),
-                reason: "could not write output".to_string(),
-            })
-            .ok();
+    if json && !yes {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "yes".to_string(),
+            message:
+                "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode"
+                    .to_string(),
+        }));
+    }
 
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: "stdin".to_string(),
-                reason: "could not read input".to_string(),
-            })?;
-
-        let input = input.trim().to_lowercase();
-        if input != "y" && input != "yes" {
-            println!("Destruction cancelled.");
-            return Ok(());
-        }
+    if !yes && !prompt_confirm("Destroy this manager?", false)? {
+        println!("Destruction cancelled.");
+        return Ok(());
     }
 
     // Delete the manager
@@ -570,6 +673,14 @@ async fn destroy_manager_task(
             message: "deleting manager".to_string(),
             url: None,
         })?;
+
+    if json {
+        return print_json(&DestroyManagerOutput {
+            destroyed: true,
+            id: manager.id.as_str().to_string(),
+            name: manager.name.clone(),
+        });
+    }
 
     println!(
         "Manager '{}' ({}) destruction initiated.",

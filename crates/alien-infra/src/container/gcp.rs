@@ -3332,27 +3332,34 @@ impl GcpContainerController {
         }))
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, ContainerBinding};
 
-        self.container_name.as_ref().map(|name| {
-            let internal_url = format!("http://{}.svc:8080", name);
+        let Some(name) = &self.container_name else {
+            return Ok(None);
+        };
 
-            let binding = if let Some(url) = &self.public_url {
-                ContainerBinding::horizon_with_public_url(
-                    BindingValue::value(name.clone()),
-                    BindingValue::value(internal_url),
-                    BindingValue::value(url.clone()),
-                )
-            } else {
-                ContainerBinding::horizon(
-                    BindingValue::value(name.clone()),
-                    BindingValue::value(internal_url),
-                )
-            };
+        let internal_url = format!("http://{}.svc:8080", name);
 
-            serde_json::to_value(binding).unwrap_or_default()
-        })
+        let binding = if let Some(url) = &self.public_url {
+            ContainerBinding::horizon_with_public_url(
+                BindingValue::value(name.clone()),
+                BindingValue::value(internal_url),
+                BindingValue::value(url.clone()),
+            )
+        } else {
+            ContainerBinding::horizon(
+                BindingValue::value(name.clone()),
+                BindingValue::value(internal_url),
+            )
+        };
+
+        Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+            ErrorData::ResourceStateSerializationFailed {
+                resource_id: "binding".to_string(),
+                message: "Failed to serialize binding parameters".to_string(),
+            },
+        )?))
     }
 }
 

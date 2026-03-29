@@ -2,7 +2,7 @@
  * deploy() — single entry point for deploying an Alien application for testing
  *
  * Auto-detects the deployment method based on the target platform:
- * - local (default): spawns `alien dev` as a child process — no credentials needed
+ * - local (default): spawns `alien dev` and watches its status file contract
  * - aws / gcp / azure: builds + creates release/deployment via platform API — reads ALIEN_API_KEY from env
  */
 
@@ -11,12 +11,17 @@ import { existsSync, readFileSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { AlienError } from "@alienplatform/core"
+import type { DevStatus } from "@alienplatform/core"
 import getPort from "get-port"
 import { Deployment } from "./deployment.js"
 import { TestingOperationFailedError, withTestingContext } from "./errors.js"
-import type { DeployOptions, DeploymentInfo } from "./types.js"
+import type { DeployOptions } from "./types.js"
 
 const execFileAsync = promisify(execFile)
+
+type DevStatusAgent = DevStatus["agents"][string] & {
+  commandsUrl?: string | null
+}
 
 /**
  * Get the alien CLI path with fallback discovery.
@@ -81,8 +86,9 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
   const verbose = options.verbose ?? process.env.VERBOSE === "true"
   const port = await getPort()
   const cliPath = getAlienCliPath(options.app)
+  const statusFile = join(options.app, ".alien", "testing-dev-status.json")
 
-  const args = ["dev", "--no-tui", "--port", String(port)]
+  const args = ["dev", "--port", String(port), "--status-file", statusFile]
 
   if (options.config) {
     args.push("--config", options.config)
@@ -141,38 +147,50 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
     stderr += `\nFailed to spawn alien CLI: ${err.message}`
   })
 
-  const serverUrl = `http://localhost:${port}`
-
   try {
-    const info = await waitForDevDeploymentRunning(
-      serverUrl,
+    const status = await waitForDevStatusReady(
+      statusFile,
       () => exited,
       () => exitCode,
       () => stderr,
     )
 
-    const publicUrl = findPublicUrl(info.resources)
+    const agent = findPrimaryAgent(status)
+
+    const publicUrl = findPublicUrl(agent.resources)
     if (!publicUrl) {
       throw new AlienError(
         TestingOperationFailedError.create({
           operation: "resolve-public-url",
           message: "No public URL found in deployment resources",
-          details: { resources: info.resources },
+          details: { resources: agent.resources },
         }),
       )
     }
 
     if (verbose) {
       console.log(`[testing] Public URL: ${publicUrl}`)
-      console.log(`[testing] Commands URL: ${info.commands.url}`)
+      if (agent.commandsUrl) {
+        console.log(`[testing] Commands URL: ${agent.commandsUrl}`)
+      }
+    }
+
+    if (!agent.commandsUrl) {
+      throw new AlienError(
+        TestingOperationFailedError.create({
+          operation: "resolve-commands-url",
+          message: "alien dev status file did not include a commands URL",
+          details: { agent },
+        }),
+      )
     }
 
     return new Deployment({
-      id: info.commands.deploymentId,
-      name: "default",
+      id: agent.id,
+      name: agent.name,
       url: publicUrl,
       platform: options.platform ?? "local",
-      commandsUrl: info.commands.url,
+      commandsUrl: agent.commandsUrl,
       process: proc,
       appPath: options.app,
     })
@@ -181,8 +199,8 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
     throw await withTestingContext(
       error,
       "deploy",
-      "Failed while waiting for deployment to become ready",
-      { serverUrl, appPath: options.app, platform: options.platform ?? "local" },
+      "Failed while waiting for alien dev to become ready",
+      { statusFile, appPath: options.app, platform: options.platform ?? "local" },
     )
   }
 }
@@ -301,25 +319,24 @@ async function deployViaApi(options: DeployOptions): Promise<Deployment> {
 // ---------------------------------------------------------------------------
 
 /**
- * Wait for a dev-mode deployment to reach "running" status by polling the local server API.
+ * Wait for `alien dev` to report a ready local session via its status file.
  */
-async function waitForDevDeploymentRunning(
-  serverUrl: string,
+async function waitForDevStatusReady(
+  statusFile: string,
   hasExited: () => boolean,
   getExitCode: () => number | null,
   getStderr: () => string,
-): Promise<DeploymentInfo> {
+): Promise<DevStatus> {
   const timeout = 900_000
-  const pollInterval = 2000
+  const pollInterval = 500
   const start = Date.now()
 
-  // First wait for the server to be healthy
   while (Date.now() - start < timeout) {
     if (hasExited()) {
       throw new AlienError(
         TestingOperationFailedError.create({
-          operation: "wait-for-health",
-          message: "alien dev exited before deployment was ready",
+          operation: "wait-for-ready",
+          message: "alien dev exited before the local session became ready",
           details: {
             exitCode: getExitCode(),
             stderrTail: getStderr().slice(-1000),
@@ -328,69 +345,31 @@ async function waitForDevDeploymentRunning(
       )
     }
 
-    try {
-      const resp = await fetch(`${serverUrl}/health`, { signal: AbortSignal.timeout(1000) })
-      if (resp.ok) break
-    } catch {
-      // Expected while server is starting
-    }
-
-    await new Promise(r => setTimeout(r, 500))
-  }
-
-  // Poll deployments until one is running
-  while (Date.now() - start < timeout) {
-    if (hasExited()) {
-      throw new AlienError(
-        TestingOperationFailedError.create({
-          operation: "wait-for-running",
-          message: "alien dev exited before deployment was ready",
-          details: {
-            exitCode: getExitCode(),
-            stderrTail: getStderr().slice(-1000),
-          },
-        }),
-      )
+    if (!existsSync(statusFile)) {
+      await new Promise(r => setTimeout(r, pollInterval))
+      continue
     }
 
     try {
-      const listResp = await fetch(`${serverUrl}/v1/deployments`, {
-        signal: AbortSignal.timeout(5000),
-      })
+      const status = JSON.parse(readFileSync(statusFile, "utf-8")) as DevStatus
+      if (status.status === "error") {
+        throw new AlienError(
+          TestingOperationFailedError.create({
+            operation: "wait-for-ready",
+            message: "alien dev reported an error status",
+            details: { status },
+          }),
+        )
+      }
 
-      if (listResp.ok) {
-        const list = (await listResp.json()) as {
-          items: Array<{ id: string; name: string; status: string }>
-        }
-        const deployment = list.items[0]
-
-        if (deployment) {
-          if (deployment.status === "error" || deployment.status.includes("failed")) {
-            throw new AlienError(
-              TestingOperationFailedError.create({
-                operation: "wait-for-running",
-                message: `Deployment failed with status: ${deployment.status}`,
-                details: { deploymentId: deployment.id, deploymentName: deployment.name },
-              }),
-            )
-          }
-
-          const infoResp = await fetch(`${serverUrl}/v1/deployments/${deployment.id}/info`, {
-            signal: AbortSignal.timeout(5000),
-          })
-
-          if (infoResp.ok) {
-            const info = (await infoResp.json()) as DeploymentInfo
-            if (info.status === "running") {
-              return info
-            }
-          }
-        }
+      if (status.status === "ready" && Object.keys(status.agents ?? {}).length > 0) {
+        return status
       }
     } catch (error) {
       if (error instanceof AlienError && error.code === "TESTING_OPERATION_FAILED") {
         throw error
       }
+      // Status file may be mid-write; retry.
     }
 
     await new Promise(r => setTimeout(r, pollInterval))
@@ -398,11 +377,26 @@ async function waitForDevDeploymentRunning(
 
   throw new AlienError(
     TestingOperationFailedError.create({
-      operation: "wait-for-running",
-      message: `Timeout waiting for deployment to reach running status (${timeout / 1000}s)`,
-      details: { serverUrl, timeoutMs: timeout },
+      operation: "wait-for-ready",
+      message: `Timeout waiting for alien dev to report readiness (${timeout / 1000}s)`,
+      details: { statusFile, timeoutMs: timeout },
     }),
   )
+}
+
+function findPrimaryAgent(status: DevStatus): DevStatusAgent {
+  const agent = Object.values(status.agents ?? {})[0] as DevStatusAgent | undefined
+  if (!agent) {
+    throw new AlienError(
+      TestingOperationFailedError.create({
+        operation: "resolve-agent",
+        message: "alien dev reported readiness but no agents were present in the status file",
+        details: { status },
+      }),
+    )
+  }
+
+  return agent
 }
 
 /**
@@ -462,22 +456,22 @@ async function waitForPlatformDeploymentRunning(
  * Find the public URL from deployment resources
  */
 function findPublicUrl(
-  resources: Record<string, { resourceType: string; publicUrl?: string }>,
+  resources: Record<string, { url: string; resourceType?: string | null }>,
 ): string | undefined {
   for (const [name, resource] of Object.entries(resources)) {
     if (
-      resource.publicUrl &&
+      resource.url &&
       (name.includes("router") || name.includes("gateway") || name.includes("proxy"))
     ) {
-      return resource.publicUrl
+      return resource.url
     }
   }
 
   const publicResources = Object.entries(resources).filter(
-    ([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.publicUrl,
+    ([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.url,
   )
   if (publicResources.length > 0) {
-    return publicResources[publicResources.length - 1]![1].publicUrl
+    return publicResources[publicResources.length - 1]![1].url
   }
 
   return undefined

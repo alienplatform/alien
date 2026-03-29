@@ -677,10 +677,12 @@ pub trait ResourceController: Send + Sync + Debug {
     /// `create_start` and `update_start` operations, not during `get_binding_params`.
     ///
     /// # Returns
-    /// A serde_json::Value containing the binding parameters struct, or None if not ready
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    /// - `Ok(Some(value))` — binding parameters ready
+    /// - `Ok(None)` — resource not ready yet (still provisioning)
+    /// - `Err(...)` — serialization or other internal failure
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Default implementation returns None for resources that don't expose binding parameters
-        None
+        Ok(None)
     }
 }
 

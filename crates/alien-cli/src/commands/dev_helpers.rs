@@ -9,11 +9,14 @@ use crate::{
     config::load_configuration,
     error::{ErrorData, Result},
     get_current_dir,
+    output::write_json_file,
 };
 use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_commands::server::NullCommandDispatcher;
-use alien_core::{BinaryTarget, Stack};
+use alien_core::{
+    AgentStatus, BinaryTarget, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
     providers::{
@@ -29,6 +32,9 @@ use alien_manager::{
 };
 use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
 use alien_manager_api::Client as AlienManagerClient;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +48,16 @@ pub struct CliEnvVar {
     pub value: String,
     pub is_secret: bool,
     pub target_resources: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevDeploymentSnapshot {
+    pub deployment_id: String,
+    pub deployment_name: String,
+    pub status: DeploymentStatus,
+    pub commands_url: String,
+    pub resources: HashMap<String, DevResourceInfo>,
 }
 
 /// Check if dev server is healthy
@@ -58,13 +74,36 @@ pub async fn ensure_server_running(port: u16) -> Result<()> {
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
 pub async fn ensure_server_running_with_env(
     port: u16,
-    _status_file: Option<PathBuf>,
+    status_file: Option<PathBuf>,
     _user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
     if check_server_health(port).await {
         info!("Dev server already running on port {}", port);
         ensure_local_dev_deployment_group(port).await?;
+        if let Some(status_file) = status_file {
+            write_dev_status(
+                &status_file,
+                &build_dev_status(
+                    port,
+                    DevStatusState::Initializing,
+                    None,
+                    None,
+                ),
+            )?;
+        }
         return Ok(());
+    }
+
+    if let Some(status_file) = status_file {
+        write_dev_status(
+            &status_file,
+            &build_dev_status(
+                port,
+                DevStatusState::Initializing,
+                None,
+                None,
+            ),
+        )?;
     }
 
     start_embedded_dev_manager(port).await
@@ -278,7 +317,7 @@ pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Build and post a release to the dev server (simple version for use in TUI setup).
+/// Build and post a release to the dev server for the local `alien dev` flow.
 ///
 /// Always builds for the local platform — dev mode is local-only.
 /// Reads the stack from `.alien/build/local/stack.json`.
@@ -384,7 +423,7 @@ pub async fn create_initial_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
-) -> Result<()> {
+) -> Result<String> {
     let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
     let base_url = format!("http://localhost:{}", port);
 
@@ -402,7 +441,16 @@ pub async fn create_initial_deployment(
         .any(|d| d.name == deployment_name);
     if exists {
         info!("Deployment '{}' already exists", deployment_name);
-        return Ok(());
+        let existing = list_response
+            .items
+            .into_iter()
+            .find(|deployment| deployment.name == deployment_name)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "Deployment disappeared while resolving local deployment".to_string(),
+                })
+            })?;
+        return Ok(existing.id);
     }
 
     // Create deployment with environment variables via raw HTTP
@@ -445,6 +493,239 @@ pub async fn create_initial_deployment(
         }));
     }
 
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "deserialize".to_string(),
+            reason: "Failed to parse deployment creation response".to_string(),
+        })?;
+
+    let deployment_id = body
+        .get("deployment")
+        .and_then(|deployment| deployment.get("id"))
+        .and_then(|id| id.as_str())
+        .or_else(|| body.get("id").and_then(|id| id.as_str()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::JsonError {
+                operation: "extract".to_string(),
+                reason: "Deployment creation response did not include an ID".to_string(),
+            })
+        })?;
+
     info!("Deployment '{}' created", deployment_name);
-    Ok(())
+    Ok(deployment_id.to_string())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDeploymentListItem {
+    id: String,
+    name: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDeploymentListResponse {
+    items: Vec<DevDeploymentListItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevCommandsInfo {
+    url: String,
+    deployment_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevResourceEntry {
+    resource_type: Option<String>,
+    public_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDeploymentInfoResponse {
+    commands: DevCommandsInfo,
+    resources: HashMap<String, DevResourceEntry>,
+    status: String,
+}
+
+pub async fn wait_for_dev_deployment_ready(
+    port: u16,
+    deployment_name: &str,
+    status_file: Option<&PathBuf>,
+) -> Result<DevDeploymentSnapshot> {
+    let http_client = reqwest::Client::new();
+    let base_url = format!("http://localhost:{port}");
+
+    for _ in 0..180 {
+        let list_response = http_client
+            .get(format!("{base_url}/v1/deployments"))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to list local deployments".to_string(),
+                url: None,
+            })?;
+
+        if list_response.status().is_success() {
+            let deployments: DevDeploymentListResponse = list_response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialize".to_string(),
+                    reason: "Failed to parse local deployment list".to_string(),
+                })?;
+
+            if let Some(deployment) = deployments
+                .items
+                .into_iter()
+                .find(|deployment| deployment.name == deployment_name)
+            {
+                let info_response = http_client
+                    .get(format!("{base_url}/v1/deployments/{}/info", deployment.id))
+                    .send()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: "Failed to fetch local deployment details".to_string(),
+                        url: None,
+                    })?;
+
+                if info_response.status().is_success() {
+                    let info: DevDeploymentInfoResponse = info_response
+                        .json()
+                        .await
+                        .into_alien_error()
+                        .context(ErrorData::JsonError {
+                            operation: "deserialize".to_string(),
+                            reason: "Failed to parse local deployment info".to_string(),
+                        })?;
+
+                    let snapshot = DevDeploymentSnapshot {
+                        deployment_id: info.commands.deployment_id,
+                        deployment_name: deployment.name,
+                        status: parse_deployment_status(&info.status)?,
+                        commands_url: info.commands.url,
+                        resources: info
+                            .resources
+                            .into_iter()
+                            .filter_map(|(name, resource)| {
+                                resource.public_url.map(|url| {
+                                    (
+                                        name,
+                                        DevResourceInfo {
+                                            url,
+                                            resource_type: resource.resource_type,
+                                        },
+                                    )
+                                })
+                            })
+                            .collect(),
+                    };
+
+                    if let Some(status_file) = status_file {
+                        let state = if snapshot.status == DeploymentStatus::Running {
+                            DevStatusState::Ready
+                        } else {
+                            DevStatusState::Initializing
+                        };
+                        write_dev_status(status_file, &build_dev_status(port, state, Some(&snapshot), None))?;
+                    }
+
+                    if snapshot.status == DeploymentStatus::Running {
+                        return Ok(snapshot);
+                    }
+
+                    if snapshot.status.is_failed() {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "Local deployment '{}' failed with status {:?}",
+                                snapshot.deployment_name, snapshot.status
+                            ),
+                        }));
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: "Timed out waiting for local deployment to become ready".to_string(),
+    }))
+}
+
+pub fn build_dev_status(
+    port: u16,
+    status: DevStatusState,
+    snapshot: Option<&DevDeploymentSnapshot>,
+    error: Option<AlienError>,
+) -> DevStatus {
+    let state_dir = get_current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".alien");
+    let mut agents = HashMap::new();
+
+    if let Some(snapshot) = snapshot {
+        agents.insert(
+            snapshot.deployment_name.clone(),
+            AgentStatus {
+                id: snapshot.deployment_id.clone(),
+                name: snapshot.deployment_name.clone(),
+                commands_url: Some(snapshot.commands_url.clone()),
+                status: snapshot.status,
+                resources: snapshot.resources.clone(),
+                created_at: Utc::now().to_rfc3339(),
+                error: None,
+            },
+        );
+    }
+
+    DevStatus {
+        pid: std::process::id(),
+        platform: "local".to_string(),
+        stack_id: "dev".to_string(),
+        state_dir: state_dir.display().to_string(),
+        api_url: format!("http://localhost:{port}"),
+        started_at: Utc::now().to_rfc3339(),
+        status,
+        agents,
+        last_updated: Utc::now().to_rfc3339(),
+        error,
+    }
+}
+
+pub fn write_dev_status(path: &PathBuf, status: &DevStatus) -> Result<()> {
+    write_json_file(path, status)
+}
+
+fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
+    match status {
+        "pending" => Ok(DeploymentStatus::Pending),
+        "initial-setup" => Ok(DeploymentStatus::InitialSetup),
+        "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
+        "provisioning" => Ok(DeploymentStatus::Provisioning),
+        "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
+        "running" => Ok(DeploymentStatus::Running),
+        "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
+        "update-pending" => Ok(DeploymentStatus::UpdatePending),
+        "updating" => Ok(DeploymentStatus::Updating),
+        "update-failed" => Ok(DeploymentStatus::UpdateFailed),
+        "delete-pending" => Ok(DeploymentStatus::DeletePending),
+        "deleting" => Ok(DeploymentStatus::Deleting),
+        "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "deleted" => Ok(DeploymentStatus::Deleted),
+        other => Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment_status".to_string(),
+            message: format!("Unknown local deployment status '{other}'"),
+        })),
+    }
 }

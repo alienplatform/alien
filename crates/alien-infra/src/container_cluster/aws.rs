@@ -2898,8 +2898,8 @@ impl AwsContainerClusterController {
         }))
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
-        None
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+        Ok(None)
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use std::time::Duration;
 use tracing::info;
@@ -132,6 +132,7 @@ impl AzureQueueController {
                 queue_name,
                 resource_scope,
                 "Queue",
+                "queue",
             )
             .await?;
         }
@@ -245,16 +246,21 @@ impl AzureQueueController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, QueueBinding};
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {
             let binding = QueueBinding::service_bus(
                 BindingValue::value(ns.clone()),
                 BindingValue::value(qn.clone()),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

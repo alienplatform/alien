@@ -14,7 +14,7 @@ use alien_azure_clients::models::authorization_role_definitions::{
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountOutputs};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
     generators::{AzureRoleDefinition, AzureRuntimePermissionsGenerator},
@@ -785,7 +785,7 @@ impl AzureServiceAccountController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, ServiceAccountBinding};
 
         if let (Some(client_id), Some(resource_id), Some(principal_id)) = (
@@ -798,9 +798,14 @@ impl AzureServiceAccountController {
                 BindingValue::Value(resource_id.clone()),
                 BindingValue::Value(principal_id.clone()),
             );
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

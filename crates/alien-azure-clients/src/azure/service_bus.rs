@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::warn;
 use url::Url;
 
 /// Check if a header name is a standard HTTP header that should not be treated as a custom property
@@ -902,18 +901,26 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         // Parse BrokerProperties header
         let broker_properties =
             if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
-                let broker_props_str = broker_props_header.to_str().unwrap_or("{}");
-                match serde_json::from_str(broker_props_str) {
-                    Ok(props) => Some(props),
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            raw_header = %broker_props_str,
-                            "Failed to parse BrokerProperties header"
-                        );
-                        None
-                    }
-                }
+                let broker_props_str = broker_props_header
+                    .to_str()
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: "BrokerProperties header contains non-ASCII characters".to_string(),
+                        url: url.to_string(),
+                        http_status: 200,
+                        http_request_text: None,
+                        http_response_text: None,
+                    })?;
+                let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: format!("Failed to parse BrokerProperties header: {}", broker_props_str),
+                        url: url.to_string(),
+                        http_status: 200,
+                        http_request_text: None,
+                        http_response_text: Some(broker_props_str.to_string()),
+                    })?;
+                Some(broker_properties)
             } else {
                 None
             };
@@ -1019,18 +1026,26 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         // Parse BrokerProperties header
         let broker_properties =
             if let Some(broker_props_header) = resp.headers().get("BrokerProperties") {
-                let broker_props_str = broker_props_header.to_str().unwrap_or("{}");
-                match serde_json::from_str(broker_props_str) {
-                    Ok(props) => Some(props),
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            raw_header = %broker_props_str,
-                            "Failed to parse BrokerProperties header"
-                        );
-                        None
-                    }
-                }
+                let broker_props_str = broker_props_header
+                    .to_str()
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: "BrokerProperties header contains non-ASCII characters".to_string(),
+                        url: url.to_string(),
+                        http_status: 200,
+                        http_request_text: None,
+                        http_response_text: None,
+                    })?;
+                let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: format!("Failed to parse BrokerProperties header: {}", broker_props_str),
+                        url: url.to_string(),
+                        http_status: 200,
+                        http_request_text: None,
+                        http_response_text: Some(broker_props_str.to_string()),
+                    })?;
+                Some(broker_properties)
             } else {
                 None
             };

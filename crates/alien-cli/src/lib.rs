@@ -1,6 +1,4 @@
-//! Alien CLI library
-//!
-//! This exposes TUI components and other utilities for use by binaries.
+//! Alien CLI library.
 
 pub mod auth;
 pub mod commands;
@@ -9,8 +7,8 @@ pub mod deployment_tracking;
 pub mod error;
 pub mod execution_context;
 pub mod git_utils;
+pub mod output;
 pub mod project_link;
-pub mod tui;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -23,25 +21,21 @@ use crate::commands::platform::{
     LoginArgs, LogoutArgs, PlatformCommand, ProjectArgs, UnlinkArgs, WorkspaceArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_embedded_dev_manager,
-    create_initial_deployment, deploy_task, deployments_task, destroy_task,
-    ensure_server_running_with_env, onboard_task, release_command, vault_task, whoami_task,
+    build_and_post_release_simple, build_command, build_dev_status, create_initial_deployment,
+    deploy_task, deployments_task, destroy_task, ensure_server_running_with_env, onboard_task,
+    release_command, vault_task, wait_for_dev_deployment_ready, whoami_task, write_dev_status,
     BuildArgs, CliEnvVar, DeployArgs, DeploymentsArgs, DestroyArgs, OnboardArgs, ReleaseArgs,
     WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::tui::state::BuildState;
-use crate::tui::{run_app, AppConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::env;
+use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::time::Instant;
-use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// CLI argument structure
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
@@ -53,11 +47,7 @@ pub struct Cli {
     #[arg(short = 'C', long, name = "path")]
     pub dir: Option<String>,
 
-    /// Disable TUI and use console output instead
-    #[arg(long, global = true)]
-    pub no_tui: bool,
-
-    /// Project to manage (defaults to linked project or prompts)
+    /// Project to manage (defaults to linked project or interactive bootstrap)
     #[arg(long, global = true)]
     pub project: Option<String>,
 
@@ -78,13 +68,11 @@ pub struct Cli {
     pub workspace: Option<String>,
 }
 
-/// CLI commands
 #[derive(Subcommand)]
 pub enum Commands {
-    // --- Core commands (always available) ---
     /// Build the Alien application
     Build(BuildArgs),
-    /// Create a release from built platforms
+    /// Push images and create a release
     Release(ReleaseArgs),
     /// Create a deployment group and generate a deployment link
     Onboard(OnboardArgs),
@@ -95,12 +83,11 @@ pub enum Commands {
     Deploy(DeployArgs),
     /// Destroy resources from a deployment
     Destroy(DestroyArgs),
-    /// Local development mode
+    /// Local development commands
     Dev(DevCommand),
     /// Show current authenticated user information
     Whoami(WhoamiArgs),
 
-    // --- Platform commands (behind "platform" feature) ---
     #[cfg(feature = "platform")]
     #[command(flatten)]
     Platform(PlatformCommand),
@@ -110,7 +97,6 @@ pub enum Commands {
     Manager(ManagerArgs),
 }
 
-/// Dev command with optional subcommands
 #[derive(Parser, Debug, Clone)]
 pub struct DevCommand {
     /// Dev server port
@@ -125,27 +111,19 @@ pub struct DevCommand {
     #[arg(long)]
     pub skip_build: bool,
 
-    /// Path to write status file (JSON with DevStatus type)
-    /// The status file includes API URL, resource URLs, and deployment status
-    /// Type definition: alien_core::DevStatus (auto-generated to @alienplatform/core)
+    /// Path to write status file (JSON with alien_core::DevStatus)
     #[arg(long)]
     pub status_file: Option<PathBuf>,
 
-    /// Deployment name for the initial deployment (default: "default")
-    /// Useful when running multiple alien dev instances to avoid conflicts
+    /// Deployment name for the initial deployment
     #[arg(long, default_value = "default")]
     pub deployment_name: String,
 
     /// Plain environment variables (KEY=VALUE or KEY=VALUE:target1,target2)
-    /// Can be used multiple times. Without targets, applies to all resources.
-    /// Example: --env LOG_LEVEL=debug --env API_KEY=test:api-handler,worker
     #[arg(long = "env")]
     pub env_vars: Vec<String>,
 
     /// Secret environment variables (KEY=VALUE or KEY=VALUE:target1,target2)
-    /// Secrets are loaded from vault at function startup (in production).
-    /// In dev mode, they're injected directly like plain vars but marked as secrets.
-    /// Example: --secret DATABASE_PASSWORD=secret123 --secret API_KEY=key:processor
     #[arg(long = "secret")]
     pub secret_vars: Vec<String>,
 
@@ -153,33 +131,25 @@ pub struct DevCommand {
     pub subcommand: Option<DevSubcommand>,
 }
 
-/// Dev subcommands - either run dev mode versions of platform commands or dev-specific commands
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevSubcommand {
-    /// Start dev server only (no TUI)
+    /// Start the local manager only
     Server,
-
-    /// Deployment commands (dev mode)
+    /// Deployment commands against the local manager
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
-
-    /// Show dev whoami
+    /// Show local manager identity information
     Whoami(WhoamiArgs),
-
-    /// Deploy to dev server
+    /// Deploy to the local manager
     Deploy(DeployArgs),
-
-    /// Destroy from dev server
+    /// Destroy from the local manager
     Destroy(DestroyArgs),
-
-    /// Create release on dev server
+    /// Create a release on the local manager
     Release(ReleaseArgs),
-
     /// Manage vault secrets for local dev deployments
     Vault(commands::VaultArgs),
 }
 
-/// Get the current working directory as a CLI result
 pub fn get_current_dir() -> Result<std::path::PathBuf> {
     std::env::current_dir()
         .into_alien_error()
@@ -190,47 +160,22 @@ pub fn get_current_dir() -> Result<std::path::PathBuf> {
         })
 }
 
-/// Setup tracing for the CLI
-///
-/// ## Environment Variables
-///
-/// - `ALIEN_LOG`: Set log level filter (e.g., "debug", "alien_cli=debug,alien_manager=trace")
-///   Falls back to `RUST_LOG` if not set.
-///
-/// - `ALIEN_LOG_FILE`: Enable file logging. Set to a file path to write logs.
-///   In TUI mode, this is the only way to see logs without breaking the UI.
-///   Example: `ALIEN_LOG_FILE=/tmp/alien.log`
-///
-/// ## Behavior
-///
-/// - **No TUI mode (`--no-tui`)**: Logs to stderr by default, optionally to file if `ALIEN_LOG_FILE` is set.
-/// - **TUI mode**: Console output is disabled to prevent breaking the TUI. Set `ALIEN_LOG_FILE` to debug.
-pub fn setup_tracing(no_tui: bool) {
-    // Get log level from ALIEN_LOG, falling back to RUST_LOG
+pub fn setup_tracing() {
+    let file_path = std::env::var("ALIEN_LOG_FILE").ok();
     let env_filter = std::env::var("ALIEN_LOG")
         .or_else(|_| std::env::var("RUST_LOG"))
         .ok()
-        .and_then(|filter| EnvFilter::try_new(&filter).ok())
+        .and_then(|value| EnvFilter::try_new(value).ok())
         .unwrap_or_else(|| {
-            if no_tui {
-                // Default info level for non-TUI mode
-                EnvFilter::new("alien_cli=info,alien_core=info,alien_infra=info,alien_build=info,alien_manager=info")
+            if file_path.is_some() {
+                EnvFilter::new(
+                    "alien_cli=debug,alien_core=debug,alien_infra=debug,alien_build=debug,alien_manager=debug",
+                )
             } else {
-                // Default off for TUI mode unless file logging is enabled
-                let has_file_log = std::env::var("ALIEN_LOG_FILE").is_ok();
-                if has_file_log {
-                    EnvFilter::new("alien_cli=debug,alien_core=debug,alien_infra=debug,alien_build=debug,alien_manager=debug")
-                } else {
-                    EnvFilter::new("off")
-                }
+                EnvFilter::new("warn")
             }
         });
 
-    // Check for file logging
-    let file_path = std::env::var("ALIEN_LOG_FILE").ok();
-
-    // Initialize OTLP if configured (for embedded alien-runtime functions)
-    // Dev server sets OTEL_EXPORTER_OTLP_LOGS_ENDPOINT when it starts
     #[cfg(feature = "otlp")]
     let otlp_layer = alien_runtime::init_otlp_logging().ok().flatten();
 
@@ -238,19 +183,18 @@ pub fn setup_tracing(no_tui: bool) {
     let _otlp_layer: Option<()> = None;
 
     let registry = tracing_subscriber::registry().with(env_filter);
+    let stderr_layer = fmt::layer().with_ansi(std::io::stderr().is_terminal());
 
-    match (no_tui, file_path) {
-        // Non-TUI mode with file logging: write to both stderr and file
-        (true, Some(path)) => {
+    match file_path {
+        Some(path) => {
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
-                .expect(&format!("Failed to open log file: {}", path));
-
+                .expect("Failed to open ALIEN_LOG_FILE");
             let layers = registry
-                .with(fmt::layer().with_ansi(true)) // stderr
-                .with(fmt::layer().with_ansi(false).with_writer(file)); // file
+                .with(stderr_layer)
+                .with(fmt::layer().with_ansi(false).with_writer(file));
 
             #[cfg(feature = "otlp")]
             if let Some(otlp) = otlp_layer {
@@ -262,43 +206,8 @@ pub fn setup_tracing(no_tui: bool) {
             #[cfg(not(feature = "otlp"))]
             layers.init();
         }
-        // Non-TUI mode without file logging: write to stderr only
-        (true, None) => {
-            let layers = registry.with(fmt::layer().with_ansi(true));
-
-            #[cfg(feature = "otlp")]
-            if let Some(otlp) = otlp_layer {
-                layers.with(otlp).init();
-            } else {
-                layers.init();
-            }
-
-            #[cfg(not(feature = "otlp"))]
-            layers.init();
-        }
-        // TUI mode with file logging: write to file only (no stderr to avoid breaking TUI)
-        (false, Some(path)) => {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .expect(&format!("Failed to open log file: {}", path));
-
-            let layers = registry.with(fmt::layer().with_ansi(false).with_writer(file));
-
-            #[cfg(feature = "otlp")]
-            if let Some(otlp) = otlp_layer {
-                layers.with(otlp).init();
-            } else {
-                layers.init();
-            }
-
-            #[cfg(not(feature = "otlp"))]
-            layers.init();
-        }
-        // TUI mode without file logging: no output (but OTLP if configured)
-        (false, None) => {
-            let layers = registry.with(fmt::layer().with_writer(std::io::sink));
+        None => {
+            let layers = registry.with(stderr_layer);
 
             #[cfg(feature = "otlp")]
             if let Some(otlp) = otlp_layer {
@@ -313,79 +222,55 @@ pub fn setup_tracing(no_tui: bool) {
     }
 }
 
-/// Handle dev command and its subcommands
-/// Parse --env and --secret flags from CLI
-/// Format: KEY=VALUE or KEY=VALUE:target1,target2
-fn parse_env_and_secret_vars(
-    env_vars: &[String],
-    secret_vars: &[String],
-) -> Result<Vec<CliEnvVar>> {
+fn parse_env_and_secret_vars(env_vars: &[String], secret_vars: &[String]) -> Result<Vec<CliEnvVar>> {
     let mut parsed = Vec::new();
-
-    // Parse plain env vars
     for env in env_vars {
         parsed.push(parse_single_env_var(env, false)?);
     }
-
-    // Parse secret vars
     for secret in secret_vars {
         parsed.push(parse_single_env_var(secret, true)?);
     }
-
     Ok(parsed)
 }
 
-/// Parse a single environment variable
-/// Format: KEY=VALUE or KEY=VALUE:target1,target2
 fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
-    // First split on '=' to get KEY and VALUE_WITH_TARGETS
     let parts: Vec<&str> = input.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "Invalid {} format: '{}'. Expected KEY=VALUE or KEY=VALUE:target1,target2",
-                if is_secret { "--secret" } else { "--env" },
-                input
+                "Invalid {} format: '{input}'. Expected KEY=VALUE or KEY=VALUE:target1,target2",
+                if is_secret { "--secret" } else { "--env" }
             ),
         }));
     }
 
     let name = parts[0].to_string();
     let value_with_targets = parts[1];
-
-    // Check if there are targets after the value (VALUE:target1,target2)
-    // Use rfind to find the LAST colon, since targets come at the end.
-    // This prevents URLs like "http://example.com:8080" from being incorrectly split.
     let (value, target_resources) = if let Some(colon_pos) = value_with_targets.rfind(':') {
         let potential_value = &value_with_targets[..colon_pos];
-        let potential_targets_str = &value_with_targets[colon_pos + 1..];
-
-        // Check if what comes after the colon looks like targets (comma-separated identifiers)
-        // If it looks like a port number or URL path, treat the whole thing as a value
-        let looks_like_targets = !potential_targets_str.is_empty()
-            && !potential_targets_str.chars().all(|c| c.is_ascii_digit())  // Not just a port number
-            && !potential_targets_str.starts_with('/'); // Not a URL path
+        let potential_targets = &value_with_targets[colon_pos + 1..];
+        let looks_like_targets = !potential_targets.is_empty()
+            && !potential_targets.chars().all(|c| c.is_ascii_digit())
+            && !potential_targets.starts_with('/');
 
         if looks_like_targets {
-            let targets: Vec<String> = potential_targets_str
+            let targets: Vec<String> = potential_targets
                 .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
                 .collect();
 
             if targets.is_empty() {
                 return Err(AlienError::new(ErrorData::ConfigurationError {
                     message: format!(
-                        "Invalid {} format: '{}'. Targets list is empty after ':'",
-                        if is_secret { "--secret" } else { "--env" },
-                        input
+                        "Invalid {} format: '{input}'. Targets list is empty after ':'.",
+                        if is_secret { "--secret" } else { "--env" }
                     ),
                 }));
             }
 
             (potential_value.to_string(), Some(targets))
         } else {
-            // The colon is part of the value (like a URL or port), not a target separator
             (value_with_targets.to_string(), None)
         }
     } else {
@@ -400,143 +285,61 @@ fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
     })
 }
 
-/// Convert CLI env vars to core EnvironmentVariable format for deployment creation.
 fn cli_env_vars_to_core(cli_vars: &[CliEnvVar]) -> Option<Vec<alien_core::EnvironmentVariable>> {
     if cli_vars.is_empty() {
         return None;
     }
+
     Some(
         cli_vars
             .iter()
-            .map(|v| alien_core::EnvironmentVariable {
-                name: v.name.clone(),
-                value: v.value.clone(),
-                var_type: if v.is_secret {
+            .map(|var| alien_core::EnvironmentVariable {
+                name: var.name.clone(),
+                value: var.value.clone(),
+                var_type: if var.is_secret {
                     alien_core::EnvironmentVariableType::Secret
                 } else {
                     alien_core::EnvironmentVariableType::Plain
                 },
-                target_resources: v.target_resources.clone(),
+                target_resources: var.target_resources.clone(),
             })
             .collect(),
     )
 }
 
-async fn handle_dev_command(dev_cmd: DevCommand, global_no_tui: bool) -> Result<()> {
+async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
     let port = dev_cmd.port;
-    let skip_build = dev_cmd.skip_build;
-    let status_file = dev_cmd.status_file;
-    let deployment_name = dev_cmd.deployment_name;
-    let config_file = dev_cmd.config;
     let ctx = ExecutionMode::Dev { port };
-
-    // Parse --env and --secret flags
     let parsed_env_vars = parse_env_and_secret_vars(&dev_cmd.env_vars, &dev_cmd.secret_vars)?;
 
     match dev_cmd.subcommand {
         None => {
-            // No subcommand: run dev TUI
-            run_dev_tui(
+            run_dev_session(
                 port,
-                global_no_tui,
-                skip_build,
-                status_file,
-                deployment_name,
+                dev_cmd.skip_build,
+                dev_cmd.status_file,
+                dev_cmd.deployment_name,
                 parsed_env_vars,
-                config_file,
+                dev_cmd.config,
             )
             .await?;
         }
         Some(DevSubcommand::Server) => {
-            run_dev_server_only(port, status_file, deployment_name, parsed_env_vars).await?;
+            run_dev_server_only(port, dev_cmd.status_file, parsed_env_vars).await?;
         }
-        Some(DevSubcommand::Deployments(args)) => {
-            deployments_task(args, ctx).await?;
-        }
-        Some(DevSubcommand::Whoami(args)) => {
-            whoami_task(args, ctx).await?;
-        }
-        Some(DevSubcommand::Deploy(args)) => {
-            deploy_task(args, ctx).await?;
-        }
-        Some(DevSubcommand::Destroy(args)) => {
-            destroy_task(args, ctx).await?;
-        }
-        Some(DevSubcommand::Release(mut args)) => {
-            // Apply global no_tui
-            args.no_tui = global_no_tui || args.no_tui;
-            release_command(args, ctx).await?;
-        }
-        Some(DevSubcommand::Vault(args)) => {
-            vault_task(args, port).await?;
-        }
+        Some(DevSubcommand::Deployments(args)) => deployments_task(args, ctx).await?,
+        Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
+        Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
+        Some(DevSubcommand::Destroy(args)) => destroy_task(args, ctx).await?,
+        Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
+        Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
     }
 
     Ok(())
 }
 
-/// Run the TUI dashboard for managing platform resources
-#[cfg(feature = "platform")]
-async fn run_tui_dashboard(
-    base_url: Option<String>,
-    api_key: Option<String>,
-    _workspace: Option<String>,
-    project: Option<String>,
-) -> Result<()> {
-    use crate::auth::{get_auth_http, AuthOpts};
-    use crate::project_link::{get_project_link_status, ProjectLinkStatus};
-
-    let current_dir = get_current_dir()?;
-
-    // Get authentication
-    let auth_opts = AuthOpts {
-        api_key: api_key.clone(),
-        base_url: base_url.clone(),
-        no_browser: true, // Don't open browser for TUI
-    };
-    let auth = get_auth_http(&auth_opts)
-        .await
-        .context(ErrorData::AuthenticationFailed {
-            reason: "Not logged in. Run 'alien login' first.".to_string(),
-        })?;
-
-    // Validate we have a project (either specified or linked)
-    // The SDK client is already scoped by auth, but we want to ensure we're in a project context
-    let project_id = if let Some(p) = project {
-        p
-    } else {
-        // Check if current directory is linked to a project
-        match get_project_link_status(&current_dir) {
-            ProjectLinkStatus::Linked(link) => link.project_id,
-            ProjectLinkStatus::NotLinked => {
-                return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: "No project linked. Run 'alien link' first or specify --project."
-                        .to_string(),
-                }));
-            }
-            ProjectLinkStatus::Error(e) => {
-                return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: format!("Project link error: {}", e),
-                }));
-            }
-        }
-    };
-
-    let config = AppConfig::platform(auth.sdk_client().clone()).with_project(project_id);
-
-    run_app(config).await.map_err(|e| {
-        AlienError::new(ErrorData::TuiOperationFailed {
-            message: e.to_string(),
-        })
-    })
-}
-
-/// Run dev TUI
-///
-/// Dev mode is local-only — always uses `Platform::Local`.
-async fn run_dev_tui(
+async fn run_dev_session(
     port: u16,
-    no_tui: bool,
     skip_build: bool,
     status_file: Option<PathBuf>,
     deployment_name: String,
@@ -544,186 +347,140 @@ async fn run_dev_tui(
     config_file: Option<PathBuf>,
 ) -> Result<()> {
     let current_dir = get_current_dir()?;
-
-    // Start dev server if not running
-    ensure_server_running_with_env(port, status_file.clone(), user_env_vars.clone()).await?;
-
-    // Convert CLI env vars to core EnvironmentVariable for deployment creation
     let core_env_vars = cli_env_vars_to_core(&user_env_vars);
 
-    if no_tui {
-        // Console mode
-        info!("Starting dev environment...");
-        let _release_id =
-            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
-                .await?;
-        create_initial_deployment(&deployment_name, port, core_env_vars).await?;
+    println!("Starting local Alien development session...");
+    println!("Manager URL: http://localhost:{port}");
 
-        info!("Dev environment ready!");
-        info!("   Press Ctrl+C to stop.");
-
-        tokio::signal::ctrl_c().await.into_alien_error().context(
-            ErrorData::TuiOperationFailed {
-                message: "Failed to wait for ctrl-c".to_string(),
-            },
+    if let Some(status_file) = &status_file {
+        write_dev_status(
+            status_file,
+            &build_dev_status(port, alien_core::DevStatusState::Initializing, None, None),
         )?;
-        return Ok(());
     }
 
-    // TUI mode
-    let (build_status_tx, build_status_rx) = tokio::sync::mpsc::channel(10);
-    let (rebuild_tx, rebuild_rx) = tokio::sync::mpsc::channel(1);
-    let (terminal_ready_tx, terminal_ready_rx) = tokio::sync::oneshot::channel();
+    let result = async {
+        println!("Ensuring local manager is running...");
+        ensure_server_running_with_env(port, status_file.clone(), user_env_vars).await?;
 
-    // Spawn build task - it will wait for terminal initialization
-    let env_vars_for_task = cli_env_vars_to_core(&user_env_vars);
-    let build_task = tokio::spawn(run_build_task(
-        current_dir.clone(),
-        port,
-        deployment_name.clone(),
-        env_vars_for_task,
-        build_status_tx,
-        rebuild_rx,
-        terminal_ready_rx,
-    ));
+        if skip_build {
+            println!("Using existing local build artifacts...");
+        } else {
+            println!("Building project for local development...");
+        }
 
-    // Run TUI - this will initialize terminal first, then signal readiness
-    let sdk = alien_platform_api::Client::new(&format!("http://localhost:{}", port));
-    let config = AppConfig::dev(sdk)
-        .with_build_channels(build_status_rx, rebuild_tx)
-        .with_terminal_ready_signal(terminal_ready_tx);
+        let release_id =
+            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
+                .await?;
+        println!("Release created: {release_id}");
 
-    let result = run_app(config).await.map_err(|e| {
-        AlienError::new(ErrorData::TuiOperationFailed {
-            message: e.to_string(),
-        })
-    });
+        println!("Ensuring local deployment '{deployment_name}' exists...");
+        let deployment_id =
+            create_initial_deployment(&deployment_name, port, core_env_vars.clone()).await?;
+        println!("Deployment ID: {deployment_id}");
 
-    // Cleanup
-    build_task.abort();
+        println!("Waiting for the local deployment to become ready...");
+        let snapshot = wait_for_dev_deployment_ready(port, &deployment_name, status_file.as_ref()).await?;
+
+        if let Some(status_file) = &status_file {
+            write_dev_status(
+                status_file,
+                &build_dev_status(port, alien_core::DevStatusState::Ready, Some(&snapshot), None),
+            )?;
+        }
+
+        print_dev_ready_summary(port, &release_id, &snapshot);
+
+        tokio::signal::ctrl_c().await.into_alien_error().context(
+            ErrorData::ServerStartFailed {
+                reason: "Failed to wait for Ctrl+C".to_string(),
+            },
+        )?;
+
+        Ok::<(), alien_error::AlienError<ErrorData>>(())
+    }
+    .await;
+
+    if let Some(status_file) = &status_file {
+        let status = match &result {
+            Ok(()) => build_dev_status(port, alien_core::DevStatusState::ShuttingDown, None, None),
+            Err(error) => build_dev_status(
+                port,
+                alien_core::DevStatusState::Error,
+                None,
+                Some(error.clone()),
+            ),
+        };
+        write_dev_status(status_file, &status)?;
+    }
+
     result
 }
 
-/// Build task - runs initial build and listens for rebuild requests.
-///
-/// Dev mode is local-only — always builds for `Platform::Local`.
-/// This task waits for terminal initialization before starting.
-async fn run_build_task(
-    current_dir: PathBuf,
-    port: u16,
-    deployment_name: String,
-    environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
-    build_status_tx: tokio::sync::mpsc::Sender<BuildState>,
-    mut rebuild_rx: tokio::sync::mpsc::Receiver<()>,
-    terminal_ready_rx: tokio::sync::oneshot::Receiver<()>,
-) {
-    // Wait for terminal to be initialized in raw mode
-    // This ensures no build output can corrupt terminal state
-    if terminal_ready_rx.await.is_err() {
-        // Terminal initialization failed or was cancelled
-        return;
-    }
-
-    // Initial build
-    build_status_tx.send(BuildState::Initializing).await.ok();
-    let build_start = Instant::now();
-    match build_and_post_release_simple(&current_dir, port, false, None).await {
-        Ok(_release_id) => {
-            let duration = build_start.elapsed();
-            build_status_tx
-                .send(BuildState::Built { duration })
-                .await
-                .ok();
-
-            // Create initial deployment after successful build
-            if let Err(e) =
-                create_initial_deployment(&deployment_name, port, environment_variables).await
-            {
-                build_status_tx
-                    .send(BuildState::Failed {
-                        error: format!("Failed to create deployment: {}", e),
-                    })
-                    .await
-                    .ok();
-            }
-        }
-        Err(e) => {
-            build_status_tx
-                .send(BuildState::Failed {
-                    error: e.to_string(),
-                })
-                .await
-                .ok();
-        }
-    }
-
-    // Continue listening for rebuild requests
-    while rebuild_rx.recv().await.is_some() {
-        build_status_tx.send(BuildState::Building).await.ok();
-        let build_start = Instant::now();
-        match build_and_post_release_simple(&current_dir, port, false, None).await {
-            Ok(_) => {
-                let duration = build_start.elapsed();
-                build_status_tx
-                    .send(BuildState::Built { duration })
-                    .await
-                    .ok();
-            }
-            Err(e) => {
-                build_status_tx
-                    .send(BuildState::Failed {
-                        error: e.to_string(),
-                    })
-                    .await
-                    .ok();
-            }
-        }
-    }
-}
-
-/// Run dev server only mode
 async fn run_dev_server_only(
     port: u16,
-    _status_file: Option<PathBuf>,
-    _deployment_name: String,
-    _user_env_vars: Vec<CliEnvVar>,
+    status_file: Option<PathBuf>,
+    user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
-    info!("Starting dev server on port {}...", port);
-    let (server, addr) = build_embedded_dev_manager(port).await?;
-    let bootstrap_port = port;
+    println!("Starting local manager...");
+    ensure_server_running_with_env(port, status_file.clone(), user_env_vars).await?;
 
-    tokio::spawn(async move {
-        if let Err(e) =
-            crate::commands::dev_helpers::wait_for_dev_server_ready(bootstrap_port).await
-        {
-            tracing::error!("Dev server readiness check failed: {:?}", e);
-            return;
-        }
+    if let Some(status_file) = &status_file {
+        write_dev_status(
+            status_file,
+            &build_dev_status(port, alien_core::DevStatusState::Ready, None, None),
+        )?;
+    }
 
-        if let Err(e) =
-            crate::commands::dev_helpers::ensure_local_dev_deployment_group(bootstrap_port).await
-        {
-            tracing::error!("Failed to ensure local-dev deployment group: {:?}", e);
-        }
-    });
+    println!("Local manager ready.");
+    println!("API URL: http://localhost:{port}");
+    println!("Next: run `alien dev` for the full local app flow.");
 
-    info!("Dev server ready");
-    info!("   API: http://localhost:{}/v1/deployments", port);
-    info!("   Press Ctrl+C to stop");
+    tokio::signal::ctrl_c().await.into_alien_error().context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to wait for Ctrl+C".to_string(),
+        },
+    )?;
 
-    server
-        .start(addr)
-        .await
-        .into_alien_error()
-        .context(ErrorData::ServerStartFailed {
-            reason: "Server stopped unexpectedly".to_string(),
-        })
+    if let Some(status_file) = &status_file {
+        write_dev_status(
+            status_file,
+            &build_dev_status(port, alien_core::DevStatusState::ShuttingDown, None, None),
+        )?;
+    }
+
+    Ok(())
 }
 
-/// Main CLI entry point
+fn print_dev_ready_summary(
+    port: u16,
+    release_id: &str,
+    snapshot: &commands::DevDeploymentSnapshot,
+) {
+    println!("Local development environment is ready.");
+    println!("Release ID: {release_id}");
+    println!("Deployment ID: {}", snapshot.deployment_id);
+    println!("Commands URL: {}", snapshot.commands_url);
+    println!("Manager API: http://localhost:{port}");
+
+    if snapshot.resources.is_empty() {
+        println!("No public resource URLs were reported yet.");
+    } else {
+        println!("Resource URLs:");
+        for (name, resource) in &snapshot.resources {
+            println!("  - {name}: {}", resource.url);
+        }
+    }
+
+    println!("Next:");
+    println!("  alien dev deployments ls");
+    println!("  alien dev release");
+    println!("  alien dev deploy --name <deployment> --platform local");
+    println!("Press Ctrl+C to stop this session.");
+}
+
 pub async fn run_cli(cli: Cli) -> Result<()> {
-    // Change working directory if specified
-    if let Some(ref dir) = cli.dir {
+    if let Some(dir) = &cli.dir {
         env::set_current_dir(dir)
             .into_alien_error()
             .context(ErrorData::FileOperationFailed {
@@ -733,17 +490,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             })?;
     }
 
-    // Set up tracing early based on the no_tui flag or individual command settings
-    let global_no_tui = cli.no_tui;
-    let command_no_tui = match &cli.command {
-        Some(Commands::Build(args)) => args.no_tui,
-        Some(Commands::Dev(_)) => false, // Dev TUI is handled in handle_dev_command
-        _ => false,                      // Other commands don't have TUI, or no command (TUI mode)
-    };
-    setup_tracing(global_no_tui || command_no_tui);
+    setup_tracing();
 
-    // Construct execution context once from global flags
-    // Mode resolution: ALIEN_MANAGER_URL → standalone, platform feature → platform, else → error
     let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
         let api_key = cli
             .api_key
@@ -751,9 +499,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             .or_else(|| env::var("ALIEN_API_KEY").ok())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "ALIEN_API_KEY is required when ALIEN_MANAGER_URL is set.".to_string(),
+                    message: "ALIEN_API_KEY is required when ALIEN_MANAGER_URL is set."
+                        .to_string(),
                 })
             })?;
+
         ExecutionMode::Standalone {
             server_url,
             api_key,
@@ -775,59 +525,42 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "platform"))]
         {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "No manager URL configured. Start an alien-manager instance, then: \
-                export ALIEN_MANAGER_URL=http://localhost:8080"
-                    .to_string(),
+                message: "No manager URL configured. Export ALIEN_MANAGER_URL=http://localhost:8080 to target a standalone manager.".to_string(),
             }));
         }
     };
 
     match cli.command {
-        // No subcommand: launch the TUI dashboard (platform feature only)
         None => {
-            #[cfg(feature = "platform")]
-            {
-                run_tui_dashboard(cli.base_url, cli.api_key, cli.workspace, cli.project).await?;
-            }
-            #[cfg(not(feature = "platform"))]
-            {
-                println!("Alien CLI - use 'alien --help' to see available commands");
-                println!("Start an alien-manager instance, then: export ALIEN_MANAGER_URL=http://localhost:8080");
-            }
+            let mut command = Cli::command();
+            command.print_long_help().into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: "stdout".to_string(),
+                    reason: "Failed to print CLI help".to_string(),
+                },
+            )?;
+            println!();
         }
-
-        // --- Core commands ---
-        Some(Commands::Build(mut build_args)) => {
-            build_args.no_tui = global_no_tui || build_args.no_tui;
-            build_command(build_args).await?;
-        }
-        Some(Commands::Dev(dev_cmd)) => {
-            handle_dev_command(dev_cmd, global_no_tui).await?;
-        }
+        Some(Commands::Build(args)) => build_command(args).await?,
+        Some(Commands::Release(args)) => release_command(args, ctx).await?,
         Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
         Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
-        Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
         Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
-        Some(Commands::Release(mut args)) => {
-            args.no_tui = global_no_tui || args.no_tui;
-            release_command(args, ctx).await?;
-        }
-
-        // --- Platform commands (behind feature flag) ---
+        Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,
+        Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
         #[cfg(feature = "platform")]
-        Some(Commands::Platform(cmd)) => match cmd {
+        Some(Commands::Platform(command)) => match command {
             PlatformCommand::Login(args) => login_task(args, ctx).await?,
+            PlatformCommand::Logout(args) => logout_task(args).await?,
             PlatformCommand::Workspaces(args) => workspace_task(args, ctx).await?,
             PlatformCommand::Projects(args) => project_task(args, ctx).await?,
             PlatformCommand::Link(args) => link_task(args, ctx).await?,
-            PlatformCommand::Logout(args) => logout_task(args).await?,
             PlatformCommand::Unlink(args) => unlink_task(args).await?,
         },
         #[cfg(feature = "platform")]
-        Some(Commands::Manager(args)) => {
-            manager_task(args, ctx).await?;
-        }
+        Some(Commands::Manager(args)) => manager_task(args, ctx).await?,
     }
 
     Ok(())

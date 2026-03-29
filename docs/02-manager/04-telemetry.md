@@ -66,10 +66,10 @@ Two implementations:
 | Implementation | Used In | Behavior |
 |---|---|---|
 | `OtlpForwardingBackend` | Standalone | Forwards raw OTLP to `OTLP_ENDPOINT` with scope headers |
-| `InMemoryTelemetryBackend` | `alien dev` | Stores logs in a ring buffer for the CLI TUI. See [Local Development](08-local-development.md) |
+| `InMemoryTelemetryBackend` | `alien dev` | Stores logs in memory for the plain local CLI flow and local tooling. See [Local Development](08-local-development.md) |
 
 When running in a managed platform context, a custom `TelemetryBackend` implementation can proxy telemetry to a dedicated observability pipeline with tenant-scoped headers.
 
 ## Local Dev
 
-In `alien dev`, the CLI wires `InMemoryTelemetryBackend` explicitly. Instead of sending telemetry to an external endpoint, logs are stored in an in-memory ring buffer and streamed to the CLI TUI. See [Local Development — Log Streaming](08-local-development.md#log-streaming).
+In `alien dev`, the CLI wires `InMemoryTelemetryBackend` explicitly. Instead of sending telemetry to an external endpoint, logs are stored in an in-memory ring buffer for the local development flow. See [Local Development](08-local-development.md).

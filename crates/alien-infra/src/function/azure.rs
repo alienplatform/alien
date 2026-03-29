@@ -13,7 +13,7 @@ use alien_core::{
     CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, ResourceOutputs,
     ResourceRef, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -815,6 +815,7 @@ impl AzureFunctionController {
                 container_app_name,
                 resource_scope,
                 "Function",
+                "function",
             )
             .await?;
         }
@@ -1465,7 +1466,7 @@ impl AzureFunctionController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, ContainerAppFunctionBinding, FunctionBinding};
 
         if let (Some(container_app_name), Some(resource_id)) =
@@ -1486,9 +1487,14 @@ impl AzureFunctionController {
                 private_url: BindingValue::Value("unknown-private-url".to_string()), // TODO: Store in controller
                 public_url: self.url.as_ref().map(|u| BindingValue::Value(u.clone())),
             });
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -1619,7 +1625,7 @@ impl AzureFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Vec<EnvironmentVar>> {
         // Get the function's own binding params (may be None during initial creation)
-        let self_binding_params = self.get_binding_params();
+        let self_binding_params = self.get_binding_params()?;
 
         // Build complete environment using shared logic
         // IMPORTANT: Start with func.environment which includes injected vars from DeploymentConfig
@@ -1697,7 +1703,10 @@ impl AzureFunctionController {
         // Azure Container Apps requires specific CPU/memory combinations.
         // The ratio is 0.5 Gi per 0.25 CPU (2 Gi per 1 CPU).
         let memory_gi = func.memory_mb as f64 / 1024.0;
-        let cpu = (memory_gi / 2.0).max(0.25);
+        // Azure Container Apps requires specific CPU/memory pairs where CPU = memory_gi / 2.
+        // The FunctionMemoryCheck preflight validates that memory_mb is a valid Azure value
+        // (512, 1024, 1536, 2048, 2560, 3072, 3584, 4096).
+        let cpu = memory_gi / 2.0;
 
         let container = Container {
             name: Some("main".to_string()),

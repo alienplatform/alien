@@ -662,10 +662,10 @@ impl KubernetesBuildController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         // Build bindings are constructed from namespace and ServiceAccount info
         // No controller-specific binding params needed
-        None
+        Ok(None)
     }
 }
 

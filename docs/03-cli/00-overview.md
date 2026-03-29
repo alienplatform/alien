@@ -1,280 +1,247 @@
 # The Alien CLI
 
-The primary tool for building and managing Alien applications. One CLI, three modes of operation.
+`alien` is a plain CLI first. There is no dashboard mode and no TUI fallback. Human terminals get readable progress and small setup prompts where helpful; automation gets flags, `--json`, and fast failures.
 
 ## Mode Resolution
 
-The CLI determines which mode to use based on how it's invoked:
+The CLI resolves its target in this order:
 
-```
+```text
 if command is `alien dev ...`:
-    → Dev mode
+    local dev mode
 elif ALIEN_MANAGER_URL is set:
-    → Standalone mode
+    standalone manager mode
 else:
-    → Platform mode
+    platform mode
 ```
 
-### Platform mode (default)
+## Command Categories
 
-The CLI talks to the Alien platform. The platform handles routing requests to the appropriate manager, workspace/project scoping, OAuth, and artifact registry management.
+The command tree has four categories.
+
+### 1. Offline / build commands
+
+These run on your machine and do not need a manager.
+
+| Command | Purpose |
+|---|---|
+| `alien build --platform <platform>` | Build the stack into `.alien/build/<platform>` |
+
+### 2. Top-level manager commands
+
+These talk to a non-local manager API.
+
+| Command | Purpose |
+|---|---|
+| `alien release` | Push images and create a release |
+| `alien deploy` | Create or update a deployment |
+| `alien destroy` | Destroy a deployment |
+| `alien deployments ...` | List and inspect deployments |
+| `alien onboard` | Create a deployment group / onboarding flow |
+| `alien whoami` | Show manager identity information |
+
+In platform mode these commands resolve the right manager through the platform using workspace, project, and target platform. In standalone mode they talk directly to `ALIEN_MANAGER_URL`.
+
+### 3. Local commands under `alien dev`
+
+These target the embedded local manager only.
+
+| Command | Purpose |
+|---|---|
+| `alien dev` | Start local manager, build, release, deploy, and stay attached |
+| `alien dev server` | Start only the local manager |
+| `alien dev release` | Create a local release |
+| `alien dev deploy` | Create or update a local deployment |
+| `alien dev destroy` | Destroy a local deployment |
+| `alien dev deployments ...` | Inspect local deployments |
+| `alien dev vault ...` | Manage local vault state |
+| `alien dev whoami` | Show local manager identity |
+
+Local behavior stays under `alien dev ...`. Top-level manager commands do not grow a separate `--local` mode.
+
+### 4. Platform-only commands
+
+These operate on platform entities, not manager APIs.
+
+| Command | Purpose |
+|---|---|
+| `alien login` | Authenticate and set a default workspace |
+| `alien logout` | Clear stored credentials |
+| `alien workspaces ls` | List workspaces |
+| `alien workspaces set` | Set the active workspace |
+| `alien projects ls` | List projects in the active workspace |
+| `alien link` | Link the current directory to a project |
+| `alien unlink` | Remove the local project link |
+| `alien manager ...` | Manage private managers through the platform API |
+
+## Platform Mode
+
+Platform mode is the default when `ALIEN_MANAGER_URL` is not set.
 
 ```bash
-alien login                          # OAuth → selects workspace
-alien link --project my-app          # Links directory to project
-alien build --platform aws           # Compile locally
-alien release                        # Push images, create release
-alien deployments ls                 # List deployments
-```
-
-No server URLs, no manual configuration. Authentication via OAuth (`alien login`) or API key (`ALIEN_API_KEY`).
-
-For custom platform deployments (e.g., an enterprise running their own Alien platform), set `ALIEN_BASE_URL`:
-
-```bash
-export ALIEN_BASE_URL=https://api.acme-alien.com
-export ALIEN_API_KEY=ax_...
-```
-
-This is still platform mode — it has workspaces, projects, OAuth — just at a different URL.
-
-### Standalone mode
-
-The CLI talks directly to a standalone alien-manager. Set `ALIEN_MANAGER_URL`:
-
-```bash
-export ALIEN_MANAGER_URL=http://my-server:8080
-export ALIEN_API_KEY=ax_admin_...
-
+alien login
+alien link --project my-app
 alien build --platform aws
 alien release
-alien deployment-groups create --name production
-alien deploy --token ax_dg_... --platform aws --name production
 alien deployments ls
 ```
 
-**Key differences from platform mode:**
-- `ALIEN_API_KEY` is required — no OAuth against a bare server
-- No workspaces, no projects — single-project server
-- Platform-only commands are unavailable (`login`, `workspace`, `projects`, `link`, `packages`)
+Key rules:
 
-### Dev mode
+- authentication is OAuth or `ALIEN_API_KEY`
+- workspace comes from `--workspace`, `ALIEN_WORKSPACE`, login profile, or an interactive bootstrap prompt
+- project comes from `--project`, `.alien/project.json`, or an interactive bootstrap prompt
+- manager-targeted commands do not require a manual manager URL in normal platform usage
 
-`alien dev` starts a local alien-manager, builds your stack, and deploys everything on your machine. No cloud, no credentials, no internet.
+## Standalone Mode
+
+Standalone mode talks directly to one manager.
+
+```bash
+export ALIEN_MANAGER_URL=http://localhost:8080
+export ALIEN_API_KEY=ax_admin_...
+
+alien build --platform local
+alien release
+alien onboard --name customer-a
+```
+
+Key differences from platform mode:
+
+- `ALIEN_API_KEY` is required
+- there are no workspaces or projects
+- platform-only commands such as `login`, `workspaces`, `projects`, and `link` do not apply
+
+## Local Dev Mode
+
+`alien dev` is the explicit local namespace.
 
 ```bash
 cd my-app
 alien dev
 ```
 
-All dev commands route to `localhost:9090`. Workspace and project are constants (`local-dev`). See [Local Development](02-manager/08-local-development.md).
+Bare `alien dev`:
 
-### Why two URL variables?
+1. starts the local manager
+2. builds the app for the local platform unless `--skip-build`
+3. creates a local release
+4. creates or updates the initial local deployment
+5. waits until the deployment is ready
+6. prints URLs and next-step commands
 
-`ALIEN_BASE_URL` and `ALIEN_MANAGER_URL` serve different purposes:
+`alien dev server` starts only the local manager.
 
-- **`ALIEN_BASE_URL`** = "where is the platform?" — points at the Alien platform API (default: `api.alien.dev`). The platform routes requests, manages workspaces and projects, handles OAuth. Setting a custom URL means you're using a different platform deployment, not a bare server.
+## Interactive Bootstrap Rules
 
-- **`ALIEN_MANAGER_URL`** = "where is my alien-manager?" — points directly at a standalone alien-manager. No platform in the middle. No workspaces, no OAuth, no routing. Just a server with an API key.
+Interactive prompts are allowed only as bootstrap help for humans in a real terminal.
 
-The presence of `ALIEN_MANAGER_URL` is what switches the CLI to standalone mode.
+Examples:
 
-## Commands
+- `alien login` can ask for a workspace
+- `alien workspaces set` can offer a workspace selector
+- `alien link` can help choose or create a project
+- `alien release` can bootstrap missing workspace/project context in a TTY
 
-### Offline
+Rules:
 
-| Command | Description |
-|---------|-------------|
-| `alien build --platform <platform>` | Compile `alien.ts` into OCI image tarballs |
+- there is always a complete flag-based path
+- `--json` never prompts
+- non-interactive execution never depends on prompts
+- prompts are plain terminal prompts, not full-screen interfaces
 
-`alien build` runs entirely on your machine. No server involved.
+When automation is missing context, the CLI should fail with an actionable message such as “run `alien link --project <name>`” or “run `alien workspaces set <name>`”.
 
-### Server commands
+## Machine-Readable Output
 
-These work against any alien-manager — platform-managed, standalone, or local dev. In platform mode, they route through the platform API transparently.
+Major commands support `--json` and treat it as a strict machine contract.
 
-| Command | Description |
-|---------|-------------|
-| `alien release` | Push images to artifact registry + create release |
-| `alien deploy` | Provision a deployment in a remote environment |
-| `alien destroy` | Teardown a deployment's cloud resources |
-| `alien deployments ls` | List deployments |
-| `alien deployments get <id>` | Get deployment details |
-| `alien deployments retry <id>` | Retry a failed deployment |
-| `alien deployments redeploy <id>` | Trigger redeployment with the same release |
-| `alien command invoke` | Execute a remote command on a deployment |
-| `alien deployment-groups create` | Create a deployment group |
-| `alien onboard` | Create deployment group + generate deployment link |
-| `alien whoami` | Check authenticated identity |
-
-### Platform-only commands
-
-These only work in platform mode. They don't exist on standalone alien-managers.
-
-| Command | Description |
-|---------|-------------|
-| `alien deployments pin <id> [release]` | Pin deployment to specific release (omit release to unpin) |
-| `alien login` | OAuth authentication + workspace selection |
-| `alien logout` | Clear stored credentials |
-| `alien workspace ls` | List workspaces |
-| `alien workspace set` | Set default workspace |
-| `alien projects ls` | List projects in workspace |
-| `alien link` | Link current directory to a platform project |
-| `alien unlink` | Remove project link |
-| `alien packages ls` | List packages in registry |
-| `alien manager deploy` | Deploy a new private manager to your cloud |
-| `alien manager status <id>` | Show manager status and details |
-| `alien manager ls` | List managers in workspace |
-| `alien manager events <id>` | View manager events (`--follow` to poll) |
-| `alien manager destroy <id>` | Destroy a manager (`--yes` to skip confirmation) |
-
-### Dev mode commands
-
-Prefix any server command with `dev` to run it against the local dev server:
+Examples:
 
 ```bash
-alien dev deployments ls                    # List local deployments
-alien dev release                           # Create local release
-alien dev deploy                            # Deploy locally
-alien dev whoami                            # Show dev server identity
-alien dev vault set <vault> <key> <value>   # Set dev vault secret
-alien dev server                            # Start dev server only (no TUI)
+alien build --json
+alien release --json --yes
+alien whoami --json
+alien projects ls --json
+alien manager ls --json
 ```
 
-Dev mode uses the same command implementations — only the target changes.
+`alien dev` also exposes a machine interface for tooling through `--status-file`:
+
+```bash
+alien dev --port 9090 --status-file .alien/dev-status.json
+```
+
+That file is written as JSON using the shared `DevStatus` type from `@alienplatform/core`.
 
 ## Configuration
 
-### Authentication
+### Platform mode
 
-**Platform mode** — two methods:
-1. **OAuth** — `alien login` opens the browser, runs PKCE flow, stores tokens in the system keyring. Tokens auto-refresh.
-2. **API key** — set `ALIEN_API_KEY` env var. Used in CI/CD (GitHub Actions).
+Resolution order:
 
-**Standalone mode** — `ALIEN_API_KEY` required. The admin token is printed on first server startup.
+1. CLI flags
+2. environment variables
+3. `.alien/project.json`
+4. login profile
+5. built-in defaults
 
-**Dev mode** — no authentication. The dev server accepts all requests.
-
-### Project linking
-
-`alien link` creates `.alien/project.json` in the current directory:
-
-```json
-{
-  "workspace": "my-workspace",
-  "project_id": "prj_xxx",
-  "project_name": "my-app"
-}
-```
-
-Commands that need a project (like `alien release`) check for this file first. If not found, they prompt interactively or use the `--project` flag.
-
-Project linking is platform-only. In standalone mode, there's one project — no linking needed. In dev mode, the project is always `local-dev`.
-
-### Configuration hierarchy
-
-**Platform mode** — resolution order (first match wins):
-
-1. **CLI flags** — `--api-key`, `--workspace`, `--project`
-2. **Environment variables** — `ALIEN_BASE_URL`, `ALIEN_API_KEY`, `ALIEN_WORKSPACE`
-3. **Project link** — `.alien/project.json` (workspace and project)
-4. **Profile** — `~/.config/alien/profile.json` (default workspace from `alien login`)
-5. **Defaults** — `https://api.alien.dev`
-
-**Standalone mode** — resolution order:
-
-1. **Environment variables** — `ALIEN_MANAGER_URL`, `ALIEN_API_KEY`
-
-No project link, no profile, no defaults. Both `ALIEN_MANAGER_URL` and `ALIEN_API_KEY` are required.
-
-**Dev mode** — no resolution needed. Target is always `localhost:{port}`, no auth, workspace/project are `local-dev`.
-
-### Configuration files
-
-| File | Created by | Contents |
-|------|-----------|----------|
-| `~/.config/alien/profile.json` | `alien login` | Default workspace name |
-| `.alien/project.json` | `alien link` | Project link (workspace, project ID, name) |
-| `.alien/dev.db` | `alien dev` | Dev server SQLite database |
-| `.alien/build/` | `alien build` | Built OCI tarballs |
-| System keyring | `alien login` | OAuth access + refresh tokens |
-
-### Environment variables
+Important variables:
 
 ```bash
-# Platform mode
-ALIEN_BASE_URL=https://api.alien.dev    # Platform API URL (default)
-ALIEN_API_KEY=ax_...                     # API key for auth (skips OAuth)
-ALIEN_WORKSPACE=my-workspace             # Default workspace
-
-# Standalone mode
-ALIEN_MANAGER_URL=http://my-server:8080  # Standalone manager URL (triggers standalone mode)
-ALIEN_API_KEY=ax_admin_...               # API key (required in standalone mode)
-
-# Debugging
-ALIEN_LOG=debug                          # Log level
-ALIEN_LOG_FILE=/tmp/alien.log            # Log to file
+ALIEN_BASE_URL=https://api.alien.dev
+ALIEN_API_KEY=ax_...
+ALIEN_WORKSPACE=my-workspace
 ```
 
-## The Release Flow
+### Standalone mode
 
-`alien release` pushes built images and creates a release record:
+Required:
 
-1. **Resolve project** — from `--project` flag, `.alien/project.json`, or interactive prompt (platform mode only)
-2. **Fetch registry config** — calls the server to get artifact registry type, endpoint, and push credentials
-3. **Verify build** — checks `.alien/build/{platform}/` for built OCI tarballs
-4. **Push images** — pushes each resource's image to the registry
-5. **Create release** — `POST /v1/releases` with stack JSON containing image URIs
-6. **Deployments auto-update** — server sets `desired_release_id` on eligible deployments
-
-The developer doesn't specify a repository. The server provides the registry configuration — the CLI just pushes where the server tells it to.
-
-## The Deploy Flow
-
-`alien deploy` provisions a deployment in a remote environment:
-
-1. **Authenticate** — validates the deployment group token via `/v1/whoami`
-2. **Create deployment** — registers with the server, gets a deployment ID and deployment token
-3. **Sync loop** — calls `acquire` → runs `alien-deployment::step()` locally → calls `reconcile`
-4. **Track locally** — stores deployment ID and token in the system keyring for future deploys
-
-After initial setup, the admin's machine drives provisioning using their own cloud credentials. alien-manager records the result. Subsequent updates are handled by the deployment loop (push) or Agent (pull).
-
-## The TUI
-
-Running `alien` or `alien dev` without a subcommand launches the Terminal UI.
-
-**Platform TUI** (`alien`):
-- Shows deployments, releases, commands for the linked project
-- Read-only monitoring — deployments are managed via `alien deploy` or the dashboard
-
-**Dev TUI** (`alien dev`):
-- Shows local deployments and streams logs in real time
-- Press `B` to rebuild after code changes
-- Includes build status and rebuild channels
-
-Both TUIs use the same component architecture:
-- **State** — plain data structs, no async
-- **Views** — pure render functions (Ratatui)
-- **Services** — SDK calls that return state types
-- **Controller** — orchestrates state updates from user actions and service responses
-
-## CI/CD Integration
-
-The same commands work in GitHub Actions:
-
-```yaml
-- name: Build
-  run: alien build --platform aws --no-tui
-
-- name: Release
-  run: alien release --yes --project my-project
+```bash
+ALIEN_MANAGER_URL=http://localhost:8080
+ALIEN_API_KEY=ax_admin_...
 ```
 
-`--no-tui` disables the terminal UI for CI. `--yes` skips confirmation prompts. Authenticate with `ALIEN_API_KEY` environment variable (no OAuth needed).
+### Local dev mode
 
-## Crate Location
+No auth is required. The local manager is addressed through `alien dev ...` and defaults to `http://localhost:9090`.
 
-`alien/crates/alien-cli/`
+## Common Flows
 
-Dependencies: `alien-build`, `alien-deployment`, `alien-manager`, `alien-manager-api`.
+### Human first run on the platform
+
+```bash
+alien login
+alien link
+alien build --platform aws
+alien release
+```
+
+### CI / agent flow on the platform
+
+```bash
+alien login --workspace my-workspace --json
+alien link --project my-app --json
+alien build --platform aws --json
+alien release --project my-app --yes --json
+```
+
+### Local development
+
+```bash
+alien dev
+alien dev deployments ls
+alien dev release
+```
+
+### Standalone manager
+
+```bash
+export ALIEN_MANAGER_URL=http://localhost:8080
+export ALIEN_API_KEY=ax_admin_...
+
+alien build --platform local
+alien release
+alien deployments ls
+```

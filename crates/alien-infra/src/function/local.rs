@@ -7,7 +7,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     Function, FunctionCode, FunctionOutputs, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 
 #[controller]
@@ -320,14 +320,19 @@ impl LocalFunctionController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, FunctionBinding};
 
         if let Some(function_url) = &self.function_url {
             let binding = FunctionBinding::local(BindingValue::value(function_url.clone()));
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

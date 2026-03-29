@@ -385,31 +385,38 @@ impl LocalContainerController {
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, ContainerBinding};
 
-        self.container_info.as_ref().map(|info| {
-            // Internal URL uses Docker network DNS with first port
-            let first_port = info.ports.first().copied().unwrap_or(8080);
-            let internal_url = format!("http://{}:{}", info.internal_dns, first_port);
+        let Some(info) = &self.container_info else {
+            return Ok(None);
+        };
 
-            // Public URL is the localhost-mapped port (if exposed publicly)
-            let public_url = info.host_port.map(|p| format!("http://localhost:{}", p));
+        // Internal URL uses Docker network DNS with first port
+        let first_port = info.ports.first().copied().unwrap_or(8080);
+        let internal_url = format!("http://{}:{}", info.internal_dns, first_port);
 
-            let binding = if let Some(url) = public_url {
-                ContainerBinding::local_with_public_url(
-                    BindingValue::value(info.container_id.clone()),
-                    BindingValue::value(internal_url),
-                    BindingValue::value(url),
-                )
-            } else {
-                ContainerBinding::local(
-                    BindingValue::value(info.container_id.clone()),
-                    BindingValue::value(internal_url),
-                )
-            };
+        // Public URL is the localhost-mapped port (if exposed publicly)
+        let public_url = info.host_port.map(|p| format!("http://localhost:{}", p));
 
-            serde_json::to_value(binding).unwrap_or_default()
-        })
+        let binding = if let Some(url) = public_url {
+            ContainerBinding::local_with_public_url(
+                BindingValue::value(info.container_id.clone()),
+                BindingValue::value(internal_url),
+                BindingValue::value(url),
+            )
+        } else {
+            ContainerBinding::local(
+                BindingValue::value(info.container_id.clone()),
+                BindingValue::value(internal_url),
+            )
+        };
+
+        Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+            ErrorData::ResourceStateSerializationFailed {
+                resource_id: "binding".to_string(),
+                message: "Failed to serialize binding parameters".to_string(),
+            },
+        )?))
     }
 }

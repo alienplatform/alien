@@ -12,7 +12,8 @@ import { DevResourceInfoSchema } from "./dev-resource-info-schema.js";
  * @description Status of a single agent in the dev server
  */
 export const AgentStatusSchema = z.object({
-    "createdAt": z.string().describe("ISO 8601 timestamp when agent was created"),
+    "commandsUrl": z.string().describe("Commands endpoint URL for the deployment").nullish(),
+"createdAt": z.string().describe("ISO 8601 timestamp when agent was created"),
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },

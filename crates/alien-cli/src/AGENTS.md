@@ -1,193 +1,98 @@
 # alien-cli Guidelines
 
-## TUI Architecture
+## Product Model
 
-The TUI follows a **pure state + pure views** architecture:
+`alien-cli` is a plain CLI first.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    AppController                         │
-│  - Handles Actions from views                           │
-│  - Updates state                                        │
-│  - Calls services                                       │
-└─────────────────────────────────────────────────────────┘
-         │                              │
-         ▼                              ▼
-┌─────────────────┐          ┌─────────────────────────────┐
-│  AppViewState   │          │        AppServices          │
-│  - Pure data    │          │  - SDK calls                │
-│  - No async     │          │  - Converts to state types  │
-│  - No SDK types │          └─────────────────────────────┘
-└─────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│                      Views                               │
-│  - render(state) -> Frame                               │
-│  - handle_key(key, state) -> Action                     │
-│  - Pure functions, no side effects                      │
-└─────────────────────────────────────────────────────────┘
-```
+- no TUI
+- no dashboard entrypoint
+- no `--no-tui` compatibility layer
+- human terminals get readable progress and small bootstrap prompts
+- automation gets flags, `--json`, and deterministic failures
 
-### Key Principles
+Keep the command model clean:
 
-1. **TUI is just a view** - It observes and displays state. It never triggers deployments or business logic.
+- top-level `alien ...` manager commands target platform-managed or standalone managers
+- `alien dev ...` targets the local manager only
+- platform-only commands stay separate (`login`, `workspaces`, `projects`, `link`, `manager`)
+- offline build commands stay separate from server-targeted commands
 
-2. **Views don't own state** - They receive state as parameters and return Actions.
+## Interaction Rules
 
-3. **State types are decoupled from SDK** - `DeploymentItem`, `LogLine`, etc. are plain data with display-ready strings.
+Interactive prompts are allowed only as bootstrap help for humans in a real terminal.
 
-4. **Logs are global** - `AppViewState.logs` accumulates all logs. Views filter by deployment_id.
+Good examples:
 
-5. **Resources come from polling** - The runtime polls the API every 2 seconds for fresh data.
+- `alien login`
+- `alien workspaces set`
+- `alien link`
+- manager-targeted commands that need to establish missing workspace/project context
 
-### State Types (`tui/state/`)
+Rules:
 
-```rust
-// Pure data, no SDK dependencies
-pub struct DeploymentItem {
-    pub id: String,
-    pub name: String,
-    pub status: DeploymentStatus,  // Our enum, not SDK's
-}
+- every command must have a complete non-interactive path
+- `--json` must never prompt
+- non-interactive execution must fail fast with actionable guidance
+- prompts should be simple line-oriented terminal prompts, not full-screen experiences
 
-// Global log buffer
-pub struct AppViewState {
-    pub logs: VecDeque<LogLine>,  // All logs, filtered per-view
-    pub deployments: ListState<DeploymentItem>,
-    // ...
-}
-```
+## Output Rules
 
-### Views (`tui/views/`)
+When changing or adding commands:
 
-```rust
-// Pure render function
-pub fn render(frame: &mut Frame, area: Rect, state: &ListState<DeploymentItem>) {
-    // No async, no SDK calls, just rendering
-}
+- prefer clear phase-by-phase plain text for human mode
+- support `--json` when the command returns structured data or is useful for tooling
+- keep success summaries short and actionable
+- end long-running flows with obvious next-step commands when that helps the user continue
 
-// Pure key handler
-pub fn handle_key(key: KeyEvent, state: &mut ListState<DeploymentItem>) -> Action {
-    match key.code {
-        KeyCode::Enter => Action::NavigateToDeployment(state.selected_id()),
-        KeyCode::Char('n') => Action::OpenNewDeploymentDialog,
-        _ => Action::None,
-    }
-}
-```
+Do not treat logs as an API. If tooling needs data, expose it explicitly with JSON output or a documented file contract.
 
-### Services (`tui/services/`)
+## Local Dev Contract
 
-```rust
-// Encapsulates SDK calls, converts to state types
-impl DeploymentsService {
-    pub async fn list(&self) -> Result<Vec<DeploymentItem>, String> {
-        let response = self.sdk.list_deployments().send().await?;
-        Ok(response.items.into_iter().map(deployment_from_api).collect())
-    }
-}
-```
+`alien dev` is the shipped local workflow.
 
----
+- bare `alien dev` starts the local manager, builds, creates a release, deploys, and waits
+- `alien dev server` starts only the local manager
+- local tooling uses `--status-file`
+- the status file shape comes from `alien-core::DevStatus` and is generated into `@alienplatform/core`
 
-## Storybook
+If you change the dev status shape:
 
-Test views in isolation with mock data. Located in `src/storybook/tui/`.
+1. update `alien-core`
+2. regenerate `alien/packages/core`
+3. update any consumers such as `packages/testing`
 
-### Running Demos
-
-```bash
-cargo run --bin alien-cli-storybook -- tui deployments empty
-cargo run --bin alien-cli-storybook -- tui deployments many-items
-cargo run --bin alien-cli-storybook -- tui deployment-detail running
-cargo run --bin alien-cli-storybook -- tui deployment-detail many-logs
-```
-
-### Creating Demos
-
-```rust
-// In storybook/tui/demos/deployments_list.rs
-pub enum DeploymentsDemo {
-    Empty,      // No deployments
-    Loading,    // Loading state
-    Error,      // Error state
-    ManyItems,  // Scrolling, selection
-}
-```
-
-Each demo constructs an `AppViewState` with specific data and runs the view.
-
----
-
-## Debugging
-
-TUI commands disable console logging. Use file logging:
-
-```bash
-# Enable file logging
-ALIEN_LOG=debug ALIEN_LOG_FILE=/tmp/alien.log alien dev
-
-# In another terminal
-tail -f /tmp/alien.log
-```
-
-### Log Levels
-
-```bash
-ALIEN_LOG=debug                              # Everything
-ALIEN_LOG="alien_cli=trace,alien_core=warn"  # Specific components
-```
-
-### Adding Logs
-
-```rust
-use tracing::{debug, info, warn, error};
-
-debug!(deployment_id = %id, "Loading deployment");
-info!("Server listening on port {}", port);
-error!(%reason, "Failed to connect");
-```
-
----
+Do not hand-maintain duplicate TypeScript copies of the dev status schema when the generated type can be imported.
 
 ## Error Handling
 
-Use `alien-error` for structured errors. See `crates/AGENTS.md` for full guide.
+Use `alien-error` structured errors and add context at the boundary where information becomes actionable.
+
+Preferred patterns:
 
 ```rust
-// New error
-Err(AlienError::new(ErrorData::TuiOperationFailed { message: "..." }))
-
-// Wrap error with context
-operation().await.context(ErrorData::TuiOperationFailed { ... })?;
-
-// Third-party errors
-io_op().into_alien_error().context(ErrorData::TuiOperationFailed { ... })?;
+operation().await.context(ErrorData::ApiRequestFailed {
+    message: "creating release".to_string(),
+    url: None,
+})?;
 ```
-
----
-
-## Common Patterns
-
-### Adding a New View
-
-1. **State** (`tui/state/`): Define `XxxItem` with display-ready fields
-2. **Service** (`tui/services/`): Add SDK calls that return state types
-3. **View** (`tui/views/`): Implement `render`, `handle_key`, `keybinds`
-4. **Wire up**: Add to `AppViewState`, `AppController`, and routing in `runtime.rs`
-5. **Storybook**: Add demo scenarios
-
-### Adding a New Action
-
-1. Add variant to `Action` enum in `tui/state/app.rs`
-2. Handle in `AppController::handle_action`
-3. Return from view's `handle_key`
-
-### Refreshing Data
-
-Data refreshes automatically via `POLL_INTERVAL` (2 seconds). For manual refresh:
 
 ```rust
-KeyCode::Char('r') => Action::Refresh,
+return Err(AlienError::new(ErrorData::ValidationError {
+    field: "project".to_string(),
+    message: "run `alien link --project <name>` first".to_string(),
+}));
 ```
+
+Prefer explicit next steps over vague guidance.
+
+## Documentation Expectations
+
+If you change command behavior, update the docs at the same time.
+
+The key docs for this crate are:
+
+- `alien/docs/03-cli/00-overview.md`
+- `alien/docs/02-manager/08-local-development.md`
+- `alien/docs/09-testing/00-framework.md`
+
+If you change the command model, bootstrap rules, or local machine interface, update all three.

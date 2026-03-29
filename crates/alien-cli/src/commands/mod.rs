@@ -23,8 +23,10 @@ pub use deploy::{deploy_task, DeployArgs};
 pub use deployments::{deployments_task, DeploymentsArgs};
 pub use destroy::{destroy_task, DestroyArgs};
 pub use dev_helpers::{
-    build_and_post_release_simple, build_embedded_dev_manager, create_initial_deployment,
-    ensure_server_running, ensure_server_running_with_env, start_embedded_dev_manager, CliEnvVar,
+    build_and_post_release_simple, build_dev_status, build_embedded_dev_manager,
+    create_initial_deployment, ensure_server_running, ensure_server_running_with_env,
+    start_embedded_dev_manager, wait_for_dev_deployment_ready, write_dev_status, CliEnvVar,
+    DevDeploymentSnapshot,
 };
 pub use onboard::{onboard_task, OnboardArgs};
 pub use release::{release_command, ReleaseArgs};

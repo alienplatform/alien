@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
@@ -832,7 +832,14 @@ impl StackExecutor {
 
                 // Only sync binding params if remote_access is enabled
                 if remote_access {
-                    resource_state.remote_binding_params = serde_json::to_value(binding).ok();
+                    resource_state.remote_binding_params =
+                        Some(serde_json::to_value(binding).into_alien_error().context(
+                            ErrorData::ResourceStateSerializationFailed {
+                                resource_id: resource_id.clone(),
+                                message: "Failed to serialize external binding parameters"
+                                    .to_string(),
+                            },
+                        )?);
                 }
 
                 initial_transitions.insert(resource_id.clone(), resource_state);
@@ -1300,7 +1307,7 @@ impl StackExecutor {
             // Get the updated status, outputs, and binding params from the final controller
             let next_status = final_controller.get_status();
             let next_outputs = final_controller.get_outputs();
-            let next_binding_params = final_controller.get_binding_params();
+            let next_binding_params = final_controller.get_binding_params()?;
 
             // Automatically update config to match desired state (except during deletion)
             let next_config = if current_resource_state.status == ResourceStatus::Deleting {

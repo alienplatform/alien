@@ -1,4 +1,4 @@
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -175,15 +175,20 @@ impl GcpVaultController {
         }
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::VaultBinding;
 
         if let Some(vault_prefix) = &self.vault_prefix {
             let binding = VaultBinding::secret_manager(vault_prefix.clone());
 
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }

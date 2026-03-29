@@ -10,7 +10,7 @@ use alien_aws_clients::codebuild::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 /// Generates the full, prefixed AWS CodeBuild project name.
@@ -439,7 +439,7 @@ phases:
         })
     }
 
-    fn get_binding_params(&self) -> Option<serde_json::Value> {
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::BuildBinding;
 
         if let (Some(project_name), Some(build_env_vars)) =
@@ -447,9 +447,14 @@ phases:
         {
             let binding =
                 BuildBinding::codebuild(project_name.clone(), build_env_vars.clone(), None);
-            serde_json::to_value(binding).ok()
+            Ok(Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize binding parameters".to_string(),
+                },
+            )?))
         } else {
-            None
+            Ok(None)
         }
     }
 }
