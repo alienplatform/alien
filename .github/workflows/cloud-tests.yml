@@ -120,7 +120,7 @@ jobs:
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: infra/standalone/images/lambda
+          context: infra/standalone/test-images/lambda
           platforms: linux/arm64
           push: true
           tags: ${{ steps.registries.outputs.aws_lambda_image }}
@@ -130,7 +130,7 @@ jobs:
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: infra/standalone/images/http-server
+          context: infra/standalone/test-images/http-server
           platforms: linux/amd64
           push: true
           tags: |
