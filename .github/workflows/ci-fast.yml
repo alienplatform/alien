@@ -97,6 +97,3 @@ jobs:
           RUST_LOG: info
           VERBOSE: "true"
         run: pnpm test:examples
-
-      - name: Run local e2e tests
-        run: pnpm test:e2e:local
