@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "test": "pnpm run test:projects",
-    "test:projects": "pnpm -C endpoint-agent test && pnpm -C minimal-cloud-agent test && pnpm -C github-agent/packages/remote-agent test",
+    "test:projects": "pnpm -C minimal-cloud-agent test && pnpm -C github-agent/packages/remote-agent test",
+    "test:projects:all": "pnpm -C endpoint-agent test && pnpm -C minimal-cloud-agent test && pnpm -C github-agent/packages/remote-agent test",
     "test:remote-agent": "pnpm -C github-agent/packages/remote-agent test"
   },
   "packageManager": "pnpm@10.11.0"
