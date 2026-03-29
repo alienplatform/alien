@@ -66,6 +66,7 @@ async-stream = { workspace = true, optional = true }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
 
 [dev-dependencies]
+alien-aws-clients = { workspace = true, features = ["test-utils"] }
 dotenvy = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

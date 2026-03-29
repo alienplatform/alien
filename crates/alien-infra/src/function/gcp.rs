@@ -4067,6 +4067,8 @@ mod tests {
             target_https_proxy_name: None,
             global_address_name: None,
             forwarding_rule_name: None,
+            commands_topic_name: None,
+            commands_subscription_name: None,
             _internal_stay_count: None,
         };
 

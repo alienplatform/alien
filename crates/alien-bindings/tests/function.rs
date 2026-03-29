@@ -220,7 +220,6 @@ impl AsyncTestContext for AwsProviderTestContext {
                 session_token: None,
             },
             service_overrides: None,
-            project_number: None,
         };
         let lambda_client = LambdaClient::new(
             reqwest::Client::new(),
@@ -716,7 +715,6 @@ impl AsyncTestContext for AzureProviderTestContext {
                 client_secret,
             },
             service_overrides: None,
-            project_number: None,
         };
 
         let container_apps_client = AzureContainerAppsClient::new(

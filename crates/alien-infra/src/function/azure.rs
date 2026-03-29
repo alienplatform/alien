@@ -3440,6 +3440,9 @@ mod tests {
             keyvault_cert_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            commands_namespace_name: None,
+            commands_queue_name: None,
+            commands_dapr_component: None,
             _internal_stay_count: None,
         };
 

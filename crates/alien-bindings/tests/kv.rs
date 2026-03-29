@@ -321,7 +321,6 @@ impl AsyncTestContext for AwsProviderTestContext {
                 session_token: None,
             },
             service_overrides: None,
-            project_number: None,
         };
 
         let dynamodb_client = DynamoDbClient::new(
@@ -886,7 +885,6 @@ impl AsyncTestContext for AzureProviderTestContext {
                 client_secret: client_secret.clone(),
             },
             service_overrides: None,
-            project_number: None,
         };
 
         let management_client = AzureTableManagementClient::new(
