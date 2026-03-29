@@ -81,7 +81,7 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda)'
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::pull)'
 
       - name: Build all CLIs
         run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-agent
