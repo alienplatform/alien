@@ -19,10 +19,10 @@ import { AlienError } from "@alienplatform/core"
 import { Hono } from "hono"
 
 // Debug: catch any unhandled errors/rejections
-process.on("uncaughtException", (err) => {
+process.on("uncaughtException", err => {
   console.error("[CRASH-DEBUG] uncaughtException:", err)
 })
-process.on("unhandledRejection", (reason) => {
+process.on("unhandledRejection", reason => {
   console.error("[CRASH-DEBUG] unhandledRejection:", reason)
 })
 
@@ -84,7 +84,7 @@ app.get("/sse", c => {
 
 // --- Debug: sleep endpoint to test HTTP timeout ---
 app.get("/sleep/:seconds", async c => {
-  const seconds = parseInt(c.req.param("seconds"))
+  const seconds = Number.parseInt(c.req.param("seconds"))
   console.log(`[SLEEP-DEBUG] sleeping ${seconds}s`)
   await new Promise(resolve => setTimeout(resolve, seconds * 1000))
   console.log(`[SLEEP-DEBUG] woke up after ${seconds}s`)
@@ -133,19 +133,19 @@ app.post("/kv-test/:bindingName", async c => {
   try {
     console.log(`[KV-DEBUG] calling kv(${bindingName})`)
     const k = await kv(bindingName)
-    console.log(`[KV-DEBUG] kv binding obtained`)
+    console.log("[KV-DEBUG] kv binding obtained")
     const testKey = `test-key-${Date.now()}`
     const testValue = { message: "kv-test", ts: Date.now() }
 
     console.log(`[KV-DEBUG] calling k.set(${testKey})`)
     await k.set(testKey, testValue)
-    console.log(`[KV-DEBUG] k.set completed`)
+    console.log("[KV-DEBUG] k.set completed")
     const retrieved = await k.get(testKey)
-    console.log(`[KV-DEBUG] k.get completed`)
+    console.log("[KV-DEBUG] k.get completed")
     const value = retrieved ? JSON.parse(new TextDecoder().decode(retrieved)) : null
     console.log(`[KV-DEBUG] calling k.delete(${testKey})`)
     await k.delete(testKey)
-    console.log(`[KV-DEBUG] k.delete completed`)
+    console.log("[KV-DEBUG] k.delete completed")
 
     return c.json({
       success: true,
@@ -157,7 +157,7 @@ app.post("/kv-test/:bindingName", async c => {
       },
     })
   } catch (error: unknown) {
-    console.error(`[KV-DEBUG] kv-test error:`, error)
+    console.error("[KV-DEBUG] kv-test error:", error)
     const alienError = await toExternalOperationError(error, "kv-test")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
@@ -171,18 +171,18 @@ app.post("/vault-test/:bindingName", async c => {
   try {
     console.log(`[VAULT-DEBUG] calling vault(${bindingName})`)
     const v = await vault(bindingName)
-    console.log(`[VAULT-DEBUG] vault binding obtained`)
+    console.log("[VAULT-DEBUG] vault binding obtained")
     const testKey = `test-secret-${Date.now()}`
     const testValue = "test-secret-value"
 
     console.log(`[VAULT-DEBUG] calling v.set(${testKey})`)
     await v.set(testKey, testValue)
-    console.log(`[VAULT-DEBUG] v.set completed`)
+    console.log("[VAULT-DEBUG] v.set completed")
     const retrieved = await v.get(testKey)
     console.log(`[VAULT-DEBUG] v.get completed, value=${retrieved}`)
     console.log(`[VAULT-DEBUG] calling v.delete(${testKey})`)
     await v.delete(testKey)
-    console.log(`[VAULT-DEBUG] v.delete completed`)
+    console.log("[VAULT-DEBUG] v.delete completed")
 
     return c.json({
       success: true,
@@ -194,7 +194,7 @@ app.post("/vault-test/:bindingName", async c => {
       },
     })
   } catch (error: unknown) {
-    console.log(`[VAULT-DEBUG] vault-test caught error:`, error)
+    console.log("[VAULT-DEBUG] vault-test caught error:", error)
     const alienError = await toExternalOperationError(error, "vault-test")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
@@ -208,14 +208,14 @@ app.post("/queue-test/:bindingName", async c => {
   try {
     console.log(`[QUEUE-DEBUG] calling queue(${bindingName})`)
     const q = await queue(bindingName)
-    console.log(`[QUEUE-DEBUG] queue binding obtained`)
-    console.log(`[QUEUE-DEBUG] calling q.send("default", ...)`)
+    console.log("[QUEUE-DEBUG] queue binding obtained")
+    console.log("[QUEUE-DEBUG] calling q.send(\"default\", ...)")
     await q.send("default", { test: true, ts: Date.now() })
-    console.log(`[QUEUE-DEBUG] q.send completed`)
+    console.log("[QUEUE-DEBUG] q.send completed")
 
     return c.json({ success: true, bindingName })
   } catch (error: unknown) {
-    console.error(`[QUEUE-DEBUG] queue-test error:`, error)
+    console.error("[QUEUE-DEBUG] queue-test error:", error)
     const alienError = await toExternalOperationError(error, "queue-test")
     const detail = error instanceof Error ? error.message : String(error)
     return c.json({ success: false, error: alienError.message, code: alienError.code, detail }, 500)
