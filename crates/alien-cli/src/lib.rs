@@ -408,7 +408,7 @@ async fn run_dev_session(
                 port,
                 alien_core::DevStatusState::Error,
                 None,
-                Some(error.clone()),
+                Some(error.clone().into_generic()),
             ),
         };
         write_dev_status(status_file, &status)?;

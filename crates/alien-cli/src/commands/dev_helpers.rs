@@ -443,6 +443,7 @@ pub async fn create_initial_deployment(
         info!("Deployment '{}' already exists", deployment_name);
         let existing = list_response
             .items
+            .clone()
             .into_iter()
             .find(|deployment| deployment.name == deployment_name)
             .ok_or_else(|| {

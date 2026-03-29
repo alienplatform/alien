@@ -72,7 +72,7 @@ async fn list_projects_task(
         println!("(no projects)");
     } else {
         for project in items {
-            println!("{} ({})", project.name, project.id);
+            println!("{} ({})", project.name.as_str(), project.id.as_str());
         }
     }
 
