@@ -326,30 +326,17 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
 
     let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
 
-    // Policy: allow Lambda service in the target account to pull images.
-    // Lambda needs both pull permissions AND policy management permissions
-    // for cross-account image caching during function deployment.
+    // Policy: allow Lambda service to pull images cross-account.
+    // Two principals are needed:
+    // 1. Lambda service principal — for image pull during function deployment
+    // 2. Target account root — for ECR authorization and cache management
+    // The Lambda service principal statement intentionally omits the sourceArn
+    // condition because the function doesn't exist yet during CreateFunction.
     let policy = serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
             {
-                "Sid": "AllowLambdaCrossAccountPull",
-                "Effect": "Allow",
-                "Principal": {
-                    "Service": "lambda.amazonaws.com"
-                },
-                "Action": [
-                    "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer"
-                ],
-                "Condition": {
-                    "StringLike": {
-                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
-                    }
-                }
-            },
-            {
-                "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
+                "Sid": "LambdaCrossAccountPull",
                 "Effect": "Allow",
                 "Principal": {
                     "Service": "lambda.amazonaws.com"
@@ -360,12 +347,19 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                     "ecr:SetRepositoryPolicy",
                     "ecr:DeleteRepositoryPolicy",
                     "ecr:GetRepositoryPolicy"
-                ],
-                "Condition": {
-                    "StringLike": {
-                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
-                    }
-                }
+                ]
+            },
+            {
+                "Sid": "TargetAccountAccess",
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": format!("arn:aws:iam::{}:root", target_account_id)
+                },
+                "Action": [
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:GetAuthorizationToken"
+                ]
             }
         ]
     });
@@ -484,19 +478,35 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get GAR repository IAM policy: {}", e))?;
 
-    // Step 3: Add binding for the target project's Cloud Run service agent
+    // Step 3: Add bindings for cross-project image access.
+    // Cloud Run v2 requires BOTH:
+    //   a) The Cloud Run service agent — for pulling images at deploy time
+    //   b) The caller SA (target project SA) — Cloud Run v2 validates image
+    //      accessibility using the caller's credentials during CreateService
     let service_agent_member = format!(
         "serviceAccount:service-{}@serverless-robot-prod.iam.gserviceaccount.com",
         project_number
     );
-    let reader_role = "roles/artifactregistry.reader";
 
-    // Check if binding already exists
+    // Extract the target SA email from its credentials JSON
+    let target_sa_key_json: serde_json::Value =
+        serde_json::from_str(target_sa_key).context("Failed to parse target SA key JSON")?;
+    let target_sa_email = target_sa_key_json["client_email"]
+        .as_str()
+        .context("Target SA key missing client_email")?;
+    let target_sa_member = format!("serviceAccount:{}", target_sa_email);
+
+    let reader_role = "roles/artifactregistry.reader";
+    let members_to_add = [&service_agent_member, &target_sa_member];
+
+    // Merge all members into the existing binding
     let mut found = false;
     for binding in &mut policy.bindings {
         if binding.role == reader_role {
-            if !binding.members.contains(&service_agent_member) {
-                binding.members.push(service_agent_member.clone());
+            for member in &members_to_add {
+                if !binding.members.contains(member) {
+                    binding.members.push((*member).clone());
+                }
             }
             found = true;
             break;
@@ -505,7 +515,7 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
     if !found {
         policy.bindings.push(Binding {
             role: reader_role.to_string(),
-            members: vec![service_agent_member.clone()],
+            members: members_to_add.iter().map(|m| (*m).clone()).collect(),
             condition: None,
         });
     }
@@ -523,8 +533,9 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
 
     info!(
         repo = %repo_id,
-        member = %service_agent_member,
-        "GAR cross-project reader binding set on repository"
+        service_agent = %service_agent_member,
+        target_sa = %target_sa_member,
+        "GAR cross-project reader bindings set on repository"
     );
 
     // Step 5: Also add project-level Artifact Registry Reader on the management project.
@@ -547,12 +558,14 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get management project IAM policy: {}", e))?;
 
-    // Merge binding into project-level policy
+    // Merge bindings into project-level policy (same members as repo-level)
     let mut project_binding_found = false;
     for binding in &mut project_policy.bindings {
         if binding.role == reader_role {
-            if !binding.members.contains(&service_agent_member) {
-                binding.members.push(service_agent_member.clone());
+            for member in &members_to_add {
+                if !binding.members.contains(member) {
+                    binding.members.push((*member).clone());
+                }
             }
             project_binding_found = true;
             break;
@@ -561,7 +574,7 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
     if !project_binding_found {
         project_policy.bindings.push(Binding {
             role: reader_role.to_string(),
-            members: vec![service_agent_member.clone()],
+            members: members_to_add.iter().map(|m| (*m).clone()).collect(),
             condition: None,
         });
     }
@@ -573,8 +586,9 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
 
     info!(
         project = %mgmt.project_id,
-        member = %service_agent_member,
-        "GAR cross-project reader binding set on project"
+        service_agent = %service_agent_member,
+        target_sa = %target_sa_member,
+        "GAR cross-project reader bindings set on project"
     );
 
     Ok(())

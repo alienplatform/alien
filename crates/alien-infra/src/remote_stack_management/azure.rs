@@ -63,64 +63,19 @@ impl AzureRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
-        let azure_config = ctx.get_azure_config()?;
-        let client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
+        // Azure Lighthouse only allows built-in role definitions in registration
+        // definition authorizations. Custom role definitions are rejected with:
+        //   "Only built in role definitions are allowed"
+        // Use the built-in Contributor role for Lighthouse delegation instead
+        // of creating a custom role definition.
+        let contributor_role_guid = "b24988ac-6180-42a0-ab88-20f7382dd24c";
 
         info!(
-            config_id = %config.id,
-            "Creating Azure custom role definition for management permissions"
+            role_guid = %contributor_role_guid,
+            "Using built-in Contributor role for Lighthouse management authorization"
         );
 
-        // For role definitions, we need to create at resource group scope
-        // Get the default resource group name from stack state
-        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
-        let scope = Scope::ResourceGroup {
-            resource_group_name: resource_group_name.clone(),
-        };
-        // Deterministic UUID so re-running the same deployment updates
-        // the existing role definition instead of creating a duplicate.
-        let role_definition_id = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("alien:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
-        )
-        .to_string();
-
-        // Generate role definition from management permission sets
-        let role_definition_properties = self.generate_management_role_definition(ctx)?;
-
-        let role_definition = RoleDefinition {
-            properties: Some(role_definition_properties),
-            ..Default::default()
-        };
-
-        let created_role = client
-            .create_or_update_role_definition(&scope, role_definition_id.clone(), &role_definition)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Azure management role definition '{}'",
-                    role_definition_id
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        let role_id = created_role.id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Created management role definition missing ID".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        info!(
-            role_definition_id = %role_definition_id,
-            role_id = %role_id,
-            "Azure management role definition created successfully"
-        );
-
-        self.management_role_definition_id = Some(role_id);
+        self.management_role_definition_id = Some(contributor_role_guid.to_string());
         self.management_role_created = true;
 
         Ok(HandlerAction::Continue {
@@ -422,50 +377,11 @@ impl AzureRemoteStackManagementController {
         );
 
         // First, update the management role definition
-        if let Some(role_definition_id) = &self.management_role_definition_id {
-            let authorization_client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_config)?;
-
-            let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
-            let scope = Scope::ResourceGroup {
-                resource_group_name: resource_group_name.clone(),
-            };
-
-            // Re-generate role definition properties based on current stack permissions
-            let role_definition_properties = self.generate_management_role_definition(ctx)?;
-
-            let role_definition = RoleDefinition {
-                properties: Some(role_definition_properties),
-                ..Default::default()
-            };
-
-            // Extract the UUID from the full resource ID
-            let role_def_uuid = role_definition_id
-                .split('/')
-                .last()
-                .unwrap_or(role_definition_id);
-
-            authorization_client
-                .create_or_update_role_definition(
-                    &scope,
-                    role_def_uuid.to_string(),
-                    &role_definition,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update Azure management role definition '{}'",
-                        role_definition_id
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                config_id = %config.id,
-                role_definition_id = %role_definition_id,
-                "Azure management role definition updated successfully"
-            );
+        // Lighthouse uses a built-in role (Contributor), no custom role update needed.
+        // Ensure the role definition ID is set for authorization generation.
+        if self.management_role_definition_id.is_none() {
+            self.management_role_definition_id =
+                Some("b24988ac-6180-42a0-ab88-20f7382dd24c".to_string());
         }
 
         // Then update the registration definition
@@ -690,59 +606,14 @@ impl AzureRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        // No custom role definition to delete — Lighthouse uses a built-in role.
         info!(
             config_id = %config.id,
-            "Deleting Azure management role definition"
+            "No custom management role definition to delete (using built-in Contributor role)"
         );
 
-        if let Some(role_definition_id) = &self.management_role_definition_id {
-            let azure_config = ctx.get_azure_config()?;
-            let client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_config)?;
-
-            let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
-            let scope = Scope::ResourceGroup {
-                resource_group_name: resource_group_name.clone(),
-            };
-
-            // Extract the UUID from the full resource ID
-            let role_def_uuid = role_definition_id
-                .split('/')
-                .last()
-                .unwrap_or(role_definition_id);
-
-            match client
-                .delete_role_definition(&scope, role_def_uuid.to_string())
-                .await
-            {
-                Ok(_) => {
-                    info!(role_definition_id = %role_definition_id, "Management role definition deleted successfully");
-                }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(role_definition_id = %role_definition_id, "Management role definition already deleted");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete management role definition '{}'",
-                            role_definition_id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }))
-                }
-            }
-
-            self.management_role_definition_id = None;
-            self.management_role_created = false;
-        } else {
-            info!(config_id = %config.id, "No management role definition was created, skipping role definition deletion");
-        }
+        self.management_role_definition_id = None;
+        self.management_role_created = false;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -798,7 +669,7 @@ impl AzureRemoteStackManagementController {
             }))?;
         let management_principal_id = &azure_management.management_principal_id;
 
-        // Get the custom role definition ID that we created
+        // Get the built-in role definition GUID (set during creating_management_role_definition)
         let role_definition_id = self.management_role_definition_id.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Management role definition ID not available".to_string(),
