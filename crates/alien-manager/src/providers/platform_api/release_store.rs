@@ -45,6 +45,7 @@ impl ReleaseStore for PlatformApiReleaseStore {
         let body: alien_platform_api::types::CreateReleaseRequest =
             convert_via_json(&serde_json::json!({
                 "stack": params.stack,
+                "platform": params.platform.map(|p| p.as_str()),
                 "gitMetadata": {
                     "commitSha": params.git_commit_sha,
                     "commitRef": params.git_commit_ref,

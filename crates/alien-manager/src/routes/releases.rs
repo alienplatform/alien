@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use alien_core::Stack;
+use alien_core::{Platform, Stack};
 
 use crate::error::ErrorData;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
@@ -94,23 +94,29 @@ fn record_to_response(
     r: &ReleaseRecord,
     original_stack: Option<&StackByPlatform>,
 ) -> ReleaseResponse {
-    // If we have the original StackByPlatform, use it. Otherwise build a minimal one.
+    // If we have the original StackByPlatform, use it. Otherwise reconstruct
+    // from the stored platform + stack.
     let stack = if let Some(sbp) = original_stack {
         sbp.clone()
     } else {
-        // Serialize the stored Stack into a generic StackByPlatform
-        // Since we don't know which platform it came from, put it under a generic key.
-        // The stored Stack is the parsed value; re-serialize it.
         let stack_value = serde_json::to_value(&r.stack).unwrap_or_default();
-        // Try to reconstruct based on any platform key
-        StackByPlatform {
+        let mut sbp = StackByPlatform {
             aws: None,
             gcp: None,
             azure: None,
             kubernetes: None,
-            local: Some(stack_value),
+            local: None,
             test: None,
+        };
+        match r.platform {
+            Some(Platform::Aws) => sbp.aws = Some(stack_value),
+            Some(Platform::Gcp) => sbp.gcp = Some(stack_value),
+            Some(Platform::Azure) => sbp.azure = Some(stack_value),
+            Some(Platform::Kubernetes) => sbp.kubernetes = Some(stack_value),
+            Some(Platform::Local) | None => sbp.local = Some(stack_value),
+            Some(Platform::Test) => sbp.test = Some(stack_value),
         }
+        sbp
     };
 
     let git_metadata = if r.git_commit_sha.is_some()
@@ -135,22 +141,24 @@ fn record_to_response(
 }
 
 /// Pick the first non-null platform stack from the request and parse it as a Stack.
+/// Returns both the parsed Stack and the platform it came from.
 fn parse_stack_from_request(
     stack: &StackByPlatform,
-) -> std::result::Result<Stack, alien_error::AlienError<ErrorData>> {
-    let platforms = [
-        &stack.aws,
-        &stack.gcp,
-        &stack.azure,
-        &stack.kubernetes,
-        &stack.local,
-        &stack.test,
+) -> std::result::Result<(Stack, Platform), alien_error::AlienError<ErrorData>> {
+    let platforms: [(Platform, &Option<serde_json::Value>); 6] = [
+        (Platform::Aws, &stack.aws),
+        (Platform::Gcp, &stack.gcp),
+        (Platform::Azure, &stack.azure),
+        (Platform::Kubernetes, &stack.kubernetes),
+        (Platform::Local, &stack.local),
+        (Platform::Test, &stack.test),
     ];
 
-    for value in &platforms {
+    for (platform, value) in &platforms {
         if let Some(v) = value {
-            return serde_json::from_value(v.clone())
-                .map_err(|e| ErrorData::bad_request(format!("Invalid stack format: {}", e)));
+            let parsed: Stack = serde_json::from_value(v.clone())
+                .map_err(|e| ErrorData::bad_request(format!("Invalid stack format: {}", e)))?;
+            return Ok((parsed, *platform));
         }
     }
 
@@ -186,7 +194,7 @@ async fn create_release(
     }
 
     // Parse stack from request
-    let stack = match parse_stack_from_request(&req.stack) {
+    let (stack, platform) = match parse_stack_from_request(&req.stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -204,6 +212,7 @@ async fn create_release(
         .release_store
         .create_release(CreateReleaseParams {
             stack,
+            platform: Some(platform),
             git_commit_sha: git_sha,
             git_commit_ref: git_ref,
             git_commit_message: git_msg,

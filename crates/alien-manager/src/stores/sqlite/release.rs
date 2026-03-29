@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_query::{Expr, Order, Query, SqliteQueryBuilder};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -21,9 +22,10 @@ impl SqliteReleaseStore {
         Self { db }
     }
 
-    const RELEASE_COLUMNS: [Releases; 6] = [
+    const RELEASE_COLUMNS: [Releases; 7] = [
         Releases::Id,
         Releases::Stack,
+        Releases::Platform,
         Releases::GitCommitSha,
         Releases::GitCommitRef,
         Releases::GitCommitMessage,
@@ -32,13 +34,21 @@ impl SqliteReleaseStore {
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {
         let p = RowParser::new(row);
+        let platform_str = p.optional_string(2, "platform")?;
+        let platform = platform_str
+            .as_deref()
+            .map(alien_core::Platform::from_str)
+            .transpose()
+            .ok()
+            .flatten();
         Ok(ReleaseRecord {
             id: p.string(0, "id")?,
             stack: p.json(1, "stack")?,
-            git_commit_sha: p.optional_string(2, "git_commit_sha")?,
-            git_commit_ref: p.optional_string(3, "git_commit_ref")?,
-            git_commit_message: p.optional_string(4, "git_commit_message")?,
-            created_at: p.datetime(5, "created_at")?,
+            platform,
+            git_commit_sha: p.optional_string(3, "git_commit_sha")?,
+            git_commit_ref: p.optional_string(4, "git_commit_ref")?,
+            git_commit_message: p.optional_string(5, "git_commit_message")?,
+            created_at: p.datetime(6, "created_at")?,
         })
     }
 }
@@ -58,11 +68,14 @@ impl ReleaseStore for SqliteReleaseStore {
                 message: "Failed to serialize stack".to_string(),
             })?;
 
+        let platform_str: Option<String> = params.platform.map(|p| p.as_str().to_string());
+
         let sql = Query::insert()
             .into_table(Releases::Table)
             .columns([
                 Releases::Id,
                 Releases::Stack,
+                Releases::Platform,
                 Releases::GitCommitSha,
                 Releases::GitCommitRef,
                 Releases::GitCommitMessage,
@@ -71,6 +84,7 @@ impl ReleaseStore for SqliteReleaseStore {
             .values_panic([
                 id.clone().into(),
                 stack_json.into(),
+                platform_str.into(),
                 params.git_commit_sha.clone().into(),
                 params.git_commit_ref.clone().into(),
                 params.git_commit_message.clone().into(),
@@ -83,6 +97,7 @@ impl ReleaseStore for SqliteReleaseStore {
         Ok(ReleaseRecord {
             id,
             stack: params.stack,
+            platform: params.platform,
             git_commit_sha: params.git_commit_sha,
             git_commit_ref: params.git_commit_ref,
             git_commit_message: params.git_commit_message,

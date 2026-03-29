@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use alien_core::Stack;
+use alien_core::{Platform, Stack};
 use alien_error::AlienError;
 
 /// A release record.
@@ -10,6 +10,9 @@ use alien_error::AlienError;
 pub struct ReleaseRecord {
     pub id: String,
     pub stack: Stack,
+    /// The platform this release was created for (e.g. "aws", "gcp", "azure").
+    /// Used to reconstruct the StackByPlatform wrapper on GET responses.
+    pub platform: Option<Platform>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,
@@ -20,6 +23,8 @@ pub struct ReleaseRecord {
 #[derive(Debug, Clone)]
 pub struct CreateReleaseParams {
     pub stack: Stack,
+    /// The platform this release targets.
+    pub platform: Option<Platform>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,

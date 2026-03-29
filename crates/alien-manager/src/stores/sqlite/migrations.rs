@@ -37,6 +37,7 @@ pub(crate) enum Releases {
     Table,
     Id,
     Stack,
+    Platform,
     GitCommitSha,
     GitCommitRef,
     GitCommitMessage,
@@ -129,6 +130,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .if_not_exists()
             .col(ColumnDef::new(Releases::Id).text().primary_key())
             .col(ColumnDef::new(Releases::Stack).text().not_null())
+            .col(ColumnDef::new(Releases::Platform).text())
             .col(ColumnDef::new(Releases::GitCommitSha).text())
             .col(ColumnDef::new(Releases::GitCommitRef).text())
             .col(ColumnDef::new(Releases::GitCommitMessage).text())
