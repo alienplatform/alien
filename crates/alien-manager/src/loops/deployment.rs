@@ -433,11 +433,13 @@ impl DeploymentLoop {
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
         });
-        // Token for commands polling — in dev mode, use deployment_id as token (permissive auth)
+        // Token for commands polling — in dev/standalone mode, use deployment_id as token
+        // (permissive auth). Plain type so it's available during InitialSetup when
+        // secrets are skipped (vault doesn't exist yet).
         vars.push(EnvironmentVariable {
             name: "ALIEN_COMMANDS_TOKEN".to_string(),
             value: deployment_id.to_string(),
-            var_type: EnvironmentVariableType::Secret,
+            var_type: EnvironmentVariableType::Plain,
             target_resources: None,
         });
 

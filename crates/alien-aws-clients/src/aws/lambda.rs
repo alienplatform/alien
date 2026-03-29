@@ -321,10 +321,18 @@ impl LambdaClient {
             }
             "InvalidParameterValueException"
             | "InvalidRequestContentException"
-            | "UnsupportedMediaTypeException" => ErrorData::InvalidInput {
-                message,
-                field_name: None,
-            },
+            | "UnsupportedMediaTypeException" => {
+                // IAM eventual consistency: Lambda may return InvalidParameterValueException
+                // when it cannot yet assume a just-created execution role.
+                if message.contains("cannot be assumed") || message.contains("not authorized") {
+                    ErrorData::RemoteServiceUnavailable { message }
+                } else {
+                    ErrorData::InvalidInput {
+                        message,
+                        field_name: None,
+                    }
+                }
+            }
             "InvalidRuntimeException" | "InvalidZipFileException" => {
                 ErrorData::RemoteServiceUnavailable { message }
             }

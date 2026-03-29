@@ -93,8 +93,9 @@ impl CommandsPolling {
             })
         })?;
 
-        // Token is loaded from vault (as a secret-type env var)
+        // Token can come from secrets (managed mode) or plain env vars (dev/standalone mode)
         let token = secrets.get("ALIEN_COMMANDS_TOKEN")
+            .or_else(|| env_vars.get("ALIEN_COMMANDS_TOKEN"))
             .ok_or_else(|| AlienError::new(ErrorData::ConfigurationInvalid {
                 message: format!(
                     "ALIEN_COMMANDS_TOKEN required when ALIEN_COMMANDS_POLLING_ENABLED=true. Available secrets: {:?}",

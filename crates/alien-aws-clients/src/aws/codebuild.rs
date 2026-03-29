@@ -194,9 +194,16 @@ impl CodeBuildClient {
                 resource_name: resource.into(),
             },
             "InvalidInputException" | "NotAuthorized" | "ValidationError" => {
-                ErrorData::InvalidInput {
-                    message,
-                    field_name: None,
+                // IAM eventual consistency: CodeBuild may return InvalidInputException
+                // when it cannot yet assume a just-created service role. Treat these as
+                // transient so the executor retries with backoff.
+                if message.contains("sts:AssumeRole") || message.contains("not authorized") {
+                    ErrorData::RemoteServiceUnavailable { message }
+                } else {
+                    ErrorData::InvalidInput {
+                        message,
+                        field_name: None,
+                    }
                 }
             }
             _ => match status {
