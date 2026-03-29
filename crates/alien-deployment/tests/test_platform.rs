@@ -426,19 +426,20 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
     let config = create_test_config("hash_v1", true);
     let mut state = create_initial_state(stack);
 
-    // This should fail during provisioning due to persistent failure
+    // This should fail during initial setup due to persistent failure
+    // (initial setup now creates ALL resources)
     state = run_until_status(
         state,
         config.clone(),
         &[
             DeploymentStatus::Running,
-            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::InitialSetupFailed,
         ],
     )
     .await;
 
-    // Should have failed during provisioning
-    assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+    // Should have failed during initial setup
+    assert_eq!(state.status, DeploymentStatus::InitialSetupFailed);
 }
 
 /// D) Update flow tests
