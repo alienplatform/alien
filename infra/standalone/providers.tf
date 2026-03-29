@@ -9,7 +9,9 @@ terraform {
 }
 
 provider "azuread" {
-  tenant_id = var.azure_management_tenant_id
+  tenant_id     = var.azure_management_tenant_id
+  client_id     = var.azure_management_client_id
+  client_secret = var.azure_management_client_secret
 }
 
 provider "aws" {
