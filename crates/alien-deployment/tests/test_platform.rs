@@ -756,7 +756,9 @@ async fn test_partial_failure_interrupts_in_progress_resources() {
     // Run until provisioning fails
     let final_state = run_to_completion(state, config).await;
 
-    assert_eq!(final_state.status, DeploymentStatus::ProvisioningFailed);
+    // Initial setup now creates ALL resources (no separate provisioning phase),
+    // so failures during first deployment result in InitialSetupFailed.
+    assert_eq!(final_state.status, DeploymentStatus::InitialSetupFailed);
 
     let stack_state = final_state
         .stack_state
@@ -821,9 +823,9 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     let config = create_test_config("hash_v1", false);
     let state = create_initial_state(stack.clone());
 
-    // Run until provisioning fails
+    // Run until initial setup fails (all resources created during initial setup now)
     let mut final_state = run_to_completion(state, config.clone()).await;
-    assert_eq!(final_state.status, DeploymentStatus::ProvisioningFailed);
+    assert_eq!(final_state.status, DeploymentStatus::InitialSetupFailed);
 
     let stack_state = final_state
         .stack_state
@@ -856,9 +858,9 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     // must correctly reset to Pending so it can start provisioning.
     request_retry(&mut final_state);
     let after_retry =
-        run_until_status(final_state, config, &[DeploymentStatus::ProvisioningFailed]).await;
+        run_until_status(final_state, config, &[DeploymentStatus::InitialSetupFailed]).await;
 
-    assert_eq!(after_retry.status, DeploymentStatus::ProvisioningFailed);
+    assert_eq!(after_retry.status, DeploymentStatus::InitialSetupFailed);
 
     // sibling-fn should again be ProvisionFailed (either re-interrupted or actually tried),
     // not stuck in a corrupted state
