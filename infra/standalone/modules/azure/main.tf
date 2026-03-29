@@ -90,10 +90,12 @@ data "azurerm_client_config" "management" {
 
 resource "azuread_application" "manager" {
   display_name = "alien-test-manager"
+  owners       = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_service_principal" "manager" {
   client_id = azuread_application.manager.client_id
+  owners    = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_application_password" "manager" {
