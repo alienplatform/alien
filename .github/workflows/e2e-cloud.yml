@@ -135,6 +135,7 @@ jobs:
           name: env-test-e2e
           path: .env.test
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 1
 
   test:
