@@ -289,10 +289,7 @@ pub async fn setup_target(
     let reconcile_body = serde_json::json!({
         "deploymentId": deployment.id,
         "session": session_id,
-        "status": format!("{:?}", state.status).to_lowercase(),
-        "stackState": state.stack_state,
-        "environmentInfo": state.environment_info,
-        "currentReleaseId": state.current_release.as_ref().map(|r| &r.release_id),
+        "state": state,
     });
 
     let reconcile_resp = http
