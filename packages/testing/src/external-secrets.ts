@@ -3,9 +3,6 @@
  */
 
 import { exec } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { promisify } from "node:util"
 import { AlienError } from "@alienplatform/core"
 import { PutParameterCommand, SSMClient } from "@aws-sdk/client-ssm"
@@ -32,7 +29,7 @@ export async function setExternalSecret(
   vaultName: string,
   secretKey: string,
   secretValue: string,
-  namespace?: string,
+  _namespace?: string,
   stateDir?: string,
   agentName?: string,
 ): Promise<void> {
