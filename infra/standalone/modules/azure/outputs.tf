@@ -33,7 +33,7 @@ output "acr_name" {
 }
 
 output "management_sp_client_id" {
-  value = azuread_service_principal.manager.application_id
+  value = azuread_service_principal.manager.client_id
 }
 
 output "management_sp_client_secret" {
