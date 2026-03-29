@@ -91,6 +91,7 @@ fn create_build_settings(
         },
         Platform::Gcp => PlatformBuildSettings::Gcp {},
         Platform::Azure => PlatformBuildSettings::Azure {},
+        Platform::Kubernetes => PlatformBuildSettings::Kubernetes {},
         other => anyhow::bail!("Unsupported platform for build: {:?}", other),
     };
 
