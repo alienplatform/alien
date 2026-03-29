@@ -141,8 +141,11 @@ async fn create_aws_push_settings(config: &TestConfig) -> anyhow::Result<PushSet
         .context("AWS_MANAGEMENT_ACCOUNT_ID required for ECR auth")?
         .clone();
 
+    // Extract ECR region from the repository URL (e.g. "...dkr.ecr.us-east-2.amazonaws.com/...")
+    let ecr_region = extract_ecr_region(&repository)?;
+
     let aws_config = AwsClientConfig {
-        region: mgmt.region.clone(),
+        region: ecr_region,
         account_id,
         credentials: AwsCredentials::AccessKeys {
             access_key_id: mgmt.access_key_id.clone(),
@@ -229,6 +232,24 @@ fn create_gcp_push_settings(config: &TestConfig) -> anyhow::Result<PushSettings>
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the AWS region from an ECR repository URL.
+/// e.g. "219193354193.dkr.ecr.us-east-2.amazonaws.com/alien-test-lambda" -> "us-east-2"
+fn extract_ecr_region(ecr_url: &str) -> anyhow::Result<String> {
+    // Format: {account_id}.dkr.ecr.{region}.amazonaws.com/{repo}
+    let host = ecr_url.split('/').next().unwrap_or(ecr_url);
+    let parts: Vec<&str> = host.split('.').collect();
+    // parts: [account_id, "dkr", "ecr", region, "amazonaws", "com"]
+    if parts.len() >= 4 && parts[1] == "dkr" && parts[2] == "ecr" {
+        Ok(parts[3].to_string())
+    } else {
+        anyhow::bail!("Cannot extract region from ECR URL: {}", ecr_url)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cross-account registry access
 // ---------------------------------------------------------------------------
 
@@ -285,8 +306,11 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
         .context("AWS_MANAGEMENT_ACCOUNT_ID required")?
         .clone();
 
+    // Extract ECR region from the repository URL
+    let ecr_region = extract_ecr_region(ecr_repo_url)?;
+
     let aws_config = AwsClientConfig {
-        region: mgmt.region.clone(),
+        region: ecr_region,
         account_id,
         credentials: AwsCredentials::AccessKeys {
             access_key_id: mgmt.access_key_id.clone(),

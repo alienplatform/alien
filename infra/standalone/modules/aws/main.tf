@@ -3,7 +3,7 @@ terraform {
     aws = {
       source                = "hashicorp/aws"
       version               = "~> 5.0"
-      configuration_aliases = [aws.management, aws.target]
+      configuration_aliases = [aws.management, aws.target, aws.management_target_region]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
@@ -65,10 +65,12 @@ resource "aws_s3_bucket" "test" {
   force_destroy = true
 }
 
-# ── Management: ECR repository ────────────────────────────────────────────────
+# ── Management: ECR repository (in target region) ────────────────────────────
+# Lambda requires container images in the same region as the function.
+# The ECR repo lives in the management account but in the target region.
 
 resource "aws_ecr_repository" "lambda_test" {
-  provider             = aws.management
+  provider             = aws.management_target_region
   name                 = "alien-test-lambda"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
