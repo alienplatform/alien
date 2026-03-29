@@ -5,7 +5,7 @@ use crate::interaction::{ConfirmationMode, InteractionMode};
 use crate::output::prompt_confirm;
 use crate::ui::{
     command, contextual_heading, deployment_resource_detail, dim_label, format_resource_status,
-    heading, render_human_error, success_line,
+    heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -747,24 +747,35 @@ async fn list_deployments_task(
     if deployments_response.items.is_empty() {
         println!("(no deployments)");
     } else {
-        // Pretty print deployments list
+        let mut table = make_table(&[
+            "Name",
+            "ID",
+            "Status",
+            "Platform",
+            "Release",
+            "Last activity",
+        ]);
         for deployment in &deployments_response.items {
-            println!("Deployment ID: {}", deployment.id.as_str());
-            println!("  Name: {}", deployment.name.as_str());
-            println!("  Status: {:?}", deployment.status);
-            println!("  Platform: {:?}", deployment.platform);
-
-            if let Some(current_release_id) = &deployment.current_release_id {
-                println!("  Current Release: {}", current_release_id.as_str());
-            }
-
-            if let Some(last_heartbeat) = &deployment.last_heartbeat_at {
-                println!("  Last Heartbeat: {}", last_heartbeat);
-            }
-
-            println!("  Created: {}", deployment.created_at);
-            println!();
+            table.add_row(vec![
+                deployment.name.as_str().to_string().into(),
+                deployment.id.as_str().to_string().into(),
+                status_cell(&format!("{:?}", deployment.status)),
+                format!("{:?}", deployment.platform).into(),
+                deployment
+                    .current_release_id
+                    .as_ref()
+                    .map(|id| id.as_str().to_string())
+                    .unwrap_or_else(|| "—".to_string())
+                    .into(),
+                deployment
+                    .last_heartbeat_at
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| deployment.created_at.to_string())
+                    .into(),
+            ]);
         }
+        print_table(table);
     }
 
     Ok(())
@@ -805,10 +816,26 @@ async fn list_local_deployments_task(port: u16) -> Result<()> {
         return Ok(());
     }
 
+    let mut table = make_table(&["Name", "ID", "Status", "Platform", "Release", "Updated"]);
     for deployment in response.items {
-        print_local_deployment(&deployment);
-        println!();
+        table.add_row(vec![
+            deployment.name.clone().into(),
+            deployment.id.clone().into(),
+            status_cell(&deployment.status),
+            deployment.platform.clone().into(),
+            deployment
+                .current_release_id
+                .clone()
+                .unwrap_or_else(|| "—".to_string())
+                .into(),
+            deployment
+                .updated_at
+                .clone()
+                .unwrap_or_else(|| deployment.created_at.clone())
+                .into(),
+        ]);
     }
+    print_table(table);
 
     Ok(())
 }
@@ -864,20 +891,19 @@ async fn redeploy_local_deployment_task(port: u16, deployment_id: &str) -> Resul
 }
 
 fn print_local_deployment(deployment: &LocalDeploymentResponse) {
-    println!("Deployment ID: {}", deployment.id);
-    println!("  Name: {}", deployment.name);
-    println!("  Status: {}", deployment.status);
-    println!("  Platform: {}", deployment.platform);
-
+    let mut table = make_table(&["Field", "Value"]);
+    table.add_row(vec!["ID", deployment.id.as_str()]);
+    table.add_row(vec!["Name", deployment.name.as_str()]);
+    table.add_row(vec!["Status", deployment.status.as_str()]);
+    table.add_row(vec!["Platform", deployment.platform.as_str()]);
     if let Some(current_release_id) = &deployment.current_release_id {
-        println!("  Current Release: {}", current_release_id);
+        table.add_row(vec!["Current release", current_release_id.as_str()]);
     }
-
-    println!("  Created: {}", deployment.created_at);
-
+    table.add_row(vec!["Created", deployment.created_at.as_str()]);
     if let Some(updated_at) = &deployment.updated_at {
-        println!("  Updated: {}", updated_at);
+        table.add_row(vec!["Updated", updated_at.as_str()]);
     }
+    print_table(table);
 }
 
 async fn local_manager_request<T: DeserializeOwned>(
@@ -1274,17 +1300,18 @@ fn print_stack_resources(stack_state: &alien_core::StackState) {
     let mut resources: Vec<_> = stack_state.resources.iter().collect();
     resources.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
 
+    let mut table = make_table(&["Name", "Type", "Status", "Details"]);
     for (resource_name, resource) in resources {
-        println!(
-            "  - {} ({}): {}",
-            resource_name,
-            resource.resource_type,
-            format_resource_status(resource.status)
-        );
-        if let Some(detail) = deployment_resource_detail(resource) {
-            println!("    {}", detail);
-        }
+        table.add_row(vec![
+            resource_name.to_string().into(),
+            resource.resource_type.clone().into(),
+            status_cell(format_resource_status(resource.status)),
+            deployment_resource_detail(resource)
+                .unwrap_or_else(|| "—".to_string())
+                .into(),
+        ]);
     }
+    print_table(table);
 }
 
 fn convert_via_json<T, U>(value: &T, operation_target: &str, reason: &str) -> Result<U>

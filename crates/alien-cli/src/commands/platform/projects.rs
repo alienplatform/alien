@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
-use crate::ui::dim_label;
+use crate::ui::{dim_label, make_table, print_table};
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::types::ListProjectsWorkspace;
 use alien_platform_api::SdkResultExt;
@@ -72,9 +72,11 @@ async fn list_projects_task(
     } else if items.is_empty() {
         println!("{}", dim_label("No projects found."));
     } else {
+        let mut table = make_table(&["Project", "ID"]);
         for project in items {
-            println!("{} ({})", project.name.as_str(), project.id.as_str());
+            table.add_row(vec![project.name.as_str(), project.id.as_str()]);
         }
+        print_table(table);
     }
 
     Ok(())

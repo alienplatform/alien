@@ -11,11 +11,6 @@ permissions:
   id-token: write
   packages: write
 
-# Prevent concurrent terraform applies on the same workspace
-concurrency:
-  group: terraform-test-infra
-  cancel-in-progress: false
-
 jobs:
   # ── Build alien-runtime for both architectures ──────────────────────
   # These run in parallel with the setup job so they don't add latency.
@@ -139,6 +134,10 @@ jobs:
           contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e')
         )
       )
+    # Prevent concurrent terraform applies on the same workspace
+    concurrency:
+      group: terraform-test-infra
+      cancel-in-progress: false
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -263,6 +262,8 @@ jobs:
 
       - name: Install JS dependencies and build packages
         run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run E2E push test
         env:

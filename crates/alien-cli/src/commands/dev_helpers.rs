@@ -744,6 +744,18 @@ pub async fn wait_for_dev_deployment_ready(
     deployment_name: &str,
     status_file: Option<&PathBuf>,
 ) -> Result<DevDeploymentSnapshot> {
+    wait_for_dev_deployment_ready_with_progress(port, deployment_name, status_file, |_| {}).await
+}
+
+pub async fn wait_for_dev_deployment_ready_with_progress<F>(
+    port: u16,
+    deployment_name: &str,
+    status_file: Option<&PathBuf>,
+    mut on_status: F,
+) -> Result<DevDeploymentSnapshot>
+where
+    F: FnMut(DeploymentStatus),
+{
     let http_client = reqwest::Client::new();
     let base_url = format!("http://localhost:{port}");
 
@@ -825,6 +837,8 @@ pub async fn wait_for_dev_deployment_ready(
                             &build_dev_status(port, state, Some(&snapshot), None),
                         )?;
                     }
+
+                    on_status(snapshot.status.clone());
 
                     if snapshot.status == DeploymentStatus::Running {
                         return Ok(snapshot);

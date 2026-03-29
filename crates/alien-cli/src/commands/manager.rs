@@ -8,6 +8,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
 use crate::output::{print_json, prompt_confirm};
+use crate::ui::{make_table, print_table, status_cell};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     CreateManagerWorkspace, DeleteManagerWorkspace, GetManagerWorkspace,
@@ -434,28 +435,40 @@ async fn list_managers_task(
     if summaries.is_empty() {
         println!("(no managers)");
     } else {
+        let mut table = make_table(&[
+            "Name",
+            "ID",
+            "Status",
+            "Targets",
+            "Deployments",
+            "Version",
+            "Last heartbeat",
+        ]);
         for manager in &summaries {
-            println!("Manager ID: {}", manager.id);
-            println!("  Name: {}", manager.name);
-            println!("  Status: {}", manager.status);
-            println!("  Targets: {}", manager.targets.join(", "));
-            if let Some(managed_deployment_count) = manager.managed_deployment_count {
-                println!("  Deployments: {}", managed_deployment_count);
-            }
-
-            if let Some(version) = &manager.version {
-                println!("  Version: {}", version);
-            }
-
-            if let Some(last_heartbeat) = &manager.last_heartbeat_at {
-                println!("  Last Heartbeat: {}", last_heartbeat);
-            }
-
-            if let Some(created_at) = &manager.created_at {
-                println!("  Created: {}", created_at);
-            }
-            println!();
+            table.add_row(vec![
+                manager.name.clone().into(),
+                manager.id.clone().into(),
+                status_cell(&manager.status),
+                manager.targets.join(", ").into(),
+                manager
+                    .managed_deployment_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "—".to_string())
+                    .into(),
+                manager
+                    .version
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string())
+                    .into(),
+                manager
+                    .last_heartbeat_at
+                    .clone()
+                    .or_else(|| manager.created_at.clone())
+                    .unwrap_or_else(|| "—".to_string())
+                    .into(),
+            ]);
         }
+        print_table(table);
     }
 
     Ok(())

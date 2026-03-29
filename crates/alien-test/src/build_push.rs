@@ -14,7 +14,7 @@ use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
 use alien_core::{Function, FunctionCode, Platform};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::TestConfig;
 
@@ -292,10 +292,12 @@ async fn ensure_azure_acr_cross_account_access(
     use alien_azure_clients::containerregistry::{
         AzureContainerRegistryClient, ContainerRegistryApi,
     };
-    use alien_azure_clients::long_running_operation::LongRunningOperationClient;
+    use alien_azure_clients::long_running_operation::{
+        LongRunningOperationApi, LongRunningOperationClient, OperationResult,
+    };
     use alien_azure_clients::models::containerregistry::{
-        GenerateCredentialsParameters, ScopeMapProperties, TokenProperties,
-        TokenPropertiesStatus,
+        GenerateCredentialsParameters, GenerateCredentialsResult, ScopeMapProperties,
+        TokenProperties, TokenPropertiesStatus,
     };
     use alien_azure_clients::{AzureClientConfig, AzureCredentials, AzureTokenCache};
 
@@ -428,22 +430,40 @@ async fn ensure_azure_acr_cross_account_access(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to generate ACR credentials: {}", e))?;
 
-    cred_op
-        .wait_for_operation_completion(&lro_client, "GenerateCredentials", token_name)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed waiting for credential generation: {}", e))?;
+    // Extract the password from the generateCredentials response directly.
+    // Azure only returns the password `value` in the generateCredentials response itself —
+    // subsequent GET on the token does NOT include the password value.
+    let password = match cred_op {
+        OperationResult::Completed(result) => result
+            .passwords
+            .into_iter()
+            .find_map(|p| p.value)
+            .context("generateCredentials completed but returned no password value")?,
+        OperationResult::LongRunning(lro) => {
+            let body = lro_client
+                .wait_for_completion(&lro, "GenerateCredentials", token_name)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed waiting for credential generation: {}", e)
+                })?;
 
-    // Re-fetch the token to read the generated credentials from its properties.
-    let updated_token = acr_client
-        .get_token(resource_group, registry_name, token_name)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to re-fetch token after credential generation: {}", e))?;
-
-    let password = updated_token
-        .properties
-        .and_then(|p| p.credentials)
-        .and_then(|c| c.passwords.into_iter().find_map(|p| p.value))
-        .context("Token has no password after credential generation")?;
+            // The LRO status body may or may not contain the credentials.
+            // Try parsing it; if it doesn't have password values, re-fetch the
+            // token as a last resort (though Azure typically omits the value on GET).
+            serde_json::from_str::<GenerateCredentialsResult>(&body)
+                .ok()
+                .and_then(|r| r.passwords.into_iter().find_map(|p| p.value))
+                .or_else(|| {
+                    warn!("LRO status body did not contain password values, trying GET on token");
+                    None
+                })
+                .context(
+                    "generateCredentials LRO completed but password value not found in \
+                     the operation status response. Azure only returns password values \
+                     in the initial generateCredentials response body.",
+                )?
+        }
+    };
 
     let username = token_name.to_string();
 

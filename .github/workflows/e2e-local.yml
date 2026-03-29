@@ -73,6 +73,8 @@ jobs:
 
       - name: Build TypeScript packages
         run: pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Build alien CLI
         run: cargo build -p alien-cli

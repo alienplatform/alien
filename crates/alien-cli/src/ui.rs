@@ -5,11 +5,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use alien_core::{
-    AlienEvent, EventBus, EventChange, EventHandler, EventState, PushProgress, ResourceStatus,
-    StackResourceState,
+    AlienEvent, DeploymentStatus, EventBus, EventChange, EventHandler, EventState, PushProgress,
+    ResourceStatus, StackResourceState,
 };
 use alien_error::{AlienError, AlienErrorData};
 use async_trait::async_trait;
+use comfy_table::{
+    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL_CONDENSED, Attribute, Cell, Color,
+    ContentArrangement, Table,
+};
 use console::style;
 use indexmap::IndexMap;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -78,6 +82,57 @@ pub fn print_cli_banner(current_dir: &Path) {
         println!("{rendered_glyph} {text}");
     }
     println!();
+}
+
+pub fn make_table(headers: &[&str]) -> Table {
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    let header_cells: Vec<Cell> = headers
+        .iter()
+        .map(|header| {
+            let cell = Cell::new(*header).add_attribute(Attribute::Bold);
+            if supports_ansi() {
+                cell.fg(Color::Cyan)
+            } else {
+                cell
+            }
+        })
+        .collect();
+    table.set_header(header_cells);
+    table
+}
+
+pub fn print_table(table: Table) {
+    println!("{table}");
+}
+
+pub fn status_cell(status: &str) -> Cell {
+    let normalized = status.to_ascii_lowercase();
+    let cell = Cell::new(status);
+    if !supports_ansi() {
+        return cell;
+    }
+
+    if normalized.contains("running")
+        || normalized.contains("ready")
+        || normalized.contains("success")
+        || normalized.contains("active")
+    {
+        cell.fg(Color::Green)
+    } else if normalized.contains("failed") || normalized.contains("error") {
+        cell.fg(Color::Red)
+    } else if normalized.contains("pending")
+        || normalized.contains("queued")
+        || normalized.contains("provision")
+        || normalized.contains("updating")
+        || normalized.contains("deleting")
+    {
+        cell.fg(Color::Yellow)
+    } else {
+        cell.fg(Color::Cyan)
+    }
 }
 
 fn abbreviate_home(path: &Path) -> String {
@@ -300,6 +355,25 @@ pub fn format_resource_status(status: ResourceStatus) -> &'static str {
     }
 }
 
+pub fn format_deployment_status(status: DeploymentStatus) -> &'static str {
+    match status {
+        DeploymentStatus::Pending => "Queued",
+        DeploymentStatus::InitialSetup => "Initializing",
+        DeploymentStatus::InitialSetupFailed => "Failed",
+        DeploymentStatus::Provisioning => "Provisioning",
+        DeploymentStatus::ProvisioningFailed => "Failed",
+        DeploymentStatus::Running => "Running",
+        DeploymentStatus::RefreshFailed => "Failed",
+        DeploymentStatus::UpdatePending => "Queued",
+        DeploymentStatus::Updating => "Updating",
+        DeploymentStatus::UpdateFailed => "Failed",
+        DeploymentStatus::DeletePending => "Queued",
+        DeploymentStatus::Deleting => "Deleting",
+        DeploymentStatus::DeleteFailed => "Failed",
+        DeploymentStatus::Deleted => "Deleted",
+    }
+}
+
 pub fn deployment_resource_detail(resource: &StackResourceState) -> Option<String> {
     match resource.status {
         ResourceStatus::ProvisionFailed
@@ -314,13 +388,13 @@ pub fn deployment_resource_detail(resource: &StackResourceState) -> Option<Strin
 
 struct ProgressBoard {
     progress: MultiProgress,
-    step_bars: Vec<ProgressBar>,
     state: Mutex<ProgressBoardState>,
 }
 
 struct ProgressBoardState {
     step_labels: Vec<String>,
     step_states: Vec<RowState>,
+    step_bars: Vec<Option<ProgressBar>>,
     resources: IndexMap<String, ResourceEntry>,
 }
 
@@ -333,26 +407,16 @@ struct ResourceEntry {
 impl ProgressBoard {
     fn new(step_labels: &[&str]) -> Self {
         let progress = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
-        let step_bars: Vec<_> = step_labels
-            .iter()
-            .map(|label| {
-                let bar = ProgressBar::new(1);
-                bar.set_style(text_row_style());
-                let bar = progress.add(bar);
-                apply_text_row(&bar, RowState::Pending, label, None);
-                bar
-            })
-            .collect();
 
         Self {
             progress,
-            step_bars,
             state: Mutex::new(ProgressBoardState {
                 step_labels: step_labels
                     .iter()
                     .map(|label| (*label).to_string())
                     .collect(),
                 step_states: vec![RowState::Pending; step_labels.len()],
+                step_bars: vec![None; step_labels.len()],
                 resources: IndexMap::new(),
             }),
         }
@@ -366,8 +430,23 @@ impl ProgressBoard {
         let mut guard = self.state.lock().expect("progress board lock poisoned");
         if let Some(label) = guard.step_labels.get(index).cloned() {
             guard.step_states[index] = state;
-            apply_text_row(&self.step_bars[index], state, &label, detail.as_deref());
+            if matches!(state, RowState::Pending) && guard.step_bars[index].is_none() {
+                return;
+            }
+
+            let bar = self.ensure_step_bar(&mut guard, index);
+            apply_step_row(&bar, state, &label, detail.as_deref());
         }
+    }
+
+    fn ensure_step_bar(&self, state: &mut ProgressBoardState, index: usize) -> ProgressBar {
+        if let Some(bar) = &state.step_bars[index] {
+            return bar.clone();
+        }
+
+        let bar = self.progress.add(new_text_row());
+        state.step_bars[index] = Some(bar.clone());
+        bar
     }
 
     fn set_resource_text(&self, key: &str, label: String, state: RowState, detail: Option<String>) {
@@ -502,9 +581,21 @@ fn layers_progress_style() -> ProgressStyle {
 }
 
 fn apply_text_row(bar: &ProgressBar, state: RowState, label: &str, detail: Option<&str>) {
+    bar.disable_steady_tick();
     bar.set_style(text_row_style());
     bar.set_prefix(prefix_for_state(state));
     bar.set_message(format_message(label, detail));
+}
+
+fn apply_step_row(bar: &ProgressBar, state: RowState, label: &str, detail: Option<&str>) {
+    match state {
+        RowState::Active => {
+            bar.set_style(spinner_row_style());
+            bar.set_message(format_message(label, detail));
+            bar.enable_steady_tick(Duration::from_millis(120));
+        }
+        _ => apply_text_row(bar, state, label, detail),
+    }
 }
 
 fn prefix_for_state(state: RowState) -> String {

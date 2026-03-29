@@ -60,6 +60,7 @@ urlencoding = { workspace = true }
 futures = { workspace = true }
 console = "0.16"
 indicatif = "0.18.4"
+comfy-table = "7.2.2"
 
 # Platform dependencies (behind "platform" feature)
 keyring = { version = "2", optional = true }

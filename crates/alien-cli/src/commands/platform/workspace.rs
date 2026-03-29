@@ -3,7 +3,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::InteractionMode;
 use crate::output::{can_prompt, print_json, prompt_select};
-use crate::ui::{command, dim_label, success_line};
+use crate::ui::{command, dim_label, make_table, print_table, success_line};
 use alien_error::{AlienError, Context};
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand};
@@ -97,15 +97,23 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
         WorkspaceCmd::Ls => {
             let http = ctx.auth_http().await?;
             let workspaces = list_workspace_names(&http).await?;
+            let current = load_workspace();
 
             if args.json {
                 print_json(&workspaces)?;
             } else if workspaces.is_empty() {
                 println!("(no workspaces)");
             } else {
+                let mut table = make_table(&["Workspace", "Selected"]);
                 for workspace in workspaces {
-                    println!("{workspace}");
+                    let selected = if current.as_deref() == Some(workspace.as_str()) {
+                        "Yes"
+                    } else {
+                        ""
+                    };
+                    table.add_row(vec![workspace, selected.to_string()]);
                 }
+                print_table(table);
             }
         }
     }

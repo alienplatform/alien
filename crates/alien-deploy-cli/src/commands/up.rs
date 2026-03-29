@@ -566,17 +566,22 @@ pub async fn push_initial_setup(
         match client.get_release().id(release_id).send().await {
             Ok(resp) => {
                 let rel = resp.into_inner();
-                let stack = serde_json::from_value(
-                    serde_json::to_value(&rel.stack)
-                        .into_alien_error()
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to serialize release stack".to_string(),
-                        })?,
-                )
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to parse release stack".to_string(),
-                })?;
+                let stack_by_platform = serde_json::to_value(&rel.stack)
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to serialize release stack".to_string(),
+                    })?;
+                // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
+                // Extract the inner stack for the target platform.
+                let inner_stack_value = stack_by_platform
+                    .get(platform.as_str())
+                    .cloned()
+                    .unwrap_or(stack_by_platform);
+                let stack = serde_json::from_value(inner_stack_value)
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to parse release stack".to_string(),
+                    })?;
 
                 Some(ReleaseInfo {
                     release_id: rel.id,
