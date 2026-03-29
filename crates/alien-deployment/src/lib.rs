@@ -17,7 +17,7 @@ pub use error::{ErrorData, ResourceError, Result};
 // Re-export types from alien-core
 pub use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig, DeploymentState, DeploymentStatus,
-    DeploymentStepResult, EnvironmentInfo, GcpEnvironmentInfo,
+    DeploymentStepResult, EnvironmentInfo, GcpEnvironmentInfo, Stack,
 };
 
 // Re-export helper function for creating aggregated errors
@@ -94,16 +94,14 @@ pub async fn step(
     // Resolve GCP project number for IAM condition expressions
     let client_config = resolve_gcp_project_number(client_config).await;
 
-    // Extract target stack from target_release
+    // Extract target stack from target_release (optional — only required by
+    // Pending, UpdatePending, Delete*, and *Failed handlers that receive the
+    // stack directly; InitialSetup/Provisioning/Running/Updating get it from
+    // runtime_metadata.prepared_stack instead).
     let target_stack = current
         .target_release
         .as_ref()
-        .map(|r| r.stack.clone())
-        .ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::MissingConfiguration {
-                message: "Target release required for deployment".to_string(),
-            })
-        })?;
+        .map(|r| r.stack.clone());
 
     // Use provided service provider or default
     let service_provider = service_provider.unwrap_or_else(|| {
@@ -114,20 +112,29 @@ pub async fn step(
     // Mutation and injection strategy:
     // - Pending: Applies mutations, stores prepared_stack in runtime_metadata, validates env var injection
     // - UpdatePending: Applies mutations, stores prepared_stack in runtime_metadata
-    // - InitialSetup: Use prepared_stack, deploy frozen resources only (IAM, VPCs, vault - no env vars)
-    // - Provisioning/Updating: Use prepared_stack and inject env vars when deploying functions/services
-    // - Running: Use prepared_stack for health checks only (read-only, no config changes)
+    // - InitialSetup: Use prepared_stack, deploy all resources with env vars injected
+    // - Provisioning/Updating: Use prepared_stack with env vars injected for functions/services
+    // - Running: Use prepared_stack with env vars for health checks (read-only, no config changes)
     // - Delete phases: Use prepared_stack for deletion (no env var injection needed)
     //
     // This ensures:
     // 1. Mutations are applied once per deployment phase (in Pending/UpdatePending)
     // 2. Env vars are only injected when deploying resources that use them (functions/services)
     // 3. Health checks and deletions don't modify resource configurations
+    // Helper to require target_stack for handlers that need it
+    let require_target_stack = || -> Result<Stack> {
+        target_stack.clone().ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::MissingConfiguration {
+                message: "Target release required for deployment".to_string(),
+            })
+        })
+    };
+
     let update = match current.status {
         DeploymentStatus::Pending => {
             pending::handle_pending(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -148,7 +155,7 @@ pub async fn step(
         DeploymentStatus::UpdatePending => {
             updating::handle_update_pending(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -161,7 +168,7 @@ pub async fn step(
         DeploymentStatus::DeletePending => {
             deleting::handle_delete_pending(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -171,7 +178,7 @@ pub async fn step(
         DeploymentStatus::Deleting => {
             deleting::handle_deleting(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -182,7 +189,7 @@ pub async fn step(
         DeploymentStatus::InitialSetupFailed => {
             initial_setup::handle_initial_setup_failed(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -192,7 +199,7 @@ pub async fn step(
         DeploymentStatus::ProvisioningFailed => {
             provisioning::handle_provisioning_failed(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -202,7 +209,7 @@ pub async fn step(
         DeploymentStatus::UpdateFailed => {
             updating::handle_update_failed(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -212,7 +219,7 @@ pub async fn step(
         DeploymentStatus::DeleteFailed => {
             deleting::handle_delete_failed(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
@@ -222,7 +229,7 @@ pub async fn step(
         DeploymentStatus::RefreshFailed => {
             running::handle_refresh_failed(
                 current,
-                target_stack,
+                require_target_stack()?,
                 config,
                 client_config,
                 service_provider,

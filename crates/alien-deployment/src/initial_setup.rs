@@ -41,11 +41,22 @@ pub async fn handle_initial_setup(
     })?;
 
     // Use the prepared stack from Pending phase (already mutated)
-    let target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Prepared stack not found in runtime metadata".to_string(),
         })
     })?;
+
+    // Inject environment variables so Function/Container resources are created with the
+    // correct config from the start. Without this, the Function is created without env vars
+    // during InitialSetup, then Provisioning detects a config mismatch and triggers an
+    // unwanted update (e.g., Cloud Run revision 00002) that may fail.
+    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+
+    // Inject OTLP monitoring env vars if monitoring is configured
+    if let Some(monitoring) = &config.monitoring {
+        crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
+    }
 
     // Deploy all resources (Frozen + Live) during initial setup
     info!("Deploying all resources in initial setup");

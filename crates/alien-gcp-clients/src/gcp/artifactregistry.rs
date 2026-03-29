@@ -340,19 +340,17 @@ impl ArtifactRegistryApi for ArtifactRegistryClient {
     /// See: https://cloud.google.com/artifact-registry/docs/reference/rest/v1/projects.locations.operations/get
     async fn get_operation(
         &self,
-        project_id: String,
-        location: String,
+        _project_id: String,
+        _location: String,
         operation_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/locations/{}/operations/{}",
-            project_id, location, operation_name
-        );
-
+        // The operation name returned by the GCP API is already a full resource path
+        // (e.g., "projects/{project}/locations/{location}/operations/{id}"),
+        // so we use it directly as the request path.
         self.base
             .execute_request(
                 Method::GET,
-                &path,
+                &operation_name,
                 None,
                 Option::<()>::None,
                 &operation_name,

@@ -325,6 +325,14 @@ async fn test_provisioning_resyncs_when_hash_changes() {
     // Now change config to hash_v2
     let config2 = create_test_config("hash_v2", true);
 
+    // If provisioning already completed (transitioned to Running), set state
+    // back to Provisioning to test the resync behavior. This can happen when
+    // InitialSetup deploys all resources including the function, so Provisioning
+    // completes in a single step.
+    if state.status != DeploymentStatus::Provisioning {
+        state.status = DeploymentStatus::Provisioning;
+    }
+
     // Run another step with new config
     let result2 = alien_deployment::step(state.clone(), config2.clone(), ClientConfig::Test, None)
         .await

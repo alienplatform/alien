@@ -138,7 +138,7 @@ impl AzurePermissionsHelper {
                 })?;
 
             // Generate role definition for resource-scoped permissions
-            let azure_role_definition = generator
+            let mut azure_role_definition = generator
                 .generate_role_definition(
                     &permission_set,
                     BindingTarget::Resource,
@@ -151,6 +151,16 @@ impl AzurePermissionsHelper {
                     ),
                     resource_id: Some(profile_name.to_string()),
                 })?;
+
+            // Override assignable_scopes with the actual resource scope.
+            // The JSONC-generated scopes use variable interpolation that may not match
+            // the real cloud resource path (e.g., naming conventions differ). Since we
+            // already have the exact resource scope from the controller, use it directly
+            // to ensure the role definition's assignable_scopes match the PUT URL scope
+            // (Azure requires this, otherwise returns AssignableScopeMismatch 400).
+            let azure_config = ctx.get_azure_config()?;
+            let scope_string = format!("/{}", resource_scope.to_scope_string(azure_config));
+            azure_role_definition.assignable_scopes = vec![scope_string];
 
             // Generate role assignment for the resource
             let azure_role_assignment = generator
