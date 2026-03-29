@@ -449,20 +449,25 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            // Combine resource-specific permissions with matching wildcard permissions
+            // Combine resource-specific permissions with matching wildcard permissions,
+            // deduplicating by permission set ID to avoid duplicate IAM bindings
+            let mut seen_ids = std::collections::HashSet::new();
             let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
 
             if let Some(permission_set_refs) = profile.0.get(resource_id) {
-                combined_refs.extend(permission_set_refs.iter().cloned());
+                for r in permission_set_refs {
+                    if seen_ids.insert(r.id().to_string()) {
+                        combined_refs.push(r.clone());
+                    }
+                }
             }
 
             if let Some(wildcard_refs) = profile.0.get("*") {
-                combined_refs.extend(
-                    wildcard_refs
-                        .iter()
-                        .filter(|r| r.id().starts_with(&type_prefix))
-                        .cloned(),
-                );
+                for r in wildcard_refs.iter().filter(|r| r.id().starts_with(&type_prefix)) {
+                    if seen_ids.insert(r.id().to_string()) {
+                        combined_refs.push(r.clone());
+                    }
+                }
             }
 
             if !combined_refs.is_empty() {
@@ -706,20 +711,25 @@ impl ResourcePermissionsHelper {
 
         let type_prefix = format!("{}/", resource_type);
 
-        // Combine resource-specific and wildcard management permissions
+        // Combine resource-specific and wildcard management permissions,
+        // deduplicating by permission set ID
+        let mut seen_ids = std::collections::HashSet::new();
         let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
 
         if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(permission_set_refs.iter().cloned());
+            for r in permission_set_refs {
+                if seen_ids.insert(r.id().to_string()) {
+                    combined_refs.push(r.clone());
+                }
+            }
         }
 
         if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .cloned(),
-            );
+            for r in wildcard_refs.iter().filter(|r| r.id().starts_with(&type_prefix)) {
+                if seen_ids.insert(r.id().to_string()) {
+                    combined_refs.push(r.clone());
+                }
+            }
         }
 
         if combined_refs.is_empty() {

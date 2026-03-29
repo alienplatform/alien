@@ -364,7 +364,7 @@ impl ArtifactRegistryApi for ArtifactRegistryClient {
 // --- Data Structures ---
 
 /// An Artifact Registry repository.
-#[derive(Debug, Serialize, Deserialize, Clone, Builder)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
     /// The name of the repository, for example: "projects/p1/locations/us-central1/repositories/repo1".

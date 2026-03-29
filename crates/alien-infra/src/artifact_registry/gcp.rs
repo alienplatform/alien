@@ -1,10 +1,11 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
+use alien_gcp_clients::artifactregistry::{Repository, RepositoryFormat};
 use alien_gcp_clients::iam::{CreateServiceAccountRequest, ServiceAccount};
 
 /// Generates the service account ID for pull operations
@@ -63,6 +64,8 @@ pub struct GcpArtifactRegistryController {
     pub(crate) pull_service_account_email: Option<String>,
     /// The email of the push+pull service account
     pub(crate) push_service_account_email: Option<String>,
+    /// LRO operation name for repository creation (used while waiting)
+    pub(crate) repository_operation_name: Option<String>,
 }
 
 #[controller]
@@ -82,25 +85,154 @@ impl GcpArtifactRegistryController {
             registry_id = %config.id,
             project_id = %gcp_cfg.project_id,
             location = %gcp_cfg.region,
-            "Setting up GCP Artifact Registry with service accounts"
+            "Setting up GCP Artifact Registry"
         );
 
-        // The Artifact Registry API should be enabled via infra requirements
-        // Here we set up the registry reference and create service accounts
         self.project_id = Some(gcp_cfg.project_id.clone());
         self.location = Some(gcp_cfg.region.clone());
 
-        info!(
-            registry_id = %config.id,
-            project_id = %gcp_cfg.project_id,
-            location = %gcp_cfg.region,
-            "GCP Artifact Registry reference is ready"
-        );
+        let ar_client = ctx
+            .service_provider
+            .get_gcp_artifact_registry_client(gcp_cfg)?;
 
-        Ok(HandlerAction::Continue {
-            state: CreatingPullServiceAccount,
-            suggested_delay: None,
-        })
+        // Check if the repository already exists
+        match ar_client
+            .get_repository(
+                gcp_cfg.project_id.clone(),
+                gcp_cfg.region.clone(),
+                config.id.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    registry_id = %config.id,
+                    "GCP Artifact Registry repository already exists"
+                );
+                Ok(HandlerAction::Continue {
+                    state: CreatingPullServiceAccount,
+                    suggested_delay: None,
+                })
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                info!(
+                    registry_id = %config.id,
+                    "Repository not found, creating it"
+                );
+
+                let repository = Repository {
+                    format: Some(RepositoryFormat::Docker),
+                    description: Some(format!(
+                        "Alien Artifact Registry for {}",
+                        config.id
+                    )),
+                    ..Default::default()
+                };
+
+                let operation = ar_client
+                    .create_repository(
+                        gcp_cfg.project_id.clone(),
+                        gcp_cfg.region.clone(),
+                        config.id.clone(),
+                        repository,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create Artifact Registry repository '{}'",
+                            config.id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+
+                if operation.done == Some(true) {
+                    info!(
+                        registry_id = %config.id,
+                        "Repository created successfully"
+                    );
+                    Ok(HandlerAction::Continue {
+                        state: CreatingPullServiceAccount,
+                        suggested_delay: None,
+                    })
+                } else {
+                    self.repository_operation_name =
+                        operation.name.clone();
+                    Ok(HandlerAction::Continue {
+                        state: CreatingRepository,
+                        suggested_delay: Some(std::time::Duration::from_secs(2)),
+                    })
+                }
+            }
+            Err(e) => Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to check Artifact Registry repository '{}'",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            })),
+        }
+    }
+
+    #[handler(
+        state = CreatingRepository,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_repository(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let gcp_cfg = ctx.get_gcp_config()?;
+        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+
+        let operation_name = self.repository_operation_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Missing repository operation name".to_string(),
+                operation: Some("creating_repository".to_string()),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        let ar_client = ctx
+            .service_provider
+            .get_gcp_artifact_registry_client(gcp_cfg)?;
+
+        let operation = ar_client
+            .get_operation(
+                gcp_cfg.project_id.clone(),
+                gcp_cfg.region.clone(),
+                operation_name.clone(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to check repository creation status for '{}'",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        if operation.done == Some(true) {
+            info!(
+                registry_id = %config.id,
+                "Repository created successfully"
+            );
+            self.repository_operation_name = None;
+            Ok(HandlerAction::Continue {
+                state: CreatingPullServiceAccount,
+                suggested_delay: None,
+            })
+        } else {
+            Ok(HandlerAction::Continue {
+                state: CreatingRepository,
+                suggested_delay: Some(std::time::Duration::from_secs(2)),
+            })
+        }
     }
 
     #[handler(
@@ -381,6 +513,64 @@ impl GcpArtifactRegistryController {
         }
 
         Ok(HandlerAction::Continue {
+            state: DeletingRepository,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingRepository,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_repository(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let gcp_cfg = ctx.get_gcp_config()?;
+        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+
+        let ar_client = ctx
+            .service_provider
+            .get_gcp_artifact_registry_client(gcp_cfg)?;
+
+        match ar_client
+            .delete_repository(
+                gcp_cfg.project_id.clone(),
+                gcp_cfg.region.clone(),
+                config.id.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    registry_id = %config.id,
+                    "Repository deleted successfully"
+                );
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                info!(
+                    registry_id = %config.id,
+                    "Repository already deleted"
+                );
+            }
+            Err(e) => {
+                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to delete Artifact Registry repository '{}'",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+
+        Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
         })
@@ -590,6 +780,7 @@ impl GcpArtifactRegistryController {
                 "test-push@{}.iam.gserviceaccount.com",
                 project_id
             )),
+            repository_operation_name: None,
             _internal_stay_count: None,
         }
     }
@@ -680,19 +871,38 @@ mod tests {
         Arc::new(mock_iam)
     }
 
+    fn setup_mock_ar_client_existing_repo() -> Arc<MockArtifactRegistryApi> {
+        let mut mock_ar = MockArtifactRegistryApi::new();
+
+        // Repository already exists — CreateStart will skip creation
+        mock_ar
+            .expect_get_repository()
+            .returning(|_, _, _| Ok(Repository::default()));
+
+        // Delete flow calls delete_repository
+        mock_ar.expect_delete_repository().returning(|_, _, _| {
+            Ok(alien_gcp_clients::longrunning::Operation {
+                name: None,
+                metadata: None,
+                done: Some(true),
+                result: None,
+            })
+        });
+
+        Arc::new(mock_ar)
+    }
+
     fn setup_mock_service_provider(mock_iam: Arc<MockIamApi>) -> Arc<MockPlatformServiceProvider> {
+        let mock_ar = setup_mock_ar_client_existing_repo();
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_gcp_iam_client()
             .returning(move |_| Ok(mock_iam.clone()));
 
-        // The ApplyingResourcePermissions state retrieves the AR client for repository-level IAM.
-        // In tests there are no permission bindings, so set_repository_iam_policy won't be called,
-        // but the client must still be obtainable.
         mock_provider
             .expect_get_gcp_artifact_registry_client()
-            .returning(|_| Ok(Arc::new(MockArtifactRegistryApi::new())));
+            .returning(move |_| Ok(mock_ar.clone()));
 
         Arc::new(mock_provider)
     }
