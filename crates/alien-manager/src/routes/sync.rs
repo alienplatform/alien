@@ -66,6 +66,8 @@ pub struct ReconcileRequest {
     pub state: DeploymentState,
     #[serde(default)]
     pub update_heartbeat: bool,
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +224,7 @@ async fn reconcile(
             session: req.session,
             state: req.state.clone(),
             update_heartbeat: req.update_heartbeat,
+            error: req.error,
         })
         .await
     {

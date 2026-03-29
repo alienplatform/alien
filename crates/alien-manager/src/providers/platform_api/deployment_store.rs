@@ -205,7 +205,7 @@ impl DeploymentStore for PlatformApiDeploymentStore {
                 deployment_id,
                 session: Some(data.session),
                 state: sdk_state,
-                error: None,
+                error: data.error.and_then(|e| convert_via_json(&e).ok()),
                 update_heartbeat: Some(data.update_heartbeat),
             })
             .send()

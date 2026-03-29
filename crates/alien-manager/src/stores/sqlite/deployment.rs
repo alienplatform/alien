@@ -509,15 +509,26 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .unwrap_or_else(|| "NULL".to_string())
         };
 
+        let error_json: Option<String> = data
+            .error
+            .as_ref()
+            .map(|e| serde_json::to_string(e))
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize error".to_string(),
+            })?;
+
         // Always set ALL fields (even when None) to clear stale data
         let sql = format!(
-            "UPDATE deployments SET status = '{}', stack_state = {}, environment_info = {}, runtime_metadata = {}, current_release_id = {}, desired_release_id = {}, retry_requested = 0, error = NULL, updated_at = '{}' WHERE id = '{}'",
+            "UPDATE deployments SET status = '{}', stack_state = {}, environment_info = {}, runtime_metadata = {}, current_release_id = {}, desired_release_id = {}, retry_requested = 0, error = {}, updated_at = '{}' WHERE id = '{}'",
             status_str.replace('\'', "''"),
             stack_state_json.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string()),
             environment_info_json.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string()),
             runtime_metadata_json.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string()),
             current_release_id.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string()),
             desired_release_value,
+            error_json.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string()),
             now.to_rfc3339(),
             data.deployment_id.replace('\'', "''"),
         );

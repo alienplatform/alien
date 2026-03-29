@@ -260,6 +260,7 @@ impl DeploymentLoop {
         // 7. Step loop — call step() repeatedly until stable or delayed.
         // Note: step() takes ownership of state, so we clone before each call
         // to retain the last known state if step() fails.
+        let mut last_step_error: Option<serde_json::Value> = None;
         for i in 0..MAX_STEPS_PER_TICK {
             info!(
                 deployment_id = %deployment_id,
@@ -287,6 +288,9 @@ impl DeploymentLoop {
                             error = %err,
                             "Deployment step returned error"
                         );
+                        last_step_error = Some(serde_json::to_value(err).unwrap_or_default());
+                    } else {
+                        last_step_error = None;
                     }
 
                     // If state is synced, we are done.
@@ -317,6 +321,7 @@ impl DeploymentLoop {
                         error = %e,
                         "Deployment step() failed"
                     );
+                    last_step_error = Some(serde_json::to_value(&e).unwrap_or_default());
                     // state retains its value from before the failed step.
                     // We still reconcile below to persist the current state.
                     break;
@@ -330,6 +335,7 @@ impl DeploymentLoop {
             session: session.to_string(),
             state: state.clone(),
             update_heartbeat: state.status == DeploymentStatus::Running,
+            error: last_step_error,
         };
 
         match self.deployment_store.reconcile(reconcile_data).await {

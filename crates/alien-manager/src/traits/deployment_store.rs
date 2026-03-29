@@ -80,6 +80,7 @@ pub struct ReconcileData {
     pub session: String,
     pub state: DeploymentState,
     pub update_heartbeat: bool,
+    pub error: Option<serde_json::Value>,
 }
 
 /// Persistence for deployments and deployment groups.
