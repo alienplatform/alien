@@ -12,11 +12,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { promisify } from "node:util"
 import { CommandsClient } from "@alienplatform/commands-client"
-import type {
-  DeploymentInit,
-  Platform,
-  UpgradeOptions,
-} from "./types.js"
+import type { DeploymentInit, Platform, UpgradeOptions } from "./types.js"
 
 const execFileAsync = promisify(execFile)
 
