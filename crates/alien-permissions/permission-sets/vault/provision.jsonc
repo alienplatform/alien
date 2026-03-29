@@ -23,10 +23,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.create",
-            "secretmanager.secrets.delete"
-          ]
+          "permissions": ["secretmanager.secrets.create", "secretmanager.secrets.delete"]
         },
         "binding": {
           "stack": {

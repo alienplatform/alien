@@ -40,11 +40,7 @@
       // Describe* require Resource: "*" (AWS API limitation).
       {
         "grant": {
-          "actions": [
-            "ec2:AttachVolume",
-            "ec2:DetachVolume",
-            "ec2:DescribeVolumes"
-          ]
+          "actions": ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DescribeVolumes"]
         },
         "binding": {
           "stack": {
