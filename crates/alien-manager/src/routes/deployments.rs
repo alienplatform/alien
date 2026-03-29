@@ -129,6 +129,8 @@ pub struct DeploymentInfoResponse {
     pub resources: std::collections::HashMap<String, ResourceEntry>,
     pub status: String,
     pub platform: Platform,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -543,6 +545,7 @@ async fn get_deployment_info(
         resources,
         status: deployment.status,
         platform: deployment.platform,
+        error: deployment.error,
     })
     .into_response()
 }

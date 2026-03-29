@@ -94,6 +94,7 @@ jobs:
       - name: Run examples
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+          RUST_LOG: info
         run: pnpm test:examples
 
       - name: Run local e2e tests

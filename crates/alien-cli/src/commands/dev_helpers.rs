@@ -553,6 +553,8 @@ struct DevDeploymentInfoResponse {
     commands: DevCommandsInfo,
     resources: HashMap<String, DevResourceEntry>,
     status: String,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
 }
 
 pub async fn wait_for_dev_deployment_ready(
@@ -645,10 +647,13 @@ pub async fn wait_for_dev_deployment_ready(
                     }
 
                     if snapshot.status.is_failed() {
+                        let error_detail = info.error
+                            .map(|e| format!(": {}", e))
+                            .unwrap_or_default();
                         return Err(AlienError::new(ErrorData::ConfigurationError {
                             message: format!(
-                                "Local deployment '{}' failed with status {:?}",
-                                snapshot.deployment_name, snapshot.status
+                                "Local deployment '{}' failed with status {:?}{}",
+                                snapshot.deployment_name, snapshot.status, error_detail
                             ),
                         }));
                     }
