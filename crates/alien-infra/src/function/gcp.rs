@@ -2774,7 +2774,7 @@ mod tests {
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation};
-    use alien_gcp_clients::iam::IamPolicy;
+    use alien_gcp_clients::iam::{IamPolicy, MockIamApi, Role};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use httpmock::{prelude::*, Mock};
@@ -3060,6 +3060,17 @@ mod tests {
         Arc::new(mock_cloudrun)
     }
 
+    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
+        let mut mock_iam = MockIamApi::new();
+        mock_iam
+            .expect_get_role()
+            .returning(|_| Ok(Role::default()));
+        mock_iam
+            .expect_patch_role()
+            .returning(|_, _, _| Ok(Role::default()));
+        Arc::new(mock_iam)
+    }
+
     fn setup_mock_service_provider(
         mock_cloudrun: Arc<MockCloudRunApi>,
         mock_compute: Option<Arc<MockComputeApi>>,
@@ -3075,6 +3086,12 @@ mod tests {
                 .expect_get_gcp_compute_client()
                 .returning(move |_| Ok(compute.clone()));
         }
+
+        // Mock IAM client for resource-scoped permissions (custom role management)
+        let mock_iam = create_gcp_iam_mock_for_resource_permissions();
+        mock_provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(mock_iam.clone()));
 
         Arc::new(mock_provider)
     }
@@ -3448,7 +3465,7 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
             .times(1);
 
-        // Validate IAM policy operations are called for public ingress
+        // Validate IAM policy operations are called for resource-scoped permissions
         mock_cloudrun
             .expect_get_service_iam_policy()
             .withf(|location, service_name| {
@@ -3458,13 +3475,8 @@ mod tests {
 
         mock_cloudrun
             .expect_set_service_iam_policy()
-            .withf(|location, service_name, policy| {
-                location == "us-central1"
-                    && service_name.starts_with("test-")
-                    && policy
-                        .bindings
-                        .iter()
-                        .any(|b| b.role == "roles/run.invoker")
+            .withf(|location, service_name, _policy| {
+                location == "us-central1" && service_name.starts_with("test-")
             })
             .returning(|_, _, _| Ok(create_empty_iam_policy()));
 

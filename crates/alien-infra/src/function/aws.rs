@@ -321,13 +321,14 @@ impl AwsFunctionController {
 
         if is_active {
             if function_config.ingress == Ingress::Public {
-                let next_state = if self.uses_custom_domain || self.certificate_arn.is_some() {
-                    // Platform mode: wait for certificate then create API Gateway + custom domain
-                    WaitingForCertificate
-                } else {
-                    // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
-                    CreatingApiGateway
-                };
+                let next_state =
+                    if self.uses_custom_domain || self.certificate_id.is_some() {
+                        // Platform mode: wait for certificate then create API Gateway + custom domain
+                        WaitingForCertificate
+                    } else {
+                        // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
+                        CreatingApiGateway
+                    };
                 Ok(HandlerAction::Continue {
                     state: next_state,
                     suggested_delay: Some(Duration::from_secs(2)),
@@ -2204,6 +2205,7 @@ mod tests {
         Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
         Route, Stage,
     };
+    use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
@@ -2602,6 +2604,14 @@ mod tests {
         Arc::new(mock_lambda)
     }
 
+    fn create_aws_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
+        let mut mock_iam = MockIamApi::new();
+        mock_iam
+            .expect_put_role_policy()
+            .returning(|_, _, _| Ok(()));
+        Arc::new(mock_iam)
+    }
+
     fn setup_mock_service_provider(
         mock_lambda: Arc<MockLambdaApi>,
         mock_acm: Option<Arc<MockAcmApi>>,
@@ -2612,6 +2622,12 @@ mod tests {
         mock_provider
             .expect_get_aws_lambda_client()
             .returning(move |_| Ok(mock_lambda.clone()));
+
+        // Mock IAM client for resource-scoped permissions (ApplyingResourcePermissions state)
+        let mock_iam = create_aws_iam_mock_for_resource_permissions();
+        mock_provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(mock_iam.clone()));
 
         if let Some(acm) = mock_acm {
             mock_provider

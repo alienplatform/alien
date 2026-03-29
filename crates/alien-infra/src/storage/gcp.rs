@@ -843,7 +843,7 @@ mod tests {
         Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
         ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
     };
-    use alien_gcp_clients::iam::{Binding, IamPolicy};
+    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi, Role};
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -1021,12 +1021,29 @@ mod tests {
         Arc::new(mock_gcs)
     }
 
+    fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
+        let mut mock_iam = MockIamApi::new();
+        mock_iam
+            .expect_get_role()
+            .returning(|_| Ok(Role::default()));
+        mock_iam
+            .expect_patch_role()
+            .returning(|_, _, _| Ok(Role::default()));
+        Arc::new(mock_iam)
+    }
+
     fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_gcp_gcs_client()
             .returning(move |_| Ok(mock_gcs.clone()));
+
+        // Mock IAM client for resource-scoped permissions (custom role management)
+        let mock_iam = create_gcp_iam_mock_for_resource_permissions();
+        mock_provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(mock_iam.clone()));
 
         Arc::new(mock_provider)
     }
