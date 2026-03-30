@@ -1078,7 +1078,7 @@ impl GcpFunctionController {
                 resource_id: Some(cfg.id.clone()),
             })?;
 
-        self.commands_topic_name = Some(topic_full_name);
+        self.commands_topic_name = Some(topic_short_name);
         self.commands_subscription_name = Some(subscription_name);
 
         info!(function=%cfg.id, "Commands Pub/Sub infrastructure created");
