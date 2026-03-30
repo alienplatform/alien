@@ -140,7 +140,7 @@ If you're new, read the directories in order:
 
 - **[00-aws.md](../05-platforms/00-aws.md)** — AssumeRole, Lambda, S3 naming, networking
 - **[01-gcp.md](../05-platforms/01-gcp.md)** — Service account impersonation, API enablement, resource-level IAM
-- **[02-azure.md](../05-platforms/02-azure.md)** — Lighthouse, Resource Groups, no default VNet
+- **[02-azure.md](../05-platforms/02-azure.md)** — UAMI + FIC cross-tenant access, Resource Groups, no default VNet
 - **[03-local.md](../05-platforms/03-local.md)** — Local platform without cloud APIs
 - **[04-kubernetes.md](../05-platforms/04-kubernetes.md)** — Pull-only, external bindings
 

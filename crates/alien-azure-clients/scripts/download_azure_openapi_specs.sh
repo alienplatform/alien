@@ -26,7 +26,6 @@ npx --yes @redocly/cli bundle -o "$TEMP_DIR" \
     $BASE_URL/storage/resource-manager/Microsoft.Storage/stable/2024-01-01/table.json \
     $BASE_URL/resources/resource-manager/Microsoft.Resources/resources/stable/2025-04-01/resources.json \
     $BASE_URL/containerregistry/resource-manager/Microsoft.ContainerRegistry/Registry/stable/2025-04-01/containerregistry.json \
-    $BASE_URL/managedservices/resource-manager/Microsoft.ManagedServices/ManagedServices/stable/2022-10-01/managedservices.json \
     $BASE_URL/keyvault/resource-manager/Microsoft.KeyVault/stable/2024-11-01/keyvault.json \
     $BASE_URL/keyvault/data-plane/Microsoft.KeyVault/stable/7.6/secrets.json \
     $BASE_URL/keyvault/data-plane/Microsoft.KeyVault/stable/7.6/certificates.json \

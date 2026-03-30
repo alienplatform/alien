@@ -266,10 +266,10 @@ So now, let's discuss AWS/GCP/Azure:
     1. We create a role in the target account, with trust policy that enables `mgmt-sa` to assume this role. 
     2. We grant the `management` permission set to the cross-account role.
 
-  - Azure (via Lighthouse):
+  - Azure (via UAMI + FIC):
     0. We assume there's a user-assigned managed identity in the management account (`mgmt-sa`)
-    1. We create Lighthouse registration definition in the target account to `mgmt-sa` with the `management` permission set 
-    2. We create a Lighthouse registration assignment in the target account 
+    1. We create a target UAMI with a FIC trusting the manager's OIDC issuer
+    2. We create a custom role definition from management permission sets and assign it to the UAMI
 
 To make it easy with all these differences, on the AWS/GCP/Azure platforms we'll add a new `RemoteManagementAccess` resource in stack_processor, similarly to how we add a `ServiceAccount` for each permissions profile. The respective controller (e.g. AwsRemoteManagementAccessController etc) will be responsible to create everything. 
 
@@ -592,7 +592,7 @@ Note that in AWS we need to add the resource-scoped permissions as well to the r
 
 Milestone 6: Update AWS/GCP/Azure resource controllers of Build, Artifact Registry, Storage, Function, and infrastructure requirements to apply resource-scoped permissions after the resource is created.
 
-Milestone 7: Build an Azure Lighthouse client in alien-cloud-clients, minimal, only the APIs necessary.
+Milestone 7: Build Azure FIC + Authorization clients in alien-cloud-clients for UAMI and custom RBAC management.
 
 Milestone 8: Remove the old StackManagement and create the RemoteStackManagement resource instead. Add it in stack processor.
 

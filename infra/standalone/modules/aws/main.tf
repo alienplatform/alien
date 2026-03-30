@@ -26,10 +26,9 @@ resource "aws_iam_access_key" "manager" {
   user     = aws_iam_user.manager.name
 }
 
-resource "aws_iam_user_policy" "manager" {
+resource "aws_iam_policy" "manager" {
   provider = aws.management
   name     = "alien-manager-policy"
-  user     = aws_iam_user.manager.name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -220,6 +219,12 @@ resource "aws_iam_user_policy" "manager" {
       },
     ]
   })
+}
+
+resource "aws_iam_user_policy_attachment" "manager" {
+  provider   = aws.management
+  user       = aws_iam_user.manager.name
+  policy_arn = aws_iam_policy.manager.arn
 }
 
 # ── Management: IAM role for SA impersonation ────────────────────────────────
@@ -526,10 +531,9 @@ resource "aws_iam_access_key" "target" {
   user     = aws_iam_user.target.name
 }
 
-resource "aws_iam_user_policy" "target" {
+resource "aws_iam_policy" "target" {
   provider = aws.target
   name     = "alien-target-policy"
-  user     = aws_iam_user.target.name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -698,6 +702,12 @@ resource "aws_iam_user_policy" "target" {
       },
     ]
   })
+}
+
+resource "aws_iam_user_policy_attachment" "target" {
+  provider   = aws.target
+  user       = aws_iam_user.target.name
+  policy_arn = aws_iam_policy.target.arn
 }
 
 data "aws_caller_identity" "target" {

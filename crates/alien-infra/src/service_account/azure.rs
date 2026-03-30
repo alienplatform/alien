@@ -840,7 +840,7 @@ impl AzureServiceAccountController {
         permission_context = permission_context.with_storage_account_name(storage_account_name);
 
         // Managing subscription/resource group: used by function/execute and container-cluster/execute
-        // permission sets for cross-subscription management (Lighthouse). In single-subscription mode,
+        // permission sets for cross-tenant management. In single-subscription mode,
         // these are the same as the current subscription/resource group.
         permission_context = permission_context
             .with_managing_subscription_id(azure_config.subscription_id.clone())
