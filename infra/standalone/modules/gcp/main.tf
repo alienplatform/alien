@@ -37,9 +37,17 @@ resource "google_project_service" "management_apis" {
 resource "google_project_service" "target_apis" {
   provider = google.target
   for_each = toset([
+    "serviceusage.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "storage.googleapis.com",
+    "artifactregistry.googleapis.com",
     "run.googleapis.com",
     "iam.googleapis.com",
     "compute.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "secretmanager.googleapis.com",
+    "pubsub.googleapis.com",
+    "firestore.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false

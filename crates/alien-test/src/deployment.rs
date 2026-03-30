@@ -216,20 +216,45 @@ impl TestDeployment {
 
             match state {
                 "SUCCEEDED" => {
-                    // Extract inline response from CommandResponse::Success
-                    // Structure: { response: { status: "success", response: { mode: "inline", inlineBase64: "..." } } }
-                    if let Some(response) = status_data.get("response") {
-                        if let Some(inline_b64) = response
-                            .get("response")
-                            .and_then(|b| b.get("inlineBase64"))
+                    // Extract response from CommandResponse::Success
+                    // Structure: { response: { status: "success", response: { mode: "inline"|"storage", ... } } }
+                    if let Some(body_spec) = status_data
+                        .get("response")
+                        .and_then(|r| r.get("response"))
+                    {
+                        let mode = body_spec
+                            .get("mode")
                             .and_then(|v| v.as_str())
-                        {
-                            let decoded = general_purpose::STANDARD.decode(inline_b64)?;
-                            let result: Value = serde_json::from_slice(&decoded)?;
-                            return Ok(result);
+                            .unwrap_or("");
+
+                        match mode {
+                            "inline" => {
+                                if let Some(inline_b64) =
+                                    body_spec.get("inlineBase64").and_then(|v| v.as_str())
+                                {
+                                    let decoded =
+                                        general_purpose::STANDARD.decode(inline_b64)?;
+                                    let result: Value = serde_json::from_slice(&decoded)?;
+                                    return Ok(result);
+                                }
+                            }
+                            "storage" => {
+                                // For storage mode, read the file from the local backend
+                                if let Some(file_path) = body_spec
+                                    .get("storageGetRequest")
+                                    .and_then(|r| r.get("backend"))
+                                    .and_then(|b| b.get("filePath"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    let bytes = tokio::fs::read(file_path).await?;
+                                    let result: Value = serde_json::from_slice(&bytes)?;
+                                    return Ok(result);
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    // If no inline response, return the status data itself
+                    // If no decodable response, return the status data itself
                     return Ok(status_data);
                 }
                 "FAILED" => {
