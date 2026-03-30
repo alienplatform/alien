@@ -461,9 +461,15 @@ impl AwsRemoteStackManagementController {
             })
         })?;
 
-        // Only provision permission sets (ID ends with "/provision") need project-level IAM
-        // policies attached to the management role. Non-provision sets (management, heartbeat,
-        // etc.) are applied by resource controllers via resource-level IAM.
+        // Include both /provision and /management permission sets in the stack-level
+        // management policy. /provision sets provide resource lifecycle operations (create,
+        // delete), while /management sets provide ongoing management operations (update,
+        // get, configure). Both use stack-level wildcard bindings so the management role
+        // has the necessary permissions from the moment it's created.
+        //
+        // Resource controllers also apply resource-scoped /management inline policies, but
+        // the stack-level policy serves as a reliable baseline that doesn't depend on
+        // per-resource policy propagation timing.
         let mut combined_actions = Vec::new();
         let mut combined_resources = std::collections::HashSet::new();
 
@@ -471,9 +477,12 @@ impl AwsRemoteStackManagementController {
             let permission_set =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned());
             if let Some(permission_set) = permission_set {
-                // Skip non-provision permission sets — they are handled by resource controllers
-                // via resource-level IAM policies.
-                if !permission_set.id.ends_with("/provision") {
+                // Include /provision and /management sets at stack level.
+                // Other sets (heartbeat, invoke, etc.) are resource-scoped and handled
+                // by resource controllers via per-resource inline policies.
+                if !permission_set.id.ends_with("/provision")
+                    && !permission_set.id.ends_with("/management")
+                {
                     continue;
                 }
 

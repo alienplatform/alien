@@ -1116,8 +1116,33 @@ impl ResourcePermissionsHelper {
                 management_role = %management_role_name,
                 permission_set = %permission_set.id,
                 resource_id = %resource_id,
+                policy_name = %policy_name,
+                policy_size = policy_json.len(),
                 "Applied AWS management resource-scoped permission"
             );
+
+            // Verify the policy was actually stored by reading it back
+            match iam_client
+                .get_role_policy(&management_role_name, &policy_name)
+                .await
+            {
+                Ok(resp) => {
+                    info!(
+                        management_role = %management_role_name,
+                        policy_name = %policy_name,
+                        stored_policy_size = resp.get_role_policy_result.policy_document.len(),
+                        "Verified management inline policy exists on role"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        management_role = %management_role_name,
+                        policy_name = %policy_name,
+                        error = %e,
+                        "Failed to verify management inline policy — PutRolePolicy may not have persisted"
+                    );
+                }
+            }
         }
 
         Ok(())

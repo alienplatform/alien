@@ -250,13 +250,23 @@ impl GcpFunctionController {
         // Wait for the service to be Ready before proceeding. The create operation
         // may complete before the first revision is fully serving traffic, so the
         // Ready condition can still be false at this point.
-        let is_ready = service.conditions.iter().any(|c| {
-            c.r#type.as_deref() == Some("Ready")
-                && c.state
-                    .as_ref()
-                    .map(|s| s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded)
-                    .unwrap_or(false)
-        });
+        //
+        // Cloud Run v2 API may not return a top-level "Ready" condition. When both
+        // "RoutesReady" and "ConfigurationsReady" are Succeeded, the service is
+        // effectively ready for traffic.
+        let has_condition_succeeded =
+            |name: &str| -> bool {
+                service.conditions.iter().any(|c| {
+                    c.r#type.as_deref() == Some(name)
+                        && c.state.as_ref().map(|s| {
+                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
+                        }).unwrap_or(false)
+                })
+            };
+
+        let is_ready = has_condition_succeeded("Ready")
+            || (has_condition_succeeded("RoutesReady")
+                && has_condition_succeeded("ConfigurationsReady"));
 
         if !is_ready {
             // Log condition details at info level to aid debugging slow deployments
@@ -1178,13 +1188,21 @@ impl GcpFunctionController {
         // Verify service is ready. A service can be temporarily not-Ready due to
         // scaling events, GCP maintenance, or revision transitions. Use a retryable
         // error to allow recovery instead of immediately failing the deployment.
-        let is_ready = service.conditions.iter().any(|c| {
-            c.r#type.as_deref() == Some("Ready")
-                && c.state
-                    .as_ref()
-                    .map(|s| s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded)
-                    .unwrap_or(false)
-        });
+        // Cloud Run v2 may not return a "Ready" condition, so also accept both
+        // sub-conditions as Succeeded.
+        let has_condition_succeeded =
+            |name: &str| -> bool {
+                service.conditions.iter().any(|c| {
+                    c.r#type.as_deref() == Some(name)
+                        && c.state.as_ref().map(|s| {
+                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
+                        }).unwrap_or(false)
+                })
+            };
+
+        let is_ready = has_condition_succeeded("Ready")
+            || (has_condition_succeeded("RoutesReady")
+                && has_condition_succeeded("ConfigurationsReady"));
 
         if !is_ready {
             warn!(name=%function_config.id, "Cloud Run service is not in Ready state during heartbeat");
@@ -1414,14 +1432,21 @@ impl GcpFunctionController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
-        // Check if the service is ready
-        let is_ready = service.conditions.iter().any(|c| {
-            c.r#type.as_deref() == Some("Ready")
-                && c.state
-                    .as_ref()
-                    .map(|s| s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded)
-                    .unwrap_or(false)
-        });
+        // Check if the service is ready. Cloud Run v2 may not return a "Ready"
+        // condition, so also accept both sub-conditions as Succeeded.
+        let has_condition_succeeded =
+            |name: &str| -> bool {
+                service.conditions.iter().any(|c| {
+                    c.r#type.as_deref() == Some(name)
+                        && c.state.as_ref().map(|s| {
+                            s == &alien_gcp_clients::cloudrun::ConditionState::ConditionSucceeded
+                        }).unwrap_or(false)
+                })
+            };
+
+        let is_ready = has_condition_succeeded("Ready")
+            || (has_condition_succeeded("RoutesReady")
+                && has_condition_succeeded("ConfigurationsReady"));
 
         if !is_ready {
             debug!(name=%service_name, "Service not yet ready after update");
