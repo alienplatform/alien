@@ -278,6 +278,103 @@ pub async fn ensure_cross_account_registry_access(
     }
 }
 
+/// Grant the RSM service account (created during InitialSetup) read access to the
+/// management project's Artifact Registry. Must be called AFTER setup_target completes.
+///
+/// During Provisioning, the manager impersonates the RSM SA to make API calls.
+/// Cloud Run validates that the CALLER has `artifactregistry.repositories.downloadArtifacts`
+/// when updating a service with a cross-project image. The RSM SA needs this access
+/// on the management project's AR repo.
+pub async fn grant_rsm_gar_access(
+    config: &TestConfig,
+    rsm_sa_email: &str,
+) -> anyhow::Result<()> {
+    use alien_gcp_clients::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
+
+    let mgmt = config
+        .gcp_mgmt
+        .as_ref()
+        .context("GCP management credentials required")?;
+    let gar_repo_url = config
+        .gcp_resources
+        .gar_repository
+        .as_ref()
+        .context("ALIEN_TEST_GCP_GAR_REPOSITORY required")?;
+
+    let parts: Vec<&str> = gar_repo_url.split('/').collect();
+    if parts.len() < 3 {
+        anyhow::bail!("Invalid GAR repository URL format: {}", gar_repo_url);
+    }
+    let location = parts[0]
+        .strip_suffix("-docker.pkg.dev")
+        .context("Invalid GAR host format")?;
+    let repo_id = parts[2];
+
+    let sa_key = mgmt
+        .credentials_json
+        .as_ref()
+        .context("GCP management service account key required")?;
+
+    let gcp_config = alien_core::GcpClientConfig {
+        project_id: mgmt.project_id.clone(),
+        region: mgmt.region.clone(),
+        credentials: alien_core::GcpCredentials::ServiceAccountKey {
+            json: sa_key.clone(),
+        },
+        service_overrides: None,
+        project_number: None,
+    };
+
+    let ar_client = ArtifactRegistryClient::new(reqwest::Client::new(), gcp_config);
+    let mut policy = ar_client
+        .get_repository_iam_policy(
+            mgmt.project_id.clone(),
+            location.to_string(),
+            repo_id.to_string(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get GAR repository IAM policy: {}", e))?;
+
+    let rsm_member = format!("serviceAccount:{}", rsm_sa_email);
+    let reader_role = "roles/artifactregistry.reader";
+
+    let mut found = false;
+    for binding in &mut policy.bindings {
+        if binding.role == reader_role {
+            if !binding.members.contains(&rsm_member) {
+                binding.members.push(rsm_member.clone());
+            }
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        policy.bindings.push(alien_gcp_clients::Binding {
+            role: reader_role.to_string(),
+            members: vec![rsm_member.clone()],
+            condition: None,
+        });
+    }
+
+    ar_client
+        .set_repository_iam_policy(
+            mgmt.project_id.clone(),
+            location.to_string(),
+            repo_id.to_string(),
+            policy,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to set GAR repository IAM policy: {}", e))?;
+
+    info!(
+        repo = %repo_id,
+        rsm_sa = %rsm_sa_email,
+        "Granted RSM service account AR reader access"
+    );
+
+    Ok(())
+}
+
 /// Azure ACR cross-subscription access: create a repository-scoped pull
 /// token on the management ACR and return its credentials.
 ///
@@ -690,10 +787,11 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         .map_err(|e| anyhow::anyhow!("Failed to get GAR repository IAM policy: {}", e))?;
 
     // Step 3: Add bindings for cross-project image access.
-    // Cloud Run v2 requires BOTH:
+    // Cloud Run v2 validates image accessibility using the caller's credentials
+    // during both CreateService and UpdateService. We need three principals:
     //   a) The Cloud Run service agent — for pulling images at deploy time
-    //   b) The caller SA (target project SA) — Cloud Run v2 validates image
-    //      accessibility using the caller's credentials during CreateService
+    //   b) The target SA — caller during InitialSetup (CreateService)
+    //   c) The management SA — caller during Provisioning (UpdateService)
     let service_agent_member = format!(
         "serviceAccount:service-{}@serverless-robot-prod.iam.gserviceaccount.com",
         project_number
@@ -707,8 +805,17 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         .context("Target SA key missing client_email")?;
     let target_sa_member = format!("serviceAccount:{}", target_sa_email);
 
+    // Extract the management SA email — this SA is used by the manager's deployment
+    // loop during Provisioning to update Cloud Run services with the real image.
+    let mgmt_sa_key_json: serde_json::Value =
+        serde_json::from_str(sa_key).context("Failed to parse management SA key JSON")?;
+    let mgmt_sa_email = mgmt_sa_key_json["client_email"]
+        .as_str()
+        .context("Management SA key missing client_email")?;
+    let mgmt_sa_member = format!("serviceAccount:{}", mgmt_sa_email);
+
     let reader_role = "roles/artifactregistry.reader";
-    let members_to_add = [&service_agent_member, &target_sa_member];
+    let members_to_add = [&service_agent_member, &target_sa_member, &mgmt_sa_member];
 
     // Merge all members into the existing binding
     let mut found = false;
@@ -746,6 +853,7 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         repo = %repo_id,
         service_agent = %service_agent_member,
         target_sa = %target_sa_member,
+        mgmt_sa = %mgmt_sa_member,
         "GAR cross-project reader bindings set on repository"
     );
 
@@ -799,6 +907,7 @@ async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Res
         project = %mgmt.project_id,
         service_agent = %service_agent_member,
         target_sa = %target_sa_member,
+        mgmt_sa = %mgmt_sa_member,
         "GAR cross-project reader bindings set on project"
     );
 

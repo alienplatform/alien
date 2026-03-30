@@ -704,6 +704,16 @@ pub async fn setup(
             "Running setup_target for cross-account deployment"
         );
         crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
+
+        // GCP: grant the RSM SA (created during InitialSetup) read access to the
+        // management project's Artifact Registry. During Provisioning, the manager
+        // impersonates the RSM SA — Cloud Run requires the caller to have AR access
+        // when updating services with cross-project images.
+        if platform == Platform::Gcp {
+            if let Some(rsm_sa_email) = extract_rsm_sa_email(manager.client(), &deployment.id).await? {
+                crate::build_push::grant_rsm_gar_access(&config, &rsm_sa_email).await?;
+            }
+        }
     }
 
     // Wait for the deployment to be running (populates URL)
@@ -762,6 +772,43 @@ pub async fn setup(
         model,
         agent,
     })
+}
+
+/// Extract the RSM service account email from the deployment's stack state.
+///
+/// After InitialSetup, the `remote-stack-management` resource outputs contain the
+/// RSM SA email in `access_configuration`.
+async fn extract_rsm_sa_email(
+    client: &alien_manager_api::Client,
+    deployment_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let resp = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
+
+    if let Some(ref stack_state) = resp.stack_state {
+        if let Some(resources) = stack_state.get("resources").and_then(|v| v.as_object()) {
+            for (_id, resource) in resources {
+                let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if resource_type == "remote-stack-management" {
+                    if let Some(email) = resource
+                        .get("outputs")
+                        .and_then(|o| o.get("access_configuration"))
+                        .and_then(|v| v.as_str())
+                    {
+                        info!(rsm_sa = %email, "Extracted RSM SA email from deployment state");
+                        return Ok(Some(email.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    info!("No RSM SA email found in deployment state");
+    Ok(None)
 }
 
 /// Convenience entry point that runs the full E2E test flow including
