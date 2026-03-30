@@ -192,6 +192,23 @@ impl DeploymentLoop {
     ) -> Result<(), AlienError> {
         let deployment_id = deployment.id.clone();
 
+        // Push-mode deployments: skip Pending and InitialSetup.
+        // These steps are handled by push_initial_setup (alien-deploy-cli) which runs
+        // with target-environment credentials. The manager only has management credentials,
+        // which would cause resources to be created in the wrong project.
+        let status = parse_status(&deployment.status);
+        if deployment.stack_settings.deployment_model == alien_core::DeploymentModel::Push
+            && (status == DeploymentStatus::Pending
+                || status == DeploymentStatus::InitialSetup)
+        {
+            debug!(
+                deployment_id = %deployment_id,
+                status = ?status,
+                "Skipping push-mode deployment — Pending/InitialSetup handled by push client"
+            );
+            return Ok(());
+        }
+
         // 1. Get the release for this deployment.
         let desired_release_id = deployment.desired_release_id.as_ref().ok_or_else(|| {
             AlienError::new(GenericError {
