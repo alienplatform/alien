@@ -507,6 +507,7 @@ pub async fn deploy_test_app(
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
         stack_settings: None,
+        environment_variables: None,
     };
 
     let resp = manager
