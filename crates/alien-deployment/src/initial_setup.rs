@@ -150,7 +150,19 @@ pub async fn handle_initial_setup(
             update_heartbeat: false,
         }
     } else {
-        // Still in progress
+        // Still in progress — log which resources are not yet running
+        let non_running: Vec<_> = step_result
+            .next_state
+            .resources
+            .iter()
+            .filter(|(_, r)| r.status != alien_core::ResourceStatus::Running)
+            .map(|(id, r)| format!("{}({:?})", id, r.status))
+            .collect();
+        info!(
+            "Initial setup in progress. Non-running resources: [{}]",
+            non_running.join(", ")
+        );
+
         let mut next = current_cloned;
         next.stack_state = Some(step_result.next_state);
         next.runtime_metadata = Some(runtime_metadata);

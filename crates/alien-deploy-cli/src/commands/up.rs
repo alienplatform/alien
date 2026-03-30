@@ -662,35 +662,46 @@ pub async fn push_initial_setup(
     // Step loop with lock release guard
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;
 
-    // Always reconcile + release, even on error
+    // Always reconcile + release, even on error.
+    //
+    // We bypass the Progenitor SDK client for reconcile because the SDK's
+    // generated types lose data during roundtrip: BaseResource (additionalProperties)
+    // gets stripped to just {type, id}, dropping resource-specific fields.
+    // Instead, we serialize alien_core::DeploymentState directly to JSON.
+    use alien_manager_api::ClientInfo;
     let state_json = serde_json::to_value(&state).unwrap_or_default();
-    let sdk_state: alien_manager_api::types::DeploymentState =
-        serde_json::from_value(state_json.clone()).unwrap_or_else(|e| {
-            tracing::error!(
-                "Failed to convert deployment state to SDK type: {e}. State JSON: {}",
-                serde_json::to_string_pretty(&state_json).unwrap_or_default()
-            );
-            // Fallback: use a minimal state so reconcile doesn't fail
-            serde_json::from_value(serde_json::json!({
-                "status": "initial-setup-failed",
-                "platform": platform.as_str(),
-            }))
-            .unwrap()
-        });
+    let reconcile_body = serde_json::json!({
+        "deploymentId": deployment_id,
+        "session": session,
+        "state": state_json,
+        "updateHeartbeat": false,
+    });
 
-    if let Err(e) = client
-        .reconcile()
-        .body(alien_manager_api::types::ReconcileRequest {
-            deployment_id: deployment_id.to_string(),
-            session: session.clone(),
-            state: sdk_state,
-            update_heartbeat: Some(false),
-        })
+    let reconcile_result = client
+        .client()
+        .post(format!("{}/v1/sync/reconcile", client.baseurl()))
+        .json(&reconcile_body)
         .send()
-        .await
-    {
-        tracing::error!("Failed to reconcile deployment state: {e}");
-        output::error(&format!("Failed to reconcile deployment state: {e}"));
+        .await;
+
+    match reconcile_result {
+        Ok(resp) if !resp.status().is_success() => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::error!(
+                "Failed to reconcile deployment state: HTTP {status}. Body: {body}"
+            );
+            output::error(&format!(
+                "Failed to reconcile deployment state: HTTP {status}. Body: {body}"
+            ));
+        }
+        Err(e) => {
+            tracing::error!("Failed to reconcile deployment state: {e}");
+            output::error(&format!("Failed to reconcile deployment state: {e}"));
+        }
+        Ok(_) => {
+            tracing::info!("Reconcile succeeded");
+        }
     }
 
     if let Err(e) = client
@@ -717,7 +728,7 @@ async fn run_step_loop(
     client_config: &ClientConfig,
     deployment_id: &str,
 ) -> Result<()> {
-    let max_steps = 100;
+    let max_steps = 200;
 
     for step_count in 1..=max_steps {
         info!("Step {}: status = {:?}", step_count, state.status);
