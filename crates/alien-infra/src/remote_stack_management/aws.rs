@@ -491,14 +491,28 @@ impl AwsRemoteStackManagementController {
             }
         }
 
+        // Always include iam:GetRole for the management role itself. During the Running
+        // phase the manager impersonates this role and runs heartbeat checks on all resources,
+        // including the RSM resource. The RSM Ready handler calls iam:GetRole on the
+        // management role to verify it still exists, so the role needs this self-permission.
+        if !combined_actions.contains(&"iam:GetRole".to_string()) {
+            combined_actions.push("iam:GetRole".to_string());
+        }
+        if let Some(role_name) = &self.role_name {
+            let aws_config_for_arn = ctx.get_aws_config()?;
+            let self_role_arn = format!(
+                "arn:aws:iam::{}:role/{}",
+                aws_config_for_arn.account_id, role_name
+            );
+            combined_resources.insert(self_role_arn);
+        }
+
         // Remove duplicates from actions
         combined_actions.sort();
         combined_actions.dedup();
 
-        // If no provision-level actions were found, return an empty string so that callers
-        // skip the PutRolePolicy call. Non-provision permission sets (management, heartbeat,
-        // etc.) are handled by resource controllers via resource-level IAM, not project-level
-        // policy on the management role.
+        // If no actions were found (shouldn't happen now since we always add iam:GetRole),
+        // return an empty string so that callers skip the PutRolePolicy call.
         if combined_actions.is_empty() {
             return Ok(String::new());
         }

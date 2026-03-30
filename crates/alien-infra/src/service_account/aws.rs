@@ -148,6 +148,47 @@ impl AwsServiceAccountController {
         self.stack_permissions_applied = true;
 
         Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+
+        info!(
+            service_account_id = %config.id,
+            "Applying resource-scoped permissions for service account"
+        );
+
+        // Apply resource-scoped permissions using the centralized helper.
+        // This attaches management SA permissions (e.g., service-account/heartbeat)
+        // as inline policies on the management role.
+        {
+            use crate::core::ResourcePermissionsHelper;
+            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+                ctx,
+                &config.id,
+                &config.id,
+                "service-account",
+            )
+            .await?;
+        }
+
+        info!(
+            service_account_id = %config.id,
+            "Successfully applied resource-scoped permissions for service account"
+        );
+
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -244,7 +285,7 @@ impl AwsServiceAccountController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: ApplyingResourcePermissions,
             suggested_delay: None,
         })
     }

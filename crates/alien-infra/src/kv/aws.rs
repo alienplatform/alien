@@ -230,6 +230,38 @@ impl AwsKvController {
         info!(table_name=%table_name, "TTL enabled successfully on DynamoDB table");
 
         Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Kv>()?;
+
+        info!(kv=%config.id, "Applying resource-scoped permissions for DynamoDB table");
+
+        if let Some(table_name) = &self.table_name {
+            use crate::core::ResourcePermissionsHelper;
+            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+                ctx,
+                &config.id,
+                table_name,
+                "kv",
+            )
+            .await?;
+        }
+
+        info!(kv=%config.id, "Successfully applied resource-scoped permissions");
+
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
