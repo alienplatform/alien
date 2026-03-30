@@ -81,6 +81,77 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/alien-runtime
           retention-days: 1
 
+  # ── Build alien-agent for both architectures ───────────────────────
+  # Parallel to runtime builds. The agent binary is needed for pull tests.
+
+  build-agent-x86_64:
+    if: |
+      github.event_name != 'pull_request' || (
+        !github.event.pull_request.head.repo.fork && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'merge_group' ||
+          contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e')
+        )
+      )
+    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: x86_64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build alien-agent (x86_64)
+        run: depot cargo build --release -p alien-agent --target x86_64-unknown-linux-musl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-agent
+          retention-days: 1
+
+  build-agent-aarch64:
+    if: |
+      github.event_name != 'pull_request' || (
+        !github.event.pull_request.head.repo.fork && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'merge_group' ||
+          contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e')
+        )
+      )
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: aarch64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build alien-agent (aarch64)
+        run: depot cargo build --release -p alien-agent --target aarch64-unknown-linux-musl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-agent
+          retention-days: 1
+
+  # ── Build container images ─────────────────────────────────────────
+
   build-base-image:
     needs: [build-runtime-x86_64, build-runtime-aarch64]
     runs-on: depot-ubuntu-24.04-arm
@@ -120,6 +191,47 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+          provenance: false
+
+  build-agent-image:
+    needs: [build-agent-x86_64, build-agent-aarch64]
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    outputs:
+      agent_image: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: alien-agent-x86_64
+          path: target/x86_64-unknown-linux-musl/release/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: alien-agent-aarch64
+          path: target/aarch64-unknown-linux-musl/release/
+
+      - name: Make binaries executable
+        run: chmod +x target/*/release/alien-agent
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: depot/setup-action@v1
+
+      - name: Build and push alien-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
           provenance: false
 
   # ── Terraform setup ─────────────────────────────────────────────────
@@ -175,6 +287,17 @@ jobs:
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
 
+      - name: Set up Azure OIDC token
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SUBJECT="repo:${{ github.repository }}:pull_request"
+          else
+            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
+          fi
+          echo "Setting AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT"
+          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
+          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
+
       - name: Generate .env.test
         run: |
           ./scripts/gen-env-test.sh
@@ -194,9 +317,9 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-  # ── E2E test matrix ─────────────────────────────────────────────────
+  # ── E2E push test matrix ───────────────────────────────────────────
 
-  test:
+  push-test:
     needs: [setup, build-base-image]
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -210,16 +333,22 @@ jobs:
         include:
           - name: push-aws-rust
             test_filter: push_aws_rust
+            needs_oidc: false
           - name: push-aws-typescript
             test_filter: push_aws_typescript
+            needs_oidc: false
           - name: push-gcp-rust
             test_filter: push_gcp_rust
+            needs_oidc: false
           - name: push-gcp-typescript
             test_filter: push_gcp_typescript
+            needs_oidc: false
           - name: push-azure-rust
             test_filter: push_azure_rust
+            needs_oidc: true
           - name: push-azure-typescript
             test_filter: push_azure_typescript
+            needs_oidc: true
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
@@ -235,6 +364,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: env-test-e2e
+
+      - name: Acquire Azure OIDC token
+        if: matrix.needs_oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -272,3 +409,88 @@ jobs:
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} --no-capture
+
+  # ── E2E pull test matrix ───────────────────────────────────────────
+
+  pull-test:
+    needs: [setup, build-base-image, build-agent-image]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
+      (github.event_name == 'pull_request' &&
+        !github.event.pull_request.head.repo.fork &&
+        contains(join(github.event.pull_request.labels.*.name, ','), 'run-cloud-e2e'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pull-aws-rust
+            test_filter: pull_aws_rust
+          - name: pull-aws-typescript
+            test_filter: pull_aws_typescript
+          - name: pull-gcp-rust
+            test_filter: pull_gcp_rust
+          - name: pull-gcp-typescript
+            test_filter: pull_gcp_typescript
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull agent image
+        run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Run E2E pull test
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.build-base-image.outputs.base_image }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.build-agent-image.outputs.agent_image }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} --no-capture

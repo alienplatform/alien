@@ -128,8 +128,8 @@ AZURE_MANAGEMENT_SP_CLIENT_SECRET='${azure_management_sp_client_secret}'
 AZURE_MANAGEMENT_SP_OBJECT_ID='${azure_management_sp_object_id}'
 
 # Azure OIDC (set dynamically in CI, empty for local dev = SP fallback)
-AZURE_MANAGEMENT_OIDC_ISSUER=''
-AZURE_MANAGEMENT_OIDC_SUBJECT=''
+AZURE_MANAGEMENT_OIDC_ISSUER='${AZURE_MANAGEMENT_OIDC_ISSUER:-}'
+AZURE_MANAGEMENT_OIDC_SUBJECT='${AZURE_MANAGEMENT_OIDC_SUBJECT:-}'
 
 # Azure - Target
 AZURE_TARGET_SUBSCRIPTION_ID='${azure_target_subscription_id}'

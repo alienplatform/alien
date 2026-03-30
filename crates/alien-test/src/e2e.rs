@@ -189,11 +189,18 @@ pub fn test_app_path(language: Language) -> &'static str {
     }
 }
 
-/// Returns the alien config file name for a given deployment model.
-pub fn config_file(model: DeploymentModel) -> &'static str {
+/// Returns the alien config file name for a given deployment model and platform.
+///
+/// Cloud platforms (AWS/GCP/Azure) always deploy serverless functions regardless
+/// of model — the difference is WHO runs the deployment (manager in push, agent
+/// in pull). K8s and Local use the container config for pull deployments.
+pub fn config_file(model: DeploymentModel, platform: Platform) -> &'static str {
     match model {
         DeploymentModel::Push => "alien.function.ts",
-        DeploymentModel::Pull => "alien.container.ts",
+        DeploymentModel::Pull => match platform {
+            Platform::Aws | Platform::Gcp | Platform::Azure => "alien.function.ts",
+            _ => "alien.container.ts",
+        },
     }
 }
 
@@ -420,7 +427,7 @@ pub async fn deploy_test_app(
 ) -> anyhow::Result<TestDeployment> {
     let e2e_root = e2e_test_apps_root()?;
     let app_path = e2e_root.join(test_app_path(language));
-    let cfg_file = config_file(model);
+    let cfg_file = config_file(model, platform);
 
     let deployment_name = format!(
         "e2e-{}-{}-{}-{}",
@@ -502,11 +509,20 @@ pub async fn deploy_test_app(
 
     // Step 5: Create a deployment in the group via SDK
     let api_platform = to_api_platform(platform);
+    let stack_settings = if model == DeploymentModel::Pull {
+        Some(alien_manager_api::types::StackSettings {
+            deployment_model: Some(alien_manager_api::types::DeploymentModel::Pull),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     let create_body = alien_manager_api::types::CreateDeploymentRequest {
         name: deployment_name.clone(),
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
-        stack_settings: None,
+        stack_settings,
         environment_variables: None,
     };
 
@@ -557,14 +573,14 @@ pub fn is_platform_available(
             model == DeploymentModel::Pull
         }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
-            // Cloud platforms only support push (function) model in
-            // standalone mode. Pull (container) model requires Horizon
-            // clusters for orchestration, which are provisioned by the
-            // alien.dev platform — not available in standalone managers.
-            if model != DeploymentModel::Push || !config.has_platform(platform) {
-                return false;
-            }
-            true
+            // Cloud platforms support both push and pull models.
+            //
+            // Push: manager deploys using cross-account impersonation (RSM).
+            // Pull: alien-agent runs in the target environment and deploys
+            //       directly using target credentials — no cross-account IAM.
+            //
+            // Both require management + target credentials to be configured.
+            config.has_platform(platform)
         }
         _ => false,
     }
@@ -681,62 +697,68 @@ pub async fn setup(
         "Deployment created, waiting for running status"
     );
 
-    // Cross-account registry access: ensure the management account's container
-    // registry allows the target account to pull images. Must happen before
-    // function deployment (Provisioning phase). Returns image pull credentials
-    // for platforms that need explicit registry auth (Azure).
-    let image_pull_credentials = if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?
-    } else {
-        None
-    };
+    // Determine the agent image for pull mode. In CI the image is built
+    // ephemerally and passed via ALIEN_TEST_OVERRIDE_AGENT_IMAGE; locally we
+    // fall back to the published image.
+    let agent_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
+        .unwrap_or_else(|_| "ghcr.io/alienplatform/alien-agent:latest".to_string());
 
-    // Cross-account setup: if management + target credentials are both
-    // configured, run InitialSetup with target credentials (mirrors the
-    // production alien-deploy-cli push model flow). The manager's
-    // deployment loop will pick up from Provisioning using management SA
-    // impersonation + RSM cross-account role.
-    if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        let management_config = manager.management_config();
-        info!(
-            deployment_id = %deployment.id,
-            has_management_config = management_config.is_some(),
-            "Running setup_target for cross-account deployment"
-        );
-        crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
+    if model == DeploymentModel::Push {
+        // ── Push model: cross-account deployment via manager ─────────
 
-        // GCP: grant the RSM SA (created during InitialSetup) read access to the
-        // management project's Artifact Registry. During Provisioning, the manager
-        // impersonates the RSM SA — Cloud Run requires the caller to have AR access
-        // when updating services with cross-project images.
-        if platform == Platform::Gcp {
-            if let Some(rsm_sa_email) = extract_rsm_sa_email(manager.client(), &deployment.id).await? {
-                crate::build_push::grant_rsm_gar_access(&config, &rsm_sa_email).await?;
-                // Allow GCP IAM to propagate before the manager starts Provisioning.
-                info!("Waiting for IAM propagation after RSM SA AR access grant");
-                tokio::time::sleep(Duration::from_secs(10)).await;
+        // Cross-account registry access: ensure the management account's container
+        // registry allows the target account to pull images. Must happen before
+        // function deployment (Provisioning phase). Returns image pull credentials
+        // for platforms that need explicit registry auth (Azure).
+        let image_pull_credentials = if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            crate::build_push::ensure_cross_account_registry_access(platform, &config).await?
+        } else {
+            None
+        };
+
+        // Cross-account setup: if management + target credentials are both
+        // configured, run InitialSetup with target credentials (mirrors the
+        // production alien-deploy-cli push model flow). The manager's
+        // deployment loop will pick up from Provisioning using management SA
+        // impersonation + RSM cross-account role.
+        if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            let management_config = manager.management_config();
+            info!(
+                deployment_id = %deployment.id,
+                has_management_config = management_config.is_some(),
+                "Running setup_target for cross-account deployment"
+            );
+            crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
+
+            // GCP: grant the RSM SA (created during InitialSetup) read access to the
+            // management project's Artifact Registry. During Provisioning, the manager
+            // impersonates the RSM SA — Cloud Run requires the caller to have AR access
+            // when updating services with cross-project images.
+            if platform == Platform::Gcp {
+                if let Some(rsm_sa_email) = extract_rsm_sa_email(manager.client(), &deployment.id).await? {
+                    crate::build_push::grant_rsm_gar_access(&config, &rsm_sa_email).await?;
+                    // Allow GCP IAM to propagate before the manager starts Provisioning.
+                    info!("Waiting for IAM propagation after RSM SA AR access grant");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
             }
         }
+    } else if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        // ── Cloud pull model: agent deploys directly with target creds ──
+        //
+        // No RSM or cross-account IAM needed — the agent runs in the target
+        // environment with direct credentials. We still need cross-account
+        // registry access so the cloud provider can pull images from the
+        // management registry.
+        info!(
+            deployment_id = %deployment.id,
+            "Cloud pull mode: ensuring cross-account registry access (no RSM)"
+        );
+        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
     }
 
-    // Wait for the deployment to be running (populates URL)
-    deployment
-        .wait_until_running(Duration::from_secs(600))
-        .await
-        .map_err(|e| anyhow::anyhow!("Deployment failed to reach running: {}", e))?;
-    info!(
-        deployment_id = %deployment.id,
-        url = ?deployment.url,
-        "Deployment is running"
-    );
-
-    // Provision the external test secret via the manager vault API.
-    // Cloud platforms have vault resources that are now provisioned and ready.
-    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        provision_external_secret(&manager, &deployment).await?;
-    }
-
-    // For pull model: start alien-agent container
+    // For pull model: start alien-agent container BEFORE waiting for Running,
+    // because the agent is what drives the deployment to Running.
     let agent = if model == DeploymentModel::Pull {
         match platform {
             Platform::Kubernetes => {
@@ -756,8 +778,9 @@ pub async fn setup(
                 // Docker container for cloud + local pull
                 let agent = crate::agent::TestAlienAgent::start_container(
                     &manager,
-                    "ghcr.io/alienplatform/alien-agent:latest",
+                    &agent_image,
                     platform,
+                    Some(&config),
                 )
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to start alien-agent container: {}", e))?;
@@ -767,6 +790,25 @@ pub async fn setup(
     } else {
         None
     };
+
+    // Wait for the deployment to be running (populates URL).
+    // For push: the manager's deployment loop drives this.
+    // For pull: the alien-agent drives this via sync + deployment loop.
+    deployment
+        .wait_until_running(Duration::from_secs(600))
+        .await
+        .map_err(|e| anyhow::anyhow!("Deployment failed to reach running: {}", e))?;
+    info!(
+        deployment_id = %deployment.id,
+        url = ?deployment.url,
+        "Deployment is running"
+    );
+
+    // Provision the external test secret via the manager vault API.
+    // Cloud platforms have vault resources that are now provisioned and ready.
+    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        provision_external_secret(&manager, &deployment).await?;
+    }
 
     Ok(TestContext {
         deployment,

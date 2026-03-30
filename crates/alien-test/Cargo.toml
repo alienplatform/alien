@@ -59,6 +59,9 @@ anyhow = { workspace = true }
 # Base64 encoding for command params
 base64 = { workspace = true }
 
+# Random encryption key generation for agent containers
+rand = { workspace = true }
+
 # Ngrok tunnel for pull tests
 ngrok = { workspace = true }
 url = { workspace = true }

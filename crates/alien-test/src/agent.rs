@@ -10,11 +10,20 @@ use std::sync::Arc;
 use alien_core::Platform;
 use tracing::info;
 
+use crate::config::TestConfig;
 use crate::manager::TestManager;
 
 /// Default Docker label applied to test alien-agent containers so they can be
 /// cleaned up afterwards.
 pub const TEST_AGENT_LABEL: &str = "alien-test-agent=true";
+
+/// Generate a random 64-character hex string for use as an encryption key.
+fn generate_encryption_key() -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
+    hex::encode(bytes)
+}
 
 /// A running alien-agent container for pull-model E2E tests.
 pub struct TestAlienAgent {
@@ -37,10 +46,15 @@ impl TestAlienAgent {
     /// The container is labelled with [`TEST_AGENT_LABEL`] for easy cleanup.
     /// `image` is the alien-agent Docker image to run (e.g.
     /// `ghcr.io/alienplatform/alien-agent:latest`).
+    ///
+    /// For cloud platforms (AWS/GCP/Azure), pass a `TestConfig` to inject
+    /// target account credentials into the container so the agent can deploy
+    /// resources directly.
     pub async fn start_container(
         manager: &TestManager,
         image: &str,
         platform: Platform,
+        config: Option<&TestConfig>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
             manager_url = %manager.url,
@@ -49,23 +63,72 @@ impl TestAlienAgent {
             "starting alien-agent container"
         );
 
+        let encryption_key = generate_encryption_key();
+
+        let mut args = vec![
+            "run".to_string(),
+            "-d".to_string(),
+            "--label".to_string(),
+            TEST_AGENT_LABEL.to_string(),
+            // The agent needs to reach the manager on the host network
+            "--network".to_string(),
+            "host".to_string(),
+            // Core agent configuration (env var names match clap `env = "..."` annotations)
+            "-e".to_string(), format!("SYNC_URL={}", manager.url),
+            "-e".to_string(), format!("SYNC_TOKEN={}", manager.admin_token),
+            "-e".to_string(), format!("PLATFORM={}", platform.as_str()),
+            "-e".to_string(), format!("AGENT_ENCRYPTION_KEY={}", encryption_key),
+        ];
+
+        // Inject target account credentials for cloud platforms so the agent
+        // can deploy resources directly (pull model = no cross-account IAM).
+        if let Some(cfg) = config {
+            match platform {
+                Platform::Aws => {
+                    if let Some(ref target) = cfg.aws_target {
+                        args.extend([
+                            "-e".to_string(), format!("AWS_ACCESS_KEY_ID={}", target.access_key_id),
+                            "-e".to_string(), format!("AWS_SECRET_ACCESS_KEY={}", target.secret_access_key),
+                            "-e".to_string(), format!("AWS_REGION={}", target.region),
+                        ]);
+                        if let Some(ref token) = target.session_token {
+                            args.extend(["-e".to_string(), format!("AWS_SESSION_TOKEN={}", token)]);
+                        }
+                        if let Some(ref account_id) = target.account_id {
+                            args.extend(["-e".to_string(), format!("AWS_ACCOUNT_ID={}", account_id)]);
+                        }
+                    }
+                }
+                Platform::Gcp => {
+                    if let Some(ref target) = cfg.gcp_target {
+                        args.extend([
+                            "-e".to_string(), format!("GCP_PROJECT_ID={}", target.project_id),
+                            "-e".to_string(), format!("GCP_REGION={}", target.region),
+                        ]);
+                        if let Some(ref creds) = target.credentials_json {
+                            args.extend(["-e".to_string(), format!("GOOGLE_SERVICE_ACCOUNT_KEY={}", creds)]);
+                        }
+                    }
+                }
+                Platform::Azure => {
+                    if let Some(ref target) = cfg.azure_target {
+                        args.extend([
+                            "-e".to_string(), format!("AZURE_SUBSCRIPTION_ID={}", target.subscription_id),
+                            "-e".to_string(), format!("AZURE_TENANT_ID={}", target.tenant_id),
+                            "-e".to_string(), format!("AZURE_CLIENT_ID={}", target.client_id),
+                            "-e".to_string(), format!("AZURE_CLIENT_SECRET={}", target.client_secret),
+                            "-e".to_string(), format!("AZURE_REGION={}", target.region),
+                        ]);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        args.push(image.to_string());
+
         let output = tokio::process::Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--label",
-                TEST_AGENT_LABEL,
-                // The agent needs to reach the manager on the host network
-                "--network",
-                "host",
-                "-e",
-                &format!("ALIEN_MANAGER_URL={}", manager.url),
-                "-e",
-                &format!("ALIEN_API_KEY={}", manager.admin_token),
-                "-e",
-                &format!("ALIEN_PLATFORM={}", platform.as_str()),
-                image,
-            ])
+            .args(&args)
             .output()
             .await?;
 
@@ -105,6 +168,8 @@ impl TestAlienAgent {
             "installing alien-agent via helm"
         );
 
+        let encryption_key = generate_encryption_key();
+
         let mut cmd = tokio::process::Command::new("helm");
         cmd.args([
             "install",
@@ -114,9 +179,11 @@ impl TestAlienAgent {
             namespace,
             "--create-namespace",
             "--set",
-            &format!("config.managerUrl={}", manager.url),
+            &format!("syncUrl={}", manager.url),
             "--set",
-            &format!("config.apiKey={}", manager.admin_token),
+            &format!("syncToken={}", manager.admin_token),
+            "--set",
+            &format!("encryptionKey={}", encryption_key),
             "--wait",
             "--timeout",
             "120s",
@@ -208,7 +275,8 @@ impl TestAlienAgent {
         manager: &Arc<TestManager>,
         image: &str,
         platform: Platform,
+        config: Option<&TestConfig>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_container(manager.as_ref(), image, platform).await
+        Self::start_container(manager.as_ref(), image, platform, config).await
     }
 }

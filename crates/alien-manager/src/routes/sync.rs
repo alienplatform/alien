@@ -473,8 +473,38 @@ async fn initialize(
             }
         }
         TokenType::Admin => {
-            ErrorData::bad_request("Initialize requires a deployment or deployment group token")
-                .into_response()
+            // Admin tokens on standalone managers: find the most recent
+            // deployment and assign the agent to it. This enables the common
+            // self-hosted workflow where the operator creates a deployment via
+            // the API and then starts an agent with the admin token.
+            let filter = DeploymentFilter {
+                deployment_group_id: None,
+                deployment_ids: None,
+                statuses: None,
+                platforms: None,
+                limit: Some(1),
+            };
+            match state.deployment_store.list_deployments(&filter).await {
+                Ok(deployments) if !deployments.is_empty() => {
+                    let deployment_id = deployments[0].id.clone();
+                    tracing::info!(
+                        %deployment_id,
+                        "Admin token: assigning agent to existing deployment"
+                    );
+                    Json(InitializeResponse {
+                        deployment_id,
+                        token: None,
+                    })
+                    .into_response()
+                }
+                Ok(_) => {
+                    ErrorData::bad_request(
+                        "No deployments found. Create a deployment before initializing an agent.",
+                    )
+                    .into_response()
+                }
+                Err(e) => e.into_response(),
+            }
         }
     }
 }

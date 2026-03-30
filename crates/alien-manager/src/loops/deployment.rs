@@ -192,15 +192,22 @@ impl DeploymentLoop {
     ) -> Result<(), AlienError> {
         let deployment_id = deployment.id.clone();
 
+        // Pull-mode deployments are entirely driven by the alien-agent running in the
+        // target environment. The manager must not attempt to provision or deploy them.
+        if deployment.stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
+            debug!(
+                deployment_id = %deployment_id,
+                "Skipping pull-mode deployment — handled by alien-agent"
+            );
+            return Ok(());
+        }
+
         // Push-mode deployments: skip Pending and InitialSetup.
         // These steps are handled by push_initial_setup (alien-deploy-cli) which runs
         // with target-environment credentials. The manager only has management credentials,
         // which would cause resources to be created in the wrong project.
         let status = parse_status(&deployment.status);
-        if deployment.stack_settings.deployment_model == alien_core::DeploymentModel::Push
-            && (status == DeploymentStatus::Pending
-                || status == DeploymentStatus::InitialSetup)
-        {
+        if status == DeploymentStatus::Pending || status == DeploymentStatus::InitialSetup {
             debug!(
                 deployment_id = %deployment_id,
                 status = ?status,
