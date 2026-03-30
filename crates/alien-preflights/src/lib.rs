@@ -258,10 +258,6 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
-        // ManagementPermissionProfileMutation must run AFTER ServiceAccountMutation so it
-        // can see the service-account resource and include service-account/heartbeat in the
-        // management permission profile.
-        registry.add_mutation(Box::new(mutations::ManagementPermissionProfileMutation));
 
         // Phase 3: Service activations and platform infrastructure
         // These scan resource types to decide what to create, so they must see all
@@ -271,6 +267,11 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::AzureContainerAppsEnvironmentMutation));
         registry.add_mutation(Box::new(mutations::AzureServiceBusNamespaceMutation));
         registry.add_mutation(Box::new(mutations::AzureStorageAccountMutation));
+
+        // Phase 3b: Management permissions (must run AFTER all resource-creating mutations
+        // so it can see every resource including service activations, service accounts,
+        // vaults, etc. and generate the correct permission profile)
+        registry.add_mutation(Box::new(mutations::ManagementPermissionProfileMutation));
 
         // Phase 4: Dependency wiring (must be last, after all resources exist)
         registry.add_mutation(Box::new(mutations::ServiceAccountDependenciesMutation));
