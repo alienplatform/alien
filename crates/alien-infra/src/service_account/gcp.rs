@@ -5,8 +5,13 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_gcp_clients::iam::{CreateServiceAccountRequest, ServiceAccount as GcpServiceAccount};
+use alien_gcp_clients::iam::{
+    Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
+};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_permissions::{
+    generators::GcpRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+};
 
 /// Generates the GCP service account ID from the ServiceAccount name.
 fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
@@ -134,6 +139,162 @@ impl GcpServiceAccountController {
             .await?;
 
             self.role_created = true;
+        }
+
+        Ok(HandlerAction::Continue {
+            state: BindingStackRoles,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = BindingStackRoles,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn binding_stack_roles(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+
+        let service_account_email = self.service_account_email.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Service account email not available for stack role binding".to_string(),
+                operation: Some("binding_stack_roles".to_string()),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        if config.stack_permission_sets.is_empty() {
+            info!(
+                config_id = %config.id,
+                "No stack-level permissions to bind at project level"
+            );
+            return Ok(HandlerAction::Continue {
+                state: ApplyingResourcePermissions,
+                suggested_delay: None,
+            });
+        }
+
+        info!(
+            config_id = %config.id,
+            service_account_email = %service_account_email,
+            permission_sets_count = config.stack_permission_sets.len(),
+            "Binding stack-level permission-set roles to service account at project level"
+        );
+
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let gcp_config = ctx.get_gcp_config()?;
+
+        let service_account_id = service_account_email
+            .split('@')
+            .next()
+            .unwrap_or(service_account_email);
+
+        let mut permission_context = PermissionContext::new()
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_project_name(gcp_config.project_id.clone())
+            .with_region(gcp_config.region.clone())
+            .with_service_account_name(service_account_id.to_string());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+
+        let mut new_bindings = Vec::new();
+
+        for permission_set in &config.stack_permission_sets {
+            let bindings = generator
+                .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate IAM bindings for stack permission set '{}'",
+                        permission_set.id
+                    ),
+                    operation: Some("binding_stack_roles".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            for binding in bindings.bindings {
+                new_bindings.push(Binding {
+                    role: binding.role,
+                    members: binding.members,
+                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                        expression: cond.expression,
+                        title: Some(cond.title),
+                        description: Some(cond.description),
+                        location: None,
+                    }),
+                });
+            }
+        }
+
+        if !new_bindings.is_empty() {
+            let project_id = &gcp_config.project_id;
+            let rm_client = ctx
+                .service_provider
+                .get_gcp_resource_manager_client(gcp_config)?;
+
+            let current_policy = rm_client
+                .get_project_iam_policy(
+                    project_id.clone(),
+                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                        requested_policy_version: Some(3),
+                    }),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get project IAM policy before binding stack roles"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            let mut all_bindings = current_policy.bindings;
+            for new_binding in new_bindings {
+                let existing = all_bindings.iter_mut().find(|b| {
+                    b.role == new_binding.role
+                        && match (&b.condition, &new_binding.condition) {
+                            (None, None) => true,
+                            (Some(a), Some(b)) => a.expression == b.expression,
+                            _ => false,
+                        }
+                });
+
+                if let Some(existing) = existing {
+                    for member in &new_binding.members {
+                        if !existing.members.contains(member) {
+                            existing.members.push(member.clone());
+                        }
+                    }
+                } else {
+                    all_bindings.push(new_binding);
+                }
+            }
+
+            let new_policy = IamPolicy::builder()
+                .version(3)
+                .bindings(all_bindings)
+                .maybe_etag(current_policy.etag)
+                .maybe_kind(current_policy.kind)
+                .maybe_resource_id(current_policy.resource_id)
+                .build();
+
+            rm_client
+                .set_project_iam_policy(project_id.clone(), new_policy, None)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to bind stack roles to service account '{}' at project level",
+                        service_account_email
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            info!(
+                config_id = %config.id,
+                service_account_email = %service_account_email,
+                "Stack-level permission-set roles bound at project level"
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -315,8 +476,8 @@ impl GcpServiceAccountController {
             "Starting deletion of GCP service account resources"
         );
 
-        // No project-level IAM policy unbinding needed — permissions are now
-        // applied at the resource level by individual resource controllers.
+        // Stack-level IAM bindings at project level become inert once the SA is
+        // deleted; GCP automatically ignores bindings for deleted principals.
 
         Ok(HandlerAction::Continue {
             state: DeletingRole,
