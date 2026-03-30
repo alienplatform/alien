@@ -712,6 +712,9 @@ pub async fn setup(
         if platform == Platform::Gcp {
             if let Some(rsm_sa_email) = extract_rsm_sa_email(manager.client(), &deployment.id).await? {
                 crate::build_push::grant_rsm_gar_access(&config, &rsm_sa_email).await?;
+                // Allow GCP IAM to propagate before the manager starts Provisioning.
+                info!("Waiting for IAM propagation after RSM SA AR access grant");
+                tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
     }
@@ -789,14 +792,20 @@ async fn extract_rsm_sa_email(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
 
-    if let Some(ref stack_state) = resp.stack_state {
-        if let Some(resources) = stack_state.get("resources").and_then(|v| v.as_object()) {
+    if let Some(ref state) = resp.stack_state {
+        // DeploymentState uses camelCase: the StackState is under "stackState",
+        // and RSM outputs use "accessConfiguration" (not snake_case).
+        if let Some(resources) = state
+            .get("stackState")
+            .and_then(|ss| ss.get("resources"))
+            .and_then(|v| v.as_object())
+        {
             for (_id, resource) in resources {
                 let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if resource_type == "remote-stack-management" {
                     if let Some(email) = resource
                         .get("outputs")
-                        .and_then(|o| o.get("access_configuration"))
+                        .and_then(|o| o.get("accessConfiguration"))
                         .and_then(|v| v.as_str())
                     {
                         info!(rsm_sa = %email, "Extracted RSM SA email from deployment state");
