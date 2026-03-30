@@ -718,7 +718,9 @@ pub async fn push_initial_setup(
     state.stack_state = deployment
         .stack_state
         .and_then(|v| serde_json::from_value(v).ok());
-    state.runtime_metadata = None;
+    state.runtime_metadata = deployment
+        .runtime_metadata
+        .and_then(|v| serde_json::from_value(v).ok());
 
     // Step loop with lock release guard
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;

@@ -1173,6 +1173,7 @@
           "retryRequested": {
             "type": "boolean"
           },
+          "runtimeMetadata": {},
           "stackSettings": {},
           "stackState": {},
           "status": {
