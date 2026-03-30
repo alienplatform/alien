@@ -41,10 +41,6 @@ fn generate_azure_models() {
             "./openapi/containerregistry.json",
             "src/azure/models/containerregistry.rs",
         ),
-        (
-            "./openapi/managedservices.json",
-            "src/azure/models/managedservices.rs",
-        ),
         ("./openapi/keyvault.json", "src/azure/models/keyvault.rs"),
         ("./openapi/secrets.json", "src/azure/models/secrets.rs"),
         (

@@ -41,8 +41,15 @@ pub struct ImagePullCredentials {
 pub struct AzureManagementConfig {
     /// The managing Azure Tenant ID for cross-tenant access
     pub managing_tenant_id: String,
-    /// The principal ID of the service principal in the management account
-    pub management_principal_id: String,
+    /// OIDC issuer URL for federated identity credential creation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_issuer: Option<String>,
+    /// OIDC subject claim for federated identity credential creation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc_subject: Option<String>,
+    /// Management service principal object ID for local development fallback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub management_principal_id: Option<String>,
 }
 
 /// Management configuration for different cloud platforms.

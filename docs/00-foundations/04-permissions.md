@@ -349,9 +349,11 @@ The `RemoteStackManagement` resource handles cross-account setup:
 3. Create custom role with management permissions
 4. Bind custom role to the service account
 
-**Azure** (via Lighthouse):
-1. Create Lighthouse registration definition with management permissions
-2. Create Lighthouse registration assignment
+**Azure** (via UAMI + FIC + custom RBAC):
+1. Create User-Assigned Managed Identity (UAMI) in customer's resource group
+2. Create Federated Identity Credential (FIC) on the UAMI, trusting the manager's OIDC issuer
+3. Create custom role definition from `/provision` permission sets at RG scope
+4. Create role assignments binding the custom role to the UAMI principal
 
 For Kubernetes and Local platforms, an Agent runs inside the environment and pulls configuration. No cross-account access needed.
 
@@ -362,7 +364,7 @@ For Kubernetes and Local platforms, an Agent runs inside the environment and pul
 | Identity | IAM Role | Service Account | Managed Identity |
 | Stack-level scope | ARN wildcards (`my-stack-*`) | Resource-level IAM on each resource | Resource group scope |
 | Resource-level scope | Specific ARN in role policy | `setIamPolicy` on individual resource | Role assignment on specific resource |
-| Cross-account | AssumeRole with trust policy | Service account impersonation | Azure Lighthouse |
+| Cross-account | AssumeRole with trust policy | Service account impersonation | OIDC token exchange via FIC |
 | Provision scope | Wildcard ARNs (resources don't exist yet) | Project-level (resources don't exist yet) | Resource-group-scoped (resources don't exist yet) |
 
 **AWS**: All permissions go into IAM role policies. Stack-level uses wildcard ARNs. Resource-level uses specific ARNs. Both end up in the same policy document. For management permissions, resource-specific ARN statements are used (not wildcards), except for `provision` which must use wildcards since the resources don't exist yet.

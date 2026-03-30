@@ -104,8 +104,15 @@ impl AzurePermissionsHelper {
             }
         }
 
-        // Note: Azure management permissions are handled via Lighthouse (cross-tenant delegation)
-        // in the AzureRemoteStackManagementController, not via resource-level IAM here.
+        // Process management SA permissions for this resource (non-provision sets)
+        Self::apply_management_permissions(
+            ctx,
+            resource_id,
+            resource_type,
+            &resource_scope,
+            permission_context,
+        )
+        .await?;
 
         Ok(())
     }
@@ -361,6 +368,200 @@ impl AzurePermissionsHelper {
             })?;
 
         Ok(())
+    }
+
+    /// Apply management resource-scoped permissions (non-provision sets) for the
+    /// management UAMI. This is the Azure equivalent of AWS's
+    /// `apply_aws_management_resource_permissions` and GCP's
+    /// `collect_gcp_management_bindings`.
+    async fn apply_management_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        resource_scope: &Scope,
+        permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let management_profile = match ctx.desired_stack.management().profile() {
+            Some(profile) => profile,
+            None => return Ok(()),
+        };
+
+        let type_prefix = format!("{}/", resource_type);
+
+        let mut combined_refs = Vec::new();
+        if let Some(refs) = management_profile.0.get(resource_id) {
+            combined_refs.extend(refs.iter().cloned());
+        }
+        if let Some(wildcard_refs) = management_profile.0.get("*") {
+            combined_refs.extend(
+                wildcard_refs
+                    .iter()
+                    .filter(|r| r.id().starts_with(&type_prefix))
+                    .cloned(),
+            );
+        }
+
+        if combined_refs.is_empty() {
+            return Ok(());
+        }
+
+        // Skip /provision sets — handled by RSM at RG scope
+        let non_provision_refs: Vec<_> = combined_refs
+            .into_iter()
+            .filter(|r| !r.id().ends_with("/provision"))
+            .collect();
+
+        if non_provision_refs.is_empty() {
+            return Ok(());
+        }
+
+        let management_principal_id =
+            match Self::get_management_uami_principal_id(ctx)? {
+                Some(id) => id,
+                None => {
+                    warn!(
+                        resource_id = %resource_id,
+                        "Management UAMI not found, skipping management permissions"
+                    );
+                    return Ok(());
+                }
+            };
+
+        let azure_config = ctx.get_azure_config()?;
+        let authorization_client = ctx
+            .service_provider
+            .get_azure_authorization_client(azure_config)?;
+        let generator = AzureRuntimePermissionsGenerator::new();
+
+        for permission_set_ref in &non_provision_refs {
+            let permission_set = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Management permission set '{}' not found",
+                            permission_set_ref.id()
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    })
+                })?;
+
+            let mut azure_role_definition = generator
+                .generate_role_definition(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    permission_context,
+                )
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to generate management role definition for '{}'",
+                        permission_set.id
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+
+            let scope_string = format!("/{}", resource_scope.to_scope_string(azure_config));
+            azure_role_definition.assignable_scopes = vec![scope_string];
+
+            let role_definition_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!(
+                    "alien:azure:mgmt-res-role-def:{}:{}:{}",
+                    ctx.resource_prefix, resource_id, permission_set.id
+                )
+                .as_bytes(),
+            )
+            .to_string();
+
+            match Self::create_role_definition(
+                &authorization_client,
+                resource_scope,
+                &role_definition_id,
+                &azure_role_definition,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!(
+                        role_definition_id = %role_definition_id,
+                        permission_set = %permission_set.id,
+                        "Management role definition created for resource"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        role_definition_id = %role_definition_id,
+                        error = %e,
+                        "Failed to create management role definition"
+                    );
+                    continue;
+                }
+            }
+
+            let full_role_definition_id = format!(
+                "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
+                resource_scope.to_scope_string(azure_config),
+                role_definition_id
+            );
+
+            let role_assignment_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!(
+                    "alien:azure:mgmt-res-role-assign:{}:{}:{}",
+                    ctx.resource_prefix, resource_id, permission_set.id
+                )
+                .as_bytes(),
+            )
+            .to_string();
+
+            match Self::create_role_assignment(
+                &authorization_client,
+                azure_config,
+                resource_scope,
+                &role_assignment_id,
+                &management_principal_id,
+                &full_role_definition_id,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!(
+                        principal_id = %management_principal_id,
+                        permission_set = %permission_set.id,
+                        "Management role assignment created for resource"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        principal_id = %management_principal_id,
+                        error = %e,
+                        "Failed to create management role assignment"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get the management UAMI principal ID from the RSM controller
+    fn get_management_uami_principal_id(
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<String>> {
+        use alien_core::RemoteStackManagement;
+
+        for (_resource_id, resource_entry) in &ctx.desired_stack.resources {
+            if resource_entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+                let controller = ctx
+                    .require_dependency::<crate::remote_stack_management::AzureRemoteStackManagementController>(
+                        &(&resource_entry.config).into(),
+                    )?;
+
+                return Ok(controller.uami_principal_id.clone());
+            }
+        }
+
+        Ok(None)
     }
 
     /// Get the managed identity resource ID for a permission profile

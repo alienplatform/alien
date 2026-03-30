@@ -12,7 +12,7 @@ use std::fmt::Debug;
 /// Maps to:
 /// - AWS: Cross-account IAM role with management permissions
 /// - GCP: Service account with management permissions and impersonation rights
-/// - Azure: Lighthouse registration definition and assignment
+/// - Azure: User-assigned managed identity with federated credential and custom RBAC
 ///
 /// This resource is automatically created for AWS, GCP, and Azure platforms
 /// when the stack needs to be managed by another account. The management account
@@ -47,13 +47,13 @@ pub struct RemoteStackManagementOutputs {
     /// Platform-specific management resource identifier
     /// For AWS: The ARN of the created cross-account role
     /// For GCP: The email of the created service account
-    /// For Azure: The resource ID of the lighthouse registration
+    /// For Azure: The resource ID of the target user-assigned managed identity
     pub management_resource_id: String,
 
     /// Platform-specific access configuration
     /// For AWS: The role ARN to assume
     /// For GCP: The service account email to impersonate
-    /// For Azure: The lighthouse registration assignment ID
+    /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
 }
 

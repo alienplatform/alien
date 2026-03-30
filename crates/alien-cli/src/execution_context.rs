@@ -11,7 +11,6 @@
 //! Platform-specific features (OAuth login, workspaces, projects, link/unlink) are
 //! behind `#[cfg(feature = "platform")]`.
 
-use crate::commands::start_embedded_dev_manager;
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::Client as ServerSdkClient;
@@ -94,8 +93,11 @@ impl ExecutionMode {
         match self {
             Self::Dev { port } => {
                 if !check_server_health(*port).await {
-                    info!("Starting dev server on port {}...", port);
-                    start_dev_server(*port).await?;
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Local dev server is not running on http://localhost:{port}. Start it with `alien dev` (full session) or `alien dev server`."
+                        ),
+                    }));
                 }
                 Ok(())
             }
@@ -531,9 +533,4 @@ async fn check_server_health(port: u16) -> bool {
     let client = reqwest::Client::new();
     let url = format!("http://localhost:{}/health", port);
     client.get(&url).send().await.is_ok()
-}
-
-/// Start the dev server in the background
-async fn start_dev_server(port: u16) -> Result<()> {
-    start_embedded_dev_manager(port).await
 }

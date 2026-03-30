@@ -2,9 +2,18 @@
 
 Platform-specific details for working on Azure controllers.
 
-## Cross-Account Access
+## Cross-Tenant Access
 
-Azure uses **Azure Lighthouse** for cross-tenant management. A registration definition specifies which permissions the managing tenant gets, and a registration assignment activates it on the customer's subscription.
+Azure uses **UAMI + FIC + custom RBAC** for cross-tenant management:
+
+1. The `AzureRemoteStackManagementController` creates a **User-Assigned Managed Identity (UAMI)** in the customer's resource group.
+2. A **Federated Identity Credential (FIC)** is created on the UAMI, trusting the manager's OIDC issuer (EKS, GitHub Actions, or Container Apps).
+3. A **custom role definition** is created from the stack's `/provision` permission sets, scoped to the resource group.
+4. **Role assignments** bind the custom role to the UAMI principal.
+
+At runtime, the manager exchanges an OIDC token (projected K8s SA token with `audience: api://AzureADTokenExchange`) for an ARM access token via the customer's Azure AD token endpoint. For local development, a multi-tenant Service Principal uses cross-tenant `client_credentials` as a fallback.
+
+This is symmetric with AWS (AssumeRole) and GCP (service account impersonation) — all three platforms use token exchange against the customer's identity provider.
 
 ## Resource Mapping
 
@@ -43,11 +52,15 @@ Default: `linux-x64`
 
 ## Permissions
 
-Permissions go into **custom role definitions** with role assignments. Stack-level scope targets the resource group. Resource-level scope targets specific resources. Uses `dataActions` for data-plane operations (e.g. blob read/write) vs `actions` for control-plane operations.
+Permissions go into **custom role definitions** with role assignments. Two tiers:
+
+1. **RG-scoped (provision)**: The RSM controller creates a custom role from `/provision` permission sets and assigns it at resource group scope. This gives the management UAMI the ability to create/delete resources.
+2. **Resource-scoped (non-provision)**: Resource controllers assign management permissions (execute, heartbeat, management) scoped to specific resource instances via `AzurePermissionsHelper::apply_management_permissions`.
+
+Uses `dataActions` for data-plane operations (e.g., blob read/write) vs `actions` for control-plane operations.
 
 ## Quirks
 
 - Storage Accounts are shared — the `AzureStorageAccountMutation` preflight adds a single storage account used by both Storage (Blob) and Queue (Storage Queue) resources.
 - Key Vault is an actual standalone resource (unlike AWS/GCP where "vault" is a naming convention over Secrets Manager / Secret Manager).
 - KEDA is used for autoscaling Container Apps based on Service Bus queue depth (for commands and queue-triggered functions).
-- Managed Identity federation requires explicit federated credential setup for cross-tenant scenarios.

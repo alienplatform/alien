@@ -60,11 +60,15 @@ pub struct AzureConfig {
     pub client_id: String,
     pub client_secret: String,
     pub region: String,
-    /// Management SP client ID (separate identity for Lighthouse access).
+    /// OIDC issuer for production and CI token exchange.
+    pub oidc_issuer: Option<String>,
+    /// OIDC subject for production and CI token exchange.
+    pub oidc_subject: Option<String>,
+    /// Management SP client ID (local development fallback only).
     pub management_sp_client_id: Option<String>,
-    /// Management SP client secret (for SP→SP impersonation).
+    /// Management SP client secret (local development fallback only).
     pub management_sp_client_secret: Option<String>,
-    /// Management SP object/principal ID.
+    /// Management SP object/principal ID (local development fallback only).
     pub management_sp_object_id: Option<String>,
 }
 
@@ -218,6 +222,12 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            oidc_issuer: env::var("AZURE_MANAGEMENT_OIDC_ISSUER")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            oidc_subject: env::var("AZURE_MANAGEMENT_OIDC_SUBJECT")
+                .ok()
+                .filter(|s| !s.is_empty()),
             management_sp_client_id: env::var("AZURE_MANAGEMENT_SP_CLIENT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -245,6 +255,8 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            oidc_issuer: None,
+            oidc_subject: None,
             management_sp_client_id: None,
             management_sp_client_secret: None,
             management_sp_object_id: None,

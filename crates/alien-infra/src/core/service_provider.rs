@@ -30,7 +30,6 @@ use alien_azure_clients::{
     load_balancers::{AzureLoadBalancerClient, LoadBalancerApi},
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
-    managed_services::{AzureManagedServicesClient, ManagedServicesApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     resources::{AzureResourcesClient, ResourcesApi},
     service_bus::{
@@ -170,10 +169,6 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>>;
-    fn get_azure_managed_services_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ManagedServicesApi>>;
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
@@ -691,16 +686,6 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>> {
         Ok(Arc::new(AzureManagedIdentityClient::new(
-            reqwest::Client::new(),
-            AzureTokenCache::new(config.clone()),
-        )))
-    }
-
-    fn get_azure_managed_services_client(
-        &self,
-        config: &AzureClientConfig,
-    ) -> Result<Arc<dyn ManagedServicesApi>> {
-        Ok(Arc::new(AzureManagedServicesClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

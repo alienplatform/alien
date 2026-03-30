@@ -20,7 +20,6 @@ pub mod keyvault;
 pub mod load_balancers;
 pub mod long_running_operation;
 pub mod managed_identity;
-pub mod managed_services;
 pub mod models;
 pub mod network;
 pub mod resources;
@@ -132,13 +131,83 @@ async fn get_impersonated_token(
                 field_name: Some("credentials".to_string()),
             }))
         }
-        AzureCredentials::WorkloadIdentity { .. } => {
-            // For workload identity, we can't do traditional impersonation
-            // The workload identity itself represents the impersonated identity
-            Err(AlienError::new(ErrorData::InvalidInput {
-                message: "Cannot impersonate using workload identity. The workload identity itself is the impersonated identity.".to_string(),
-                field_name: Some("credentials".to_string()),
-            }))
+        AzureCredentials::WorkloadIdentity {
+            client_id: _,
+            tenant_id: _,
+            federated_token_file,
+            authority_host: _,
+        } => {
+            let oidc_token = std::fs::read_to_string(federated_token_file)
+                .into_alien_error()
+                .context(ErrorData::InvalidClientConfig {
+                    message: format!(
+                        "Failed to read federated token file for impersonation: {}",
+                        federated_token_file
+                    ),
+                    errors: None,
+                })?
+                .trim()
+                .to_string();
+
+            let tenant_id = impersonation_config
+                .tenant_id
+                .as_ref()
+                .unwrap_or(&config.tenant_id);
+
+            let token_url = format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                tenant_id
+            );
+
+            let client = Client::new();
+            let mut form_data = HashMap::new();
+            form_data.insert("grant_type", "client_credentials".to_string());
+            form_data.insert("client_id", impersonation_config.client_id.clone());
+            form_data.insert(
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".to_string(),
+            );
+            form_data.insert("client_assertion", oidc_token);
+            form_data.insert("scope", impersonation_config.scope.clone());
+
+            let response = client
+                .post(&token_url)
+                .form(&form_data)
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Failed to exchange OIDC token for impersonation".to_string(),
+                })?;
+
+            if !response.status().is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(AlienError::new(ErrorData::AuthenticationError {
+                    message: format!(
+                        "OIDC token exchange for impersonation failed: {}",
+                        error_text
+                    ),
+                }));
+            }
+
+            #[derive(Deserialize)]
+            struct TokenResponse {
+                access_token: String,
+            }
+
+            let token_response: TokenResponse =
+                response
+                    .json()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Failed to parse OIDC impersonation token response".to_string(),
+                    })?;
+
+            Ok(token_response.access_token)
         }
         AzureCredentials::ManagedIdentity { .. } => {
             // Managed identity already represents the target identity

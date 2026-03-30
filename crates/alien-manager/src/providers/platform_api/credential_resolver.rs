@@ -198,9 +198,23 @@ fn management_config_from_info(
                 })
             })?;
 
+            let oidc_issuer = std::env::var("AZURE_MANAGEMENT_OIDC_ISSUER")
+                .ok()
+                .filter(|value| !value.is_empty());
+            let oidc_subject = std::env::var("AZURE_MANAGEMENT_OIDC_SUBJECT")
+                .ok()
+                .filter(|value| !value.is_empty());
+            let management_principal_id = if oidc_issuer.is_none() {
+                Some(azure_info.principal_id)
+            } else {
+                None
+            };
+
             Ok(ManagementConfig::Azure(alien_core::AzureManagementConfig {
                 managing_tenant_id: tenant_id,
-                management_principal_id: azure_info.principal_id,
+                oidc_issuer,
+                oidc_subject,
+                management_principal_id,
             }))
         }
     }

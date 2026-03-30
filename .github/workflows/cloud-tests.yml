@@ -137,6 +137,21 @@ jobs:
             ${{ steps.registries.outputs.azure_container_app_image }}
           provenance: false
 
+      - name: Set up Azure OIDC token
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SUBJECT="repo:${{ github.repository }}:pull_request"
+          else
+            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
+          fi
+          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
+          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
+
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+
       - name: Generate .env.test
         run: ./scripts/gen-env-test.sh
         env:

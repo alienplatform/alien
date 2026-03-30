@@ -83,10 +83,23 @@ async fn load_management_config(ext: &PlatformState) -> Result<Option<Management
                     return Ok(None);
                 }
             };
+            let oidc_issuer = std::env::var("AZURE_MANAGEMENT_OIDC_ISSUER")
+                .ok()
+                .filter(|value| !value.is_empty());
+            let oidc_subject = std::env::var("AZURE_MANAGEMENT_OIDC_SUBJECT")
+                .ok()
+                .filter(|value| !value.is_empty());
+            let management_principal_id = if oidc_issuer.is_none() {
+                Some(azure_info.principal_id)
+            } else {
+                None
+            };
 
             Some(ManagementConfig::Azure(alien_core::AzureManagementConfig {
                 managing_tenant_id: tenant_id,
-                management_principal_id: azure_info.principal_id,
+                oidc_issuer,
+                oidc_subject,
+                management_principal_id,
             }))
         }
     };
@@ -120,7 +133,9 @@ fn convert_management_config_to_sdk(
         ManagementConfig::Azure(azure_config) => {
             ManagerHeartbeatRequestManagementConfig::Variant2 {
                 managing_tenant_id: azure_config.managing_tenant_id,
-                management_principal_id: azure_config.management_principal_id,
+                management_principal_id: azure_config
+                    .management_principal_id
+                    .unwrap_or_else(|| "oidc".to_string()),
                 platform: ManagerHeartbeatRequestManagementConfigVariant2Platform::Azure,
             }
         }

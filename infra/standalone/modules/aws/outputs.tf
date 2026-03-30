@@ -49,3 +49,11 @@ output "ecr_push_role_arn" {
 output "ecr_pull_role_arn" {
   value = aws_iam_role.ecr_pull.arn
 }
+
+output "command_kv_table_name" {
+  value = aws_dynamodb_table.command_kv.name
+}
+
+output "command_kv_table_arn" {
+  value = aws_dynamodb_table.command_kv.arn
+}

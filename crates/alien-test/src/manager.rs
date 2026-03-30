@@ -337,11 +337,16 @@ impl TestManager {
             }
             Platform::Azure => {
                 let mgmt = config.azure_mgmt.as_ref()?;
-                let object_id = mgmt.management_sp_object_id.as_ref()?;
                 Some(alien_core::ManagementConfig::Azure(
                     alien_core::AzureManagementConfig {
                         managing_tenant_id: mgmt.tenant_id.clone(),
-                        management_principal_id: object_id.clone(),
+                        oidc_issuer: mgmt.oidc_issuer.clone(),
+                        oidc_subject: mgmt.oidc_subject.clone(),
+                        management_principal_id: if mgmt.oidc_issuer.is_none() {
+                            mgmt.management_sp_object_id.clone()
+                        } else {
+                            None
+                        },
                     },
                 ))
             }
@@ -399,17 +404,29 @@ impl TestManager {
                         Some(m) => m,
                         None => continue,
                     };
-                    let client_id = match mgmt.management_sp_client_id.as_ref() {
-                        Some(id) => id.clone(),
-                        None => continue,
-                    };
-                    let object_id = match mgmt.management_sp_object_id.as_ref() {
-                        Some(id) => id.clone(),
-                        None => continue,
+                    let (client_id, object_id, resource_id) = if mgmt.oidc_issuer.is_some() {
+                        (
+                            "oidc".to_string(),
+                            "oidc".to_string(),
+                            "oidc".to_string(),
+                        )
+                    } else {
+                        let client_id = match mgmt.management_sp_client_id.as_ref() {
+                            Some(id) => id.clone(),
+                            None => continue,
+                        };
+                        let object_id = match mgmt.management_sp_object_id.as_ref() {
+                            Some(id) => id.clone(),
+                            None => continue,
+                        };
+                        let resource_id = format!(
+                            "/subscriptions/{}/resourceGroups/alien-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
+                            mgmt.subscription_id, client_id
+                        );
+                        (client_id, object_id, resource_id)
                     };
                     // resource_id is not meaningful for SP-based impersonation in
                     // standalone tests, but the binding schema requires it.
-                    let resource_id = format!("/subscriptions/{}/resourceGroups/alien-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}", mgmt.subscription_id, client_id);
                     (
                         "ALIEN_AZURE_MANAGEMENT_BINDING",
                         ServiceAccountBinding::azure_managed_identity(
@@ -518,12 +535,22 @@ impl TestManager {
                         std::env::set_var("AZURE_CLIENT_ID", &mgmt.client_id);
                         std::env::set_var("AZURE_CLIENT_SECRET", &mgmt.client_secret);
                         std::env::set_var("AZURE_REGION", &mgmt.region);
-                        // Management SP secret for impersonate() credential swap
+                        std::env::set_var(
+                            "AZURE_MANAGEMENT_OIDC_ISSUER",
+                            mgmt.oidc_issuer.as_deref().unwrap_or(""),
+                        );
+                        std::env::set_var(
+                            "AZURE_MANAGEMENT_OIDC_SUBJECT",
+                            mgmt.oidc_subject.as_deref().unwrap_or(""),
+                        );
+                        // Management SP secret for local-development fallback impersonation
                         if let Some(ref sp_secret) = mgmt.management_sp_client_secret {
                             std::env::set_var(
                                 "ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET",
                                 sp_secret,
                             );
+                        } else {
+                            std::env::remove_var("ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET");
                         }
                     }
                 }

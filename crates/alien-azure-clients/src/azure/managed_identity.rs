@@ -3,10 +3,10 @@ use crate::azure::models::managed_identity::{CloudError, Identity, IdentityUpdat
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -45,11 +45,51 @@ pub trait ManagedIdentityApi: Send + Sync + std::fmt::Debug {
         identity_update: &IdentityUpdate,
     ) -> Result<Identity>;
 
+    async fn create_or_update_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+        credential: &FederatedIdentityCredential,
+    ) -> Result<FederatedIdentityCredential>;
+
+    async fn get_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<FederatedIdentityCredential>;
+
+    async fn delete_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<()>;
+
     fn build_user_assigned_identity_id(
         &self,
         resource_group_name: &str,
         resource_name: &str,
     ) -> String;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedIdentityCredential {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub properties: Option<FederatedCredentialProperties>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedCredentialProperties {
+    pub issuer: String,
+    pub subject: String,
+    pub audiences: Vec<String>,
 }
 
 // -----------------------------------------------------------------------------
@@ -74,6 +114,38 @@ impl AzureManagedIdentityClient {
             token_cache,
         }
     }
+
+    fn build_user_assigned_identity_url(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> String {
+        self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
+                self.token_cache.config().subscription_id, resource_group_name, resource_name
+            ),
+            Some(vec![("api-version", "2023-01-31".into())]),
+        )
+    }
+
+    fn build_federated_credential_url(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> String {
+        self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}/federatedIdentityCredentials/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                identity_name,
+                credential_name
+            ),
+            Some(vec![("api-version", "2023-01-31".into())]),
+        )
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -91,15 +163,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
-                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.token_cache.config().subscription_id, 
-                resource_group_name, 
-                resource_name
-            ),
-            Some(vec![("api-version", "2023-01-31".into())]),
-        );
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
 
         let body = serde_json::to_string(identity).into_alien_error().context(
             ErrorData::SerializationError {
@@ -165,15 +229,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
-                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.token_cache.config().subscription_id, 
-                resource_group_name, 
-                resource_name
-            ),
-            Some(vec![("api-version", "2023-01-31".into())]),
-        );
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
 
@@ -198,15 +254,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
-                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.token_cache.config().subscription_id, 
-                resource_group_name, 
-                resource_name
-            ),
-            Some(vec![("api-version", "2023-01-31".into())]),
-        );
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
 
@@ -260,15 +308,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
-            &format!(
-                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                &self.token_cache.config().subscription_id, 
-                resource_group_name, 
-                resource_name
-            ),
-            Some(vec![("api-version", "2023-01-31".into())]),
-        );
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
 
         let body = serde_json::to_string(identity_update)
             .into_alien_error()
@@ -321,6 +361,154 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
         )?;
 
         Ok(identity)
+    }
+
+    async fn create_or_update_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+        credential: &FederatedIdentityCredential,
+    ) -> Result<FederatedIdentityCredential> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url =
+            self.build_federated_credential_url(resource_group_name, identity_name, credential_name);
+
+        let body = serde_json::to_string(credential)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize federated credential '{}'",
+                    credential_name
+                ),
+            })?;
+
+        let request_body = body.clone();
+        let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "CreateOrUpdateFederatedCredential", credential_name)
+            .await?;
+
+        let response_body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateFederatedCredential: failed to read response body for {}",
+                    credential_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: Some(request_body.clone()),
+                http_response_text: None,
+            })?;
+
+        let credential = serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateFederatedCredential: JSON parse error for {}",
+                    credential_name
+                ),
+                url,
+                http_status: 200,
+                http_request_text: Some(request_body),
+                http_response_text: Some(response_body),
+            })?;
+
+        Ok(credential)
+    }
+
+    async fn get_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<FederatedIdentityCredential> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url =
+            self.build_federated_credential_url(resource_group_name, identity_name, credential_name);
+
+        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetFederatedCredential", credential_name)
+            .await?;
+
+        let response_body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetFederatedCredential: failed to read response body for {}",
+                    credential_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: None,
+            })?;
+
+        let credential = serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetFederatedCredential: JSON parse error for {}",
+                    credential_name
+                ),
+                url,
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(response_body),
+            })?;
+
+        Ok(credential)
+    }
+
+    async fn delete_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<()> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url =
+            self.build_federated_credential_url(resource_group_name, identity_name, credential_name);
+
+        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let _resp = self
+            .base
+            .execute_request(signed, "DeleteFederatedCredential", credential_name)
+            .await?;
+
+        Ok(())
     }
 
     /// Build the Azure resource ID for a user assigned identity
