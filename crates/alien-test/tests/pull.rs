@@ -37,7 +37,7 @@ async fn pull_kubernetes_rust(ctx: &mut K8sPullRust) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, false)
         .await
         .expect("command checks failed");
 }
@@ -50,7 +50,7 @@ async fn pull_kubernetes_typescript(ctx: &mut K8sPullTypeScript) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, false)
         .await
         .expect("command checks failed");
 }
@@ -67,7 +67,7 @@ async fn pull_local_rust(ctx: &mut LocalPullRust) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, false)
         .await
         .expect("command checks failed");
 }
@@ -80,7 +80,7 @@ async fn pull_local_typescript(ctx: &mut LocalPullTypeScript) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, false)
         .await
         .expect("command checks failed");
 }

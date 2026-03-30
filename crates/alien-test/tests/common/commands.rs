@@ -8,12 +8,21 @@ use anyhow::bail;
 use tracing::info;
 
 /// Run all command checks against the deployment.
-pub async fn check_commands(deployment: &TestDeployment) -> anyhow::Result<()> {
+///
+/// `skip_large_payload`: set to true for push-mode cloud deployments where the
+/// test manager uses local command storage that Lambda/Cloud Run can't access.
+pub async fn check_commands(
+    deployment: &TestDeployment,
+    skip_large_payload: bool,
+) -> anyhow::Result<()> {
     check_command_echo(deployment).await?;
     check_command_small_payload(deployment).await?;
-    // Large payload commands are skipped for local deployments since
-    // local dev mode has response size limitations.
-    if deployment.platform != "local" {
+    if skip_large_payload || deployment.platform == "local" {
+        info!(
+            "Skipping large payload command check (platform={}, skip_large_payload={})",
+            deployment.platform, skip_large_payload
+        );
+    } else {
         check_command_large_payload(deployment).await?;
     }
     Ok(())

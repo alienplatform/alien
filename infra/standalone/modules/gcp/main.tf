@@ -141,6 +141,18 @@ resource "google_project_iam_member" "target_owner" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
+# The target SA needs access to the management project because push_initial_setup()
+# runs the deployment step loop with target credentials. Steps like service activation
+# operate on both projects, so the target SA must be able to call serviceusage APIs
+# (and other resource-management APIs) on the management project.
+# Dedicated test project — roles/owner is safe here.
+resource "google_project_iam_member" "target_management_access" {
+  provider = google.management
+  project  = var.management_project_id
+  role     = "roles/owner"
+  member   = "serviceAccount:${google_service_account.target.email}"
+}
+
 locals {
   registry_host    = "${var.management_region}-docker.pkg.dev"
   image_repository = "${local.registry_host}/${var.management_project_id}/alien-test/http-server"

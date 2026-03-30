@@ -33,7 +33,7 @@ async fn push_aws_rust(ctx: &mut AwsPushRust) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
@@ -46,7 +46,7 @@ async fn push_aws_typescript(ctx: &mut AwsPushTypeScript) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
@@ -63,7 +63,7 @@ async fn push_gcp_rust(ctx: &mut GcpPushRust) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
@@ -76,7 +76,7 @@ async fn push_gcp_typescript(ctx: &mut GcpPushTypeScript) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
@@ -93,7 +93,7 @@ async fn push_azure_rust(ctx: &mut AzurePushRust) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
@@ -106,7 +106,7 @@ async fn push_azure_typescript(ctx: &mut AzurePushTypeScript) {
     common::runner::check_all_bindings(&ctx.ctx.deployment, ctx.ctx.platform, ctx.ctx.model)
         .await
         .expect("binding checks failed");
-    common::commands::check_commands(&ctx.ctx.deployment)
+    common::commands::check_commands(&ctx.ctx.deployment, true)
         .await
         .expect("command checks failed");
 }
