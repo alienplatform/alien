@@ -172,19 +172,24 @@ impl GcpRemoteStackManagementController {
 
         let permission_sets = Self::resolve_management_permission_sets(ctx)?;
 
-        // Only provision permission sets (ID ends with "/provision") need project-level IAM
-        // bindings. Non-provision sets (management, heartbeat, etc.) are applied by resource
-        // controllers via resource-level IAM, so they don't need project-level binding here.
-        let provision_sets: Vec<_> = permission_sets
+        // Provision and management permission sets need project-level IAM bindings.
+        // Provision sets are needed for resource lifecycle (create/delete).
+        // Management sets are needed for ongoing management operations during Provisioning
+        // (update, heartbeat checks, etc.) when using the management service account.
+        // Other sets (heartbeat, invoke, etc.) are applied by resource controllers
+        // via resource-level IAM.
+        let stack_sets: Vec<_> = permission_sets
             .into_iter()
-            .filter(|ps| ps.id.ends_with("/provision"))
+            .filter(|ps| {
+                ps.id.ends_with("/provision") || ps.id.ends_with("/management")
+            })
             .collect();
 
-        if !provision_sets.is_empty() {
+        if !stack_sets.is_empty() {
             info!(
                 service_account_email = %service_account_email,
-                provision_sets_count = provision_sets.len(),
-                "Binding provision permission-set roles to service account at project level"
+                stack_sets_count = stack_sets.len(),
+                "Binding provision and management permission-set roles to service account at project level"
             );
 
             let generator = GcpRuntimePermissionsGenerator::new();
@@ -207,7 +212,7 @@ impl GcpRemoteStackManagementController {
 
             let mut new_bindings = Vec::new();
 
-            for permission_set in &provision_sets {
+            for permission_set in &stack_sets {
                 let bindings = generator
                     .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
                     .context(ErrorData::InfrastructureError {
