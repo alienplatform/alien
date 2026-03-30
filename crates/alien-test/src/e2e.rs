@@ -793,30 +793,21 @@ async fn extract_rsm_sa_email(
         .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
 
     if let Some(ref state) = resp.stack_state {
-        // Log the top-level keys to debug JSON structure
+        // The API's stack_state field contains the StackState directly (not DeploymentState).
+        // StackState uses camelCase, so "resources" is the key. RSM outputs also use
+        // camelCase: "accessConfiguration" (not snake_case).
         if let Some(obj) = state.as_object() {
             let keys: Vec<&String> = obj.keys().collect();
             info!(?keys, "stack_state top-level keys");
         }
 
-        // DeploymentState uses camelCase: the StackState is under "stackState",
-        // and RSM outputs use "accessConfiguration" (not snake_case).
-        let stack_state_value = state.get("stackState");
-        if stack_state_value.is_none() {
-            info!("No 'stackState' key in deployment state");
-        }
-
-        if let Some(resources) = stack_state_value
-            .and_then(|ss| ss.get("resources"))
-            .and_then(|v| v.as_object())
-        {
+        if let Some(resources) = state.get("resources").and_then(|v| v.as_object()) {
             let resource_ids: Vec<&String> = resources.keys().collect();
             info!(?resource_ids, "Resources in stack state");
 
             for (id, resource) in resources {
                 let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if resource_type == "remote-stack-management" {
-                    // Log the full outputs for debugging
                     let outputs = resource.get("outputs");
                     info!(resource_id = %id, ?outputs, "Found RSM resource outputs");
 
