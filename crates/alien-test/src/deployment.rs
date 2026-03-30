@@ -216,10 +216,11 @@ impl TestDeployment {
 
             match state {
                 "SUCCEEDED" => {
-                    // Extract inline response
+                    // Extract inline response from CommandResponse::Success
+                    // Structure: { response: { status: "success", response: { mode: "inline", inlineBase64: "..." } } }
                     if let Some(response) = status_data.get("response") {
                         if let Some(inline_b64) = response
-                            .get("body")
+                            .get("response")
                             .and_then(|b| b.get("inlineBase64"))
                             .and_then(|v| v.as_str())
                         {
