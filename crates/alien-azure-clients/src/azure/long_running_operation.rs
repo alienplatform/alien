@@ -40,6 +40,11 @@ pub struct LongRunningOperation {
     pub url: String,
     /// Optional retry delay as suggested by the server
     pub retry_after: Option<Duration>,
+    /// Optional Location header URL for retrieving the final operation result.
+    /// For POST LROs, the Azure-AsyncOperation URL returns only status metadata;
+    /// the actual result must be fetched from the Location URL after completion.
+    #[serde(default)]
+    pub location_url: Option<String>,
 }
 
 impl LongRunningOperation {
@@ -50,27 +55,50 @@ impl LongRunningOperation {
     pub fn from_response_headers(response: &Response) -> Result<Option<LongRunningOperation>> {
         let headers = response.headers();
 
-        // First, look for Azure-AsyncOperation header
-        let url = if let Some(async_op) = headers.get("azure-asyncoperation") {
-            async_op
-                .to_str()
-                .into_alien_error()
-                .context(ErrorData::SerializationError {
-                    message: "Failed to serialize Azure-AsyncOperation header".to_string(),
-                })?
-                .to_string()
-        } else if let Some(location) = headers.get("location") {
-            // Fall back to Location header
-            location
-                .to_str()
-                .into_alien_error()
-                .context(ErrorData::SerializationError {
-                    message: "Failed to serialize Location header".to_string(),
-                })?
-                .to_string()
+        // Parse Azure-AsyncOperation header (preferred for polling)
+        let async_op_url = if let Some(async_op) = headers.get("azure-asyncoperation") {
+            Some(
+                async_op
+                    .to_str()
+                    .into_alien_error()
+                    .context(ErrorData::SerializationError {
+                        message: "Failed to parse Azure-AsyncOperation header".to_string(),
+                    })?
+                    .to_string(),
+            )
         } else {
-            // No long-running operation headers found
-            return Ok(None);
+            None
+        };
+
+        // Parse Location header (used for final result retrieval on POST LROs)
+        let location_url = if let Some(location) = headers.get("location") {
+            Some(
+                location
+                    .to_str()
+                    .into_alien_error()
+                    .context(ErrorData::SerializationError {
+                        message: "Failed to parse Location header".to_string(),
+                    })?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        // Use Azure-AsyncOperation for polling; fall back to Location
+        let url = match (&async_op_url, &location_url) {
+            (Some(url), _) => url.clone(),
+            (None, Some(url)) => url.clone(),
+            (None, None) => return Ok(None),
+        };
+
+        // When Azure-AsyncOperation is used for polling, keep Location separately
+        // so callers can GET the actual result after the operation completes.
+        let location_url = if async_op_url.is_some() {
+            location_url
+        } else {
+            // Location is already the polling URL, no separate result URL
+            None
         };
 
         // Parse Retry-After header if present
@@ -78,13 +106,13 @@ impl LongRunningOperation {
             if let Some(retry_header) = headers.get("retry-after") {
                 let retry_str = retry_header.to_str().into_alien_error().context(
                     ErrorData::SerializationError {
-                        message: "Failed to serialize Retry-After header".to_string(),
+                        message: "Failed to parse Retry-After header".to_string(),
                     },
                 )?;
 
                 let seconds: u64 = retry_str.parse().into_alien_error().context(
                     ErrorData::SerializationError {
-                        message: "Failed to serialize Retry-After header as seconds".to_string(),
+                        message: "Failed to parse Retry-After header as seconds".to_string(),
                     },
                 )?;
 
@@ -93,7 +121,11 @@ impl LongRunningOperation {
                 None
             };
 
-        Ok(Some(LongRunningOperation { url, retry_after }))
+        Ok(Some(LongRunningOperation {
+            url,
+            retry_after,
+            location_url,
+        }))
     }
 }
 
@@ -157,6 +189,72 @@ impl LongRunningOperationClient {
             ),
             token_cache,
         }
+    }
+
+    /// Fetches the final result of a completed LRO from its Location URL.
+    ///
+    /// For POST action LROs, Azure-AsyncOperation returns only status metadata.
+    /// The actual operation result must be fetched via GET on the Location URL
+    /// after the operation completes.
+    pub async fn fetch_location_result<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: &LongRunningOperation,
+        operation_name: &str,
+        resource_name: &str,
+    ) -> Result<T> {
+        let location_url = operation.location_url.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Azure {operation_name} for '{resource_name}': \
+                     no Location URL available to fetch the operation result"
+                ),
+            })
+        })?;
+
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let req = AzureRequestBuilder::new(Method::GET, location_url.clone()).build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .client
+            .execute(signed)
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!(
+                    "Azure {operation_name}: failed to fetch result from Location URL"
+                ),
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.into_alien_error().context(
+            ErrorData::HttpRequestFailed {
+                message: format!(
+                    "Azure {operation_name}: failed to read Location URL response body"
+                ),
+            },
+        )?;
+
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Azure {operation_name} for '{resource_name}': \
+                     Location URL returned {status}. Body: {body}"
+                ),
+            }));
+        }
+
+        serde_json::from_str(&body).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Azure {operation_name}: failed to parse result from Location URL. Body: {body}"
+                ),
+            },
+        )
     }
 }
 

@@ -305,6 +305,7 @@ impl AzureFunctionController {
         let lro = LongRunningOperation {
             url: operation_url.clone(),
             retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
         };
 
         // Poll ARM operation.
@@ -1197,6 +1198,7 @@ impl AzureFunctionController {
         let lro = LongRunningOperation {
             url: operation_url,
             retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
         };
 
         let op_status = operation_client
@@ -1596,6 +1598,7 @@ impl AzureFunctionController {
         let lro = LongRunningOperation {
             url: operation_url,
             retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
         };
 
         let op_status = operation_client
@@ -2689,6 +2692,7 @@ mod tests {
                     url: "https://management.azure.com/subscriptions/.../operations/test-op"
                         .to_string(),
                     retry_after: Some(Duration::from_millis(10)),
+                    location_url: None,
                 }))
             });
 

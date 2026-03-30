@@ -14,7 +14,7 @@ use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
 use alien_core::{Function, FunctionCode, Platform};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::TestConfig;
 
@@ -431,39 +431,42 @@ async fn ensure_azure_acr_cross_account_access(
         .map_err(|e| anyhow::anyhow!("Failed to generate ACR credentials: {}", e))?;
 
     // Extract the password from the generateCredentials response directly.
-    // Azure only returns the password `value` in the generateCredentials response itself —
-    // subsequent GET on the token does NOT include the password value.
-    let password = match cred_op {
-        OperationResult::Completed(result) => result
-            .passwords
-            .into_iter()
-            .find_map(|p| p.value)
-            .context("generateCredentials completed but returned no password value")?,
+    // Azure only returns the password `value` in the generateCredentials response —
+    // subsequent GET on the token does NOT include the password value (by design).
+    let cred_result = match cred_op {
+        OperationResult::Completed(result) => result,
         OperationResult::LongRunning(lro) => {
-            let body = lro_client
+            // Poll Azure-AsyncOperation until status is "Succeeded".
+            lro_client
                 .wait_for_completion(&lro, "GenerateCredentials", token_name)
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!("Failed waiting for credential generation: {}", e)
                 })?;
 
-            // The LRO status body may or may not contain the credentials.
-            // Try parsing it; if it doesn't have password values, re-fetch the
-            // token as a last resort (though Azure typically omits the value on GET).
-            serde_json::from_str::<GenerateCredentialsResult>(&body)
-                .ok()
-                .and_then(|r| r.passwords.into_iter().find_map(|p| p.value))
-                .or_else(|| {
-                    warn!("LRO status body did not contain password values, trying GET on token");
-                    None
-                })
-                .context(
-                    "generateCredentials LRO completed but password value not found in \
-                     the operation status response. Azure only returns password values \
-                     in the initial generateCredentials response body.",
-                )?
+            // For POST LROs, Azure-AsyncOperation returns only status metadata.
+            // The actual result must be fetched from the Location URL.
+            lro_client
+                .fetch_location_result::<GenerateCredentialsResult>(
+                    &lro,
+                    "GenerateCredentials",
+                    token_name,
+                )
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to fetch credential result from Location URL: {}",
+                        e
+                    )
+                })?
         }
     };
+
+    let password = cred_result
+        .passwords
+        .into_iter()
+        .find_map(|p| p.value)
+        .context("generateCredentials returned no password value")?;
 
     let username = token_name.to_string();
 
