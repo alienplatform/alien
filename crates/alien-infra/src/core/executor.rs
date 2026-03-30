@@ -1103,6 +1103,14 @@ impl StackExecutor {
                 }
             }
 
+            // When a lifecycle filter is active, skip heartbeat checks for resources
+            // outside the executor's scope. For example, during Provisioning (Live-only),
+            // frozen resources are already Running from InitialSetup and should not be
+            // stepped — they may use different credentials than what the current executor has.
+            if self.lifecycle_filter.is_some() && !self.resources.contains_key(resource_id) {
+                continue;
+            }
+
             let is_actively_modifying = matches!(
                 current_resource_view.status,
                 ResourceStatus::Updating | ResourceStatus::Deleting

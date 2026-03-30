@@ -794,24 +794,13 @@ async fn extract_rsm_sa_email(
 
     if let Some(ref state) = resp.stack_state {
         // The API's stack_state field contains the StackState directly (not DeploymentState).
-        // StackState uses camelCase, so "resources" is the key. RSM outputs also use
-        // camelCase: "accessConfiguration" (not snake_case).
-        if let Some(obj) = state.as_object() {
-            let keys: Vec<&String> = obj.keys().collect();
-            info!(?keys, "stack_state top-level keys");
-        }
-
+        // StackState uses camelCase: "accessConfiguration" (not snake_case).
         if let Some(resources) = state.get("resources").and_then(|v| v.as_object()) {
-            let resource_ids: Vec<&String> = resources.keys().collect();
-            info!(?resource_ids, "Resources in stack state");
-
-            for (id, resource) in resources {
+            for (_id, resource) in resources {
                 let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if resource_type == "remote-stack-management" {
-                    let outputs = resource.get("outputs");
-                    info!(resource_id = %id, ?outputs, "Found RSM resource outputs");
-
-                    if let Some(email) = outputs
+                    if let Some(email) = resource
+                        .get("outputs")
                         .and_then(|o| o.get("accessConfiguration"))
                         .and_then(|v| v.as_str())
                     {
@@ -821,8 +810,6 @@ async fn extract_rsm_sa_email(
                 }
             }
         }
-    } else {
-        info!("No stack_state in deployment response");
     }
 
     info!("No RSM SA email found in deployment state");
