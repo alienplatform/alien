@@ -100,12 +100,15 @@ pub async fn handle_initial_setup(
         next.stack_state = Some(step_result.next_state);
         next.runtime_metadata = Some(runtime_metadata);
 
-        // Don't carry suggested_delay when transitioning phases - that delay is for heartbeat
-        // polling within a phase, not for blocking the next phase
+        // Add a short delay before starting Provisioning to allow AWS IAM inline
+        // policies (applied during InitialSetup via ApplyingResourcePermissions) to
+        // propagate. IAM eventual consistency can take up to ~60s, but typically
+        // settles within 10s. Without this delay, Provisioning may start immediately
+        // and hit AccessDenied on the management role for newly-attached policies.
         DeploymentStepResult {
             state: next,
             error: None,
-            suggested_delay_ms: None,
+            suggested_delay_ms: Some(10_000),
             update_heartbeat: false,
         }
     } else if stack_status == StackStatus::Failure {
