@@ -333,11 +333,15 @@ impl GcpClientConfigExt for GcpClientConfig {
         self
     }
 
-    /// Generates a JWT token from service account credentials
+    /// Generates an OAuth2 access token from service account credentials.
+    ///
+    /// Creates a JWT assertion signed with the SA private key, then exchanges it
+    /// at Google's OAuth2 token endpoint for an access token with
+    /// `cloud-platform` scope.
     async fn generate_jwt_token(
         &self,
         service_account_json: &str,
-        audience: &str,
+        _audience: &str,
     ) -> Result<String> {
         use jwt_simple::prelude::*;
 
@@ -356,11 +360,21 @@ impl GcpClientConfigExt for GcpClientConfig {
                 errors: None,
             })?;
 
-        // Create JWT claims
-        let claims = Claims::create(Duration::from_secs(3600))
+        // Create JWT claims for the OAuth2 token exchange.
+        // The audience is Google's token endpoint; the scope claim requests
+        // broad cloud-platform access (individual API permissions are governed
+        // by IAM, not the token scope).
+        let mut extra = HashMap::new();
+        extra.insert(
+            "scope".to_string(),
+            serde_json::Value::String(
+                "https://www.googleapis.com/auth/cloud-platform".to_string(),
+            ),
+        );
+        let claims = Claims::with_custom_claims(extra, Duration::from_secs(3600))
             .with_issuer(&service_account.client_email)
             .with_subject(&service_account.client_email)
-            .with_audience(audience);
+            .with_audience("https://oauth2.googleapis.com/token");
 
         // Parse the private key and set the key_id
         let key_pair = RS256KeyPair::from_pem(&service_account.private_key)
@@ -375,14 +389,63 @@ impl GcpClientConfigExt for GcpClientConfig {
             })?
             .with_key_id(&service_account.private_key_id);
 
-        // Sign the JWT (key_id will be automatically included in the header)
-        let token = key_pair.sign(claims).map_err(|e| {
+        // Sign the JWT assertion
+        let assertion = key_pair.sign(claims).map_err(|e| {
             AlienError::new(ErrorData::RequestSignError {
                 message: format!("Failed to sign JWT token: {}", e),
             })
         })?;
 
-        Ok(token)
+        // Exchange the JWT assertion for an OAuth2 access token
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+        }
+
+        let client = Client::new();
+        let response = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&[
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                ),
+                ("assertion", &assertion),
+            ])
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to exchange JWT for access token".to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!(
+                    "OAuth2 token exchange failed with status {}: {}",
+                    status, error_text
+                ),
+                url: "https://oauth2.googleapis.com/token".to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(error_text),
+            }));
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to parse OAuth2 token response".to_string(),
+            })?;
+
+        Ok(token_response.access_token)
     }
 
     /// Builds a GCP SDK config from the stored configuration.
