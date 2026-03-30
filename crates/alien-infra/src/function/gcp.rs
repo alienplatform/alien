@@ -259,12 +259,30 @@ impl GcpFunctionController {
         });
 
         if !is_ready {
-            debug!(name=%service_name, "Service not yet ready after creation, waiting");
-            // 120 attempts × 5s = 10 minutes. Cloud Run services that pull from
-            // cross-project Artifact Registry may take several minutes while
-            // freshly-granted IAM bindings propagate.
+            // Log condition details at info level to aid debugging slow deployments
+            let condition_summary: Vec<String> = service
+                .conditions
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}={:?} (reason={:?}, message={})",
+                        c.r#type.as_deref().unwrap_or("?"),
+                        c.state,
+                        c.reason,
+                        c.message.as_deref().unwrap_or("")
+                    )
+                })
+                .collect();
+            info!(
+                name=%service_name,
+                conditions=?condition_summary,
+                "Service not yet ready after creation, waiting"
+            );
+            // 240 attempts × ~9s (5s suggested + API latency) ≈ 36 minutes.
+            // Cloud Run services that pull from cross-project Artifact Registry
+            // may take 10-20 minutes while freshly-granted IAM bindings propagate.
             return Ok(HandlerAction::Stay {
-                max_times: 120,
+                max_times: 240,
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }

@@ -122,7 +122,7 @@ pub struct StackExecutor {
     deployment_config: alien_core::DeploymentConfig,
 }
 
-const MAX_RETRIES: u32 = 5;
+const MAX_RETRIES: u32 = 10;
 
 /// Configuration for creating a [`StackExecutor`] via the builder pattern.
 ///

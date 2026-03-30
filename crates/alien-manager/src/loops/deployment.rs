@@ -324,14 +324,21 @@ impl DeploymentLoop {
                         break;
                     }
 
-                    // If step suggests a delay above threshold, yield to next tick.
+                    // If step suggests a delay above threshold, actually sleep for that
+                    // duration before yielding to the next tick. This is critical for
+                    // phase transitions like InitialSetup → Provisioning where AWS IAM
+                    // inline policies need time to propagate (eventual consistency).
                     if let Some(delay_ms) = result.suggested_delay_ms {
                         if delay_ms > SUGGESTED_DELAY_THRESHOLD_MS {
+                            // Cap at 60s to prevent pathological delays
+                            let sleep_ms = delay_ms.min(60_000);
                             debug!(
                                 deployment_id = %deployment_id,
                                 delay_ms = delay_ms,
-                                "Step suggests delay, yielding to next tick"
+                                sleep_ms = sleep_ms,
+                                "Step suggests delay, sleeping before next tick"
                             );
+                            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
                             break;
                         }
                     }
