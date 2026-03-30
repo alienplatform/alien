@@ -260,8 +260,11 @@ impl GcpFunctionController {
 
         if !is_ready {
             debug!(name=%service_name, "Service not yet ready after creation, waiting");
+            // 120 attempts × 5s = 10 minutes. Cloud Run services that pull from
+            // cross-project Artifact Registry may take several minutes while
+            // freshly-granted IAM bindings propagate.
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: 120,
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }

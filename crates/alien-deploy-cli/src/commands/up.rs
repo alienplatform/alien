@@ -566,18 +566,26 @@ pub async fn push_initial_setup(
         match client.get_release().id(release_id).send().await {
             Ok(resp) => {
                 let rel = resp.into_inner();
-                let stack_by_platform = serde_json::to_value(&rel.stack)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: "Failed to serialize release stack".to_string(),
-                    })?;
                 // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
-                // Extract the inner stack for the target platform.
-                let inner_stack_value = stack_by_platform
-                    .get(platform.as_str())
-                    .cloned()
-                    .unwrap_or(stack_by_platform);
-                let stack = serde_json::from_value(inner_stack_value)
+                // Extract the inner stack value for the target platform.
+                let platform_stack_value = match platform {
+                    Platform::Aws => rel.stack.aws,
+                    Platform::Gcp => rel.stack.gcp,
+                    Platform::Azure => rel.stack.azure,
+                    Platform::Kubernetes => rel.stack.kubernetes,
+                    Platform::Local => rel.stack.local,
+                    Platform::Test => rel.stack.test,
+                }
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Release {} has no stack for platform {}",
+                            release_id,
+                            platform.as_str()
+                        ),
+                    })
+                })?;
+                let stack = serde_json::from_value(platform_stack_value)
                     .into_alien_error()
                     .context(ErrorData::ConfigurationError {
                         message: "Failed to parse release stack".to_string(),
@@ -655,36 +663,48 @@ pub async fn push_initial_setup(
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;
 
     // Always reconcile + release, even on error
+    let state_json = serde_json::to_value(&state).unwrap_or_default();
     let sdk_state: alien_manager_api::types::DeploymentState =
-        serde_json::from_value(serde_json::to_value(&state).unwrap_or_default())
-            .unwrap_or_else(|_| {
-                // Fallback: use a minimal state so reconcile doesn't fail
-                serde_json::from_value(serde_json::json!({
-                    "status": "initial-setup-failed",
-                    "platform": platform.as_str(),
-                }))
-                .unwrap()
-            });
+        serde_json::from_value(state_json.clone()).unwrap_or_else(|e| {
+            tracing::error!(
+                "Failed to convert deployment state to SDK type: {e}. State JSON: {}",
+                serde_json::to_string_pretty(&state_json).unwrap_or_default()
+            );
+            // Fallback: use a minimal state so reconcile doesn't fail
+            serde_json::from_value(serde_json::json!({
+                "status": "initial-setup-failed",
+                "platform": platform.as_str(),
+            }))
+            .unwrap()
+        });
 
-    let _ = client
+    if let Err(e) = client
         .reconcile()
         .body(alien_manager_api::types::ReconcileRequest {
             deployment_id: deployment_id.to_string(),
             session: session.clone(),
             state: sdk_state,
-            update_heartbeat: None,
+            update_heartbeat: Some(false),
         })
         .send()
-        .await;
+        .await
+    {
+        tracing::error!("Failed to reconcile deployment state: {e}");
+        output::error(&format!("Failed to reconcile deployment state: {e}"));
+    }
 
-    let _ = client
+    if let Err(e) = client
         .release()
         .body(alien_manager_api::types::ReleaseRequest {
             deployment_id: deployment_id.to_string(),
             session: session.clone(),
         })
         .send()
-        .await;
+        .await
+    {
+        tracing::error!("Failed to release sync lock: {e}");
+        output::error(&format!("Failed to release sync lock: {e}"));
+    }
 
     result
 }

@@ -7,7 +7,12 @@ use axum::{
     routing::post,
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a bool that may be `null` (treat null as false).
+fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Option::<bool>::deserialize(deserializer).map(|opt| opt.unwrap_or(false))
+}
 
 use alien_core::{
     sync::TargetDeployment, DeploymentConfig, DeploymentState, EnvironmentVariable,
@@ -64,7 +69,7 @@ pub struct ReconcileRequest {
     pub deployment_id: String,
     pub session: String,
     pub state: DeploymentState,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_or_null")]
     pub update_heartbeat: bool,
     #[serde(default)]
     pub error: Option<serde_json::Value>,
