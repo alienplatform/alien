@@ -146,6 +146,40 @@ async fn handle_request(
         return handle_cloudevent(request, &event_type, &state).await;
     }
 
+    // Check for Pub/Sub push message (non-CloudEvent format).
+    // Pub/Sub push subscriptions send POST requests with a JSON body containing
+    // "message" and "subscription" fields, without CloudEvent headers.
+    if method == axum::http::Method::POST && path == "/" {
+        // Peek at the body to check for PubSub push format
+        let (parts, body) = request.into_parts();
+        let body_bytes = match body.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                error!(error = %e, "Failed to read request body");
+                return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
+            }
+        };
+
+        if let Ok(push_msg) = serde_json::from_slice::<PubSubPushMessage>(&body_bytes) {
+            if push_msg.subscription.is_some() {
+                debug!(
+                    subscription = ?push_msg.subscription,
+                    "Detected Pub/Sub push message"
+                );
+                return handle_pubsub_push_message(push_msg, &state).await;
+            }
+        }
+
+        // Not a PubSub push message — reconstruct request and forward to app
+        let request = Request::from_parts(parts, Body::from(body_bytes));
+        if let Some(app_port) = state.app_http_port {
+            return forward_http_request(&state.http_client, request, app_port).await;
+        }
+
+        error!("No app HTTP port registered");
+        return (StatusCode::SERVICE_UNAVAILABLE, "No application registered").into_response();
+    }
+
     // Forward HTTP request to app
     if let Some(app_port) = state.app_http_port {
         return forward_http_request(&state.http_client, request, app_port).await;
@@ -375,6 +409,83 @@ async fn handle_arc_command(
             submit_arc_response_direct(arc_command, error_response).await
         }
     }
+}
+
+/// Pub/Sub push message format (non-CloudEvent)
+#[derive(serde::Deserialize)]
+struct PubSubPushMessage {
+    message: PubSubPushMessageData,
+    subscription: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PubSubPushMessageData {
+    /// Base64-encoded message data
+    data: Option<String>,
+    /// Message attributes
+    attributes: Option<std::collections::HashMap<String, String>>,
+    /// Message ID
+    message_id: Option<String>,
+}
+
+/// Handle a Pub/Sub push message (non-CloudEvent format)
+async fn handle_pubsub_push_message(
+    push_msg: PubSubPushMessage,
+    state: &TransportState,
+) -> Response<Body> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let data = match &push_msg.message.data {
+        Some(d) => match general_purpose::STANDARD.decode(d) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                error!(error = %e, "Failed to decode Pub/Sub message data");
+                return (StatusCode::BAD_REQUEST, "Invalid message data").into_response();
+            }
+        },
+        None => Vec::new(),
+    };
+
+    let attributes = push_msg.message.attributes.unwrap_or_default();
+    let message_id = push_msg
+        .message
+        .message_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Convert to QueueMessage and check if it's a command envelope
+    let payload: alien_core::MessagePayload = match serde_json::from_slice(&data) {
+        Ok(json) => alien_core::MessagePayload::Json(json),
+        Err(_) => alien_core::MessagePayload::Text(String::from_utf8_lossy(&data).to_string()),
+    };
+
+    let source = push_msg.subscription.unwrap_or_default();
+
+    let qm = alien_core::QueueMessage {
+        id: message_id,
+        payload,
+        receipt_handle: String::new(),
+        timestamp: Utc::now(),
+        source,
+        attributes,
+        attempt_count: None,
+    };
+
+    if let Some(arc_command) = try_parse_arc_envelope(&qm) {
+        debug!(command_id = %arc_command.command_id, "Pub/Sub push message is a command envelope");
+        if let Err(e) = handle_arc_command(&arc_command, state).await {
+            error!(error = %e, "Failed to handle ARC command from Pub/Sub push");
+        }
+    } else {
+        // Regular queue message
+        if let Err(e) = send_queue_message(&qm, state).await {
+            error!(error = %e, "Failed to send queue message from Pub/Sub push");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process message")
+                .into_response();
+        }
+    }
+
+    StatusCode::OK.into_response()
 }
 
 /// Send a queue message to the application

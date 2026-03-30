@@ -1001,37 +1001,46 @@ impl GcpFunctionController {
 
         let push_endpoint = format!("{}/", service_url.trim_end_matches('/'));
 
-        // Get service account email for OIDC authentication
-        let service_account_id = format!("{}-sa", cfg.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
+        // Only use OIDC authentication on the push subscription when the function
+        // is private. Public functions have invoker_iam_disabled=true on the Cloud
+        // Run service, so PubSub can deliver without authentication. Using OIDC on
+        // public functions would require the PubSub service agent to have
+        // roles/iam.serviceAccountTokenCreator on the execution SA, which adds
+        // unnecessary complexity.
+        let oidc_token = if cfg.ingress != Ingress::Public {
+            let service_account_id = format!("{}-sa", cfg.get_permissions());
+            let service_account_ref = ResourceRef::new(
+                alien_core::ServiceAccount::RESOURCE_TYPE,
+                service_account_id.to_string(),
+            );
 
-        let service_account_state = ctx
-            .require_dependency::<crate::service_account::GcpServiceAccountController>(
-                &service_account_ref,
-            )?;
-        let service_account_email = service_account_state
-            .service_account_email
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: cfg.id().to_string(),
-                    dependency_id: service_account_id.to_string(),
-                })
-            })?
-            .to_string();
+            let service_account_state = ctx
+                .require_dependency::<crate::service_account::GcpServiceAccountController>(
+                    &service_account_ref,
+                )?;
+            let service_account_email = service_account_state
+                .service_account_email
+                .as_deref()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: cfg.id().to_string(),
+                        dependency_id: service_account_id.to_string(),
+                    })
+                })?
+                .to_string();
 
-        let oidc_token = OidcToken {
-            service_account_email: service_account_email.clone(),
-            audience: Some(push_endpoint.clone()),
+            Some(OidcToken {
+                service_account_email,
+                audience: Some(push_endpoint.clone()),
+            })
+        } else {
+            None
         };
 
         let push_config = PushConfig {
             push_endpoint: Some(push_endpoint.clone()),
             attributes: Some(std::collections::HashMap::new()),
-            oidc_token: Some(oidc_token),
+            oidc_token,
             pubsub_wrapper: None,
             no_wrapper: None,
         };
