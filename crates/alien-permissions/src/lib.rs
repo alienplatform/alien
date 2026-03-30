@@ -26,6 +26,9 @@ pub struct PermissionContext {
     pub resource_group: Option<String>,
     pub storage_account_name: Option<String>,
 
+    // GCP cross-project management variables
+    pub managing_project_id: Option<String>,
+
     // Azure cross-subscription management variables
     pub managing_subscription_id: Option<String>,
     pub managing_resource_group: Option<String>,
@@ -52,6 +55,7 @@ impl PermissionContext {
             subscription_id: None,
             resource_group: None,
             storage_account_name: None,
+            managing_project_id: None,
             managing_subscription_id: None,
             managing_resource_group: None,
             stack_prefix: None,
@@ -109,6 +113,12 @@ impl PermissionContext {
     /// Builder pattern for Azure storage account name
     pub fn with_storage_account_name(mut self, storage_account_name: impl Into<String>) -> Self {
         self.storage_account_name = Some(storage_account_name.into());
+        self
+    }
+
+    /// Builder pattern for GCP managing project ID (cross-project management)
+    pub fn with_managing_project_id(mut self, id: impl Into<String>) -> Self {
+        self.managing_project_id = Some(id.into());
         self
     }
 
@@ -195,6 +205,7 @@ impl PermissionContext {
             "externalId" => self.external_id.as_deref(),
             "managingRoleArn" => self.managing_role_arn.as_deref(),
             "managingAccountId" => self.managing_account_id.as_deref(),
+            "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
             _ => None,

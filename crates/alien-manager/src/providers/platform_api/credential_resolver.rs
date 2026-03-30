@@ -198,12 +198,10 @@ fn management_config_from_info(
                 })
             })?;
 
-            Ok(ManagementConfig::Azure(
-                alien_core::AzureManagementConfig {
-                    managing_tenant_id: tenant_id,
-                    management_principal_id: azure_info.principal_id,
-                },
-            ))
+            Ok(ManagementConfig::Azure(alien_core::AzureManagementConfig {
+                managing_tenant_id: tenant_id,
+                management_principal_id: azure_info.principal_id,
+            }))
         }
     }
 }

@@ -345,9 +345,12 @@ impl AwsStorageController {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
-            // Check if bucket still exists
+            // Verify the bucket exists using get_bucket_location.
+            // This AWS API call is used because it requires s3:GetBucketLocation permission,
+            // which is included in 'heartbeat' level roles, unlike s3:ListBucket
+            // required by head_bucket.
             client
-                .head_bucket(bucket_name)
+                .get_bucket_location(bucket_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to check S3 bucket during heartbeat".to_string(),

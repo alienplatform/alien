@@ -7,7 +7,9 @@
 //! 4. Reconciles the result (via `DeploymentStore::reconcile`)
 //! 5. Releases the lock (via `DeploymentStore::release`)
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -32,6 +34,52 @@ const MAX_STEPS_PER_TICK: usize = 100;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 
+fn active_work_statuses() -> Vec<String> {
+    vec![
+        "pending",
+        "initial-setup",
+        "provisioning",
+        "update-pending",
+        "updating",
+        "delete-pending",
+        "deleting",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn get_or_create_local_bindings_provider(
+    cache: &Mutex<HashMap<String, Arc<LocalBindingsProvider>>>,
+    state_dir: &Path,
+    deployment_id: &str,
+) -> Result<Arc<LocalBindingsProvider>, AlienError> {
+    if let Some(existing) = cache
+        .lock()
+        .expect("local_bindings_cache poisoned")
+        .get(deployment_id)
+        .cloned()
+    {
+        return Ok(existing);
+    }
+
+    let local_state_dir = state_dir.join(deployment_id);
+    let provider = LocalBindingsProvider::new(&local_state_dir).map_err(|e| {
+        AlienError::new(GenericError {
+            message: format!(
+                "Failed to create LocalBindingsProvider for {}: {}",
+                deployment_id, e
+            ),
+        })
+    })?;
+
+    let mut cache = cache.lock().expect("local_bindings_cache poisoned");
+    Ok(cache
+        .entry(deployment_id.to_string())
+        .or_insert_with(|| provider)
+        .clone())
+}
+
 pub struct DeploymentLoop {
     config: Arc<ManagerConfig>,
     deployment_store: Arc<dyn DeploymentStore>,
@@ -43,6 +91,8 @@ pub struct DeploymentLoop {
     server_bindings: Arc<ServerBindings>,
     /// Signal dev mode watchers when deployment state changes.
     dev_status_tx: Option<watch::Sender<()>>,
+    /// Keep local providers alive across ticks so runtime managers retain in-memory state.
+    local_bindings_cache: Mutex<HashMap<String, Arc<LocalBindingsProvider>>>,
 }
 
 impl DeploymentLoop {
@@ -63,6 +113,7 @@ impl DeploymentLoop {
             telemetry_backend,
             server_bindings,
             dev_status_tx,
+            local_bindings_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -85,18 +136,7 @@ impl DeploymentLoop {
 
         // Acquire deployments that need work.
         let filter = DeploymentFilter {
-            statuses: Some(
-                vec![
-                    "provisioning",
-                    "update-pending",
-                    "updating",
-                    "delete-pending",
-                    "deleting",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            ),
+            statuses: Some(active_work_statuses()),
             platforms: if self.config.targets.is_empty() {
                 None
             } else {
@@ -262,15 +302,11 @@ impl DeploymentLoop {
                         message: "state_dir is required for Local platform deployments but was not configured".to_string(),
                     })
                 })?;
-                let local_state_dir = state_dir.join(&deployment_id);
-                let local_bindings = LocalBindingsProvider::new(&local_state_dir).map_err(|e| {
-                    AlienError::new(GenericError {
-                        message: format!(
-                            "Failed to create LocalBindingsProvider for {}: {}",
-                            deployment_id, e
-                        ),
-                    })
-                })?;
+                let local_bindings = get_or_create_local_bindings_provider(
+                    &self.local_bindings_cache,
+                    state_dir,
+                    &deployment_id,
+                )?;
                 Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
                     local_bindings,
                 ))
@@ -503,6 +539,37 @@ impl DeploymentLoop {
             hash,
             created_at: chrono::Utc::now().to_rfc3339(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{active_work_statuses, get_or_create_local_bindings_provider};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    #[test]
+    fn active_work_statuses_include_new_deployment_phases() {
+        let statuses = active_work_statuses();
+        assert!(statuses.iter().any(|status| status == "pending"));
+        assert!(statuses.iter().any(|status| status == "initial-setup"));
+        assert!(statuses.iter().any(|status| status == "provisioning"));
+    }
+
+    #[tokio::test]
+    async fn local_bindings_provider_is_reused_per_deployment() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = Mutex::new(HashMap::new());
+
+        let provider_a =
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+        let provider_b =
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+
+        assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
+
+        provider_a.shutdown().await;
     }
 }
 

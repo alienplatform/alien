@@ -468,7 +468,12 @@ async fn run_dev_session(
         accent(&format!("http://localhost:{port}"))
     );
 
-    let steps = FixedSteps::new(&["Manager", "Release", "Deployment", "Status"]);
+    let steps = FixedSteps::new(&[
+        "Manager",
+        "Release",
+        "Prepare deployment",
+        "Wait for deployment",
+    ]);
 
     if let Some(status_file) = &status_file {
         write_dev_status(
@@ -495,12 +500,12 @@ async fn run_dev_session(
                 .await?;
         steps.complete(1, Some(release_id.clone()));
 
-        steps.activate(2, Some(format!("preparing {deployment_name}")));
+        steps.activate(2, Some(deployment_name.clone()));
         let deployment_id =
             prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone()).await?;
-        steps.complete(2, Some(deployment_id.clone()));
+        steps.complete(2, Some(format!("{deployment_name} ({deployment_id})")));
 
-        steps.activate(3, Some(format!("waiting for {deployment_name}")));
+        steps.activate(3, Some(deployment_name.clone()));
         let snapshot = wait_for_dev_deployment_ready_with_progress(
             port,
             &deployment_name,
@@ -509,18 +514,15 @@ async fn run_dev_session(
                 steps.activate(
                     3,
                     Some(format!(
-                        "{} {}",
+                        "{} ({})",
                         deployment_name,
-                        format_deployment_status(status)
+                        format_deployment_status(status).to_ascii_lowercase()
                     )),
                 );
             },
         )
         .await?;
-        steps.complete(
-            3,
-            Some(format_deployment_status(snapshot.status).to_string()),
-        );
+        steps.complete(3, Some(format!("{deployment_name} ready")));
 
         if let Some(status_file) = &status_file {
             write_dev_status(

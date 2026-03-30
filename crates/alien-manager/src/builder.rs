@@ -179,9 +179,7 @@ impl AlienManagerBuilder {
         // --- Credential resolver ---
         if self.credential_resolver.is_none() {
             let env: std::collections::HashMap<String, String> = std::env::vars().collect();
-            let has_management_binding = env
-                .keys()
-                .any(|k| k.contains("MANAGEMENT_BINDING"));
+            let has_management_binding = env.keys().any(|k| k.contains("MANAGEMENT_BINDING"));
 
             #[cfg(feature = "platform")]
             if has_management_binding {
@@ -193,8 +191,7 @@ impl AlienManagerBuilder {
                     .first()
                     .copied()
                     .unwrap_or(alien_core::Platform::Aws);
-                let (primary, targets) =
-                    build_standalone_providers(primary_platform, &env).await?;
+                let (primary, targets) = build_standalone_providers(primary_platform, &env).await?;
                 self.credential_resolver = Some(Arc::new(
                     crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
                         primary, targets,

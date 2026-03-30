@@ -15,6 +15,10 @@ use alien_azure_clients::azure::compute::{RollingUpgradeLatestStatus, VirtualMac
 use alien_azure_clients::azure::models::authorization_role_assignments::{
     RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
 };
+use alien_azure_clients::azure::models::authorization_role_definitions::{
+    Permission, RoleDefinition, RoleDefinitionProperties,
+};
+use alien_azure_clients::authorization::Scope;
 use alien_azure_clients::azure::models::compute_rp::{
     ApiEntityReference, BootDiagnostics, CachingTypes, DiagnosticsProfile, DiskCreateOptionTypes,
     ImageReference, LinuxConfiguration, ResourceIdentityType, Sku, SshConfiguration,
@@ -37,10 +41,13 @@ use alien_azure_clients::azure::models::secrets::SecretSetParameters;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     CapacityGroup, CapacityGroupStatus, ComputeBackend, ContainerCluster, ContainerClusterOutputs,
-    Network, ResourceOutputs, ResourceRef, ResourceStatus, TemplateInputs,
+    Network, ResourceOutputs, ResourceRef, ResourceStatus, ServiceAccount, TemplateInputs,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
+use alien_permissions::{
+    generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -53,6 +60,7 @@ use crate::error::{ErrorData, Result};
 use crate::horizon::{create_horizon_client, to_horizon_capacity_groups};
 use crate::infra_requirements::azure_utils;
 use crate::network::AzureNetworkController;
+use crate::service_account::AzureServiceAccountController;
 
 /// Tracks the state of a single Virtual Machine Scale Set (one per capacity group).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -172,6 +180,45 @@ impl AzureContainerClusterController {
             "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
             subscription_id, "b24988ac-6180-42a0-ab88-20f7382dd24c"
         )
+    }
+
+    /// Collect user-assigned managed identity resource IDs for all ServiceAccount
+    /// resources in the stack, plus the cluster's own identity. This ensures IMDS
+    /// can serve tokens for per-container identities (Azure has no impersonation API
+    /// like AWS sts:AssumeRole or GCP generateAccessToken — the UAMI must be
+    /// attached to the VMSS for IMDS to vend its tokens).
+    fn collect_vmss_identities(
+        ctx: &ResourceControllerContext<'_>,
+        cluster_identity_id: &str,
+    ) -> HashMap<String, UserAssignedIdentitiesValue> {
+        let mut ids = HashMap::new();
+        ids.insert(
+            cluster_identity_id.to_string(),
+            UserAssignedIdentitiesValue::default(),
+        );
+
+        for (_, entry) in ctx.desired_stack.resources() {
+            if entry.config.resource_type() != ServiceAccount::RESOURCE_TYPE {
+                continue;
+            }
+            let sa_ref = ResourceRef::from(&entry.config);
+            match ctx.require_dependency::<AzureServiceAccountController>(&sa_ref) {
+                Ok(sa_ctrl) => {
+                    if let Some(id) = &sa_ctrl.identity_resource_id {
+                        ids.insert(id.clone(), UserAssignedIdentitiesValue::default());
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        sa_id = entry.config.id(),
+                        error = %e,
+                        "ServiceAccount not ready yet, skipping identity attachment"
+                    );
+                }
+            }
+        }
+
+        ids
     }
 
     fn key_vault_secrets_user_role_definition_id(subscription_id: &str) -> String {
@@ -605,52 +652,149 @@ impl AzureContainerClusterController {
 
         info!(
             principal_id = %principal_id,
-            "Assigning IAM roles to managed identity"
+            "Assigning IAM roles to managed identity via execute permission set"
         );
 
-        let contributor_role_definition_id =
-            Self::contributor_role_definition_id(&azure_cfg.subscription_id);
+        // Use the container-cluster/execute permission set to generate a custom role
+        // instead of hardcoding Contributor (which is overly broad).
+        let execute_set = alien_permissions::get_permission_set("container-cluster/execute")
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Permission set 'container-cluster/execute' not found".to_string(),
+                    operation: Some("assigning_identity_roles".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
 
-        let role_assignment_name = Self::role_assignment_uuid(&format!(
-            "{}-{}-contributor",
-            ctx.resource_prefix, config.id
-        ));
-        let role_assignment_id = auth_client.build_resource_group_role_assignment_id(
-            resource_group_name.clone(),
-            role_assignment_name,
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let mut permission_context = PermissionContext::new()
+            .with_subscription_id(azure_cfg.subscription_id.clone())
+            .with_resource_group(resource_group_name.clone())
+            .with_stack_prefix(ctx.resource_prefix.to_string());
+
+        // Managing subscription/resource group for cross-subscription ACR access.
+        // In single-subscription mode these are the same as the current subscription/RG.
+        permission_context = permission_context
+            .with_managing_subscription_id(azure_cfg.subscription_id.clone())
+            .with_managing_resource_group(resource_group_name.clone());
+
+        let role_def = generator
+            .generate_role_definition(&execute_set, BindingTarget::Stack, &permission_context)
+            .map_err(|e| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate role definition for container-cluster/execute: {}",
+                        e
+                    ),
+                    operation: Some("assigning_identity_roles".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+
+        let scope = Scope::ResourceGroup {
+            resource_group_name: resource_group_name.clone(),
+        };
+
+        // Create custom role definition
+        let role_name = format!("{}-{}-execute", ctx.resource_prefix, config.id);
+        let role_definition_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("alien:azure:cc-role-def:{}", role_name).as_bytes(),
+        )
+        .to_string();
+
+        let role_definition_props = RoleDefinitionProperties {
+            role_name: Some(role_name.clone()),
+            description: Some(role_def.description.clone()),
+            type_: Some("CustomRole".to_string()),
+            permissions: vec![Permission {
+                actions: role_def.actions.clone(),
+                not_actions: Vec::new(),
+                data_actions: role_def.data_actions.clone(),
+                not_data_actions: Vec::new(),
+            }],
+            assignable_scopes: role_def.assignable_scopes.clone(),
+            ..Default::default()
+        };
+
+        let role_definition = RoleDefinition {
+            properties: Some(role_definition_props),
+            ..Default::default()
+        };
+
+        let created_role = auth_client
+            .create_or_update_role_definition(&scope, role_definition_id.clone(), &role_definition)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create custom role definition '{}'", role_name),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        let created_role_id = created_role.id.ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Created role definition missing ID".to_string(),
+                operation: Some("assigning_identity_roles".to_string()),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        info!(
+            role_name = %role_name,
+            role_id = %created_role_id,
+            actions_count = role_def.actions.len(),
+            data_actions_count = role_def.data_actions.len(),
+            "Custom role definition created for container-cluster/execute"
         );
+
+        // Create role assignment binding the managed identity to the custom role
+        let assignment_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!(
+                "alien:azure:cc-role-assign:{}:{}",
+                created_role_id, principal_id
+            )
+            .as_bytes(),
+        )
+        .to_string();
 
         let role_assignment = RoleAssignment {
             properties: Some(RoleAssignmentProperties {
                 principal_id: principal_id.clone(),
                 principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                role_definition_id: contributor_role_definition_id,
-                scope: None,
+                role_definition_id: created_role_id.clone(),
+                scope: Some(format!(
+                    "/subscriptions/{}/resourceGroups/{}",
+                    azure_cfg.subscription_id, resource_group_name
+                )),
                 condition: None,
                 condition_version: None,
                 created_by: None,
                 created_on: None,
                 delegated_managed_identity_resource_id: None,
-                description: Some(
-                    "Alien ContainerCluster managed identity contributor role".to_string(),
-                ),
+                description: Some(format!(
+                    "Alien ContainerCluster {} execute role",
+                    config.id
+                )),
                 updated_by: None,
                 updated_on: None,
             }),
             ..Default::default()
         };
 
+        let full_assignment_id = auth_client.build_role_assignment_id(&scope, assignment_id);
+
         auth_client
-            .create_or_update_role_assignment_by_id(role_assignment_id.clone(), &role_assignment)
+            .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to assign Contributor role to managed identity".to_string(),
+                message: "Failed to assign execute role to managed identity".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.role_assignment_ids.push(role_assignment_id);
+        self.role_assignment_ids.push(full_assignment_id);
 
-        info!("Managed identity roles assigned");
+        info!("Managed identity roles assigned via container-cluster/execute permission set");
 
         Ok(HandlerAction::Continue {
             state: CreatingHorizonCluster,
@@ -1099,6 +1243,14 @@ impl AzureContainerClusterController {
             })
         })?;
 
+        // Collect all identities: cluster identity + all ServiceAccount UAMIs.
+        // Azure IMDS only serves tokens for identities attached to the VMSS.
+        let vmss_identities = Self::collect_vmss_identities(ctx, identity_id);
+        info!(
+            identity_count = vmss_identities.len(),
+            "Collected VMSS identities (cluster + service accounts)"
+        );
+
         let key_vault_name = self.key_vault_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Key Vault name not set".to_string(),
@@ -1201,12 +1353,7 @@ impl AzureContainerClusterController {
                 zones: vec![],
                 identity: Some(VirtualMachineScaleSetIdentity {
                     type_: Some(ResourceIdentityType::UserAssigned),
-                    user_assigned_identities: [(
-                        identity_id.clone(),
-                        UserAssignedIdentitiesValue::default(),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    user_assigned_identities: vmss_identities.clone(),
                     ..Default::default()
                 }),
                 properties: Some(VirtualMachineScaleSetProperties {
@@ -1808,6 +1955,10 @@ impl AzureContainerClusterController {
                     resource_id: Some(config.id.clone()),
                 })
             })?;
+
+            // Collect all identities: cluster identity + all ServiceAccount UAMIs.
+            let vmss_identities = Self::collect_vmss_identities(ctx, &identity_id);
+
             let key_vault_name = self.key_vault_name.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "Key Vault not set".to_string(),
@@ -1884,7 +2035,7 @@ impl AzureContainerClusterController {
                     system_data: None, tags: HashMap::new(), type_: None, zones: vec![],
                     identity: Some(VirtualMachineScaleSetIdentity {
                         type_: Some(ResourceIdentityType::UserAssigned),
-                        user_assigned_identities: [(identity_id.clone(), UserAssignedIdentitiesValue::default())].into_iter().collect(),
+                        user_assigned_identities: vmss_identities.clone(),
                         ..Default::default()
                     }),
                     properties: Some(VirtualMachineScaleSetProperties {
@@ -2154,6 +2305,16 @@ impl AzureContainerClusterController {
             cloud_init.as_bytes(),
         );
 
+        // Collect all identities (cluster + SA UAMIs) for VMSS update.
+        // New ServiceAccount resources added since initial creation will be attached here.
+        let identity_id = self.identity_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Identity ID not set".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let vmss_identities = Self::collect_vmss_identities(ctx, identity_id);
+
         let vmss_ids: Vec<(String, String, String)> = self
             .vmss_states
             .iter()
@@ -2171,6 +2332,13 @@ impl AzureContainerClusterController {
                     resource_id: Some(config.id.clone()),
                 },
             )?;
+
+            // Update identities to include any new ServiceAccount UAMIs
+            vmss.identity = Some(VirtualMachineScaleSetIdentity {
+                type_: Some(ResourceIdentityType::UserAssigned),
+                user_assigned_identities: vmss_identities.clone(),
+                ..Default::default()
+            });
 
             if let Some(ref mut props) = vmss.properties {
                 if let Some(ref mut vm_profile) = props.virtual_machine_profile {

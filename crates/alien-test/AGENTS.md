@@ -61,6 +61,6 @@ async fn example_with_cloud() {
 
 ## Ngrok Tunnel
 
-Cloud-deployed functions need to reach the local manager for commands polling. The ngrok tunnel (`NGROK_AUTHTOKEN` + `NGROK_DOMAIN` from `.env.test`) forwards `https://{domain}/v1/...` to `http://localhost:{port}/v1/...`.
+Cloud-deployed functions need to reach the local manager for commands polling. When `NGROK_AUTHTOKEN` is set, `TestManager` automatically creates an ephemeral `e2e-<uuid>.ngrok.dev` tunnel (paid plan required). Each test run gets a unique domain, so multiple runs can execute concurrently without conflicts.
 
 The `NgrokTunnel` struct is stored in `TestManager` and holds both the `Forwarder` and `Session`. Both must stay alive for the tunnel to work — dropping either closes the tunnel.

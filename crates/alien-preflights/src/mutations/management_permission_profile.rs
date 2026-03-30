@@ -134,14 +134,6 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", resource_type));
         }
 
-        // Vault resources need data-write and data-read permissions on the management role
-        // regardless of lifecycle. The manager's vault API writes/reads secrets remotely
-        // using the management role, even when the vault resource itself is frozen.
-        if is_push && resource_type == "vault" {
-            permission_set_ids.insert("vault/data-write".to_string());
-            permission_set_ids.insert("vault/data-read".to_string());
-        }
-
         // Add commands-specific permissions for functions with commands_enabled = true
         if resource_type == "function" {
             if let Some(function) = resource_entry.config.downcast_ref::<Function>() {

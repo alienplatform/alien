@@ -12,9 +12,7 @@
             "s3:GetBucketPolicy",
             "s3:GetBucketAcl",
             "s3:GetEncryptionConfiguration",
-            "s3:GetBucketPublicAccessBlock",
-            "s3:ListBucketVersions",
-            "s3:ListBucket"
+            "s3:GetBucketPublicAccessBlock"
           ]
         },
         "binding": {

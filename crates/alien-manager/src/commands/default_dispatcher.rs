@@ -94,10 +94,7 @@ impl CommandDispatcher for DefaultCommandDispatcher {
         // Note: we don't check deployment_model here — the CommandServer already
         // routes Pull deployments to create_pending_index, so this dispatcher
         // only gets called for Push deployments.
-        if matches!(
-            deployment.platform,
-            Platform::Kubernetes | Platform::Local
-        ) {
+        if matches!(deployment.platform, Platform::Kubernetes | Platform::Local) {
             return Err(AlienError::new(CmdErrorData::OperationNotSupported {
                 message: format!(
                     "Deployment {} is on {:?} which uses polling, not push dispatch",

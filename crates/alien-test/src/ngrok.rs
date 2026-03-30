@@ -4,11 +4,12 @@
 //! the local manager's commands endpoint over the internet. This module starts
 //! an ngrok tunnel that forwards traffic from a public URL to the local manager.
 //!
+//! Each test run gets its own ephemeral `ngrok.dev` domain, so multiple test
+//! runs can execute concurrently without domain conflicts.
+//!
 //! ## Requirements
 //!
-//! - `NGROK_AUTHTOKEN` environment variable must be set.
-//! - For CI, reserved domains (e.g., `alien-e2e-tests.ngrok.dev`) are
-//!   configured in the ngrok dashboard.
+//! - `NGROK_AUTHTOKEN` environment variable must be set (paid plan required).
 
 use anyhow::Context;
 use ngrok::config::ForwarderBuilder;
@@ -23,7 +24,7 @@ use tracing::info;
 /// accepts connections and forwards them. The `_session` keeps the ngrok
 /// session alive (dropping it closes all tunnels).
 pub struct NgrokTunnel {
-    /// The public URL of the tunnel (e.g., `https://alien-e2e-tests.ngrok.dev`).
+    /// The public URL of the tunnel (e.g., `https://e2e-a1b2c3d4.ngrok.dev`).
     pub url: String,
     /// The ngrok forwarder. Its internal spawned task handles forwarding.
     _forwarder: Forwarder<HttpTunnel>,
@@ -33,17 +34,14 @@ pub struct NgrokTunnel {
 
 /// Start an ngrok HTTP tunnel forwarding to `localhost:{port}`.
 ///
-/// - `port`: The local port the manager is listening on.
-/// - `domain`: An optional reserved ngrok domain. If `None`, ngrok assigns a
-///   random subdomain.
-///
-/// Returns the tunnel's public URL and a handle that keeps the tunnel alive.
+/// Generates an ephemeral `e2e-<uuid>.ngrok.dev` domain so each test
+/// run gets its own unique public URL (requires a paid ngrok plan).
 ///
 /// # Errors
 ///
 /// Returns an error if `NGROK_AUTHTOKEN` is not set or if the tunnel fails
 /// to start.
-pub async fn start_tunnel(port: u16, domain: Option<&str>) -> anyhow::Result<NgrokTunnel> {
+pub async fn start_tunnel(port: u16) -> anyhow::Result<NgrokTunnel> {
     let forward_url = format!("http://localhost:{}", port);
     let forward_url_parsed =
         url::Url::parse(&forward_url).context("Failed to parse forward URL")?;
@@ -54,13 +52,14 @@ pub async fn start_tunnel(port: u16, domain: Option<&str>) -> anyhow::Result<Ngr
         .await
         .context("Failed to connect ngrok session (is NGROK_AUTHTOKEN set?)")?;
 
-    let mut endpoint = session.http_endpoint();
+    let ephemeral_domain = format!(
+        "e2e-{}.ngrok.dev",
+        uuid::Uuid::new_v4().to_string().replace('-', "")
+    );
 
-    if let Some(d) = domain {
-        endpoint.domain(d);
-    }
-
-    let forwarder = endpoint
+    let forwarder = session
+        .http_endpoint()
+        .domain(&ephemeral_domain)
         .listen_and_forward(forward_url_parsed)
         .await
         .context("Failed to start ngrok listener")?;

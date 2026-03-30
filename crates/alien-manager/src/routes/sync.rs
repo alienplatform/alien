@@ -68,7 +68,7 @@ pub struct AcquiredDeploymentResponse {
 pub struct ReconcileRequest {
     pub deployment_id: String,
     pub session: String,
-    pub state: DeploymentState,
+    pub state: serde_json::Value,
     #[serde(default, deserialize_with = "deserialize_bool_or_null")]
     pub update_heartbeat: bool,
     #[serde(default)]
@@ -80,7 +80,7 @@ pub struct ReconcileRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ReconcileResponse {
     pub success: bool,
-    pub current: DeploymentState,
+    pub current: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,12 +222,23 @@ async fn reconcile(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    // Deserialize state from opaque JSON to DeploymentState.
+    // The API accepts serde_json::Value to avoid data loss in generated SDK clients
+    // (Progenitor strips additionalProperties fields from typed structs during roundtrip).
+    let deployment_state: DeploymentState = match serde_json::from_value(req.state.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            return ErrorData::bad_request(&format!("Invalid deployment state: {e}"))
+                .into_response()
+        }
+    };
+
     let _result = match state
         .deployment_store
         .reconcile(ReconcileData {
             deployment_id: req.deployment_id,
             session: req.session,
-            state: req.state.clone(),
+            state: deployment_state,
             update_heartbeat: req.update_heartbeat,
             error: req.error,
         })

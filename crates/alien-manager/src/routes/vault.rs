@@ -77,9 +77,7 @@ async fn load_vault_for_deployment(
         alien_core::Platform::Gcp => {
             alien_core::bindings::VaultBinding::secret_manager(&vault_prefix)
         }
-        alien_core::Platform::Azure => {
-            alien_core::bindings::VaultBinding::key_vault(&vault_prefix)
-        }
+        alien_core::Platform::Azure => alien_core::bindings::VaultBinding::key_vault(&vault_prefix),
         other => {
             return Err(ErrorData::bad_request(format!(
                 "Vault API not supported for platform: {}",
@@ -110,13 +108,10 @@ async fn load_vault_for_deployment(
 
     // 6. Load the vault.
     use alien_bindings::BindingsProviderApi;
-    let vault = provider
-        .load_vault(vault_name)
-        .await
-        .map_err(|e| {
-            error!(deployment_id, vault_name, error = %e, "Failed to load vault");
-            internal(format!("Failed to load vault: {}", e))
-        })?;
+    let vault = provider.load_vault(vault_name).await.map_err(|e| {
+        error!(deployment_id, vault_name, error = %e, "Failed to load vault");
+        internal(format!("Failed to load vault: {}", e))
+    })?;
 
     Ok(vault)
 }

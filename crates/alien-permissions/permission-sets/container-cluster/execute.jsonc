@@ -106,10 +106,44 @@
             "scope": "projects/${projectName}"
           }
         }
+      },
+      // Disk attach/detach for persistent storage containers (horizond runtime)
+      {
+        "grant": {
+          "permissions": [
+            "compute.instances.attachDisk",
+            "compute.instances.detachDisk",
+            "compute.instances.get",
+            "compute.disks.use"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // NEG target registration for load-balanced containers (horizond runtime)
+      {
+        "grant": {
+          "permissions": [
+            "compute.networkEndpointGroups.attachNetworkEndpoints",
+            "compute.networkEndpointGroups.detachNetworkEndpoints",
+            "compute.networkEndpointGroups.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
-      // Note: GCP disk attach/detach and NEG operations are covered by
-      // roles/compute.instanceAdmin.v1 and roles/iam.serviceAccountUser
-      // granted directly in the GCP container cluster controller (not via permission sets).
     ],
     "azure": [
       // Cross-subscription ACR image pull from managing subscription
@@ -129,11 +163,32 @@
           }
         }
       },
-      // Per-container managed identity impersonation: VM reads federated identity credentials for container MIs
+      // Disk attach/detach for persistent storage containers (horizond runtime)
       {
         "grant": {
           "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read"
+            "Microsoft.Compute/disks/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Load balancer backend pool registration (horizond runtime)
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Network/loadBalancers/backendAddressPools/read",
+            "Microsoft.Network/loadBalancers/backendAddressPools/write",
+            "Microsoft.Network/loadBalancers/backendAddressPools/join/action"
           ]
         },
         "binding": {
@@ -145,8 +200,10 @@
           }
         }
       }
-      // Note: Azure disk attach/detach and LB backend pool operations are covered by
-      // Contributor role assigned to the managed identity in the Azure container cluster controller.
+      // Note: Azure per-container identity impersonation works by attaching the
+      // container's user-assigned managed identity to the VMSS at provisioning time.
+      // Once attached, IMDS serves tokens without additional runtime permissions.
+      // This differs from AWS (sts:AssumeRole) and GCP (generateAccessToken).
     ]
   }
 }

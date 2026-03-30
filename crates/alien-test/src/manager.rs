@@ -96,15 +96,13 @@ impl TestManager {
         //     manager for commands polling. The ngrok URL becomes the
         //     manager's `base_url` so `ALIEN_COMMANDS_POLLING_URL` points
         //     to the publicly reachable tunnel.
-        let ngrok_domain = config.and_then(|c| c.ngrok_domain.as_deref().map(str::to_string));
         let has_ngrok_token = std::env::var("NGROK_AUTHTOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some();
         let ngrok_tunnel = if has_ngrok_token {
-            let domain = ngrok_domain.as_deref();
-            info!(?domain, %port, "Starting ngrok tunnel for commands polling");
-            match crate::ngrok::start_tunnel(port, domain).await {
+            info!(%port, "Starting ephemeral ngrok tunnel for commands polling");
+            match crate::ngrok::start_tunnel(port).await {
                 Ok(tunnel) => {
                     info!(tunnel_url = %tunnel.url, "Ngrok tunnel ready");
                     Some(tunnel)

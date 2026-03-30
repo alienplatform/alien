@@ -95,9 +95,6 @@ pub struct TestConfig {
     pub azure_mgmt: Option<AzureConfig>,
     pub azure_target: Option<AzureConfig>,
     pub azure_resources: AzureTestResources,
-    /// Reserved ngrok domain for tunneling the local manager to the internet.
-    /// Read from `NGROK_DOMAIN`. Requires `NGROK_AUTHTOKEN` to be set.
-    pub ngrok_domain: Option<String>,
 }
 
 impl TestConfig {
@@ -119,7 +116,6 @@ impl TestConfig {
             azure_mgmt: Self::load_azure_mgmt(),
             azure_target: Self::load_azure_target(),
             azure_resources: Self::load_azure_resources(),
-            ngrok_domain: env::var("NGROK_DOMAIN").ok().filter(|s| !s.is_empty()),
         }
     }
 

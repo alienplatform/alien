@@ -35,13 +35,16 @@ use alien_gcp_clients::gcp::secret_manager::{
     SecretManagerApi, SecretPayload,
 };
 use alien_macros::controller;
+use alien_permissions::{
+    generators::GcpRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::horizon::{create_horizon_client, to_horizon_capacity_groups};
 use crate::network::GcpNetworkController;
@@ -943,22 +946,22 @@ impl GcpContainerClusterController {
             })?;
 
         let member = format!("serviceAccount:{}", sa_email);
-        let required_roles = [
-            "roles/compute.instanceAdmin.v1",
-            "roles/compute.networkAdmin",
+
+        // Operational roles that are NOT part of the execute permission set.
+        // These are infrastructure-level roles, not identity/container permissions.
+        let operational_roles = [
+            // Access machine token from Secret Manager
             "roles/secretmanager.secretAccessor",
-            "roles/logging.logWriter",
-            // Allows the VM to generate access tokens for per-container service accounts,
-            // which is required by the horizond IMDS metadata proxy to vend per-container credentials.
-            "roles/iam.serviceAccountTokenCreator",
             // Required by GCE attachDisk/detachDisk — the caller must have serviceAccountUser
             // on the instance's service account. Without this, the API returns 200 but the
             // async operation silently fails with SERVICE_ACCOUNT_ACCESS_DENIED.
             "roles/iam.serviceAccountUser",
+            // Operational logging
+            "roles/logging.logWriter",
         ];
 
         let mut changed = false;
-        for role in required_roles {
+        for role in operational_roles {
             if let Some(binding) = policy.bindings.iter_mut().find(|b| b.role == role) {
                 if !binding.members.contains(&member) {
                     binding.members.push(member.clone());
@@ -984,7 +987,116 @@ impl GcpContainerClusterController {
                 })?;
         }
 
-        info!("Service account roles granted");
+        // Use the container-cluster/execute permission set for identity/container permissions
+        // (SA impersonation, disk attach/detach, NEG operations, cross-project image pull)
+        // instead of hardcoding broad built-in roles.
+        let execute_set = alien_permissions::get_permission_set("container-cluster/execute")
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Permission set 'container-cluster/execute' not found".to_string(),
+                    operation: Some("granting_service_account_roles".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+
+        // Create the custom role for the execute permission set.
+        // service_account_name is the short ID (part before '@') for IAM binding member.
+        let sa_short_name = sa_email
+            .split('@')
+            .next()
+            .unwrap_or(sa_email);
+
+        let mut permission_context = PermissionContext::new()
+            .with_project_name(gcp_cfg.project_id.clone())
+            .with_region(gcp_cfg.region.clone())
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_service_account_name(sa_short_name.to_string());
+        if let Some(ref project_number) = gcp_cfg.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+        // Managing project ID for cross-project image pull.
+        // In single-project mode this is the same as the current project.
+        permission_context =
+            permission_context.with_managing_project_id(gcp_cfg.project_id.clone());
+
+        ResourcePermissionsHelper::ensure_single_gcp_custom_role(
+            ctx,
+            &execute_set,
+            &permission_context,
+        )
+        .await?;
+
+        // Generate and apply IAM bindings for the execute permission set
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let bindings = generator
+            .generate_bindings(&execute_set, BindingTarget::Stack, &permission_context)
+            .map_err(|e| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate IAM bindings for container-cluster/execute: {}",
+                        e
+                    ),
+                    operation: Some("granting_service_account_roles".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+
+        // Apply execute permission set bindings to the project IAM policy
+        let mut execute_policy = resource_manager_client
+            .get_project_iam_policy(
+                gcp_cfg.project_id.clone(),
+                Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                    requested_policy_version: Some(3),
+                }),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get project IAM policy for execute bindings".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        let mut execute_changed = false;
+        for binding in bindings.bindings {
+            let new_binding = Binding {
+                role: binding.role,
+                members: binding.members,
+                condition: binding.condition.map(|cond| alien_gcp_clients::gcp::iam::Expr {
+                    expression: cond.expression,
+                    title: Some(cond.title),
+                    description: Some(cond.description),
+                    location: None,
+                }),
+            };
+
+            if let Some(existing) = execute_policy
+                .bindings
+                .iter_mut()
+                .find(|b| b.role == new_binding.role)
+            {
+                for m in &new_binding.members {
+                    if !existing.members.contains(m) {
+                        existing.members.push(m.clone());
+                        execute_changed = true;
+                    }
+                }
+            } else {
+                execute_policy.bindings.push(new_binding);
+                execute_changed = true;
+            }
+        }
+
+        if execute_changed {
+            resource_manager_client
+                .set_project_iam_policy(gcp_cfg.project_id.clone(), execute_policy, None)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to apply execute permission set bindings".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
+
+        info!("Service account roles granted via operational roles + container-cluster/execute permission set");
 
         Ok(HandlerAction::Continue {
             state: CreatingHorizonCluster,

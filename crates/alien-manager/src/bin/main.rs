@@ -370,13 +370,12 @@ async fn build_platform_server(
         .await
         .expect("Failed to load command-storage binding");
 
-    let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> = Arc::new(
-        alien_manager::commands::DefaultCommandDispatcher::new(
+    let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> =
+        Arc::new(alien_manager::commands::DefaultCommandDispatcher::new(
             deployment_store.clone(),
             release_store.clone(),
             credential_resolver.clone(),
-        ),
-    );
+        ));
 
     let command_registry: Arc<dyn alien_commands::server::CommandRegistry> = Arc::new(
         PlatformCommandRegistry::new(&pc.api_url, &pc.api_key)
