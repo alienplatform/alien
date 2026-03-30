@@ -742,7 +742,7 @@ pub async fn push_initial_setup(
         })?;
     state.runtime_metadata = deployment
         .runtime_metadata
-        .map(serde_json::from_value)
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
         .transpose()
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
