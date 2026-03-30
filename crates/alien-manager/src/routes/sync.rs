@@ -171,6 +171,7 @@ async fn acquire(
 
     let filter = DeploymentFilter {
         deployment_group_id: None,
+        deployment_ids: req.deployment_ids,
         statuses: req.statuses,
         platforms: req.platforms,
         limit: Some(req.limit),

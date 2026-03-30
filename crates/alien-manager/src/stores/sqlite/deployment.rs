@@ -389,6 +389,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(dg_id) = &filter.deployment_group_id {
                 query.and_where(Expr::col(Deployments::DeploymentGroupId).eq(dg_id.as_str()));
             }
+            if let Some(ids) = &filter.deployment_ids {
+                let id_strs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                query.and_where(Expr::col(Deployments::Id).is_in(id_strs));
+            }
             if let Some(statuses) = &filter.statuses {
                 let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Status).is_in(status_strs));

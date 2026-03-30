@@ -655,23 +655,70 @@ pub async fn push_initial_setup(
 
     config.image_pull_credentials = image_pull_credentials;
 
-    // Acquire sync lock
+    // Acquire sync lock — retry until the specific deployment is locked by us.
+    // The manager's deployment loop may already hold the lock; we must wait for
+    // it to release before proceeding.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    client
-        .acquire()
-        .body(alien_manager_api::types::AcquireRequest {
-            session: session.clone(),
-            deployment_ids: Some(vec![deployment_id.to_string()]),
-            statuses: None,
-            platforms: None,
-            limit: None,
-        })
+    let max_acquire_attempts = 60;
+    for attempt in 1..=max_acquire_attempts {
+        let resp = client
+            .acquire()
+            .body(alien_manager_api::types::AcquireRequest {
+                session: session.clone(),
+                deployment_ids: Some(vec![deployment_id.to_string()]),
+                statuses: None,
+                platforms: None,
+                limit: None,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DeploymentFailed {
+                operation: "acquire sync lock".to_string(),
+            })?;
+
+        if !resp.into_inner().deployments.is_empty() {
+            break;
+        }
+
+        if attempt == max_acquire_attempts {
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                operation: "acquire sync lock: timed out waiting for lock".to_string(),
+            }));
+        }
+
+        output::info(&format!(
+            "Waiting for deployment lock (attempt {}/{})",
+            attempt, max_acquire_attempts
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    // Re-fetch the deployment state now that we hold the lock.
+    // The manager may have advanced the state while we were waiting.
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
         .send()
         .await
         .into_alien_error()
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire sync lock".to_string(),
-        })?;
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status: DeploymentStatus =
+        serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Unknown deployment status: {}", deployment.status),
+            })?;
+
+    state.status = status;
+    state.stack_state = deployment
+        .stack_state
+        .and_then(|v| serde_json::from_value(v).ok());
+    state.runtime_metadata = None;
 
     // Step loop with lock release guard
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;

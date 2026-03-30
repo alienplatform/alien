@@ -66,6 +66,7 @@ pub struct CreateDeploymentGroupParams {
 #[derive(Debug, Clone, Default)]
 pub struct DeploymentFilter {
     pub deployment_group_id: Option<String>,
+    pub deployment_ids: Option<Vec<String>>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
     pub limit: Option<u32>,
