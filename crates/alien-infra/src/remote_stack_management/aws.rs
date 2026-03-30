@@ -461,14 +461,15 @@ impl AwsRemoteStackManagementController {
             })
         })?;
 
-        // Include both /provision and /management permission sets in the stack-level
-        // management policy. /provision sets provide resource lifecycle operations (create,
-        // delete), while /management sets provide ongoing management operations (update,
-        // get, configure). Both use stack-level wildcard bindings so the management role
-        // has the necessary permissions from the moment it's created.
+        // Include all permission sets from the management profile in the stack-level
+        // management policy. The management profile is curated by
+        // ManagementPermissionProfileMutation to include only what the management role
+        // needs: /provision sets for lifecycle operations, /management sets for ongoing
+        // management, /heartbeat and /telemetry for health checks, and /data-write
+        // sets for manager-level operations like the vault API.
         //
-        // Resource controllers also apply resource-scoped /management inline policies, but
-        // the stack-level policy serves as a reliable baseline that doesn't depend on
+        // Using stack-level wildcard bindings ensures the management role has all
+        // necessary permissions from the moment it's created, without depending on
         // per-resource policy propagation timing.
         let mut combined_actions = Vec::new();
         let mut combined_resources = std::collections::HashSet::new();
@@ -477,15 +478,6 @@ impl AwsRemoteStackManagementController {
             let permission_set =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned());
             if let Some(permission_set) = permission_set {
-                // Include /provision and /management sets at stack level.
-                // Other sets (heartbeat, invoke, etc.) are resource-scoped and handled
-                // by resource controllers via per-resource inline policies.
-                if !permission_set.id.ends_with("/provision")
-                    && !permission_set.id.ends_with("/management")
-                {
-                    continue;
-                }
-
                 if let Some(aws_platform) = &permission_set.platforms.aws {
                     for platform_permission in aws_platform {
                         if let Some(actions) = &platform_permission.grant.actions {

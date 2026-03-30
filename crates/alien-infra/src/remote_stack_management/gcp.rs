@@ -172,24 +172,16 @@ impl GcpRemoteStackManagementController {
 
         let permission_sets = Self::resolve_management_permission_sets(ctx)?;
 
-        // Provision and management permission sets need project-level IAM bindings.
-        // Provision sets are needed for resource lifecycle (create/delete).
-        // Management sets are needed for ongoing management operations during Provisioning
-        // (update, heartbeat checks, etc.) when using the management service account.
-        // Other sets (heartbeat, invoke, etc.) are applied by resource controllers
-        // via resource-level IAM.
-        let stack_sets: Vec<_> = permission_sets
-            .into_iter()
-            .filter(|ps| {
-                ps.id.ends_with("/provision") || ps.id.ends_with("/management")
-            })
-            .collect();
+        // Include all permission sets from the management profile in the project-level
+        // IAM bindings. The management profile is curated by
+        // ManagementPermissionProfileMutation to include only what the management SA needs.
+        let stack_sets = permission_sets;
 
         if !stack_sets.is_empty() {
             info!(
                 service_account_email = %service_account_email,
                 stack_sets_count = stack_sets.len(),
-                "Binding provision and management permission-set roles to service account at project level"
+                "Binding management permission-set roles to service account at project level"
             );
 
             let generator = GcpRuntimePermissionsGenerator::new();

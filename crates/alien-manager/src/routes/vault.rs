@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{error, info};
 
 use super::auth;
 use super::AppState;
@@ -96,7 +96,10 @@ async fn load_vault_for_deployment(
         .credential_resolver
         .resolve(&deployment)
         .await
-        .map_err(|e| internal(format!("Failed to resolve credentials: {}", e)))?;
+        .map_err(|e| {
+            error!(deployment_id, error = %e, "Failed to resolve credentials for vault operation");
+            internal(format!("Failed to resolve credentials: {}", e))
+        })?;
 
     // 5. Build a BindingsProvider with the credentials + vault binding.
     let mut bindings = HashMap::new();
@@ -110,7 +113,10 @@ async fn load_vault_for_deployment(
     let vault = provider
         .load_vault(vault_name)
         .await
-        .map_err(|e| internal(format!("Failed to load vault: {}", e)))?;
+        .map_err(|e| {
+            error!(deployment_id, vault_name, error = %e, "Failed to load vault");
+            internal(format!("Failed to load vault: {}", e))
+        })?;
 
     Ok(vault)
 }
@@ -135,7 +141,10 @@ async fn set_secret(
     vault
         .set_secret(&key, &body.value)
         .await
-        .map_err(|e| internal(format!("Failed to set secret: {}", e)))?;
+        .map_err(|e| {
+            error!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, error = %e, "Failed to set vault secret");
+            internal(format!("Failed to set secret: {}", e))
+        })?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Vault secret set");
     Ok(Json(serde_json::json!({ "ok": true })))
