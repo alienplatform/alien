@@ -41,6 +41,19 @@
       },
       {
         "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
             "ecr:BatchGetImage",
             "ecr:GetDownloadUrlForLayer",
