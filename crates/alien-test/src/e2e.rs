@@ -792,20 +792,18 @@ async fn extract_rsm_sa_email(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
 
-    if let Some(ref state) = resp.stack_state {
-        // The API's stack_state field contains the StackState directly (not DeploymentState).
-        // StackState uses camelCase: "accessConfiguration" (not snake_case).
-        if let Some(resources) = state.get("resources").and_then(|v| v.as_object()) {
-            for (_id, resource) in resources {
-                let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if resource_type == "remote-stack-management" {
-                    if let Some(email) = resource
-                        .get("outputs")
-                        .and_then(|o| o.get("accessConfiguration"))
-                        .and_then(|v| v.as_str())
+    if let Some(ref state_value) = resp.stack_state {
+        let stack_state: alien_core::StackState = serde_json::from_value(state_value.clone())
+            .context("Failed to deserialize stack_state from manager API")?;
+
+        for (_id, resource) in &stack_state.resources {
+            if resource.resource_type == "remote-stack-management" {
+                if let Some(ref outputs) = resource.outputs {
+                    if let Some(rsm) = outputs
+                        .downcast_ref::<alien_core::RemoteStackManagementOutputs>()
                     {
-                        info!(rsm_sa = %email, "Extracted RSM SA email from deployment state");
-                        return Ok(Some(email.to_string()));
+                        info!(rsm_sa = %rsm.access_configuration, "Extracted RSM SA email from deployment state");
+                        return Ok(Some(rsm.access_configuration.clone()));
                     }
                 }
             }

@@ -1,6 +1,6 @@
 //! Integration tests for alien-commands
 //!
-//! These tests focus on the 8 core ARC scenarios:
+//! These tests focus on the 8 core command scenarios:
 //! (PUSH, PULL) × (SMALL PARAMS, LARGE PARAMS) × (SMALL RESPONSE, LARGE RESPONSE)
 //!
 //! 1. (Push, Small Params, Small Response): inline params auto-dispatched, inline response
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(parsed_envelope.command_id, "cmd_runtime_test");
         assert_eq!(parsed_envelope.command, "runtime-command");
 
-        // Test non-ARC message
+        // Test non-command message
         let non_arc_message = QueueMessage {
             id: "msg_456".to_string(),
             payload: MessagePayload::Json(serde_json::json!({"regular": "message"})),

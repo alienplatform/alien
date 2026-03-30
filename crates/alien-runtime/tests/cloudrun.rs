@@ -5,7 +5,7 @@
 //! - GCS CloudEvents → StorageEvent via gRPC → KV storage
 //! - Pub/Sub CloudEvents → QueueMessage via gRPC → KV storage
 //! - Cloud Scheduler → CronEvent via gRPC → KV storage
-//! - ARC via Pub/Sub CloudEvents → command dispatch via gRPC
+//! - Commands via Pub/Sub CloudEvents → command dispatch via gRPC
 
 use alien_bindings::{
     grpc::{

@@ -79,26 +79,28 @@ impl TestDeployment {
 
             if status == "running" {
                 // Extract the public URL from stack_state resource outputs.
-                // StackState is: { resources: { <id>: { type, status, outputs: { url, ... } } } }
-                if let Some(ref stack_state) = resp.stack_state {
-                    if let Some(resources) =
-                        stack_state.get("resources").and_then(|v| v.as_object())
+                if let Some(ref state_value) = resp.stack_state {
+                    if let Ok(stack_state) =
+                        serde_json::from_value::<alien_core::StackState>(state_value.clone())
                     {
-                        for (_resource_id, resource_state) in resources {
-                            let resource_type = resource_state
-                                .get("type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            if resource_type == "function" || resource_type == "container" {
-                                if let Some(url) = resource_state
-                                    .get("outputs")
-                                    .and_then(|o| o.get("url"))
-                                    .and_then(|v| v.as_str())
+                        for (resource_id, resource_state) in &stack_state.resources {
+                            if let Some(ref outputs) = resource_state.outputs {
+                                let url = if let Some(f) =
+                                    outputs.downcast_ref::<alien_core::FunctionOutputs>()
                                 {
+                                    f.url.as_deref()
+                                } else if let Some(c) =
+                                    outputs.downcast_ref::<alien_core::ContainerOutputs>()
+                                {
+                                    c.url.as_deref()
+                                } else {
+                                    None
+                                };
+                                if let Some(url) = url {
                                     self.url = Some(url.to_string());
                                     info!(
                                         deployment = %self.id,
-                                        resource = %_resource_id,
+                                        resource = %resource_id,
                                         %url,
                                         "deployment URL discovered from resource outputs"
                                     );

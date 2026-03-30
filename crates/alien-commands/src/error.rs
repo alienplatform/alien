@@ -1,7 +1,7 @@
 use alien_error::{AlienError, AlienErrorData};
 use serde::{Deserialize, Serialize};
 
-/// Errors that occur in the Alien Remote Call (ARC) protocol.
+/// Errors that occur in the commands protocol.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
@@ -18,7 +18,7 @@ pub enum ErrorData {
         message: String,
     },
 
-    /// Requested ARC command ID was not found.
+    /// Requested command ID was not found.
     #[error(
         code = "COMMAND_NOT_FOUND",
         message = "Command '{command_id}' not found",
@@ -107,10 +107,10 @@ pub enum ErrorData {
         target: Option<String>,
     },
 
-    /// ARC envelope validation or parsing failed.
+    /// Command envelope validation or parsing failed.
     #[error(
         code = "INVALID_ENVELOPE",
-        message = "Invalid ARC envelope: {message}",
+        message = "Invalid command envelope: {message}",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -209,10 +209,10 @@ pub enum ErrorData {
         lease_id: String,
     },
 
-    /// Generic ARC error for uncommon cases.
+    /// Generic commands error for uncommon cases.
     #[error(
-        code = "ARC_ERROR",
-        message = "ARC protocol error: {message}",
+        code = "COMMANDS_ERROR",
+        message = "Commands protocol error: {message}",
         retryable = "true",
         internal = "true"
     )]

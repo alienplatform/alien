@@ -5,7 +5,7 @@
 //! - Azure Blob Storage CloudEvents → StorageEvent via gRPC → KV storage
 //! - Dapr Service Bus messages → QueueMessage via gRPC → KV storage
 //! - Azure Timer trigger → CronEvent via gRPC → KV storage
-//! - ARC via Service Bus CloudEvents → command dispatch via gRPC
+//! - Commands via Service Bus CloudEvents → command dispatch via gRPC
 
 use alien_bindings::{
     grpc::{

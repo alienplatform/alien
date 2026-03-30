@@ -48,11 +48,10 @@ pub trait GcpClientConfigExt {
     /// Get bearer token for the given audience
     async fn get_bearer_token(&self, audience: &str) -> Result<String>;
 
-    /// Generate JWT token from service account JSON
+    /// Generate an OAuth2 access token from service account credentials
     async fn generate_jwt_token(
         &self,
         service_account_json: &str,
-        audience: &str,
     ) -> Result<String>;
 
     /// Build SDK configuration
@@ -291,11 +290,11 @@ impl GcpClientConfigExt for GcpClientConfig {
     }
 
     /// Generates a bearer token for GCP API authentication
-    async fn get_bearer_token(&self, audience: &str) -> Result<String> {
+    async fn get_bearer_token(&self, _audience: &str) -> Result<String> {
         match &self.credentials {
             GcpCredentials::AccessToken { token } => Ok(token.clone()),
             GcpCredentials::ServiceAccountKey { json } => {
-                self.generate_jwt_token(json, audience).await
+                self.generate_jwt_token(json).await
             }
             GcpCredentials::ServiceMetadata => self.fetch_metadata_token().await,
             GcpCredentials::ProjectedServiceAccount { token_file, .. } => {
@@ -341,7 +340,6 @@ impl GcpClientConfigExt for GcpClientConfig {
     async fn generate_jwt_token(
         &self,
         service_account_json: &str,
-        _audience: &str,
     ) -> Result<String> {
         use jwt_simple::prelude::*;
 

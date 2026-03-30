@@ -105,12 +105,12 @@ pub enum DeploymentsCmd {
     },
     /// Get deployment details
     Get {
-        /// Deployment ID
+        /// Deployment name or ID
         id: String,
     },
     /// Delete a deployment
     Delete {
-        /// Deployment ID
+        /// Deployment name or ID
         id: String,
 
         /// Skip confirmation prompt
@@ -119,12 +119,12 @@ pub enum DeploymentsCmd {
     },
     /// Retry a deployment
     Retry {
-        /// Deployment ID
+        /// Deployment name or ID
         id: String,
     },
     /// Redeploy a deployment with the same release
     Redeploy {
-        /// Deployment ID
+        /// Deployment name or ID
         id: String,
     },
     /// Pin a deployment to a specific release
@@ -841,7 +841,8 @@ async fn list_local_deployments_task(port: u16) -> Result<()> {
 }
 
 async fn get_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
-    let path = format!("/v1/deployments/{deployment_id}");
+    let deployment = resolve_local_deployment_reference(port, deployment_id).await?;
+    let path = format!("/v1/deployments/{}", deployment.id);
     let response: LocalDeploymentResponse =
         local_manager_request(port, reqwest::Method::GET, &path, None).await?;
     print_local_deployment(&response);
@@ -849,9 +850,13 @@ async fn get_local_deployment_task(port: u16, deployment_id: &str) -> Result<()>
 }
 
 async fn delete_local_deployment_task(port: u16, deployment_id: &str, yes: bool) -> Result<()> {
+    let deployment = resolve_local_deployment_reference(port, deployment_id).await?;
     if !yes {
         let confirmed = prompt_confirm(
-            &format!("Delete deployment '{deployment_id}' from the local manager?"),
+            &format!(
+                "Delete deployment '{}' from the local manager?",
+                deployment.name
+            ),
             false,
         )?;
         if !confirmed {
@@ -859,7 +864,7 @@ async fn delete_local_deployment_task(port: u16, deployment_id: &str, yes: bool)
         }
     }
 
-    let path = format!("/v1/deployments/{deployment_id}");
+    let path = format!("/v1/deployments/{}", deployment.id);
     let response: LocalActionResponse =
         local_manager_request(port, reqwest::Method::DELETE, &path, None).await?;
 
@@ -875,18 +880,20 @@ async fn delete_local_deployment_task(port: u16, deployment_id: &str, yes: bool)
 }
 
 async fn retry_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
-    let path = format!("/v1/deployments/{deployment_id}/retry");
+    let deployment = resolve_local_deployment_reference(port, deployment_id).await?;
+    let path = format!("/v1/deployments/{}/retry", deployment.id);
     let _: LocalActionResponse =
         local_manager_request(port, reqwest::Method::POST, &path, None).await?;
-    println!("Retry requested for deployment '{deployment_id}'.");
+    println!("Retry requested for deployment '{}'.", deployment.name);
     Ok(())
 }
 
 async fn redeploy_local_deployment_task(port: u16, deployment_id: &str) -> Result<()> {
-    let path = format!("/v1/deployments/{deployment_id}/redeploy");
+    let deployment = resolve_local_deployment_reference(port, deployment_id).await?;
+    let path = format!("/v1/deployments/{}/redeploy", deployment.id);
     let _: LocalActionResponse =
         local_manager_request(port, reqwest::Method::POST, &path, None).await?;
-    println!("Redeploy requested for deployment '{deployment_id}'.");
+    println!("Redeploy requested for deployment '{}'.", deployment.name);
     Ok(())
 }
 
@@ -904,6 +911,28 @@ fn print_local_deployment(deployment: &LocalDeploymentResponse) {
         table.add_row(vec!["Updated", updated_at.as_str()]);
     }
     print_table(table);
+}
+
+async fn resolve_local_deployment_reference(
+    port: u16,
+    reference: &str,
+) -> Result<LocalDeploymentResponse> {
+    let response: LocalDeploymentsResponse =
+        local_manager_request(port, reqwest::Method::GET, "/v1/deployments", None).await?;
+
+    response
+        .items
+        .into_iter()
+        .find(|deployment| deployment.id == reference || deployment.name == reference)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "deployment".to_string(),
+                message: format!(
+                    "Deployment '{}' was not found on the local manager.",
+                    reference
+                ),
+            })
+        })
 }
 
 async fn local_manager_request<T: DeserializeOwned>(

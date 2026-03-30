@@ -10,26 +10,26 @@ use crate::{
     PROTOCOL_VERSION,
 };
 
-/// Parse a QueueMessage to extract an ARC envelope if present
+/// Parse a QueueMessage to extract a command envelope if present
 pub fn parse_envelope(message: &QueueMessage) -> Result<Option<Envelope>> {
     let envelope_data = match &message.payload {
         MessagePayload::Json(value) => {
-            // Try to parse as ARC envelope
+            // Try to parse as command envelope
             match serde_json::from_value::<Envelope>(value.clone()) {
                 Ok(envelope) => envelope,
-                Err(_) => return Ok(None), // Not an ARC envelope
+                Err(_) => return Ok(None), // Not a command envelope
             }
         }
         MessagePayload::Text(text) => {
-            // Try to parse JSON text as ARC envelope
+            // Try to parse JSON text as command envelope
             match serde_json::from_str::<Envelope>(text) {
                 Ok(envelope) => envelope,
-                Err(_) => return Ok(None), // Not an ARC envelope
+                Err(_) => return Ok(None), // Not a command envelope
             }
         }
     };
 
-    // Validate it's a valid ARC envelope
+    // Validate it's a valid command envelope
     if envelope_data.protocol != PROTOCOL_VERSION {
         return Ok(None);
     }
@@ -151,9 +151,9 @@ pub async fn decode_params_bytes(envelope: &Envelope) -> Result<Vec<u8>> {
     }
 }
 
-/// Submit a command response back to the ARC server
+/// Submit a command response back to the command server
 ///
-/// This function implements the complete ARC response submission protocol:
+/// This function implements the complete command response submission protocol:
 /// - Small responses (≤ maxInlineBytes) are submitted inline as base64
 /// - Large responses are uploaded to storage first, then submitted with storage reference
 #[cfg(feature = "runtime")]
@@ -252,13 +252,13 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
         CommandResponse::Error { .. } => response.clone(),
     };
 
-    // Submit response to ARC server using the URL from the envelope
+    // Submit response to command server using the URL from the envelope
     let submit_url = &envelope.response_handling.submit_response_url;
 
     debug!(
         command_id = %envelope.command_id,
         url = %submit_url,
-        "Submitting ARC response"
+        "Submitting command response"
     );
 
     let http_response = client
@@ -292,7 +292,7 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
         command_id = %envelope.command_id,
         processing_ms = start_time.elapsed().as_millis(),
         response_type = if final_response.is_success() { "success" } else { "error" },
-        "ARC response submitted successfully"
+        "Command response submitted successfully"
     );
 
     Ok(())
@@ -324,7 +324,7 @@ mod tests {
             params: BodySpec::inline(b"{}"),
             response_handling: crate::types::ResponseHandling {
                 max_inline_bytes: 150000,
-                submit_response_url: "https://arc.example.com/commands/cmd_123/response"
+                submit_response_url: "https://commands.example.com/commands/cmd_123/response"
                     .to_string(),
                 storage_upload_request: PresignedRequest::new_http(
                     "https://storage.example.com/upload".to_string(),
@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_non_arc_message() {
+    fn test_parse_non_command_message() {
         let queue_message = QueueMessage {
             id: "msg_789".to_string(),
             payload: MessagePayload::Json(serde_json::json!({"regular": "message"})),
@@ -460,7 +460,7 @@ mod tests {
             params: BodySpec::inline(&params_bytes),
             response_handling: crate::types::ResponseHandling {
                 max_inline_bytes: 150000,
-                submit_response_url: "https://arc.example.com/response".to_string(),
+                submit_response_url: "https://commands.example.com/response".to_string(),
                 storage_upload_request: PresignedRequest::new_http(
                     "https://storage.example.com/upload".to_string(),
                     "PUT".to_string(),

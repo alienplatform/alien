@@ -206,7 +206,7 @@ export async function checkCommandEcho(deployment: Deployment): Promise<void> {
 export async function checkCommandLargePayload(deployment: Deployment): Promise<void> {
   // >48KB payload — forces storage-based response path
   const largeData = 'x'.repeat(50_000)
-  const result = await deployment.invokeCommand('arc-test-large', { data: largeData })
+  const result = await deployment.invokeCommand('cmd-test-large', { data: largeData })
   expect(result.data).toBe(largeData)
 }
 ```

@@ -236,9 +236,9 @@ fn register_event_handlers(app_state: &AppState) {
         Ok(params)
     });
 
-    // ARC test command for small payloads (inline response)
-    ctx.on_command("arc-test-small", |params: serde_json::Value| async move {
-        info!(params = ?params, "Received arc-test-small command");
+    // Commands test for small payloads (inline response)
+    ctx.on_command("cmd-test-small", |params: serde_json::Value| async move {
+        info!(params = ?params, "Received cmd-test-small command");
 
         let params_json = serde_json::to_string(&params).unwrap_or_default();
         let mut hasher = Sha256::new();
@@ -247,17 +247,17 @@ fn register_event_handlers(app_state: &AppState) {
 
         Ok(serde_json::json!({
             "success": true,
-            "testType": "arc-small-payload",
+            "testType": "cmd-small-payload",
             "paramsHash": hash,
             "paramsSize": params_json.len(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
-            "message": "ARC small payload test completed successfully"
+            "message": "Small payload test completed successfully"
         }))
     });
 
-    // ARC test command for large payloads (storage-based response)
-    ctx.on_command("arc-test-large", |params: serde_json::Value| async move {
-        info!(params = ?params, "Received arc-test-large command");
+    // Commands test for large payloads (storage-based response)
+    ctx.on_command("cmd-test-large", |params: serde_json::Value| async move {
+        info!(params = ?params, "Received cmd-test-large command");
 
         let params_json = serde_json::to_string(&params).unwrap_or_default();
         let mut hasher = Sha256::new();
@@ -270,11 +270,11 @@ fn register_event_handlers(app_state: &AppState) {
 
         Ok(serde_json::json!({
             "success": true,
-            "testType": "arc-large-payload",
+            "testType": "cmd-large-payload",
             "paramsHash": hash,
             "paramsSize": params_json.len(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
-            "message": "ARC large payload test completed successfully",
+            "message": "Large payload test completed successfully",
             "largeResponseData": large_data,
             "bulkData": bulk_array,
         }))

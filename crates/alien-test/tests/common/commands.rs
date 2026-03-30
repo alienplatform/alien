@@ -8,19 +8,13 @@ use anyhow::bail;
 use tracing::info;
 
 /// Run all command checks against the deployment.
-///
-/// `skip_large_payload`: set to true for push-mode cloud deployments where the
-/// test manager uses local command storage that Lambda/Cloud Run can't access.
-pub async fn check_commands(
-    deployment: &TestDeployment,
-    skip_large_payload: bool,
-) -> anyhow::Result<()> {
+pub async fn check_commands(deployment: &TestDeployment) -> anyhow::Result<()> {
     check_command_echo(deployment).await?;
     check_command_small_payload(deployment).await?;
-    if skip_large_payload || deployment.platform == "local" {
+    if deployment.platform == "local" {
         info!(
-            "Skipping large payload command check (platform={}, skip_large_payload={})",
-            deployment.platform, skip_large_payload
+            "Skipping large payload command check (platform={})",
+            deployment.platform,
         );
     } else {
         check_command_large_payload(deployment).await?;
@@ -64,7 +58,7 @@ pub async fn check_command_small_payload(deployment: &TestDeployment) -> anyhow:
     });
 
     let result = deployment
-        .invoke_command("arc-test-small", test_params)
+        .invoke_command("cmd-test-small", test_params)
         .await
         .map_err(|e| anyhow::anyhow!("Small payload command invocation failed: {}", e))?;
 
@@ -80,7 +74,7 @@ pub async fn check_command_small_payload(deployment: &TestDeployment) -> anyhow:
         .get("testType")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if test_type != "arc-small-payload" {
+    if test_type != "cmd-small-payload" {
         bail!(
             "Small payload command returned unexpected testType: {}",
             test_type
@@ -110,7 +104,7 @@ pub async fn check_command_large_payload(deployment: &TestDeployment) -> anyhow:
     });
 
     let result = deployment
-        .invoke_command("arc-test-large", test_params)
+        .invoke_command("cmd-test-large", test_params)
         .await
         .map_err(|e| anyhow::anyhow!("Large payload command invocation failed: {}", e))?;
 
@@ -126,7 +120,7 @@ pub async fn check_command_large_payload(deployment: &TestDeployment) -> anyhow:
         .get("testType")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if test_type != "arc-large-payload" {
+    if test_type != "cmd-large-payload" {
         bail!(
             "Large payload command returned unexpected testType: {}",
             test_type

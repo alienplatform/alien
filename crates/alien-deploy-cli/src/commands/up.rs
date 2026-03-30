@@ -556,10 +556,20 @@ pub async fn push_initial_setup(
 
     let stack_state = deployment
         .stack_state
-        .and_then(|v| serde_json::from_value(v).ok());
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
     let environment_info = deployment
         .environment_info
-        .and_then(|v| serde_json::from_value(v).ok());
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize environment_info from manager".to_string(),
+        })?;
 
     // If there's a desired release, fetch the full release info
     let target_release = if let Some(ref release_id) = deployment.desired_release_id {
@@ -635,7 +645,12 @@ pub async fn push_initial_setup(
     // Reconstruct DeploymentConfig from stack_settings
     let stack_settings: StackSettings = deployment
         .stack_settings
-        .and_then(|v| serde_json::from_value(v).ok())
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_settings from manager".to_string(),
+        })?
         .unwrap_or_default();
 
     // Build a minimal config JSON and deserialize to get proper defaults
@@ -657,7 +672,9 @@ pub async fn push_initial_setup(
 
     // Acquire sync lock — retry until the specific deployment is locked by us.
     // The manager's deployment loop may already hold the lock; we must wait for
-    // it to release before proceeding.
+    // it to release before proceeding. 2 minutes (60 × 2s) is sufficient because
+    // the manager skips Pending/InitialSetup for push-mode deployments — if it
+    // holds the lock, it checks push-mode + Pending and releases immediately.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
     let max_acquire_attempts = 60;
     for attempt in 1..=max_acquire_attempts {
@@ -717,10 +734,20 @@ pub async fn push_initial_setup(
     state.status = status;
     state.stack_state = deployment
         .stack_state
-        .and_then(|v| serde_json::from_value(v).ok());
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
     state.runtime_metadata = deployment
         .runtime_metadata
-        .and_then(|v| serde_json::from_value(v).ok());
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
 
     // Step loop with lock release guard
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;

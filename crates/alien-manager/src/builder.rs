@@ -30,6 +30,10 @@ pub struct AlienManagerBuilder {
     skip_deploy_page: bool,
     /// When `true`, the install script (`/v1/install`) is omitted from the router.
     skip_install: bool,
+    /// Override the command storage backend used by `with_standalone_defaults()`.
+    /// When set, this replaces the default `LocalStorage` — useful for tests that
+    /// need push-mode runtimes (Lambda/Cloud Run) to access presigned URLs.
+    command_storage_override: Option<Arc<dyn alien_bindings::traits::Storage>>,
 }
 
 impl AlienManagerBuilder {
@@ -50,6 +54,7 @@ impl AlienManagerBuilder {
             skip_initialize: false,
             skip_deploy_page: false,
             skip_install: false,
+            command_storage_override: None,
         }
     }
 
@@ -192,6 +197,18 @@ impl AlienManagerBuilder {
                     .copied()
                     .unwrap_or(alien_core::Platform::Aws);
                 let (primary, targets) = build_standalone_providers(primary_platform, &env).await?;
+
+                // If ALIEN_COMMAND_STORAGE_BINDING is configured, resolve it from
+                // the primary provider so push-mode runtimes (Lambda, Cloud Run)
+                // get real presigned HTTP URLs instead of local filesystem paths.
+                // parse_standard_bindings() already mapped it to "command-storage".
+                if self.command_storage_override.is_none() {
+                    if let Ok(storage) = primary.load_storage("command-storage").await {
+                        info!("Resolved command storage from ALIEN_COMMAND_STORAGE_BINDING");
+                        self.command_storage_override = Some(storage);
+                    }
+                }
+
                 self.credential_resolver = Some(Arc::new(
                     crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
                         primary, targets,
@@ -247,19 +264,24 @@ impl AlienManagerBuilder {
                     })
                 })?);
 
-            let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
-                LocalStorage::new(
-                    storage_path
-                        .to_str()
-                        .unwrap_or("commands_storage")
-                        .to_string(),
-                )
-                .map_err(|e| {
-                    AlienError::new(ErrorData::ServerInitFailed {
-                        reason: format!("Failed to create command storage: {}", e),
-                    })
-                })?,
-            );
+            let command_storage: Arc<dyn alien_bindings::traits::Storage> =
+                if let Some(storage) = self.command_storage_override.take() {
+                    storage
+                } else {
+                    Arc::new(
+                        LocalStorage::new(
+                            storage_path
+                                .to_str()
+                                .unwrap_or("commands_storage")
+                                .to_string(),
+                        )
+                        .map_err(|e| {
+                            AlienError::new(ErrorData::ServerInitFailed {
+                                reason: format!("Failed to create command storage: {}", e),
+                            })
+                        })?,
+                    )
+                };
 
             let command_registry: Arc<dyn alien_commands::server::CommandRegistry> =
                 Arc::new(crate::stores::sqlite::SqliteCommandRegistry::new(

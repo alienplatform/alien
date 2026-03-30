@@ -1,6 +1,6 @@
 //! Test utilities for alien-commands integration testing
 //!
-//! This module provides test infrastructure for testing ARC server and runtime
+//! This module provides test infrastructure for testing command server and runtime
 //! components in isolation and together. Key features:
 //!
 //! - `TestCommandServer`: Easy-to-use test server with local storage backends
@@ -13,7 +13,7 @@
 //! use alien_commands::test_utils::TestCommandServer;
 //!
 //! #[tokio::test]
-//! async fn test_arc_command_flow() {
+//! async fn test_command_flow() {
 //!     let server = TestCommandServer::new().await;
 //!     
 //!     // Create command

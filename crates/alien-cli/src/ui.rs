@@ -108,6 +108,20 @@ pub fn print_table(table: Table) {
     println!("{table}");
 }
 
+#[derive(Debug, Clone)]
+pub struct DevDeploymentResourceRow {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DevDeploymentRow {
+    pub name: String,
+    pub deployment_id: String,
+    pub status: DeploymentStatus,
+    pub resources: Vec<DevDeploymentResourceRow>,
+}
+
 pub fn status_cell(status: &str) -> Cell {
     let normalized = status.to_ascii_lowercase();
     let cell = Cell::new(status);
@@ -132,6 +146,75 @@ pub fn status_cell(status: &str) -> Cell {
         cell.fg(Color::Yellow)
     } else {
         cell.fg(Color::Cyan)
+    }
+}
+
+pub struct DevDeploymentsScreen {
+    progress: Option<MultiProgress>,
+    status_bar: Option<ProgressBar>,
+    table_bar: Option<ProgressBar>,
+    footer_bar: Option<ProgressBar>,
+    focus_name: String,
+}
+
+impl DevDeploymentsScreen {
+    pub fn new(focus_name: impl Into<String>) -> Self {
+        let focus_name = focus_name.into();
+        if !supports_ansi() {
+            return Self {
+                progress: None,
+                status_bar: None,
+                table_bar: None,
+                footer_bar: None,
+                focus_name,
+            };
+        }
+
+        let progress = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
+        let status_bar = progress.add(new_spinner_row());
+        let table_bar = progress.add(new_block_row());
+        let footer_bar = progress.add(new_block_row());
+
+        footer_bar.set_message(render_dev_footer(&focus_name));
+
+        Self {
+            progress: Some(progress),
+            status_bar: Some(status_bar),
+            table_bar: Some(table_bar),
+            footer_bar: Some(footer_bar),
+            focus_name,
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.progress.is_some()
+    }
+
+    pub fn update(&self, status_message: &str, deployments: &[DevDeploymentRow]) {
+        let Some(status_bar) = &self.status_bar else {
+            return;
+        };
+        let Some(table_bar) = &self.table_bar else {
+            return;
+        };
+        let Some(footer_bar) = &self.footer_bar else {
+            return;
+        };
+
+        status_bar.set_style(spinner_row_style());
+        status_bar.set_message(status_message.to_string());
+        table_bar.set_style(block_row_style());
+        table_bar.set_message(render_dev_deployments_table(deployments));
+        footer_bar.set_style(block_row_style());
+        footer_bar.set_message(render_dev_footer(&self.focus_name));
+    }
+
+    pub fn println(&self, line: &str) {
+        if let Some(progress) = &self.progress {
+            let _ = progress.println(line);
+        } else {
+            println!("{line}");
+        }
     }
 }
 
@@ -464,10 +547,6 @@ impl ProgressBoard {
         apply_text_row(&entry.bar, state, &entry.label, detail.as_deref());
     }
 
-    fn resource_active(&self, key: &str, label: String, detail: Option<String>) {
-        self.set_resource_text(key, label, RowState::Active, detail);
-    }
-
     fn set_resource_progress(
         &self,
         key: &str,
@@ -506,16 +585,6 @@ impl ProgressBoard {
         let message = format_message(&entry.label, detail.as_deref());
         entry.bar.set_prefix(active_prefix());
         entry.bar.set_message(message);
-    }
-
-    fn resource_progress(
-        &self,
-        key: &str,
-        label: String,
-        detail: Option<String>,
-        progress: &PushProgress,
-    ) {
-        self.set_resource_progress(key, label, detail, progress);
     }
 
     fn finish_resource(&self, key: &str, state: RowState, detail: Option<String>) {
@@ -566,8 +635,18 @@ fn new_text_row() -> ProgressBar {
     bar
 }
 
+fn new_block_row() -> ProgressBar {
+    let bar = ProgressBar::new(1);
+    bar.set_style(block_row_style());
+    bar
+}
+
 fn text_row_style() -> ProgressStyle {
     ProgressStyle::with_template("{prefix} {msg}").expect("text row template should be valid")
+}
+
+fn block_row_style() -> ProgressStyle {
+    ProgressStyle::with_template("{msg}").expect("block row template should be valid")
 }
 
 fn bytes_progress_style() -> ProgressStyle {
@@ -1098,4 +1177,47 @@ fn apply_push_progress(
 
 fn deployment_resource_label(resource_name: &str, resource: &StackResourceState) -> String {
     format!("{resource_name} ({})", resource.resource_type)
+}
+
+fn render_dev_deployments_table(deployments: &[DevDeploymentRow]) -> String {
+    let mut table = make_table(&["Name", "Deployment ID", "Status", "Resources"]);
+
+    let mut sorted = deployments.to_vec();
+    sorted.sort_by(|left, right| left.name.cmp(&right.name));
+
+    for deployment in sorted {
+        let mut resources = deployment.resources;
+        resources.sort_by(|left, right| left.name.cmp(&right.name));
+
+        let resources_cell = if resources.is_empty() {
+            "no public URL yet".to_string()
+        } else {
+            resources
+                .into_iter()
+                .map(|resource| format!("{}: {}", resource.name, resource.url))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        table.add_row(vec![
+            deployment.name.into(),
+            deployment.deployment_id.into(),
+            status_cell(format_deployment_status(deployment.status)),
+            Cell::new(resources_cell),
+        ]);
+    }
+
+    table.to_string()
+}
+
+fn render_dev_footer(focus_name: &str) -> String {
+    format!(
+        "{}\n  Ship a change with {}\n  Create another deployment with {}\n  Inspect {} with {}\n{}",
+        dim_label("Try next"),
+        command("alien dev release"),
+        command("alien dev deploy --name preview --platform local"),
+        focus_name,
+        command(&format!("alien dev deployments get {focus_name}")),
+        dim_label("Watching local deployments for live updates. Press Ctrl+C to stop this session.")
+    )
 }

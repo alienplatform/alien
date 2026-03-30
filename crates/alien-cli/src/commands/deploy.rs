@@ -1,4 +1,5 @@
 use crate::commands::deployments::MonitoringMode;
+use crate::commands::{create_initial_deployment, wait_for_dev_deployment_ready_with_progress};
 use crate::deployment_tracking::{validate_token, DeploymentToken, DeploymentTracker};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -151,6 +152,10 @@ fn create_authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClien
 
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ExecutionMode::Dev { port } = ctx {
+        return deploy_local_dev_task(args, port).await;
+    }
+
     info!("Starting deploy command");
     println!(
         "{}",
@@ -730,6 +735,66 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             "alien deployments get {}",
             tracked_deployment.deployment_id
         ))
+    );
+
+    Ok(())
+}
+
+async fn deploy_local_dev_task(args: DeployArgs, port: u16) -> Result<()> {
+    if args.platform != "local" {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: "alien dev deploy only supports --platform local".to_string(),
+        }));
+    }
+
+    println!(
+        "{}",
+        contextual_heading("Creating local deployment", &args.name, &[])
+    );
+
+    let steps = FixedSteps::new(&["Prepare deployment", "Wait for deployment"]);
+    steps.activate(0, Some(args.name.clone()));
+    let deployment_id = create_initial_deployment(&args.name, port, None).await?;
+    steps.complete(0, Some(format!("{} ({})", args.name, deployment_id)));
+
+    steps.activate(1, Some(format!("{} ({})", args.name, "queued")));
+    let snapshot = wait_for_dev_deployment_ready_with_progress(port, &args.name, None, |status| {
+        steps.activate(
+            1,
+            Some(format!(
+                "{} ({})",
+                args.name,
+                crate::ui::format_deployment_status(status).to_ascii_lowercase()
+            )),
+        );
+    })
+    .await?;
+    steps.complete(1, Some(format!("{} ready", args.name)));
+
+    println!("{}", success_line("Deployment ready."));
+    println!("{} {} ({})", dim_label("Deployment"), snapshot.deployment_name, snapshot.deployment_id);
+    if snapshot.resources.is_empty() {
+        println!("{}", dim_label("No public resource URLs were reported yet."));
+    } else {
+        println!("{}", dim_label("Resources"));
+        for (name, resource) in snapshot.resources.iter() {
+            println!(
+                "  - {}{}{}",
+                name,
+                resource
+                    .resource_type
+                    .as_ref()
+                    .map(|resource_type| format!(" ({resource_type})"))
+                    .unwrap_or_default(),
+                format!(": {}", resource.url)
+            );
+        }
+    }
+    println!(
+        "{} inspect it with {}",
+        dim_label("Next"),
+        command(&format!("alien dev deployments get {}", snapshot.deployment_name))
     );
 
     Ok(())

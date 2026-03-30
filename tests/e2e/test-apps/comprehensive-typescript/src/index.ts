@@ -353,21 +353,21 @@ command("echo", async (params: any) => {
   return params
 })
 
-command("arc-test-small", async (params: any) => {
+command("cmd-test-small", async (params: any) => {
   const paramsJson = JSON.stringify(params)
   const crypto = await import("node:crypto")
   const hash = crypto.createHash("sha256").update(paramsJson).digest("hex")
 
   return {
     success: true,
-    testType: "arc-small-payload",
+    testType: "cmd-small-payload",
     paramsHash: hash,
     paramsSize: paramsJson.length,
     timestamp: new Date().toISOString(),
   }
 })
 
-command("arc-test-large", async (params: any) => {
+command("cmd-test-large", async (params: any) => {
   const paramsJson = JSON.stringify(params)
   const crypto = await import("node:crypto")
   const hash = crypto.createHash("sha256").update(paramsJson).digest("hex")
@@ -376,7 +376,7 @@ command("arc-test-large", async (params: any) => {
 
   return {
     success: true,
-    testType: "arc-large-payload",
+    testType: "cmd-large-payload",
     paramsHash: hash,
     paramsSize: paramsJson.length,
     timestamp: new Date().toISOString(),

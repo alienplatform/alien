@@ -859,6 +859,33 @@
           }
         }
       },
+      "AwsPlatformPermission": {
+        "type": "object",
+        "description": "AWS-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "description": "How to bind the permissions (stack vs resource scope)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingConfiguration_AwsBindingSpec"
+              }
+            ]
+          },
+          "grant": {
+            "description": "What permissions to grant",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PermissionGrant"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -869,6 +896,202 @@
             "type": "string"
           }
         }
+      },
+      "AzurePlatformPermission": {
+        "type": "object",
+        "description": "Azure-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "description": "How to bind the permissions (stack vs resource scope)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingConfiguration_AzureBindingSpec"
+              }
+            ]
+          },
+          "grant": {
+            "description": "What permissions to grant",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PermissionGrant"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BaseResource": {
+        "type": "object",
+        "description": "Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BindingConfiguration_AwsBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": "object",
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "nullable": true
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": "object",
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "nullable": true
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_AzureBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_GcpBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "description": "Optional condition for filtering resources",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/GcpCondition"
+                  }
+                ],
+                "nullable": true
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "description": "Optional condition for filtering resources",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/GcpCondition"
+                  }
+                ],
+                "nullable": true
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       },
       "CommandsInfo": {
         "type": "object",
@@ -980,18 +1203,30 @@
         "description": "Platform-specific certificate references for custom domains.",
         "properties": {
           "aws": {
-            "$ref": "#/components/schemas/AwsCustomCertificateConfig",
             "description": "AWS ACM certificate ARN",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsCustomCertificateConfig"
+              }
+            ],
             "nullable": true
           },
           "azure": {
-            "$ref": "#/components/schemas/AzureCustomCertificateConfig",
             "description": "Azure Key Vault certificate ID",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureCustomCertificateConfig"
+              }
+            ],
             "nullable": true
           },
           "gcp": {
-            "$ref": "#/components/schemas/GcpCustomCertificateConfig",
             "description": "GCP Certificate Manager certificate name",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpCustomCertificateConfig"
+              }
+            ],
             "nullable": true
           }
         }
@@ -1005,8 +1240,12 @@
         ],
         "properties": {
           "certificate": {
-            "$ref": "#/components/schemas/CustomCertificateConfig",
-            "description": "Customer-provided certificate reference."
+            "description": "Customer-provided certificate reference.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CustomCertificateConfig"
+              }
+            ]
           },
           "domain": {
             "type": "string",
@@ -1137,7 +1376,10 @@
           "retryRequested": {
             "type": "boolean"
           },
-          "runtimeMetadata": {},
+          "runtimeMetadata": {
+            "$ref": "#/components/schemas/RuntimeMetadata",
+            "nullable": true
+          },
           "stackSettings": {},
           "stackState": {},
           "status": {
@@ -1185,8 +1427,12 @@
             "nullable": true
           },
           "type": {
-            "$ref": "#/components/schemas/EnvironmentVariableType",
-            "description": "Variable type (plain or secret)"
+            "description": "Variable type (plain or secret)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentVariableType"
+              }
+            ]
           },
           "value": {
             "type": "string",
@@ -1202,6 +1448,23 @@
           "secret"
         ]
       },
+      "GcpCondition": {
+        "type": "object",
+        "description": "GCP IAM condition",
+        "required": [
+          "title",
+          "expression"
+        ],
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -1212,6 +1475,33 @@
             "type": "string"
           }
         }
+      },
+      "GcpPlatformPermission": {
+        "type": "object",
+        "description": "GCP-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "description": "How to bind the permissions (stack vs resource scope)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingConfiguration_GcpBindingSpec"
+              }
+            ]
+          },
+          "grant": {
+            "description": "What permissions to grant",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PermissionGrant"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "GitMetadata": {
         "type": "object",
@@ -1329,6 +1619,52 @@
             "nullable": true
           }
         }
+      },
+      "ManagementPermissions": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Auto-derived permissions only (default)\nUses resource lifecycles to determine management permissions:\n- Frozen resources: `<type>/management`\n- Live resources: `<type>/provision`",
+            "enum": [
+              "auto"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Add permissions to auto-derived baseline",
+            "required": [
+              "extend"
+            ],
+            "properties": {
+              "extend": {
+                "description": "Add permissions to auto-derived baseline",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/PermissionProfile"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Replace auto-derived permissions entirely",
+            "required": [
+              "override"
+            ],
+            "properties": {
+              "override": {
+                "description": "Replace auto-derived permissions entirely",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/PermissionProfile"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Management permissions configuration for stack management access"
       },
       "NetworkSettings": {
         "oneOf": [
@@ -1479,6 +1815,117 @@
         ],
         "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
       },
+      "PermissionGrant": {
+        "type": "object",
+        "description": "Grant permissions for a specific cloud platform",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "AWS IAM actions (only for AWS)",
+            "nullable": true
+          },
+          "dataActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Azure actions (only for Azure)",
+            "nullable": true
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "GCP permissions (only for GCP)",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionProfile": {
+        "type": "object",
+        "description": "Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/PermissionSetReference"
+          }
+        }
+      },
+      "PermissionSet": {
+        "type": "object",
+        "description": "A permission set that can be applied across different cloud platforms",
+        "required": [
+          "id",
+          "description",
+          "platforms"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what this permission set allows"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the permission set (e.g., \"storage/data-read\")"
+          },
+          "platforms": {
+            "description": "Platform-specific permission configurations",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlatformPermissions"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionSetReference": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Reference to a built-in permission set by name (e.g., \"storage/data-read\")"
+          },
+          {
+            "description": "Inline permission set definition",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PermissionSet"
+              }
+            ]
+          }
+        ],
+        "description": "Reference to a permission set - either by name or inline definition"
+      },
+      "PermissionsConfig": {
+        "type": "object",
+        "description": "Combined permissions configuration that contains both profiles and management",
+        "required": [
+          "profiles"
+        ],
+        "properties": {
+          "management": {
+            "description": "Management permissions configuration for stack management access",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ManagementPermissions"
+              }
+            ]
+          },
+          "profiles": {
+            "type": "object",
+            "description": "Permission profiles that define access control for compute services\nKey is the profile name, value is the permission configuration",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -1490,6 +1937,37 @@
           "local",
           "test"
         ]
+      },
+      "PlatformPermissions": {
+        "type": "object",
+        "description": "Platform-specific permission configurations",
+        "properties": {
+          "aws": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AwsPlatformPermission"
+            },
+            "description": "AWS permission configurations",
+            "nullable": true
+          },
+          "azure": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AzurePlatformPermission"
+            },
+            "description": "Azure permission configurations",
+            "nullable": true
+          },
+          "gcp": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GcpPlatformPermission"
+            },
+            "description": "GCP permission configurations",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
       },
       "ReconcileRequest": {
         "type": "object",
@@ -1598,6 +2076,55 @@
           }
         }
       },
+      "ResourceLifecycle": {
+        "type": "string",
+        "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
+        "enum": [
+          "frozen",
+          "live"
+        ]
+      },
+      "ResourceRef": {
+        "type": "object",
+        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        }
+      },
+      "ResourceType": {
+        "type": "string",
+        "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
+        "example": "function"
+      },
+      "RuntimeMetadata": {
+        "type": "object",
+        "description": "Runtime metadata for deployment\n\nStores deployment state that needs to persist across step calls.",
+        "properties": {
+          "lastSyncedEnvVarsHash": {
+            "type": "string",
+            "description": "Hash of the environment variables snapshot that was last synced to the vault\nUsed to avoid redundant sync operations during incremental deployment",
+            "nullable": true
+          },
+          "preparedStack": {
+            "description": "The prepared (mutated) stack from the last successful deployment phase\nThis is the stack AFTER mutations have been applied (with service accounts, vault, etc.)\nUsed for compatibility checks during updates to compare mutated stacks",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Stack"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "ScopeInfo": {
         "type": "object",
         "required": [
@@ -1617,6 +2144,36 @@
           }
         }
       },
+      "Stack": {
+        "type": "object",
+        "description": "A bag of resources, unaware of any cloud.",
+        "required": [
+          "id",
+          "resources"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the stack"
+          },
+          "permissions": {
+            "description": "Combined permissions configuration containing both profiles and management",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PermissionsConfig"
+              }
+            ]
+          },
+          "resources": {
+            "type": "object",
+            "description": "Map of resource IDs to their configurations and lifecycle settings",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceEntry"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "StackByPlatform": {
         "type": "object",
         "description": "The release API accepts stacks keyed by platform.\nOnly one platform stack needs to be present.",
@@ -1634,30 +2191,54 @@
         "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
         "properties": {
           "deploymentModel": {
-            "$ref": "#/components/schemas/DeploymentModel",
-            "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push for cloud platforms.\nKubernetes and Local platforms only support Pull."
+            "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push for cloud platforms.\nKubernetes and Local platforms only support Pull.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentModel"
+              }
+            ]
           },
           "domains": {
-            "$ref": "#/components/schemas/DomainSettings",
             "description": "Domain configuration (future).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DomainSettings"
+              }
+            ],
             "nullable": true
           },
           "heartbeats": {
-            "$ref": "#/components/schemas/HeartbeatsMode",
-            "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
+            "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeartbeatsMode"
+              }
+            ]
           },
           "network": {
-            "$ref": "#/components/schemas/NetworkSettings",
             "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NetworkSettings"
+              }
+            ],
             "nullable": true
           },
           "telemetry": {
-            "$ref": "#/components/schemas/TelemetryMode",
-            "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
+            "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TelemetryMode"
+              }
+            ]
           },
           "updates": {
-            "$ref": "#/components/schemas/UpdatesMode",
-            "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
+            "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpdatesMode"
+              }
+            ]
           }
         }
       },

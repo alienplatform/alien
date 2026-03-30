@@ -16,6 +16,7 @@ use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_commands::server::NullCommandDispatcher;
 use alien_core::{
     AgentStatus, BinaryTarget, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack,
+    StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
@@ -59,6 +60,17 @@ pub struct DevDeploymentSnapshot {
     pub status: DeploymentStatus,
     pub commands_url: String,
     pub resources: HashMap<String, DevResourceInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DevDeploymentLiveState {
+    pub deployment_id: String,
+    pub deployment_name: String,
+    pub status: DeploymentStatus,
+    pub current_release_id: Option<String>,
+    pub resources: HashMap<String, DevResourceInfo>,
+    pub stack_state: Option<StackState>,
+    pub error: Option<serde_json::Value>,
 }
 
 /// Check if dev server is healthy
@@ -677,7 +689,6 @@ async fn find_named_local_deployment(
         .map(|deployment| DevDeploymentListItem {
             id: deployment.id.clone(),
             name: deployment.name.clone(),
-            status: deployment.status.clone(),
         }))
 }
 
@@ -706,7 +717,6 @@ async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> R
 struct DevDeploymentListItem {
     id: String,
     name: String,
-    status: String,
 }
 
 #[derive(Deserialize)]
@@ -735,6 +745,20 @@ struct DevDeploymentInfoResponse {
     commands: DevCommandsInfo,
     resources: HashMap<String, DevResourceEntry>,
     status: String,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDeploymentStateResponse {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default)]
+    current_release_id: Option<String>,
+    #[serde(default)]
+    stack_state: Option<serde_json::Value>,
     #[serde(default)]
     error: Option<serde_json::Value>,
 }
@@ -863,6 +887,187 @@ where
 
     Err(AlienError::new(ErrorData::ConfigurationError {
         message: "Timed out waiting for local deployment to become ready".to_string(),
+    }))
+}
+
+pub async fn fetch_dev_deployment_live_state(
+    port: u16,
+    deployment_name: &str,
+) -> Result<Option<DevDeploymentLiveState>> {
+    let http_client = reqwest::Client::new();
+    let base_url = format!("http://localhost:{port}");
+
+    let list_response = http_client
+        .get(format!("{base_url}/v1/deployments"))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list local deployments".to_string(),
+            url: None,
+        })?;
+
+    if !list_response.status().is_success() {
+        return Ok(None);
+    }
+
+    let deployments: DevDeploymentListResponse =
+        list_response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialize".to_string(),
+                reason: "Failed to parse local deployment list".to_string(),
+            })?;
+
+    let deployment = match deployments
+        .items
+        .into_iter()
+        .find(|deployment| deployment.name == deployment_name)
+    {
+        Some(deployment) => deployment,
+        None => return Ok(None),
+    };
+
+    fetch_dev_deployment_live_state_by_id(&http_client, &base_url, &deployment.id).await
+}
+
+pub async fn fetch_all_dev_deployment_live_states(port: u16) -> Result<Vec<DevDeploymentLiveState>> {
+    let http_client = reqwest::Client::new();
+    let base_url = format!("http://localhost:{port}");
+
+    let list_response = http_client
+        .get(format!("{base_url}/v1/deployments"))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to list local deployments".to_string(),
+            url: None,
+        })?;
+
+    if !list_response.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let deployments: DevDeploymentListResponse =
+        list_response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialize".to_string(),
+                reason: "Failed to parse local deployment list".to_string(),
+            })?;
+
+    let mut states = Vec::new();
+    for deployment in deployments.items {
+        if let Some(state) =
+            fetch_dev_deployment_live_state_by_id(&http_client, &base_url, &deployment.id).await?
+        {
+            states.push(state);
+        }
+    }
+
+    states.sort_by(|left, right| left.deployment_name.cmp(&right.deployment_name));
+    Ok(states)
+}
+
+async fn fetch_dev_deployment_live_state_by_id(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    deployment_id: &str,
+) -> Result<Option<DevDeploymentLiveState>> {
+    let state_response = http_client
+        .get(format!("{base_url}/v1/deployments/{deployment_id}"))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch local deployment state".to_string(),
+            url: None,
+        })?;
+
+    if !state_response.status().is_success() {
+        return Ok(None);
+    }
+
+    let state: DevDeploymentStateResponse =
+        state_response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialize".to_string(),
+                reason: "Failed to parse local deployment state".to_string(),
+            })?;
+
+    let info_response = http_client
+        .get(format!("{base_url}/v1/deployments/{deployment_id}/info"))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch local deployment details".to_string(),
+            url: None,
+        })?;
+
+    let info = if info_response.status().is_success() {
+        Some(
+            info_response
+                .json::<DevDeploymentInfoResponse>()
+                .await
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialize".to_string(),
+                    reason: "Failed to parse local deployment info".to_string(),
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let stack_state = state
+        .stack_state
+        .map(|value| {
+            serde_json::from_value(value)
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialize".to_string(),
+                    reason: "Failed to parse local stack state".to_string(),
+                })
+        })
+        .transpose()?;
+
+    let resources = info
+        .as_ref()
+        .map(|info| {
+            info.resources
+                .iter()
+                .filter_map(|(name, resource)| {
+                    resource.public_url.as_ref().map(|url| {
+                        (
+                            name.clone(),
+                            DevResourceInfo {
+                                url: url.clone(),
+                                resource_type: resource.resource_type.clone(),
+                            },
+                        )
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Some(DevDeploymentLiveState {
+        deployment_id: state.id,
+        deployment_name: state.name,
+        status: parse_deployment_status(&state.status)?,
+        current_release_id: state.current_release_id,
+        resources,
+        stack_state,
+        error: state.error.or_else(|| info.and_then(|details| details.error)),
     }))
 }
 

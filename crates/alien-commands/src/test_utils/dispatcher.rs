@@ -299,7 +299,7 @@ mod tests {
             BodySpec::inline(b"{}"),
             ResponseHandling {
                 max_inline_bytes: 150000,
-                submit_response_url: "https://arc.example.com/response".to_string(),
+                submit_response_url: "https://commands.example.com/response".to_string(),
                 storage_upload_request: alien_bindings::presigned::PresignedRequest::new_http(
                     "https://storage.example.com/upload".to_string(),
                     "PUT".to_string(),

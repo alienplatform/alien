@@ -79,7 +79,7 @@ pub struct GcpFunctionController {
     pub(crate) forwarding_rule_name: Option<String>,
 
     // Commands infrastructure
-    /// Pub/Sub topic name for commands delivery (projects/{project}/topics/{name})
+    /// Pub/Sub topic short name for commands delivery (without project prefix)
     pub(crate) commands_topic_name: Option<String>,
     /// Pub/Sub subscription name for commands delivery
     pub(crate) commands_subscription_name: Option<String>,
@@ -1995,14 +1995,8 @@ impl GcpFunctionController {
 
         // Delete commands topic (best-effort)
         if let Some(topic_name) = self.commands_topic_name.take() {
-            // Extract short topic name from full path
-            let topic_short = topic_name
-                .split('/')
-                .last()
-                .unwrap_or(&topic_name)
-                .to_string();
             info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
-            match pubsub_client.delete_topic(topic_short).await {
+            match pubsub_client.delete_topic(topic_name.clone()).await {
                 Ok(_) => {
                     info!(topic=%topic_name, "Commands Pub/Sub topic deleted");
                 }

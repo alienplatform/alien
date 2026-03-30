@@ -866,6 +866,25 @@
           }
         }
       },
+      "AwsPlatformPermission": {
+        "type": "object",
+        "description": "AWS-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_AwsBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -876,6 +895,214 @@
             "type": "string"
           }
         }
+      },
+      "AzurePlatformPermission": {
+        "type": "object",
+        "description": "Azure-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_AzureBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BaseResource": {
+        "type": "object",
+        "description": "Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BindingConfiguration_AwsBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "AWS-specific binding specification",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "condition": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Optional condition for additional filtering (rare)",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs to bind to"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_AzureBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "Azure-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "description": "Scope (subscription/resource group/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BindingConfiguration_GcpBindingSpec": {
+        "type": "object",
+        "description": "Generic binding configuration for permissions",
+        "properties": {
+          "resource": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GcpCondition",
+                    "description": "Optional condition for filtering resources"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stack": {
+            "type": "object",
+            "description": "GCP-specific binding specification",
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "condition": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GcpCondition",
+                    "description": "Optional condition for filtering resources"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope (project/resource level)"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       },
       "CommandsInfo": {
         "type": "object",
@@ -1193,7 +1420,16 @@
           "retryRequested": {
             "type": "boolean"
           },
-          "runtimeMetadata": {},
+          "runtimeMetadata": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeMetadata"
+              }
+            ]
+          },
           "stackSettings": {},
           "stackState": {},
           "status": {
@@ -1267,6 +1503,23 @@
           "secret"
         ]
       },
+      "GcpCondition": {
+        "type": "object",
+        "description": "GCP IAM condition",
+        "required": [
+          "title",
+          "expression"
+        ],
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -1277,6 +1530,25 @@
             "type": "string"
           }
         }
+      },
+      "GcpPlatformPermission": {
+        "type": "object",
+        "description": "GCP-specific platform permission configuration",
+        "required": [
+          "grant",
+          "binding"
+        ],
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/BindingConfiguration_GcpBindingSpec",
+            "description": "How to bind the permissions (stack vs resource scope)"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant",
+            "description": "What permissions to grant"
+          }
+        },
+        "additionalProperties": false
       },
       "GitMetadata": {
         "type": "object",
@@ -1420,6 +1692,44 @@
             ]
           }
         }
+      },
+      "ManagementPermissions": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Auto-derived permissions only (default)\nUses resource lifecycles to determine management permissions:\n- Frozen resources: `<type>/management`\n- Live resources: `<type>/provision`",
+            "enum": [
+              "auto"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Add permissions to auto-derived baseline",
+            "required": [
+              "extend"
+            ],
+            "properties": {
+              "extend": {
+                "$ref": "#/components/schemas/PermissionProfile",
+                "description": "Add permissions to auto-derived baseline"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Replace auto-derived permissions entirely",
+            "required": [
+              "override"
+            ],
+            "properties": {
+              "override": {
+                "$ref": "#/components/schemas/PermissionProfile",
+                "description": "Replace auto-derived permissions entirely"
+              }
+            }
+          }
+        ],
+        "description": "Management permissions configuration for stack management access"
       },
       "NetworkSettings": {
         "oneOf": [
@@ -1572,6 +1882,117 @@
         ],
         "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
       },
+      "PermissionGrant": {
+        "type": "object",
+        "description": "Grant permissions for a specific cloud platform",
+        "properties": {
+          "actions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "AWS IAM actions (only for AWS)"
+          },
+          "dataActions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Azure actions (only for Azure)"
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GCP permissions (only for GCP)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionProfile": {
+        "type": "object",
+        "description": "Permission profile that maps resources to permission sets\nKey can be \"*\" for all resources or resource name for specific resource",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/PermissionSetReference"
+          }
+        },
+        "propertyNames": {
+          "type": "string"
+        }
+      },
+      "PermissionSet": {
+        "type": "object",
+        "description": "A permission set that can be applied across different cloud platforms",
+        "required": [
+          "id",
+          "description",
+          "platforms"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what this permission set allows"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the permission set (e.g., \"storage/data-read\")"
+          },
+          "platforms": {
+            "$ref": "#/components/schemas/PlatformPermissions",
+            "description": "Platform-specific permission configurations"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PermissionSetReference": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Reference to a built-in permission set by name (e.g., \"storage/data-read\")"
+          },
+          {
+            "$ref": "#/components/schemas/PermissionSet",
+            "description": "Inline permission set definition"
+          }
+        ],
+        "description": "Reference to a permission set - either by name or inline definition"
+      },
+      "PermissionsConfig": {
+        "type": "object",
+        "description": "Combined permissions configuration that contains both profiles and management",
+        "required": [
+          "profiles"
+        ],
+        "properties": {
+          "management": {
+            "$ref": "#/components/schemas/ManagementPermissions",
+            "description": "Management permissions configuration for stack management access"
+          },
+          "profiles": {
+            "type": "object",
+            "description": "Permission profiles that define access control for compute services\nKey is the profile name, value is the permission configuration",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PermissionProfile"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -1583,6 +2004,43 @@
           "local",
           "test"
         ]
+      },
+      "PlatformPermissions": {
+        "type": "object",
+        "description": "Platform-specific permission configurations",
+        "properties": {
+          "aws": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AwsPlatformPermission"
+            },
+            "description": "AWS permission configurations"
+          },
+          "azure": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AzurePlatformPermission"
+            },
+            "description": "Azure permission configurations"
+          },
+          "gcp": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GcpPlatformPermission"
+            },
+            "description": "GCP permission configurations"
+          }
+        },
+        "additionalProperties": false
       },
       "ReconcileRequest": {
         "type": "object",
@@ -1699,6 +2157,65 @@
           }
         }
       },
+      "ResourceLifecycle": {
+        "type": "string",
+        "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
+        "enum": [
+          "frozen",
+          "live"
+        ]
+      },
+      "ResourceRef": {
+        "type": "object",
+        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        }
+      },
+      "ResourceType": {
+        "type": "string",
+        "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
+        "examples": [
+          "function",
+          "storage",
+          "queue",
+          "redis",
+          "postgres"
+        ]
+      },
+      "RuntimeMetadata": {
+        "type": "object",
+        "description": "Runtime metadata for deployment\n\nStores deployment state that needs to persist across step calls.",
+        "properties": {
+          "lastSyncedEnvVarsHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hash of the environment variables snapshot that was last synced to the vault\nUsed to avoid redundant sync operations during incremental deployment"
+          },
+          "preparedStack": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stack",
+                "description": "The prepared (mutated) stack from the last successful deployment phase\nThis is the stack AFTER mutations have been applied (with service accounts, vault, etc.)\nUsed for compatibility checks during updates to compare mutated stacks"
+              }
+            ]
+          }
+        }
+      },
       "ScopeInfo": {
         "type": "object",
         "required": [
@@ -1721,6 +2238,35 @@
             "type": "string"
           }
         }
+      },
+      "Stack": {
+        "type": "object",
+        "description": "A bag of resources, unaware of any cloud.",
+        "required": [
+          "id",
+          "resources"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the stack"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/PermissionsConfig",
+            "description": "Combined permissions configuration containing both profiles and management"
+          },
+          "resources": {
+            "type": "object",
+            "description": "Map of resource IDs to their configurations and lifecycle settings",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceEntry"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "StackByPlatform": {
         "type": "object",

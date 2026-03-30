@@ -24,16 +24,17 @@ use crate::commands::platform::{
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, deploy_task, deployments_task,
     destroy_task, ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    onboard_task, prepare_dev_session_deployment, release_command, vault_remote_task, vault_task,
-    wait_for_dev_deployment_ready_with_progress, whoami_task, write_dev_status, BuildArgs,
-    CliEnvVar, DeployArgs, DeploymentsArgs, DestroyArgs, OnboardArgs, ReleaseArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, onboard_task, prepare_dev_session_deployment,
+    release_command, vault_remote_task, vault_task,
+    whoami_task, write_dev_status, BuildArgs, CliEnvVar, DeployArgs, DeploymentsArgs,
+    DestroyArgs, OnboardArgs, ReleaseArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{
     accent, command, contextual_heading, dim_label, event_bus_for_command,
-    format_deployment_status, make_table, print_cli_banner, print_table, success_line, FixedSteps,
-    UiCommandKind,
+    format_deployment_status, print_cli_banner, success_line, DevDeploymentResourceRow,
+    DevDeploymentRow, DevDeploymentsScreen, FixedSteps, UiCommandKind,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -462,18 +463,8 @@ async fn run_dev_session(
         "{}",
         contextual_heading("Starting local development for", &app_name, &[])
     );
-    println!(
-        "{} {}",
-        dim_label("Manager"),
-        accent(&format!("http://localhost:{port}"))
-    );
 
-    let steps = FixedSteps::new(&[
-        "Manager",
-        "Release",
-        "Prepare deployment",
-        "Wait for deployment",
-    ]);
+    let steps = FixedSteps::new(&["Start local manager", "Build and create local release"]);
 
     if let Some(status_file) = &status_file {
         write_dev_status(
@@ -483,7 +474,7 @@ async fn run_dev_session(
     }
 
     let result = async {
-        steps.activate(0, Some("starting".to_string()));
+        steps.activate(0, Some("local manager".to_string()));
         ensure_server_running_for_dev_session(port, status_file.clone(), user_env_vars).await?;
         steps.complete(0, Some("ready".to_string()));
 
@@ -492,58 +483,17 @@ async fn run_dev_session(
             Some(if skip_build {
                 "using existing build artifacts".to_string()
             } else {
-                "building local app".to_string()
+                "shipping current project".to_string()
             }),
         );
-        let release_id =
-            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
-                .await?;
-        steps.complete(1, Some(release_id.clone()));
+        build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref()).await?;
+        steps.complete(1, Some("ready".to_string()));
 
-        steps.activate(2, Some(deployment_name.clone()));
-        let deployment_id =
-            prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone()).await?;
-        steps.complete(2, Some(format!("{deployment_name} ({deployment_id})")));
+        prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone()).await?;
 
-        steps.activate(3, Some(deployment_name.clone()));
-        let snapshot = wait_for_dev_deployment_ready_with_progress(
-            port,
-            &deployment_name,
-            status_file.as_ref(),
-            |status| {
-                steps.activate(
-                    3,
-                    Some(format!(
-                        "{} ({})",
-                        deployment_name,
-                        format_deployment_status(status).to_ascii_lowercase()
-                    )),
-                );
-            },
-        )
-        .await?;
-        steps.complete(3, Some(format!("{deployment_name} ready")));
-
-        if let Some(status_file) = &status_file {
-            write_dev_status(
-                status_file,
-                &build_dev_status(
-                    port,
-                    alien_core::DevStatusState::Ready,
-                    Some(&snapshot),
-                    None,
-                ),
-            )?;
-        }
-
-        print_dev_ready_summary(port, &snapshot);
-
-        tokio::signal::ctrl_c()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to wait for Ctrl+C".to_string(),
-            })?;
+        let screen = DevDeploymentsScreen::new(deployment_name.clone());
+        watch_dev_deployments_until_ctrl_c(port, &deployment_name, status_file.as_ref(), &screen)
+            .await?;
 
         Ok::<(), alien_error::AlienError<ErrorData>>(())
     }
@@ -616,65 +566,174 @@ async fn run_dev_server_only(
     Ok(())
 }
 
-fn print_dev_ready_summary(port: u16, snapshot: &commands::DevDeploymentSnapshot) {
+fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
+    error
+        .get("message")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| error.as_str().map(ToOwned::to_owned))
+}
+
+async fn watch_dev_deployments_until_ctrl_c(
+    port: u16,
+    primary_deployment_name: &str,
+    status_file: Option<&PathBuf>,
+    screen: &DevDeploymentsScreen,
+) -> Result<()> {
+    let mut initial_ready = false;
+    let mut last_error_message: Option<String> = None;
+    let mut printed_ready_summary = false;
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    loop {
+        tokio::select! {
+            result = &mut ctrl_c => {
+                result.into_alien_error().context(ErrorData::ServerStartFailed {
+                    reason: "Failed to wait for Ctrl+C".to_string(),
+                })?;
+                return Ok(());
+            }
+            _ = interval.tick() => {
+                let states = fetch_all_dev_deployment_live_states(port).await?;
+                let Some(primary_state) = states
+                    .iter()
+                    .find(|state| state.deployment_name == primary_deployment_name)
+                else {
+                    continue;
+                };
+
+                if let Some(status_file) = status_file {
+                    let snapshot = commands::DevDeploymentSnapshot {
+                        deployment_id: primary_state.deployment_id.clone(),
+                        deployment_name: primary_state.deployment_name.clone(),
+                        status: primary_state.status,
+                        commands_url: format!("http://localhost:{port}"),
+                        resources: primary_state.resources.clone(),
+                    };
+                    let dev_status_state = if primary_state.status == alien_core::DeploymentStatus::Running {
+                        alien_core::DevStatusState::Ready
+                    } else {
+                        alien_core::DevStatusState::Initializing
+                    };
+                    write_dev_status(
+                        status_file,
+                        &build_dev_status(port, dev_status_state, Some(&snapshot), None),
+                    )?;
+                }
+
+                let status_message = dev_watch_message(primary_state);
+                let rows = build_dev_rows(&states);
+
+                if screen.is_enabled() {
+                    screen.update(&status_message, &rows);
+                } else if primary_state.status == alien_core::DeploymentStatus::Running && !printed_ready_summary {
+                    print_dev_ready_summary_plain(primary_state);
+                    printed_ready_summary = true;
+                }
+
+                if !initial_ready && primary_state.status == alien_core::DeploymentStatus::Running {
+                    initial_ready = true;
+                    if !screen.is_enabled() {
+                        println!("{}", success_line("Watching local deployments for live updates."));
+                    }
+                }
+
+                if primary_state.status.is_failed() {
+                    let error_message = primary_state.error.as_ref().and_then(deployment_error_message);
+                    if error_message != last_error_message {
+                        if let Some(message) = error_message.as_ref() {
+                            screen.println(&format!("{} {}", dim_label("Deployment error"), message));
+                        } else {
+                            screen.println(&format!(
+                                "{} {}",
+                                dim_label("Deployment status"),
+                                format_deployment_status(primary_state.status)
+                            ));
+                        }
+                    }
+                    last_error_message = error_message;
+                } else {
+                    last_error_message = None;
+                }
+            }
+        }
+    }
+}
+
+fn dev_watch_message(state: &commands::DevDeploymentLiveState) -> String {
+    match state.status {
+        alien_core::DeploymentStatus::Pending
+        | alien_core::DeploymentStatus::InitialSetup
+        | alien_core::DeploymentStatus::Provisioning => {
+            format!("Starting deployment {}", state.deployment_name)
+        }
+        alien_core::DeploymentStatus::UpdatePending | alien_core::DeploymentStatus::Updating => {
+            format!("Updating deployment {}", state.deployment_name)
+        }
+        alien_core::DeploymentStatus::DeletePending | alien_core::DeploymentStatus::Deleting => {
+            format!("Deleting deployment {}", state.deployment_name)
+        }
+        alien_core::DeploymentStatus::Running => {
+            "Watching local deployments for live updates".to_string()
+        }
+        _ => format!("Deployment {} needs attention", state.deployment_name),
+    }
+}
+
+fn build_dev_rows(states: &[commands::DevDeploymentLiveState]) -> Vec<DevDeploymentRow> {
+    states
+        .iter()
+        .map(|state| {
+            let mut resources: Vec<_> = state
+                .resources
+                .iter()
+                .map(|(name, resource)| DevDeploymentResourceRow {
+                    name: name.clone(),
+                    url: resource.url.clone(),
+                })
+                .collect();
+            resources.sort_by(|left, right| left.name.cmp(&right.name));
+
+            DevDeploymentRow {
+                name: state.deployment_name.clone(),
+                deployment_id: state.deployment_id.clone(),
+                status: state.status,
+                resources,
+            }
+        })
+        .collect()
+}
+
+fn print_dev_ready_summary_plain(state: &commands::DevDeploymentLiveState) {
     println!(
         "{}",
-        contextual_heading(
-            "Local development ready for",
-            &snapshot.deployment_name,
-            &[]
-        )
+        contextual_heading("Local development ready for", &state.deployment_name, &[])
     );
-    println!(
-        "{} {} ({})",
-        dim_label("Deployment"),
-        snapshot.deployment_name,
-        snapshot.deployment_id
-    );
-
-    let manager_url = format!("http://localhost:{port}");
-    if snapshot.commands_url == manager_url {
-        println!("{} {}", dim_label("Manager"), accent(&manager_url));
-    } else {
-        println!(
-            "{} {}",
-            dim_label("Commands"),
-            accent(&snapshot.commands_url)
-        );
-        println!("{} {}", dim_label("Manager"), accent(&manager_url));
-    }
-
-    if snapshot.resources.is_empty() {
-        println!(
-            "{}",
-            dim_label("No public resource URLs were reported yet.")
-        );
+    println!("{} {} ({})", dim_label("Deployment"), state.deployment_name, state.deployment_id);
+    if state.resources.is_empty() {
+        println!("{}", dim_label("No public resource URLs were reported yet."));
     } else {
         println!("{}", dim_label("Resources"));
-        let mut table = make_table(&["Name", "Type", "URL"]);
-        let mut resources: Vec<_> = snapshot.resources.iter().collect();
+        let mut resources: Vec<_> = state.resources.iter().collect();
         resources.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
         for (name, resource) in resources {
-            table.add_row(vec![
-                name.to_string(),
-                resource
-                    .resource_type
-                    .clone()
-                    .unwrap_or_else(|| "—".to_string()),
-                resource.url.clone(),
-            ]);
+            println!("  - {}: {}", name, resource.url);
         }
-        print_table(table);
     }
-
     println!("{}", dim_label("Try next"));
-    println!("  {}", command("alien dev deployments ls"));
-    println!("  {}", command("alien dev release"));
+    println!("  Ship a change with {}", command("alien dev release"));
     println!(
-        "  {}",
-        command("alien dev deploy --name <deployment> --platform local")
+        "  Create another deployment with {}",
+        command("alien dev deploy --name preview --platform local")
     );
-    println!("{}", dim_label("Press Ctrl+C to stop this session."));
+    println!(
+        "  Inspect {} with {}",
+        state.deployment_name,
+        command(&format!("alien dev deployments get {}", state.deployment_name))
+    );
 }
 
 pub async fn run_cli(cli: Cli) -> Result<()> {

@@ -5,7 +5,7 @@ use crate::types::*;
 
 /// Helper functions for creating test data structures
 ///
-/// These functions provide convenient builders for creating ARC types
+/// These functions provide convenient builders for creating command types
 /// with sensible defaults for testing. They help reduce boilerplate
 /// in test code and ensure consistent test data.
 
@@ -30,7 +30,7 @@ pub fn test_response_handling(command_id: &str) -> ResponseHandling {
     ResponseHandling {
         max_inline_bytes: crate::INLINE_MAX_BYTES as u64,
         submit_response_url: format!(
-            "https://arc.test.example.com/v1/commands/{}/response",
+            "https://commands.test.example.com/v1/commands/{}/response",
             command_id
         ),
         storage_upload_request: PresignedRequest::new_http(
@@ -47,12 +47,12 @@ pub fn test_response_handling(command_id: &str) -> ResponseHandling {
     }
 }
 
-/// Create a test ARC envelope
+/// Create a test command envelope
 pub fn test_envelope(command_id: &str, command: &str, params: BodySpec) -> Envelope {
     test_envelope_for_agent("test-agent", command_id, command, params)
 }
 
-/// Create a test ARC envelope for a specific agent
+/// Create a test command envelope for a specific deployment
 pub fn test_envelope_for_agent(
     deployment_id: &str,
     command_id: &str,
@@ -113,7 +113,7 @@ pub fn test_inline_create_command_with_params(
 ) -> (CreateCommandRequest, Vec<u8>) {
     // Create a small but meaningful params body (under 150KB inline limit)
     let test_params = serde_json::json!({
-        "testData": "This is test command params for ARC validation",
+        "testData": "This is test command params for validation",
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "metadata": {
             "testType": "inline-params",

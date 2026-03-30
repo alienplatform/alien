@@ -25,8 +25,8 @@ This is a lightweight Rust application used for testing core Alien functionality
 
 ### Commands
 
-- `arc-test-small` - Tests command protocol with small inline responses
-- `arc-test-large` - Tests command protocol with large responses (>48KB, triggers storage mode)
+- `cmd-test-small` - Tests command protocol with small inline responses
+- `cmd-test-large` - Tests command protocol with large responses (>48KB, triggers storage mode)
 
 ### Bindings
 

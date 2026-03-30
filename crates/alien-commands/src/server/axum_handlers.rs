@@ -374,7 +374,7 @@ impl IntoResponse for ErrorResponse {
             | "KV_OPERATION_FAILED"
             | "TRANSPORT_DISPATCH_FAILED"
             | "AGENT_ERROR"
-            | "ARC_ERROR"
+            | "COMMANDS_ERROR"
             | "SERIALIZATION_FAILED"
             | "HTTP_OPERATION_FAILED" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -384,7 +384,7 @@ impl IntoResponse for ErrorResponse {
             Ok(json) => json,
             Err(e) => {
                 error!("Failed to serialize error response: {}", e);
-                r#"{"code":"ARC_ERROR","message":"Serialization error"}"#.to_string()
+                r#"{"code":"COMMANDS_ERROR","message":"Serialization error"}"#.to_string()
             }
         };
 

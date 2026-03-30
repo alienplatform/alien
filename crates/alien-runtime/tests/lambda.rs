@@ -5,7 +5,7 @@
 //! - S3 events → StorageEvent via gRPC → KV storage
 //! - SQS messages → QueueMessage via gRPC → KV storage  
 //! - CloudWatch scheduled events → CronEvent via gRPC → KV storage
-//! - ARC envelope detection → command dispatch via gRPC → response submission
+//! - commands envelope detection → command dispatch via gRPC → response submission
 
 use anyhow::Context;
 use aws_lambda_events::{
@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 mod test_utils;
 
-// ARC testing imports
+// Commands testing imports
 use alien_commands::{
     server::CommandDispatcher,
     test_utils::TestCommandServer,
@@ -76,7 +76,7 @@ fn cargo_lambda_available() -> bool {
 // CARGO LAMBDA INVOKE DISPATCHER
 // ===========================================
 
-/// A test dispatcher that uses `cargo lambda invoke` to send ARC envelopes to a Lambda function.
+/// A test dispatcher that uses `cargo lambda invoke` to send commands envelopes to a Lambda function.
 /// This simulates the real AWS Lambda InvokeFunction API call.
 #[derive(Debug)]
 pub struct CargoLambdaInvokeDispatcher {
@@ -99,13 +99,13 @@ impl CommandDispatcher for CargoLambdaInvokeDispatcher {
             command_id = %envelope.command_id,
             command = %envelope.command,
             invoke_port = %self.invoke_port,
-            "Dispatching ARC envelope via cargo lambda invoke"
+            "Dispatching commands envelope via cargo lambda invoke"
         );
 
-        // Serialize the ARC envelope as JSON payload for Lambda
+        // Serialize the commands envelope as JSON payload for Lambda
         let envelope_json = serde_json::to_string(envelope).map_err(|e| {
             alien_error::AlienError::new(ArcErrorData::TransportDispatchFailed {
-                message: format!("Failed to serialize ARC envelope for Lambda invoke: {}", e),
+                message: format!("Failed to serialize commands envelope for Lambda invoke: {}", e),
                 transport_type: Some("cargo-lambda-invoke".to_string()),
                 target: Some(envelope.command.clone()),
             })
@@ -149,7 +149,7 @@ impl CommandDispatcher for CargoLambdaInvokeDispatcher {
         debug!(
             command_id = %envelope.command_id,
             command = %envelope.command,
-            "ARC envelope dispatched asynchronously via cargo lambda invoke"
+            "commands envelope dispatched asynchronously via cargo lambda invoke"
         );
 
         Ok(())
@@ -160,13 +160,13 @@ impl CommandDispatcher for CargoLambdaInvokeDispatcher {
     }
 }
 
-/// Invokes the lambda function via `cargo lambda invoke` with an ARC envelope JSON payload.
+/// Invokes the lambda function via `cargo lambda invoke` with an commands envelope JSON payload.
 #[instrument(skip(envelope_json))]
 async fn invoke_lambda_with_envelope(
     invoke_port: u16,
     envelope_json: &str,
 ) -> anyhow::Result<ApiGatewayV2httpResponse> {
-    debug!(%envelope_json, "Sending ARC envelope via cargo lambda invoke");
+    debug!(%envelope_json, "Sending commands envelope via cargo lambda invoke");
 
     let task = || async {
         let invoke_assert = SnapboxCommand::new("cargo")
@@ -187,14 +187,14 @@ async fn invoke_lambda_with_envelope(
         let stdout_str = String::from_utf8_lossy(&output.stdout);
         let stderr_str = String::from_utf8_lossy(&output.stderr);
         if !stderr_str.is_empty() {
-            warn!(target: "lambda_invoke_stderr", "Stderr from ARC envelope invoke: {}", stderr_str);
+            warn!(target: "lambda_invoke_stderr", "Stderr from commands envelope invoke: {}", stderr_str);
         }
-        debug!(%stdout_str, "Received ARC envelope response from cargo lambda invoke");
+        debug!(%stdout_str, "Received commands envelope response from cargo lambda invoke");
 
         let response: ApiGatewayV2httpResponse =
             serde_json::from_str(&stdout_str).with_context(|| {
                 format!(
-                    "Failed to parse ARC envelope invoke stdout: '{}', stderr: '{}'",
+                    "Failed to parse commands envelope invoke stdout: '{}', stderr: '{}'",
                     stdout_str, stderr_str
                 )
             })?;
@@ -208,7 +208,7 @@ async fn invoke_lambda_with_envelope(
 
     task.retry(&retry_policy)
         .await
-        .context("ARC envelope Lambda invocation failed after retries")
+        .context("commands envelope Lambda invocation failed after retries")
 }
 
 // --- Child Process Management ---
@@ -284,23 +284,23 @@ pub struct LambdaTestContext {
 }
 
 impl LambdaTestContext {
-    /// Creates a new Lambda test context with ARC server for command testing
-    pub async fn with_arc(&self) -> anyhow::Result<TestCommandServer> {
+    /// Creates a new Lambda test context with Command server for command testing
+    pub async fn with_command_server(&self) -> anyhow::Result<TestCommandServer> {
         // Create the cargo lambda invoke dispatcher for testing
         let dispatcher = std::sync::Arc::new(CargoLambdaInvokeDispatcher::new(self.invoke_port));
 
-        // Create ARC server
-        let arc_server = TestCommandServer::builder()
+        // Create Command server
+        let command_server = TestCommandServer::builder()
             .with_dispatcher(dispatcher)
             .build()
             .await;
 
         info!(
-            arc_base_url = %arc_server.base_url(),
-            "ARC server started for lambda tests with cargo lambda invoke dispatcher"
+            command_server_url = %command_server.base_url(),
+            "Command server started for lambda tests with cargo lambda invoke dispatcher"
         );
 
-        Ok(arc_server)
+        Ok(command_server)
     }
 }
 
@@ -796,23 +796,23 @@ async fn test_lambda_sqs_queue_message(ctx: &mut LambdaTestContext) -> anyhow::R
 }
 
 // ===========================================
-// ARC PROTOCOL LAMBDA TESTS (Command-based)
+// COMMANDS PROTOCOL LAMBDA TESTS
 // ===========================================
 
-/// Test ARC: Small params + Small response (both inline)
+/// Test commands: Small params + Small response (both inline)
 #[test_context::test_context(LambdaTestContext)]
 #[tokio::test(flavor = "multi_thread")]
 #[instrument]
-async fn test_lambda_arc_small_params_small_response(
+async fn test_lambda_cmd_small_params_small_response(
     ctx: &mut LambdaTestContext,
 ) -> anyhow::Result<()> {
     if skip_if_unavailable(ctx) {
         return Ok(());
     }
 
-    let arc_server = ctx.with_arc().await?;
+    let command_server = ctx.with_command_server().await?;
 
-    info!("Testing ARC: Small params + Small response (both inline)");
+    info!("Testing commands: Small params + Small response (both inline)");
 
     let params = json!({
         "message": "Small test params",
@@ -823,19 +823,19 @@ async fn test_lambda_arc_small_params_small_response(
 
     let request = CreateCommandRequest {
         deployment_id: "lambda-test-deployment".to_string(),
-        command: "arc-test-small".to_string(),
+        command: "cmd-test-small".to_string(),
         params: BodySpec::inline(&params_bytes),
         deadline: None,
         idempotency_key: None,
     };
 
     // Create command - should auto-dispatch via CargoLambdaInvokeDispatcher
-    let response = arc_server.create_command(request).await?;
+    let response = command_server.create_command(request).await?;
     assert_eq!(response.state, CommandState::Dispatched);
     assert!(response.storage_upload.is_none()); // Should be inline
 
     // Wait for completion
-    let final_status = arc_server
+    let final_status = command_server
         .wait_for_completion(&response.command_id, Duration::from_secs(30))
         .await
         .context("Command did not complete within timeout")?;
@@ -850,7 +850,7 @@ async fn test_lambda_arc_small_params_small_response(
         let response_json: serde_json::Value = serde_json::from_slice(&response_data)?;
 
         assert_eq!(response_json["success"], true);
-        assert_eq!(response_json["testType"], "arc-small-payload");
+        assert_eq!(response_json["testType"], "cmd-small-payload");
 
         // Validate params hash - handler re-serializes params to JSON string before hashing
         use sha2::{Digest, Sha256};
@@ -860,24 +860,24 @@ async fn test_lambda_arc_small_params_small_response(
         assert_eq!(response_json["paramsHash"], expected_hash);
     }
 
-    info!("ARC Small params + Small response PASSED");
+    info!("Commands: Small params + Small response PASSED");
     Ok(())
 }
 
-/// Test ARC: Small params + Large response (inline params, storage response)
+/// Test commands: Small params + Large response (inline params, storage response)
 #[test_context::test_context(LambdaTestContext)]
 #[tokio::test(flavor = "multi_thread")]
 #[instrument]
-async fn test_lambda_arc_small_params_large_response(
+async fn test_lambda_cmd_small_params_large_response(
     ctx: &mut LambdaTestContext,
 ) -> anyhow::Result<()> {
     if skip_if_unavailable(ctx) {
         return Ok(());
     }
 
-    let arc_server = ctx.with_arc().await?;
+    let command_server = ctx.with_command_server().await?;
 
-    info!("Testing ARC: Small params + Large response (inline params, storage response)");
+    info!("Testing commands: Small params + Large response (inline params, storage response)");
 
     let params = json!({
         "message": "Small params, generate large response",
@@ -887,17 +887,17 @@ async fn test_lambda_arc_small_params_large_response(
 
     let request = CreateCommandRequest {
         deployment_id: "lambda-test-deployment".to_string(),
-        command: "arc-test-large".to_string(), // Uses large response handler
+        command: "cmd-test-large".to_string(), // Uses large response handler
         params: BodySpec::inline(&params_bytes),
         deadline: None,
         idempotency_key: None,
     };
 
-    let response = arc_server.create_command(request).await?;
+    let response = command_server.create_command(request).await?;
     assert_eq!(response.state, CommandState::Dispatched);
     assert!(response.storage_upload.is_none()); // Params should be inline
 
-    let final_status = arc_server
+    let final_status = command_server
         .wait_for_completion(&response.command_id, Duration::from_secs(30))
         .await
         .context("Command did not complete within timeout")?;
@@ -930,33 +930,33 @@ async fn test_lambda_arc_small_params_large_response(
             let response_json: serde_json::Value = serde_json::from_slice(&response_data)?;
 
             assert_eq!(response_json["success"], true);
-            assert_eq!(response_json["testType"], "arc-large-payload");
+            assert_eq!(response_json["testType"], "cmd-large-payload");
             assert!(response_json["largeResponseData"].is_string());
             assert!(response_json["bulkData"].is_array());
         }
     }
 
-    info!("ARC Small params + Large response PASSED");
+    info!("Commands: Small params + Large response PASSED");
     Ok(())
 }
 
-/// Test ARC: Large params + Small response (storage params, inline response)
+/// Test commands: Large params + Small response (storage params, inline response)
 #[test_context::test_context(LambdaTestContext)]
 #[tokio::test(flavor = "multi_thread")]
 #[instrument]
-async fn test_lambda_arc_large_params_small_response(
+async fn test_lambda_cmd_large_params_small_response(
     ctx: &mut LambdaTestContext,
 ) -> anyhow::Result<()> {
     if skip_if_unavailable(ctx) {
         return Ok(());
     }
 
-    let arc_server = ctx.with_arc().await?;
+    let command_server = ctx.with_command_server().await?;
 
-    info!("Testing ARC: Large params + Small response (storage params, inline response)");
+    info!("Testing commands: Large params + Small response (storage params, inline response)");
 
     // Create large JSON params that exceed inline limit (>150KB)
-    // ARC params are JSON - we need valid JSON data
+    // Command params are JSON - we need valid JSON data
     // 8000 items × ~25 chars = ~200KB
     let large_data: Vec<String> = (0..8000)
         .map(|i| format!("large-data-item-{:06}", i))
@@ -975,14 +975,14 @@ async fn test_lambda_arc_large_params_small_response(
 
     let request = CreateCommandRequest {
         deployment_id: "lambda-test-deployment".to_string(),
-        command: "arc-test-small".to_string(), // Small response handler
+        command: "cmd-test-small".to_string(), // Small response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
         idempotency_key: None,
     };
 
     // Create command - should require upload
-    let response = arc_server.create_command(request).await?;
+    let response = command_server.create_command(request).await?;
     assert_eq!(response.state, CommandState::PendingUpload);
     assert!(response.storage_upload.is_some());
 
@@ -997,12 +997,12 @@ async fn test_lambda_arc_large_params_small_response(
     let upload_complete = UploadCompleteRequest {
         size: large_params_bytes.len() as u64,
     };
-    arc_server
+    command_server
         .upload_complete(&response.command_id, upload_complete)
         .await?;
 
     // Wait for completion
-    let final_status = arc_server
+    let final_status = command_server
         .wait_for_completion(&response.command_id, Duration::from_secs(30))
         .await
         .context("Command did not complete within timeout")?;
@@ -1018,7 +1018,7 @@ async fn test_lambda_arc_large_params_small_response(
         let response_json: serde_json::Value = serde_json::from_slice(&response_data)?;
 
         assert_eq!(response_json["success"], true);
-        assert_eq!(response_json["testType"], "arc-small-payload");
+        assert_eq!(response_json["testType"], "cmd-small-payload");
 
         // Validate params hash - handler re-serializes params to JSON string before hashing
         use sha2::{Digest, Sha256};
@@ -1029,24 +1029,24 @@ async fn test_lambda_arc_large_params_small_response(
         assert_eq!(response_json["paramsHash"], expected_hash);
     }
 
-    info!("ARC Large params + Small response PASSED");
+    info!("Commands: Large params + Small response PASSED");
     Ok(())
 }
 
-/// Test ARC: Large params + Large response (both storage)
+/// Test commands: Large params + Large response (both storage)
 #[test_context::test_context(LambdaTestContext)]
 #[tokio::test(flavor = "multi_thread")]
 #[instrument]
-async fn test_lambda_arc_large_params_large_response(
+async fn test_lambda_cmd_large_params_large_response(
     ctx: &mut LambdaTestContext,
 ) -> anyhow::Result<()> {
     if skip_if_unavailable(ctx) {
         return Ok(());
     }
 
-    let arc_server = ctx.with_arc().await?;
+    let command_server = ctx.with_command_server().await?;
 
-    info!("Testing ARC: Large params + Large response (both storage)");
+    info!("Testing commands: Large params + Large response (both storage)");
 
     // Create large JSON params that exceed inline limit (>150KB)
     // 8000 items × ~25 chars = ~200KB
@@ -1067,13 +1067,13 @@ async fn test_lambda_arc_large_params_large_response(
 
     let request = CreateCommandRequest {
         deployment_id: "lambda-test-deployment".to_string(),
-        command: "arc-test-large".to_string(), // Large response handler
+        command: "cmd-test-large".to_string(), // Large response handler
         params: BodySpec::storage(large_params_bytes.len() as u64),
         deadline: None,
         idempotency_key: None,
     };
 
-    let response = arc_server.create_command(request).await?;
+    let response = command_server.create_command(request).await?;
     assert_eq!(response.state, CommandState::PendingUpload);
     assert!(response.storage_upload.is_some());
 
@@ -1088,12 +1088,12 @@ async fn test_lambda_arc_large_params_large_response(
     let upload_complete = UploadCompleteRequest {
         size: large_params_bytes.len() as u64,
     };
-    arc_server
+    command_server
         .upload_complete(&response.command_id, upload_complete)
         .await?;
 
     // Wait for completion
-    let final_status = arc_server
+    let final_status = command_server
         .wait_for_completion(&response.command_id, Duration::from_secs(35))
         .await
         .context("Command did not complete within timeout")?;
@@ -1123,7 +1123,7 @@ async fn test_lambda_arc_large_params_large_response(
             let response_json: serde_json::Value = serde_json::from_slice(&response_data)?;
 
             assert_eq!(response_json["success"], true);
-            assert_eq!(response_json["testType"], "arc-large-payload");
+            assert_eq!(response_json["testType"], "cmd-large-payload");
 
             // Validate params hash - handler re-serializes params to JSON string before hashing
             use sha2::{Digest, Sha256};
@@ -1134,6 +1134,6 @@ async fn test_lambda_arc_large_params_large_response(
         }
     }
 
-    info!("ARC Large params + Large response PASSED");
+    info!("Commands: Large params + Large response PASSED");
     Ok(())
 }

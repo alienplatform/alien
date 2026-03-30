@@ -171,9 +171,9 @@ mod platform_dispatchers {
 
             // Create the Pub/Sub message with command envelope metadata
             let mut attributes = HashMap::new();
-            attributes.insert("arc-protocol".to_string(), envelope.protocol.clone());
-            attributes.insert("arc-command-id".to_string(), envelope.command_id.clone());
-            attributes.insert("arc-command".to_string(), envelope.command.clone());
+            attributes.insert("cmd-protocol".to_string(), envelope.protocol.clone());
+            attributes.insert("cmd-command-id".to_string(), envelope.command_id.clone());
+            attributes.insert("cmd-command".to_string(), envelope.command.clone());
 
             let message = PubsubMessage::builder()
                 .data(data)
@@ -249,9 +249,9 @@ mod platform_dispatchers {
 
             // Create custom properties for command metadata
             let mut custom_properties = HashMap::new();
-            custom_properties.insert("arc-protocol".to_string(), envelope.protocol.clone());
-            custom_properties.insert("arc-command-id".to_string(), envelope.command_id.clone());
-            custom_properties.insert("arc-command".to_string(), envelope.command.clone());
+            custom_properties.insert("cmd-protocol".to_string(), envelope.protocol.clone());
+            custom_properties.insert("cmd-command-id".to_string(), envelope.command_id.clone());
+            custom_properties.insert("cmd-command".to_string(), envelope.command.clone());
 
             let message = SendMessageParameters {
                 body: envelope_json,

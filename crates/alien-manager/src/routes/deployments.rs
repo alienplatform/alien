@@ -9,7 +9,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use alien_core::{ContainerOutputs, EnvironmentVariable, FunctionOutputs, Platform, StackSettings};
+use alien_core::{
+    ContainerOutputs, EnvironmentVariable, FunctionOutputs, Platform, RuntimeMetadata,
+    StackSettings,
+};
 
 use crate::error::ErrorData;
 use crate::ids;
@@ -59,7 +62,7 @@ pub struct DeploymentResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_info: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_metadata: Option<serde_json::Value>,
+    pub runtime_metadata: Option<RuntimeMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_release_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,10 +193,7 @@ fn record_to_response(
             .environment_info
             .as_ref()
             .map(|e| serde_json::to_value(e).unwrap_or_default()),
-        runtime_metadata: r
-            .runtime_metadata
-            .as_ref()
-            .map(|m| serde_json::to_value(m).unwrap_or_default()),
+        runtime_metadata: r.runtime_metadata.clone(),
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
         retry_requested: r.retry_requested,

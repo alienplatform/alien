@@ -1,5 +1,5 @@
 {
-  "id": "service_activation/management",
+  "id": "service-activation/management",
   "description": "Allows reading GCP project service status and configuration",
   "platforms": {
     "gcp": [

@@ -177,6 +177,13 @@ impl TestManager {
             Self::inject_management_binding_env_vars(cfg, platforms);
         }
 
+        // 6c. Inject ALIEN_COMMAND_STORAGE_BINDING so with_standalone_defaults()
+        //     resolves command storage to a real cloud bucket instead of LocalStorage.
+        //     Push-mode runtimes (Lambda, Cloud Run) need presigned HTTP URLs.
+        if let Some(cfg) = config {
+            Self::inject_command_storage_binding(cfg, platforms);
+        }
+
         // 7. Build the manager configuration
         let targets: Vec<Platform> = platforms.to_vec();
         let manager_config = ManagerConfig {
@@ -418,6 +425,61 @@ impl TestManager {
             let binding_json = serde_json::to_string(&binding)
                 .expect("ServiceAccountBinding serialization should not fail");
             std::env::set_var(env_var_name, binding_json);
+        }
+    }
+
+    /// Inject `ALIEN_COMMAND_STORAGE_BINDING` so the manager uses a real cloud
+    /// bucket for command storage instead of `LocalStorage`. This is required for
+    /// push-mode runtimes (Lambda, Cloud Run, Container Apps) which need presigned
+    /// HTTP URLs — they can't access the manager's local filesystem.
+    ///
+    /// Picks the first available cloud bucket from the test config matching the
+    /// configured platforms.
+    fn inject_command_storage_binding(config: &TestConfig, platforms: &[Platform]) {
+        for platform in platforms {
+            let binding_json = match platform {
+                Platform::Gcp => {
+                    config.gcp_resources.gcs_bucket.as_ref().map(|bucket| {
+                        serde_json::json!({
+                            "service": "gcs",
+                            "bucketName": bucket
+                        })
+                    })
+                }
+                Platform::Aws => {
+                    config.aws_resources.s3_bucket.as_ref().map(|bucket| {
+                        serde_json::json!({
+                            "service": "s3",
+                            "bucketName": bucket
+                        })
+                    })
+                }
+                Platform::Azure => {
+                    let account = config.azure_resources.storage_account.as_ref();
+                    let container = config.azure_resources.blob_container.as_ref();
+                    match (account, container) {
+                        (Some(acct), Some(ctr)) => Some(serde_json::json!({
+                            "service": "blob",
+                            "accountName": acct,
+                            "containerName": ctr
+                        })),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(json) = binding_json {
+                std::env::set_var(
+                    "ALIEN_COMMAND_STORAGE_BINDING",
+                    serde_json::to_string(&json).expect("JSON serialization should not fail"),
+                );
+                info!(
+                    platform = %platform,
+                    "Injected ALIEN_COMMAND_STORAGE_BINDING for cloud command storage"
+                );
+                return;
+            }
         }
     }
 
