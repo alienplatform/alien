@@ -1,5 +1,5 @@
 {
-  "id": "gcp-project-service/provision",
+  "id": "service_activation/provision",
   "description": "Allows enabling, disabling, and managing GCP project services",
   "platforms": {
     "gcp": [

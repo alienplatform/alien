@@ -1,6 +1,6 @@
 {
-  "id": "gcp-project-service/heartbeat",
-  "description": "Allows readonly monitoring and health checks for gcp-project-service resources",
+  "id": "service_activation/heartbeat",
+  "description": "Allows readonly monitoring and health checks for service activation resources",
   "platforms": {
     "gcp": [
       {
