@@ -618,6 +618,20 @@ pub async fn push_initial_setup(
         retry_requested: deployment.retry_requested,
     };
 
+    // Always override environment_info with the target client_config.
+    // The manager may have already run the Pending step with management
+    // credentials, setting environment_info to the management project.
+    // push_initial_setup runs with *target* credentials, so re-collecting
+    // ensures the environment_info reflects the actual target project.
+    match alien_deployment::collect_environment_info(platform, &client_config).await {
+        Ok(env_info) => {
+            state.environment_info = Some(env_info);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to collect target environment info: {e}");
+        }
+    }
+
     // Reconstruct DeploymentConfig from stack_settings
     let stack_settings: StackSettings = deployment
         .stack_settings

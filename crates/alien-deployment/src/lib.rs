@@ -20,7 +20,8 @@ pub use alien_core::{
     DeploymentStepResult, EnvironmentInfo, GcpEnvironmentInfo, Stack,
 };
 
-// Re-export helper function for creating aggregated errors
+// Re-export helper functions
+pub use helpers::collect_environment_info;
 pub use helpers::create_aggregated_error_from_stack_state;
 
 use tracing::{debug, info, warn};
