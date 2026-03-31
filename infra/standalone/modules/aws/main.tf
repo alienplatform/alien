@@ -723,6 +723,36 @@ resource "aws_iam_policy" "target" {
         Action   = "ecr:GetAuthorizationToken"
         Resource = "*"
       },
+      {
+        Sid    = "CodeBuild"
+        Effect = "Allow"
+        Action = [
+          "codebuild:CreateProject",
+          "codebuild:DeleteProject",
+          "codebuild:UpdateProject",
+          "codebuild:BatchGetProjects",
+          "codebuild:StartBuild",
+          "codebuild:BatchGetBuilds",
+          "codebuild:StopBuild",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "SNS"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:Publish",
+          "sns:TagResource",
+          "sns:UntagResource",
+        ]
+        Resource = "*"
+      },
     ]
   })
 }
