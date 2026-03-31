@@ -19,6 +19,7 @@ mod auth;
 
 use std::sync::Arc;
 
+use alien_bindings::BindingsProviderApi;
 use alien_commands::server::{create_axum_router, CommandServer, HasCommandServer};
 use axum::{
     routing::{get, post},
@@ -39,6 +40,7 @@ pub struct AppState {
     pub credential_resolver: Arc<dyn CredentialResolver>,
     pub command_server: Arc<CommandServer>,
     pub config: Arc<crate::config::ManagerConfig>,
+    pub bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
 }
 
 impl HasCommandServer for AppState {

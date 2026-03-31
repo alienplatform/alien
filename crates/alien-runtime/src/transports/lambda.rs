@@ -3,9 +3,9 @@
 //! Receives work via Lambda Runtime API:
 //! - API Gateway → HTTP request forwarded to app
 //! - S3 event → StorageEvent via gRPC
-//! - SQS message → QueueMessage via gRPC (or ArcCommand if ARC envelope)
+//! - SQS message → QueueMessage via gRPC (or Command if command envelope)
 //! - CloudWatch scheduled → CronEvent via gRPC
-//! - InvokeFunction (ARC) → ArcCommand via gRPC
+//! - InvokeFunction → Command via gRPC
 //!
 //! Supports both buffered and streaming response modes.
 
@@ -367,7 +367,7 @@ fn event_to_request(event: LambdaEvent<Value>) -> LambdaRequest {
             .with_lambda_context(event.context);
     }
 
-    // For non-HTTP events (S3, SQS, CloudWatch, ARC), create a synthetic POST request
+    // For non-HTTP events (S3, SQS, CloudWatch, Commands), create a synthetic POST request
     // with the raw JSON payload as the body
     let body_json = serde_json::to_string(&payload).unwrap_or_default();
     let mut req = LambdaRequest::new(LambdaBody::Text(body_json));
@@ -676,9 +676,9 @@ async fn handle_streaming_event(
         }
     }
 
-    // Try to parse as ARC envelope
+    // Try to parse as command envelope
     if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
-        return handle_arc_command_streaming(state, request_id, envelope).await;
+        return handle_command_streaming(state, request_id, envelope).await;
     }
 
     // Default: forward as HTTP request
@@ -738,9 +738,9 @@ async fn handle_sqs_event_streaming(
         let receipt_handle = record.receipt_handle.unwrap_or_default();
         let source = record.event_source_arn.unwrap_or_default();
 
-        // Check if body is an ARC envelope
+        // Check if body is a command envelope
         if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(&body) {
-            return handle_arc_command_streaming(state, request_id, envelope).await;
+            return handle_command_streaming(state, request_id, envelope).await;
         }
 
         info!(message_id = %message_id, source = %source, "SQS message");
@@ -827,7 +827,7 @@ async fn handle_cloudwatch_event_streaming(
     }
 }
 
-async fn handle_arc_command_streaming(
+async fn handle_command_streaming(
     state: &LambdaState,
     request_id: &str,
     envelope: alien_commands::types::Envelope,
@@ -835,7 +835,7 @@ async fn handle_arc_command_streaming(
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
-    info!(command_id = %command_id, command = %command_name, "ARC command");
+    info!(command_id = %command_id, command = %command_name, "Command received");
 
     // Decode params
     let params = alien_commands::runtime::decode_params_bytes(&envelope)
@@ -866,7 +866,7 @@ async fn handle_arc_command_streaming(
         .await
     {
         Ok(result) => {
-            let arc_response = if result.success {
+            let command_response = if result.success {
                 if result.response_data.is_empty() {
                     CommandResponse::success(b"{}")
                 } else {
@@ -881,14 +881,14 @@ async fn handle_arc_command_streaming(
                 )
             };
 
-            if let Err(e) = submit_response(&envelope, arc_response).await {
-                error!(error = %e, "Failed to submit ARC response");
+            if let Err(e) = submit_response(&envelope, command_response).await {
+                error!(error = %e, "Failed to submit command response");
             }
         }
         Err(e) => {
-            let arc_response = CommandResponse::error("HANDLER_ERROR", &e);
-            let _ = submit_response(&envelope, arc_response).await;
-            error!(error = %e, "ARC command handler error");
+            let command_response = CommandResponse::error("HANDLER_ERROR", &e);
+            let _ = submit_response(&envelope, command_response).await;
+            error!(error = %e, "Command handler error");
         }
     }
 
@@ -1036,9 +1036,9 @@ async fn handle_buffered_event(
         }
     }
 
-    // Try to parse as ARC envelope
+    // Try to parse as command envelope
     if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
-        return handle_arc_command_buffered(state, request_id, envelope).await;
+        return handle_command_buffered(state, request_id, envelope).await;
     }
 
     // Default: forward as HTTP request
@@ -1107,9 +1107,9 @@ async fn handle_sqs_event_buffered(
         let receipt_handle = record.receipt_handle.unwrap_or_default();
         let source = record.event_source_arn.unwrap_or_default();
 
-        // Check if body is an ARC envelope
+        // Check if body is a command envelope
         if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(&body) {
-            return handle_arc_command_buffered(state, request_id, envelope).await;
+            return handle_command_buffered(state, request_id, envelope).await;
         }
 
         info!(message_id = %message_id, source = %source, "SQS message");
@@ -1198,7 +1198,7 @@ async fn handle_cloudwatch_event_buffered(
     })
 }
 
-async fn handle_arc_command_buffered(
+async fn handle_command_buffered(
     state: &LambdaState,
     _request_id: &str,
     envelope: alien_commands::types::Envelope,
@@ -1206,7 +1206,7 @@ async fn handle_arc_command_buffered(
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
-    info!(command_id = %command_id, command = %command_name, "ARC command");
+    info!(command_id = %command_id, command = %command_name, "Command received");
 
     // Decode params
     let params = alien_commands::runtime::decode_params_bytes(&envelope)
@@ -1237,7 +1237,7 @@ async fn handle_arc_command_buffered(
         .await
     {
         Ok(result) => {
-            let arc_response = if result.success {
+            let command_response = if result.success {
                 if result.response_data.is_empty() {
                     CommandResponse::success(b"{}")
                 } else {
@@ -1252,14 +1252,14 @@ async fn handle_arc_command_buffered(
                 )
             };
 
-            if let Err(e) = submit_response(&envelope, arc_response).await {
-                error!(error = %e, "Failed to submit ARC response");
+            if let Err(e) = submit_response(&envelope, command_response).await {
+                error!(error = %e, "Failed to submit command response");
             }
         }
         Err(e) => {
-            let arc_response = CommandResponse::error("HANDLER_ERROR", &e);
-            let _ = submit_response(&envelope, arc_response).await;
-            error!(error = %e, "ARC command handler error");
+            let command_response = CommandResponse::error("HANDLER_ERROR", &e);
+            let _ = submit_response(&envelope, command_response).await;
+            error!(error = %e, "Command handler error");
         }
     }
 

@@ -193,6 +193,9 @@ pub enum ComputeServiceType {
 pub struct AwsCrossAccountAccess {
     /// AWS account IDs that should have cross-account access.
     pub account_ids: Vec<String>,
+    /// AWS regions where the target Lambda functions run.
+    /// Used to construct `aws:sourceArn` patterns for the Lambda service principal condition.
+    pub regions: Vec<String>,
     /// Types of compute services that should have access.
     pub allowed_service_types: Vec<ComputeServiceType>,
     /// Specific IAM role ARNs to grant access to.

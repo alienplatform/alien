@@ -265,21 +265,10 @@ where
     T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
 {
     let report = error.human_report();
-    let headline_code = if supports_ansi() {
-        style(format!("[{}]", report.code)).dim().to_string()
-    } else {
-        format!("[{}]", report.code)
-    };
-
     let mut rendered = if supports_ansi() {
-        format!(
-            "{} {} {}",
-            style("Error:").red().bold(),
-            report.message,
-            headline_code
-        )
+        style(report.message).red().to_string()
     } else {
-        format!("Error: {} {}", report.message, headline_code)
+        report.message
     };
 
     if !report.causes.is_empty() {
@@ -287,12 +276,7 @@ where
         rendered.push_str("Cause:");
         for cause in report.causes {
             rendered.push('\n');
-            let code = if supports_ansi() {
-                style(format!("[{}]", cause.code)).dim().to_string()
-            } else {
-                format!("[{}]", cause.code)
-            };
-            rendered.push_str(&format!("  - {} {}", cause.message, code));
+            rendered.push_str(&format!("  - {}", cause.message));
         }
     }
 

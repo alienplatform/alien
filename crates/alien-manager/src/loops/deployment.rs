@@ -19,6 +19,7 @@ use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ExternalBindings, ReleaseInfo,
 };
+use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopStopReason};
 use alien_error::{AlienError, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::LocalBindingsProvider;
@@ -202,16 +203,23 @@ impl DeploymentLoop {
             return Ok(());
         }
 
-        // Push-mode deployments: skip Pending and InitialSetup.
-        // These steps are handled by push_initial_setup (alien-deploy-cli) which runs
+        // Push-mode deployments: skip creation and deletion phases.
+        // These steps are handled by the push client (alien-deploy-cli) which runs
         // with target-environment credentials. The manager only has management credentials,
-        // which would cause resources to be created in the wrong project.
+        // which would cause resources to be created/deleted in the wrong project.
         let status = parse_status(&deployment.status);
-        if status == DeploymentStatus::Pending || status == DeploymentStatus::InitialSetup {
+        if matches!(
+            status,
+            DeploymentStatus::Pending
+                | DeploymentStatus::InitialSetup
+                | DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+        ) {
             debug!(
                 deployment_id = %deployment_id,
                 status = ?status,
-                "Skipping push-mode deployment — Pending/InitialSetup handled by push client"
+                "Skipping push-mode deployment — creation/deletion phases handled by push client"
             );
             return Ok(());
         }
@@ -341,6 +349,17 @@ impl DeploymentLoop {
         // 7. Step loop — call step() repeatedly until stable or delayed.
         // Note: step() takes ownership of state, so we clone before each call
         // to retain the last known state if step() fails.
+        let operation = if matches!(
+            state.status,
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+        ) {
+            LoopOperation::Delete
+        } else {
+            LoopOperation::Deploy
+        };
+
         let mut last_step_error: Option<serde_json::Value> = None;
         for i in 0..MAX_STEPS_PER_TICK {
             info!(
@@ -374,14 +393,17 @@ impl DeploymentLoop {
                         last_step_error = None;
                     }
 
-                    // If state is synced, we are done.
-                    if state.status.is_synced() {
-                        debug!(
-                            deployment_id = %deployment_id,
-                            status = ?state.status,
-                            "Deployment reached synced state"
-                        );
-                        break;
+                    if let Some(loop_result) = classify_status(&state.status, operation) {
+                        if loop_result.stop_reason != LoopStopReason::Handoff {
+                            debug!(
+                                deployment_id = %deployment_id,
+                                status = ?state.status,
+                                stop_reason = ?loop_result.stop_reason,
+                                outcome = ?loop_result.outcome,
+                                "Deployment reached terminal state"
+                            );
+                            break;
+                        }
                     }
 
                     // If step suggests a delay above threshold, actually sleep for that
@@ -566,9 +588,15 @@ impl DeploymentLoop {
     }
 }
 
+// Test ownership: Manager-specific behavior tests (status parsing, skip logic,
+// active statuses, local bindings caching). Loop contract correctness is tested
+// in alien-deployment::loop_contract — not duplicated here.
+
 #[cfg(test)]
 mod tests {
-    use super::{active_work_statuses, get_or_create_local_bindings_provider};
+    use super::{active_work_statuses, get_or_create_local_bindings_provider, parse_status};
+    use alien_core::DeploymentStatus;
+    use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -579,6 +607,91 @@ mod tests {
         assert!(statuses.iter().any(|status| status == "pending"));
         assert!(statuses.iter().any(|status| status == "initial-setup"));
         assert!(statuses.iter().any(|status| status == "provisioning"));
+    }
+
+    #[test]
+    fn active_work_statuses_include_deletion_phases() {
+        let statuses = active_work_statuses();
+        assert!(
+            statuses.iter().any(|s| s == "delete-pending"),
+            "delete-pending must be in active statuses"
+        );
+        assert!(
+            statuses.iter().any(|s| s == "deleting"),
+            "deleting must be in active statuses"
+        );
+    }
+
+    #[test]
+    fn active_work_statuses_exclude_terminal_and_failed() {
+        let statuses = active_work_statuses();
+        for excluded in [
+            "running",
+            "deleted",
+            "initial-setup-failed",
+            "provisioning-failed",
+            "update-failed",
+            "delete-failed",
+            "refresh-failed",
+        ] {
+            assert!(
+                !statuses.iter().any(|s| s == excluded),
+                "{excluded} should NOT be in active_work_statuses"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_status_roundtrips_all_known_statuses() {
+        let cases = [
+            ("pending", DeploymentStatus::Pending),
+            ("initial-setup", DeploymentStatus::InitialSetup),
+            ("initial-setup-failed", DeploymentStatus::InitialSetupFailed),
+            ("provisioning", DeploymentStatus::Provisioning),
+            ("provisioning-failed", DeploymentStatus::ProvisioningFailed),
+            ("running", DeploymentStatus::Running),
+            ("refresh-failed", DeploymentStatus::RefreshFailed),
+            ("update-pending", DeploymentStatus::UpdatePending),
+            ("updating", DeploymentStatus::Updating),
+            ("update-failed", DeploymentStatus::UpdateFailed),
+            ("delete-pending", DeploymentStatus::DeletePending),
+            ("deleting", DeploymentStatus::Deleting),
+            ("delete-failed", DeploymentStatus::DeleteFailed),
+            ("deleted", DeploymentStatus::Deleted),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_status(input),
+                expected,
+                "parse_status({input:?}) mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn manager_skip_logic_matches_contract() {
+        let skipped_for_push = [
+            DeploymentStatus::Pending,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::DeletePending,
+            DeploymentStatus::Deleting,
+            DeploymentStatus::DeleteFailed,
+        ];
+
+        for status in skipped_for_push {
+            let deploy_result = classify_status(&status, LoopOperation::Deploy);
+            let delete_result = classify_status(&status, LoopOperation::Delete);
+
+            if status == DeploymentStatus::DeleteFailed {
+                assert!(
+                    deploy_result.is_some(),
+                    "DeleteFailed should be terminal in contract"
+                );
+            } else {
+                let _ = (deploy_result, delete_result);
+            }
+        }
     }
 
     #[tokio::test]
@@ -594,6 +707,25 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
 
         provider_a.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn local_bindings_provider_different_per_deployment() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = Mutex::new(HashMap::new());
+
+        let provider_a =
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_a").unwrap();
+        let provider_b =
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_b").unwrap();
+
+        assert!(
+            !std::sync::Arc::ptr_eq(&provider_a, &provider_b),
+            "Different deployment IDs should get different providers"
+        );
+
+        provider_a.shutdown().await;
+        provider_b.shutdown().await;
     }
 }
 

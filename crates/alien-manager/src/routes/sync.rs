@@ -246,9 +246,9 @@ async fn reconcile(
     let _result = match state
         .deployment_store
         .reconcile(ReconcileData {
-            deployment_id: req.deployment_id,
+            deployment_id: req.deployment_id.clone(),
             session: req.session,
-            state: deployment_state,
+            state: deployment_state.clone(),
             update_heartbeat: req.update_heartbeat,
             error: req.error,
         })
@@ -257,6 +257,18 @@ async fn reconcile(
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+
+    if let (Some(ref bindings_provider), Some(ref env_info)) =
+        (&state.bindings_provider, &deployment_state.environment_info)
+    {
+        crate::registry_access::reconcile_registry_access(
+            bindings_provider,
+            &req.deployment_id,
+            env_info,
+            &deployment_state.status,
+        )
+        .await;
+    }
 
     Json(ReconcileResponse {
         success: true,
@@ -339,7 +351,7 @@ async fn agent_sync(
                     .reconcile(ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
-                        state: agent_state,
+                        state: agent_state.clone(),
                         update_heartbeat: true,
                         error: None,
                     })
@@ -350,6 +362,18 @@ async fn agent_sync(
                         error = %e,
                         "Failed to reconcile agent-reported state"
                     );
+                }
+
+                if let (Some(ref bindings_provider), Some(ref env_info)) =
+                    (&state.bindings_provider, &agent_state.environment_info)
+                {
+                    crate::registry_access::reconcile_registry_access(
+                        bindings_provider,
+                        &req.deployment_id,
+                        env_info,
+                        &agent_state.status,
+                    )
+                    .await;
                 }
             }
             Err(e) => {

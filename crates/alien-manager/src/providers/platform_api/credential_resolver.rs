@@ -224,10 +224,24 @@ fn parse_status(status: &str) -> DeploymentStatus {
     match status {
         "pending" => DeploymentStatus::Pending,
         "initial-setup" => DeploymentStatus::InitialSetup,
+        "initial-setup-failed" => DeploymentStatus::InitialSetupFailed,
         "provisioning" => DeploymentStatus::Provisioning,
+        "provisioning-failed" => DeploymentStatus::ProvisioningFailed,
         "running" => DeploymentStatus::Running,
+        "refresh-failed" => DeploymentStatus::RefreshFailed,
+        "update-pending" => DeploymentStatus::UpdatePending,
         "updating" => DeploymentStatus::Updating,
+        "update-failed" => DeploymentStatus::UpdateFailed,
+        "delete-pending" => DeploymentStatus::DeletePending,
         "deleting" => DeploymentStatus::Deleting,
-        _ => DeploymentStatus::Pending,
+        "delete-failed" => DeploymentStatus::DeleteFailed,
+        "deleted" => DeploymentStatus::Deleted,
+        _ => {
+            tracing::warn!(
+                status = status,
+                "Unknown deployment status, defaulting to Pending"
+            );
+            DeploymentStatus::Pending
+        }
     }
 }

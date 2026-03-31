@@ -40,6 +40,16 @@ Treat every resource in that state as protected baseline infrastructure.
 
 Routine test cleanup must not delete Terraform-managed resources from `infra/standalone`. If a baseline resource drifted or must be rebuilt, do that intentionally through Terraform, not as ad hoc test cleanup.
 
+## Credentials for inspection
+
+The `.env.test` credentials (e.g. `alien-test-manager` IAM user) have limited permissions and **cannot list most resource types**. For cleanup inspection you need admin access:
+
+- **AWS:** use the `alien-test-mgmt` SSO profile (requires `aws sso login --profile alien-test-mgmt`)
+- **GCP:** the `.env.test` service account key works (it has project-level read access)
+- **Azure:** the `.env.test` service principal works (it has subscription-level read access)
+
+All inspection commands below use admin credentials where needed.
+
 ## Important current behavior
 
 The current `alien-test` standalone harness does **not** actually deploy into the configured target accounts.
@@ -80,8 +90,12 @@ Some are Terraform-managed (by `infra/standalone`), others are manually provisio
 
 - GCS bucket from `.env.test`: `ALIEN_TEST_GCP_GCS_BUCKET`
 - Artifact Registry repo from `.env.test`: `alien-test`
+- Artifact Registry repo: `test-alien-artifact-registry` (shared by Rust function E2E)
+- Firestore database: `(default)`
 - Service account: `alien-test-manager@alien-test-mgmt.iam.gserviceaccount.com` (Terraform-managed, key in `.env.test`)
 - Service account: `alien-test-management@alien-test-mgmt.iam.gserviceaccount.com` (Terraform-managed)
+- Service account: `alien-test-ar-pull@alien-test-mgmt.iam.gserviceaccount.com` (Terraform-managed)
+- Service account: `alien-test-ar-push@alien-test-mgmt.iam.gserviceaccount.com` (Terraform-managed)
 - Service account: `alien-terraform-bootstrap@alien-test-mgmt.iam.gserviceaccount.com` (manually provisioned)
 - Service account: `450988722957-compute@developer.gserviceaccount.com` (GCP default)
 
@@ -127,11 +141,12 @@ Standalone E2E resources usually use a random stack prefix plus the logical reso
 
 Other AWS cloud tests also leave resources with broader test prefixes:
 
+- Lambda: `alien-test-function-*`
 - DynamoDB: `alien-test-kv-*`
 - IAM role: `alien-test-role-*`
 - IAM role: `alien-test-build-role-*`
 - SSM parameters: `alien-test-vault-*`
-- Extra historical S3 buckets: `alien-test-*`
+- Extra S3 buckets: `alien-test-*` (check against `.env.test` baseline bucket)
 
 ### GCP
 
@@ -145,13 +160,19 @@ Standalone E2E leftovers usually look like:
 - Service account: `{prefix}-build-execution-sa@...`
 - Secret Manager secret: `{prefix}-secrets-ALIEN_COMMANDS_TOKEN`
 
-Rust function E2E also creates an Artifact Registry binding repo:
+Other GCP cloud tests also leave resources with broader test prefixes:
 
-- Artifact Registry repo: `test-alien-artifact-registry`
+- Cloud Run service: `alien-test-svc-*`
+- Firestore database: `alien-test-kv-db-*`
+- Artifact Registry repo: `alien-test-repo-*`
+- Secret Manager secret: `alien-test-vault-*`
+- Stale project IAM bindings: bindings referencing `deleted:serviceAccount:` entries (service accounts from old test runs that were deleted but whose IAM bindings remain)
 
 ### Azure
 
-Azure is easiest to reason about because each deployment usually gets its own resource group:
+Standalone E2E leftovers come in two forms:
+
+**Separate resource groups** (each deployment gets its own):
 
 - Resource group: `{prefix}-default-resource-group`
 - Container Apps environment: `{prefix}-default-container-env`
@@ -164,6 +185,17 @@ Azure is easiest to reason about because each deployment usually gets its own re
 
 Rust function E2E may also create an ACR for the Artifact Registry binding inside the same per-run resource group.
 
+**Resources inside the baseline resource group** (cloud tests that reuse the shared environment):
+
+- Container App: `alien-test-app-{8-char-hex}`
+- Container App Job: `build-test-pre-{number}`
+- Key Vault: `alientest{8-char-hex}`
+- Managed Identity: `alien-test-app-{8-char-hex}-identity`
+- Virtual Network: `alien-vnet-{8-char-hex}`
+- Disk: `alien-disk-{8-char-hex}`
+
+These accumulate inside the baseline RG and are easy to miss if you only look for separate leftover resource groups.
+
 ## Inspection workflow
 
 Start from the repo root:
@@ -174,33 +206,48 @@ set -a && source .env.test && set +a
 
 ### AWS
 
-Management account:
+The `.env.test` IAM user (`alien-test-manager`) lacks List permissions for most services. Use the admin SSO profile instead:
 
 ```bash
-env \
-  AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" \
-  AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" \
-  AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws sts get-caller-identity
+aws sso login --profile alien-test-mgmt
+
+aws --profile alien-test-mgmt --region us-east-1 sts get-caller-identity
 ```
 
 List likely leftovers:
 
 ```bash
-env AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws lambda list-functions | jq '.Functions[] | select(.FunctionName | test("alien-(rs|ts)-fn$")) | .FunctionName'
+P="--profile alien-test-mgmt --region us-east-1"
 
-env AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws dynamodb list-tables | jq '.TableNames[] | select(test("alien-kv$") or startswith("alien-test-kv-"))'
+# Lambda (standalone E2E + cloud tests)
+aws $P lambda list-functions --query 'Functions[].FunctionName' --output json \
+  | jq -r '.[] | select(test("alien-(rs|ts)-fn$") or test("^alien-test-function-"))'
 
-env AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws sqs list-queues | jq -r '.QueueUrls[]? | split("/")[-1] | select(test("alien-queue$"))'
+# DynamoDB
+aws $P dynamodb list-tables --output json \
+  | jq -r '.TableNames[] | select(test("alien-kv$") or startswith("alien-test-kv-"))'
 
-env AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws iam list-roles | jq -r '.Roles[] | .RoleName | select(test("execution-sa$") or test("build-execution-sa$") or test("test-alien-artifact-registry-(pull|push)$") or startswith("alien-test-role-") or startswith("alien-test-build-role-"))'
+# SQS
+aws $P sqs list-queues --output json \
+  | jq -r '.QueueUrls[]? | split("/")[-1] | select(test("alien-queue$"))'
 
-env AWS_ACCESS_KEY_ID="$AWS_MANAGEMENT_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_MANAGEMENT_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="$AWS_MANAGEMENT_REGION" \
-  aws ssm describe-parameters | jq -r '.Parameters[] | .Name | select(startswith("alien-test-vault-"))'
+# IAM roles
+aws $P iam list-roles --output json \
+  | jq -r '.Roles[] | .RoleName | select(
+      test("execution-sa$") or test("build-execution-sa$")
+      or test("test-alien-artifact-registry-(pull|push)$")
+      or startswith("alien-test-role-") or startswith("alien-test-build-role-")
+    )'
+
+# SSM parameters
+aws $P ssm describe-parameters --output json \
+  | jq -r '.Parameters[] | .Name | select(
+      startswith("alien-test-vault-") or test("secrets-ALIEN_COMMANDS_TOKEN$")
+    )'
+
+# S3 buckets (compare against ALIEN_TEST_AWS_S3_BUCKET to identify extras)
+aws $P s3api list-buckets --output json \
+  | jq -r '.Buckets[].Name | select(startswith("alien-test"))'
 ```
 
 ### GCP
@@ -217,17 +264,34 @@ CLOUDSDK_CONFIG="$CFG" gcloud auth activate-service-account --key-file="$MGMT_KE
 List likely leftovers:
 
 ```bash
-CLOUDSDK_CONFIG="$CFG" gcloud run services list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --platform=managed --format='value(metadata.name)'
+G="CLOUDSDK_CONFIG=$CFG"
+PROJECT="$GOOGLE_MANAGEMENT_PROJECT_ID"
 
-CLOUDSDK_CONFIG="$CFG" gcloud storage buckets list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --format='value(name)'
+# Cloud Run services
+env $G gcloud run services list --project="$PROJECT" --platform=managed --format='value(metadata.name)'
 
-CLOUDSDK_CONFIG="$CFG" gcloud pubsub topics list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --format='value(name)'
+# GCS buckets (compare against ALIEN_TEST_GCP_GCS_BUCKET)
+env $G gcloud storage buckets list --project="$PROJECT" --format='value(name)'
 
-CLOUDSDK_CONFIG="$CFG" gcloud pubsub subscriptions list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --format='value(name)'
+# Pub/Sub topics and subscriptions
+env $G gcloud pubsub topics list --project="$PROJECT" --format='value(name)'
+env $G gcloud pubsub subscriptions list --project="$PROJECT" --format='value(name)'
 
-CLOUDSDK_CONFIG="$CFG" gcloud iam service-accounts list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --format='value(email)'
+# Service accounts
+env $G gcloud iam service-accounts list --project="$PROJECT" --format='value(email)'
 
-CLOUDSDK_CONFIG="$CFG" gcloud secrets list --project="$GOOGLE_MANAGEMENT_PROJECT_ID" --format='value(name)'
+# Secret Manager secrets
+env $G gcloud secrets list --project="$PROJECT" --format='value(name)'
+
+# Firestore databases (look for alien-test-kv-db-* leftovers, keep (default))
+env $G gcloud firestore databases list --project="$PROJECT" --format='value(name)'
+
+# Artifact Registry repos (keep alien-test and test-alien-artifact-registry)
+env $G gcloud artifacts repositories list --project="$PROJECT" --format='value(name)'
+
+# Stale IAM bindings — deleted service accounts that still have role bindings
+env $G gcloud projects get-iam-policy "$PROJECT" --format=json \
+  | jq -r '[.bindings[].members[] | select(startswith("deleted:serviceAccount:"))] | unique | .[]'
 ```
 
 Cleanup temp auth:
@@ -239,7 +303,7 @@ rm -rf "$CFG"
 
 ### Azure
 
-Azure leftovers are best inspected by resource group:
+Azure leftovers appear in two places: as separate leftover resource groups, and as resources **inside** the baseline resource group.
 
 ```bash
 AZ_CFG=$(mktemp -d)
@@ -251,17 +315,43 @@ AZURE_CONFIG_DIR="$AZ_CFG" az login \
 AZURE_CONFIG_DIR="$AZ_CFG" az account set --subscription "$AZURE_MANAGEMENT_SUBSCRIPTION_ID"
 ```
 
-List likely leftover resource groups:
+List separate leftover resource groups (standalone E2E):
 
 ```bash
-AZURE_CONFIG_DIR="$AZ_CFG" az group list -o json | jq -r '.[].name | select(test("^[a-z][0-9a-f]{7}-default-resource-group$"))'
+AZURE_CONFIG_DIR="$AZ_CFG" az group list -o json \
+  | jq -r '.[].name | select(test("^[a-z][0-9a-f]{7}-default-resource-group$"))'
 ```
 
-Inspect one resource group:
+List leftovers **inside** the baseline resource group:
 
 ```bash
-RG="<prefix>-default-resource-group"
-AZURE_CONFIG_DIR="$AZ_CFG" az resource list --resource-group "$RG" -o table
+AZ="AZURE_CONFIG_DIR=$AZ_CFG"
+RG="$ALIEN_TEST_AZURE_RESOURCE_GROUP"
+
+# Container Apps (alien-test-app-{hex})
+env $AZ az containerapp list -o json \
+  | jq -r '.[] | select(.resourceGroup == "'"$RG"'") | .name' \
+  | grep -E '^alien-test-app-[0-9a-f]{8}$'
+
+# Container App Jobs (build-test-pre-{number})
+env $AZ az resource list --resource-group "$RG" -o json \
+  | jq -r '.[] | select(.type == "Microsoft.App/jobs") | .name'
+
+# Key Vaults (alientest{hex})
+env $AZ az resource list --resource-group "$RG" -o json \
+  | jq -r '.[] | select(.type == "Microsoft.KeyVault/vaults") | .name'
+
+# Managed Identities (alien-test-app-{hex}-identity)
+env $AZ az resource list --resource-group "$RG" -o json \
+  | jq -r '.[] | select(.type == "Microsoft.ManagedIdentity/userAssignedIdentities") | .name'
+
+# Virtual Networks (alien-vnet-{hex})
+env $AZ az resource list --resource-group "$RG" -o json \
+  | jq -r '.[] | select(.type == "Microsoft.Network/virtualNetworks") | .name'
+
+# Disks (alien-disk-{hex})
+env $AZ az resource list --resource-group "$RG" -o json \
+  | jq -r '.[] | select(.type == "Microsoft.Compute/disks") | .name'
 ```
 
 Cleanup temp auth:
@@ -313,18 +403,22 @@ Never delete:
 
 Delete in this order:
 
-1. Cloud Run services with test-run prefixes
+1. Cloud Run services with test-run prefixes (`{prefix}-alien-*-fn`, `alien-test-svc-*`)
 2. Pub/Sub subscriptions with test-run prefixes
 3. Pub/Sub topics with test-run prefixes
-4. Secret Manager secrets matching `alien-test-vault-*`
-5. Leftover GCS buckets with test-run prefixes
-6. Per-run service accounts with test-run prefixes (`{prefix}-*@...`)
-7. Optional: the shared `test-alien-artifact-registry` repo, but only if you know no current run needs it
+4. Secret Manager secrets matching `{prefix}-secrets-ALIEN_COMMANDS_TOKEN` and `alien-test-vault-*`
+5. Leftover Firestore databases matching `alien-test-kv-db-*`
+6. Leftover Artifact Registry repos matching `alien-test-repo-*`
+7. Leftover GCS buckets with test-run prefixes
+8. Per-run service accounts with test-run prefixes (`{prefix}-*@...`)
+9. Scrub stale IAM bindings referencing `deleted:serviceAccount:` members — these are bindings for service accounts that were already deleted but whose policy entries remain
 
 **Never delete these service accounts (management project):**
 
 - `alien-test-manager@alien-test-mgmt.iam.gserviceaccount.com`
 - `alien-test-management@alien-test-mgmt.iam.gserviceaccount.com`
+- `alien-test-ar-pull@alien-test-mgmt.iam.gserviceaccount.com`
+- `alien-test-ar-push@alien-test-mgmt.iam.gserviceaccount.com`
 - `alien-terraform-bootstrap@alien-test-mgmt.iam.gserviceaccount.com`
 - `450988722957-compute@developer.gserviceaccount.com`
 
@@ -341,17 +435,29 @@ Also keep:
 
 - The baseline bucket from `.env.test`
 - The baseline `alien-test` Artifact Registry repo
-- The default Firestore database unless you are intentionally rebuilding the whole test project
+- The `test-alien-artifact-registry` repo (shared by Rust function E2E, only delete if you know no current run needs it)
+- The default Firestore database
 
 ### Azure cleanup
 
-For Azure, prefer deleting by leftover resource group:
+Azure leftovers appear in two places.
+
+**Separate leftover resource groups** (standalone E2E):
 
 1. Identify each `{prefix}-default-resource-group` (prefix matches `^[a-z][0-9a-f]{7}$`)
 2. Inspect the resources in that group
 3. Delete the whole resource group if it is clearly from a failed test run
 
-That is safer and much simpler than deleting Container Apps, identities, storage accounts, Key Vaults, Service Bus namespaces, and ACRs one by one.
+**Resources inside the baseline resource group** (cloud tests):
+
+These are the most common leftovers and are easy to miss. Delete in this order:
+
+1. Container Apps matching `alien-test-app-{8-char-hex}`
+2. Container App Jobs matching `build-test-pre-{number}`
+3. Key Vaults matching `alientest{8-char-hex}` — note: Azure soft-deletes vaults, so you may also need to purge them
+4. Managed Identities matching `alien-test-app-{8-char-hex}-identity`
+5. Virtual Networks matching `alien-vnet-{8-char-hex}`
+6. Disks matching `alien-disk-{8-char-hex}`
 
 Never delete:
 
@@ -366,12 +472,31 @@ Never delete:
 
 After cleanup, the expected steady state should look like this:
 
-- **AWS management account:** baseline bucket, baseline ECR repo, IAM roles (`alien-test-lambda-execution`, `alien-test-ecr-push`, `alien-test-ecr-pull`, `alien-test-management`), IAM user (`alien-test-manager`), plus AWS service roles
+- **AWS management account:** baseline bucket, baseline ECR repo, IAM roles (`alien-test-lambda-execution`, `alien-test-ecr-push`, `alien-test-ecr-pull`, `alien-test-management`), IAM user (`alien-test-manager`), no `alien-test-function-*` Lambdas, no `alien-test-kv-*` DynamoDB tables, no `alien-test-vault-*` SSM params, no extra `alien-test-*` S3 buckets, plus AWS service roles
 - **AWS target account:** IAM user (`alien-test-target`), plus `horizon-cloud-tests`, `horizon-test-role`, and AWS service roles
-- **GCP management project:** baseline bucket, baseline `alien-test` Artifact Registry repo, service accounts (`alien-test-manager@`, `alien-test-management@`, `alien-terraform-bootstrap@`, compute default), and the default Firestore database
+- **GCP management project:** baseline bucket, `alien-test` and `test-alien-artifact-registry` Artifact Registry repos, service accounts (`alien-test-manager@`, `alien-test-management@`, `alien-test-ar-pull@`, `alien-test-ar-push@`, `alien-terraform-bootstrap@`, compute default), the `(default)` Firestore database only, no `alien-test-kv-db-*` databases, no `alien-test-repo-*` repos, no `alien-test-svc-*` Cloud Run services, no stale IAM bindings for deleted service accounts
 - **GCP target project:** service accounts (`alien-test-target@`, `alien-terraform-bootstrap@`, compute default, `iam-condition-test@`, `test-custom-sa@`, `horizon-cloud-tests@`)
-- **Azure management subscription:** baseline resource group and its resources, plus `alien-dev`, `alien-staging`, `alien-prod`
+- **Azure management subscription:** baseline resource group containing only the storage account, ACR, and managed environment — no `alien-test-app-*` Container Apps, no `build-test-pre-*` Jobs, no `alientest*` Key Vaults, no leftover identities/vnets/disks. Plus `alien-dev`, `alien-staging`, `alien-prod`. No `*-default-resource-group` leftovers.
 - **Azure target subscription:** `alien-test-target`, `horizon2-test-rg`, `NetworkWatcherRG` — no `*-default-resource-group` leftovers
+
+## Programmatic cleanup via push_deletion
+
+E2E tests can tear down deployments programmatically using `alien_deploy_cli::commands::push_deletion`. This drives `DeletePending → Deleting → Deleted` locally with target-environment credentials, running the same state machine as a normal deletion.
+
+The `alien-test` harness uses this via `teardown_target()`:
+
+```rust
+alien_deploy_cli::commands::push_deletion(
+    manager.client(),
+    deployment_id,
+    platform,
+    target_config,
+).await?;
+```
+
+This is the preferred cleanup approach for E2E tests because it drives the full deletion state machine rather than force-deleting the deployment record. Cloud resources are actually torn down, not orphaned.
+
+For tests that panic or fail before teardown, the resources become the leftover patterns documented above and require manual cleanup.
 
 ## When to prefer Terraform over manual cleanup
 

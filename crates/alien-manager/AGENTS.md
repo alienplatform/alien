@@ -38,6 +38,25 @@ The builder requires all providers to be set explicitly. Convenience method `wit
 
 Tokens use SHA-256 hashed storage: the raw token is shown once at creation, then only `key_hash` + `key_prefix` are stored. Prefixes: `ax_admin_` for admin tokens, `ax_dg_` for deployment group tokens.
 
+## Deployment Loop
+
+`loops/deployment.rs` drives the deployment state machine:
+
+1. Acquires deployments with active statuses via `DeploymentStore::acquire`
+2. **Skips pull-mode deployments** — these are driven by alien-agent in-environment
+3. **Skips push-mode creation/deletion phases** (`Pending`, `InitialSetup`, `DeletePending`, `Deleting`, `DeleteFailed`) — these run on the developer's machine via `alien-deploy-cli`
+4. Resolves credentials, builds state, runs `alien_deployment::step()` in a loop
+5. Uses `classify_status()` from `alien-deployment::loop_contract` to detect terminal states
+6. Reconciles and releases locks unconditionally
+
+## Registry Access Automation
+
+`registry_access.rs` handles cross-account artifact registry access during sync/reconcile:
+
+- **Grant** — when a deployment transitions toward or has reached `Provisioning`, grants IAM-based cross-account pull access (AWS ECR, GCP GAR)
+- **Revoke** — when a deployment reaches `Deleted`, removes the access
+- Best-effort: failures are logged but don't block deployment progress
+
 ## Providers
 
 Key provider files:

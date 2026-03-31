@@ -124,6 +124,17 @@ It returns:
 
 The deployment loop calls `step()` repeatedly until the deployment reaches a stable state or the step suggests a long delay (>500ms). This allows fast transitions (e.g., `pending` → `initial-setup` → `provisioning`) to happen in a single loop iteration. Maximum 100 steps per iteration to prevent indefinite processing.
 
+### Loop contract
+
+`alien-deployment` defines a canonical loop contract that all callers use to interpret deployment status after each step:
+
+- `classify_status(status, operation)` maps the current deployment status to a terminal outcome (`Success`, `Failure`, `Neutral`) or returns `None` if the loop should continue.
+- For **Deploy** operations: `Running` is success, `Provisioning`/`Updating` is handoff (neutral — another actor takes over), and any `*Failed` status is failure.
+- For **Delete** operations: `Deleted` is success, any `*Failed` status is failure. Non-delete statuses like `Running` are non-terminal (the loop continues stepping).
+- The shared runner (`alien-deployment::runner`) wraps this contract into a step loop with a configurable budget. If the budget is exceeded without reaching a terminal state, the outcome is `Failure`.
+
+The manager loop, `alien-deploy-cli`, and `alien-agent` all use this contract. Loop outcome interpretation is centralized — callers don't implement their own terminal-state detection.
+
 ### Push model
 
 The deployment loop is alien-manager's background process for push-model deployments. It runs as a `tokio::spawn` task on a configurable interval:
@@ -230,7 +241,7 @@ In dev mode, alien-manager uses `ClientConfig::Local { state_directory }` — no
 
 **Redeployment:** `POST /v1/deployments/{id}/redeploy` forces a re-provision of a running deployment with the same release. Sets status to `update-pending` so the deployment loop re-runs `step()`. Useful when infrastructure changes happened outside of Alien.
 
-**Deletion:** `DELETE /v1/deployments/{id}` sets status to `delete-pending`. The deployment loop tears down cloud resources via `step()` and removes the record when status reaches `deleted`.
+**Deletion:** `DELETE /v1/deployments/{id}` sets status to `delete-pending`. For push-model deployments, the manager loop skips deletion phases (`DeletePending`, `Deleting`, `DeleteFailed`) since these require target-environment credentials that only the developer's machine has. Instead, `alien-deploy-cli` drives deletion locally via `push_deletion`, which acquires the deployment, runs the delete step loop with `LoopOperation::Delete`, reconciles state, and releases the lock. For pull-model deployments, the agent handles deletion in-environment. The deployment record is removed when status reaches `deleted`.
 
 **Errors:** Any phase can transition to `*-failed` with a structured error in the `error` field. `POST /v1/deployments/{id}/retry` sets `retry_requested = true`, and the deployment loop retries from the appropriate phase.
 

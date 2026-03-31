@@ -3,8 +3,13 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::ClientConfigExt;
 use clap::Parser;
+use std::str::FromStr;
+
+use super::up::{create_manager_client, push_deletion};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -12,6 +17,9 @@ use clap::Parser;
     after_help = "EXAMPLES:
     # Destroy a tracked deployment
     alien-deploy down --name production
+
+    # Force-delete (skip resource teardown, just remove the record)
+    alien-deploy down --name production --force
 
     # Destroy using explicit token
     alien-deploy down --name production --token dg_abc123... --manager-url https://manager.example.com"
@@ -29,6 +37,10 @@ pub struct DownArgs {
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
 
+    /// Force deletion — skip resource teardown, just remove the deployment record
+    #[arg(long)]
+    pub force: bool,
+
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -37,13 +49,14 @@ pub struct DownArgs {
 pub async fn down_command(args: DownArgs) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
-    let (token, manager_url) = match tracker.get(&args.name) {
+    let (token, manager_url, platform_str) = match tracker.get(&args.name) {
         Some(tracked) => {
             let token = args.token.unwrap_or_else(|| tracked.token.clone());
             let url = args
                 .manager_url
                 .unwrap_or_else(|| tracked.manager_url.clone());
-            (token, url)
+            let platform = tracked.platform.clone();
+            (token, url, platform)
         }
         None => {
             let token = args.token.ok_or_else(|| {
@@ -61,7 +74,7 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
                     message: "--manager-url is required for untracked deployments".to_string(),
                 })
             })?;
-            (token, url)
+            (token, url, "aws".to_string())
         }
     };
 
@@ -69,9 +82,8 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
     output::status("Name:", &args.name);
     output::status("Manager:", &manager_url);
 
-    let client = crate::commands::up::create_manager_client(&token, &manager_url)?;
+    let client = create_manager_client(&token, &manager_url)?;
 
-    // Get deployment to find its ID
     let tracked = tracker.get(&args.name).ok_or_else(|| {
         AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
@@ -79,20 +91,72 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
         })
     })?;
 
-    output::step(1, 2, "Requesting deployment destruction...");
+    let deployment_id = tracked.deployment_id.clone();
+
+    if args.force {
+        output::step(1, 2, "Force-deleting deployment...");
+
+        // Call DELETE with ?force=true — skips resource teardown
+        let delete_url = format!(
+            "{}/v1/deployments/{}?force=true",
+            manager_url, deployment_id
+        );
+        let http_client = reqwest::Client::new();
+        http_client
+            .delete(&delete_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "alien-deploy-cli")
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DeploymentFailed {
+                operation: "force deletion".to_string(),
+            })?;
+
+        output::step(2, 2, "Done!");
+        output::success("Deployment force-deleted. No resource teardown was performed.");
+        return Ok(());
+    }
+
+    let total_steps = 3;
+    output::step(1, total_steps, "Requesting deployment deletion...");
 
     client
         .delete_deployment()
-        .id(&tracked.deployment_id)
+        .id(&deployment_id)
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::DeploymentFailed {
-            operation: "destruction".to_string(),
+            operation: "request deletion".to_string(),
         })?;
 
-    output::step(2, 2, "Done!");
-    output::success("Deployment deletion initiated. Resources will be cleaned up by the manager.");
+    output::step(
+        2,
+        total_steps,
+        "Loading target credentials and running deletion...",
+    );
+
+    let platform = Platform::from_str(&platform_str).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    let client_config = ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
+                platform
+            ),
+        })?;
+
+    push_deletion(&client, &deployment_id, platform, client_config).await?;
+
+    output::step(total_steps, total_steps, "Done!");
+    output::success("Deployment destroyed successfully.");
 
     Ok(())
 }

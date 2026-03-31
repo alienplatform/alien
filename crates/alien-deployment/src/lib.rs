@@ -8,6 +8,8 @@ mod deleting;
 mod error;
 mod helpers;
 mod initial_setup;
+pub mod loop_contract;
+pub mod runner;
 mod pending;
 mod provisioning;
 mod running;

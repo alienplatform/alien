@@ -775,11 +775,13 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
                 account_ids: vec!["123456789012".to_string()],
                 allowed_service_types: vec![ComputeServiceType::Function],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role-1".to_string()],
+                regions: vec![],
             });
             let access_2 = CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["987654321098".to_string()],
                 allowed_service_types: vec![ComputeServiceType::Function],
                 role_arns: vec!["arn:aws:iam::987654321098:role/test-role-2".to_string()],
+                regions: vec![],
             });
             (access_1, access_2)
         }
@@ -845,6 +847,7 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
                 account_ids: vec!["123456789012".to_string()],
                 allowed_service_types: vec![ComputeServiceType::Function],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
+                regions: vec![],
             });
 
             match artifact_registry
@@ -945,6 +948,7 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
                 account_ids: vec!["123456789012".to_string()],
                 allowed_service_types: vec![ComputeServiceType::Function],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
+                regions: vec![],
             });
 
             // Test add_cross_account_access
@@ -1458,6 +1462,7 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
                 account_ids: vec!["123456789012".to_string()],
                 allowed_service_types: vec![ComputeServiceType::Function],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
+                regions: vec![],
             }),
             "gcp" => {
                 let service_accounts = if let Some(real_sa) = get_real_service_account_email() {

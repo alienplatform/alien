@@ -13,6 +13,7 @@
 
 use crate::AgentState;
 use alien_core::{ClientConfig, DeploymentStatus, KubernetesClientConfig, Platform};
+use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopStopReason};
 use alien_error::Context;
 use alien_infra::ClientConfigExt;
 use std::sync::Arc;
@@ -105,6 +106,17 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
         "Found target release to deploy"
     );
 
+    let operation = if matches!(
+        current.status,
+        DeploymentStatus::DeletePending
+            | DeploymentStatus::Deleting
+            | DeploymentStatus::DeleteFailed
+    ) {
+        LoopOperation::Delete
+    } else {
+        LoopOperation::Deploy
+    };
+
     let mut step_count = 0;
     const MAX_STEPS_PER_ITERATION: usize = 100;
 
@@ -156,45 +168,51 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
             enriched_config.stack_settings = stack_settings.clone();
         }
 
-        // Inject commands polling configuration from agent's sync token.
-        // Use the commands_url from the manager's sync response (public URL reachable
-        // by cloud functions) rather than the agent's local sync URL.
-        if let Some(ref sync_config) = state.config.sync {
-            use alien_core::{EnvironmentVariable, EnvironmentVariableType};
+        // Inject commands polling env vars only for K8s/Local containers.
+        // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands
+        // via platform-native push (InvokeFunction, Pub/Sub, Service Bus) regardless
+        // of the deployment model (push vs pull).
+        let needs_polling = matches!(
+            current.platform,
+            Platform::Kubernetes | Platform::Local
+        );
 
-            // Prefer the commands_url from the manager (set during sync), fall back
-            // to constructing one from the agent's own sync URL.
-            let commands_url = match state.db.get_commands_url().await {
-                Ok(Some(url)) => url,
-                _ => format!("{}/v1", sync_config.url),
-            };
+        if needs_polling {
+            if let Some(ref sync_config) = state.config.sync {
+                use alien_core::{EnvironmentVariable, EnvironmentVariableType};
 
-            let mut vars = enriched_config.environment_variables.variables.clone();
+                let commands_url = match state.db.get_commands_url().await {
+                    Ok(Some(url)) => url,
+                    _ => format!("{}/v1", sync_config.url),
+                };
 
-            vars.extend([
-                EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
-                    value: "true".to_string(),
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
-                    value: commands_url,
-                    var_type: EnvironmentVariableType::Plain,
-                    target_resources: None,
-                },
-                EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_TOKEN".to_string(),
-                    value: sync_config.token.clone(),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                },
-            ]);
+                let mut vars = enriched_config.environment_variables.variables.clone();
 
-            enriched_config.environment_variables.variables = vars;
+                vars.extend([
+                    EnvironmentVariable {
+                        name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                        value: "true".to_string(),
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: None,
+                    },
+                    EnvironmentVariable {
+                        name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                        value: commands_url,
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: None,
+                    },
+                    EnvironmentVariable {
+                        name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                        value: sync_config.token.clone(),
+                        var_type: EnvironmentVariableType::Secret,
+                        target_resources: None,
+                    },
+                ]);
 
-            info!("Injected commands polling configuration with agent sync token");
+                enriched_config.environment_variables.variables = vars;
+
+                info!("Injected commands polling configuration for K8s/Local deployment");
+            }
         }
 
         // Execute the deployment step
@@ -217,18 +235,22 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
         // Persist state after each step
         state.db.set_deployment_state(&current).await?;
 
-        // Check if deployment is synced
-        if current.status.is_synced() {
-            if matches!(
-                current.status,
-                DeploymentStatus::Running | DeploymentStatus::Deleted
-            ) {
-                debug!("Deployment synced, clearing deployment config");
-                state.db.clear_deployment_config().await?;
-            }
+        if let Some(loop_result) = classify_status(&current.status, operation) {
+            if loop_result.stop_reason != LoopStopReason::Handoff {
+                if loop_result.outcome == LoopOutcome::Success {
+                    debug!("Deployment synced, clearing deployment config");
+                    state.db.clear_deployment_config().await?;
+                }
 
-            info!(status = ?current.status, steps = step_count, "Deployment synced");
-            break;
+                info!(
+                    status = ?current.status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = step_count,
+                    "Deployment reached terminal state"
+                );
+                break;
+            }
         }
 
         // Respect the suggested delay before next step

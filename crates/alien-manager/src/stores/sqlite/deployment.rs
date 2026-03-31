@@ -11,6 +11,7 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use super::database::{db_error, RowParser, SqliteDatabase};
 use super::migrations::{DeploymentGroups, Deployments};
+use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
 
@@ -283,6 +284,29 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
 
         Ok(())
+    }
+
+    async fn set_delete_pending(&self, id: &str) -> Result<(), AlienError> {
+        let deployment = self
+            .get_deployment(id)
+            .await?
+            .ok_or_else(|| db_error(&format!("Deployment {} not found", id)))?;
+
+        let rejection_statuses = ["delete-pending", "deleting", "deleted"];
+        if rejection_statuses.contains(&deployment.status.as_str()) {
+            return Err(AlienError::new(ErrorData::DeploymentAlreadyDeleting {
+                deployment_id: id.to_string(),
+                status: deployment.status,
+            })
+            .into_generic());
+        }
+
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::Status, "delete-pending")
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
     }
 
     async fn set_retry_requested(&self, id: &str) -> Result<(), AlienError> {

@@ -30,6 +30,19 @@ pub enum ErrorData {
         locked_by: Option<String>,
     },
 
+    /// Deployment is already in a deletion state
+    #[error(
+        code = "DEPLOYMENT_ALREADY_DELETING",
+        message = "Deployment '{deployment_id}' is already in status '{status}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentAlreadyDeleting {
+        deployment_id: String,
+        status: String,
+    },
+
     /// Deployment group not found
     #[error(
         code = "DEPLOYMENT_GROUP_NOT_FOUND",

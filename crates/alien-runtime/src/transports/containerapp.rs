@@ -3,7 +3,7 @@
 //! Receives work via HTTP with Dapr integration:
 //! - HTTP requests → forwarded to app's HTTP server
 //! - Blob CloudEvent → StorageEvent via gRPC
-//! - Service Bus (Dapr) → QueueMessage via gRPC (or ArcCommand if ARC envelope)
+//! - Service Bus (Dapr) → QueueMessage via gRPC (or Command if command envelope)
 //! - Timer trigger → CronEvent via gRPC
 
 use std::net::SocketAddr;
@@ -30,7 +30,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use super::shared::{
-    create_forward_client, envelope_to_arc_command, forward_http_request,
+    create_forward_client, envelope_to_command, forward_http_request,
     parse_cloudevent_from_http_with_extensions, try_parse_envelope,
 };
 use crate::error::{ErrorData, Result};
@@ -255,12 +255,12 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
     match dapr_cloudevent_to_queue_messages(cloud_event) {
         Ok(queue_messages) => {
             for qm in queue_messages {
-                // Check if this is an ARC envelope
+                // Check if this is a command envelope
                 if let Some(envelope) = try_parse_envelope(&qm) {
-                    match envelope_to_arc_command(&envelope).await {
-                        Some(arc_command) => {
-                            if let Err(e) = handle_arc_command(&envelope, &arc_command, state).await {
-                                error!(error = %e, "Failed to handle ARC command");
+                    match envelope_to_command(&envelope).await {
+                        Some(command) => {
+                            if let Err(e) = handle_command(&envelope, &command, state).await {
+                                error!(error = %e, "Failed to handle command");
                             }
                         }
                         None => {
@@ -456,18 +456,18 @@ async fn handle_azure_storage_cloudevent(
     }
 }
 
-/// Handle an ARC command
-async fn handle_arc_command(
+/// Handle a command
+async fn handle_command(
     envelope: &alien_commands::Envelope,
-    arc_command: &ArcCommand,
+    command: &ArcCommand,
     state: &TransportState,
 ) -> std::result::Result<(), String> {
     let task = Task {
-        task_id: arc_command.command_id.clone(),
-        payload: Some(control::task::Payload::ArcCommand(arc_command.clone())),
+        task_id: command.command_id.clone(),
+        payload: Some(control::task::Payload::ArcCommand(command.clone())),
     };
 
-    let arc_response = match state
+    let command_response = match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(300))
         .await
@@ -490,7 +490,7 @@ async fn handle_arc_command(
         ),
     };
 
-    alien_commands::runtime::submit_response(envelope, arc_response)
+    alien_commands::runtime::submit_response(envelope, command_response)
         .await
         .map_err(|e| format!("Failed to submit response: {}", e))
 }

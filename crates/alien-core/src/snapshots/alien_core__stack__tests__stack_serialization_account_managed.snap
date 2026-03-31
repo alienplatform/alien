@@ -8,10 +8,10 @@ expression: stack
     "my-bucket": {
       "config": {
         "id": "my-bucket",
-        "publicRead": true,
-        "versioning": false,
         "lifecycleRules": [],
-        "type": "storage"
+        "publicRead": true,
+        "type": "storage",
+        "versioning": false
       },
       "lifecycle": "frozen",
       "dependencies": [],
@@ -19,26 +19,26 @@ expression: stack
     },
     "my-function": {
       "config": {
-        "id": "my-function",
-        "links": [
-          {
-            "type": "storage",
-            "id": "my-bucket"
-          }
-        ],
-        "triggers": [],
-        "permissions": "execution",
         "code": {
-          "type": "image",
-          "image": "rust:latest"
+          "image": "rust:latest",
+          "type": "image"
         },
-        "memoryMb": 256,
-        "timeoutSeconds": 180,
-        "environment": {},
-        "ingress": "private",
         "commandsEnabled": false,
         "concurrencyLimit": null,
+        "environment": {},
+        "id": "my-function",
+        "ingress": "private",
+        "links": [
+          {
+            "id": "my-bucket",
+            "type": "storage"
+          }
+        ],
+        "memoryMb": 256,
+        "permissions": "execution",
         "readinessProbe": null,
+        "timeoutSeconds": 180,
+        "triggers": [],
         "type": "function"
       },
       "lifecycle": "live",

@@ -1,7 +1,7 @@
 //! Deployment REST API endpoints.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -123,6 +123,13 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
             include,
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteQuery {
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -576,6 +583,7 @@ async fn delete_deployment(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<DeleteQuery>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -593,8 +601,14 @@ async fn delete_deployment(
         Err(e) => return e.into_response(),
     }
 
-    if let Err(e) = state.deployment_store.delete_deployment(&id).await {
-        return e.into_response();
+    if query.force {
+        if let Err(e) = state.deployment_store.delete_deployment(&id).await {
+            return e.into_response();
+        }
+    } else {
+        if let Err(e) = state.deployment_store.set_delete_pending(&id).await {
+            return e.into_response();
+        }
     }
 
     (

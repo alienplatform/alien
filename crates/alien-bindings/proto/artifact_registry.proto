@@ -144,6 +144,8 @@ message AwsCrossAccountAccess {
     repeated ComputeServiceType allowed_service_types = 2;
     // Specific IAM role ARNs to grant access to
     repeated string role_arns = 3;
+    // AWS regions where target Lambda functions run (for sourceArn condition)
+    repeated string regions = 4;
 }
 
 // Cross-account access configuration for GCP

@@ -76,6 +76,7 @@ impl ArtifactRegistryGrpcServer {
 
                 Ok(CrossAccountAccess::Aws(AwsCrossAccountAccess {
                     account_ids: aws.account_ids,
+                    regions: aws.regions,
                     allowed_service_types: service_types,
                     role_arns: aws.role_arns,
                 }))
@@ -125,6 +126,7 @@ impl ArtifactRegistryGrpcServer {
                             account_ids: aws.account_ids,
                             allowed_service_types: proto_service_types,
                             role_arns: aws.role_arns,
+                            regions: aws.regions,
                         }
                     )),
                 }

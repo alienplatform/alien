@@ -1,4 +1,8 @@
 //! Cleanup utilities for tearing down test resources.
+//!
+//! Test ownership: Cleanup behavior lives here (alien-test). The push_deletion
+//! function used by teardown_target is defined in alien-deploy-cli and tested
+//! via E2E tests that exercise the full deploy → destroy lifecycle.
 
 use tracing::{info, warn};
 

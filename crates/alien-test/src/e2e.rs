@@ -134,8 +134,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
             bindings.push(Binding::Events);
-            // ExternalSecret requires the manager to access the cloud vault directly,
-            // which only works in push mode (manager has target account credentials).
+            // Test infrastructure limitation: in pull mode the test harness can't
+            // provision User Vault secrets from the management account. In real
+            // deployments the agent has vault access via its own credentials.
             if model == DeploymentModel::Push {
                 bindings.push(Binding::ExternalSecret);
             }
@@ -260,7 +261,7 @@ impl TestContext {
             agent.cleanup().await;
         }
 
-        // 2. Destroy the deployment and wait for terminal status.
+        // 2. Mark the deployment as delete-pending via the manager API.
         if let Err(e) = self.deployment.destroy().await {
             tracing::warn!(
                 deployment = %self.deployment.id,
@@ -270,44 +271,32 @@ impl TestContext {
             return;
         }
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-        let poll_interval = Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match self
-                .manager
-                .client()
-                .get_deployment()
-                .id(&self.deployment.id)
-                .send()
+        // 3. Drive the deletion state machine with target credentials so
+        //    cloud resources are actually torn down before the test exits.
+        if matches!(
+            self.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            let config = crate::config::TestConfig::from_env();
+            if config.has_platform(self.platform) {
+                if let Err(e) = crate::setup::teardown_target(
+                    &config,
+                    self.platform,
+                    &self.deployment.id,
+                    &self.manager,
+                )
                 .await
-            {
-                Ok(dep) => {
-                    let status = dep.status.as_str();
-                    if status == "destroyed" || status == "deleted" {
-                        info!(deployment = %self.deployment.id, "cleanup: deployment destroyed");
-                        return;
-                    }
-                    if status == "failed" || status.ends_with("-failed") {
-                        tracing::warn!(
-                            deployment = %self.deployment.id,
-                            %status,
-                            "cleanup: deployment entered failed state during destroy"
-                        );
-                        return;
-                    }
-                }
-                Err(_) => {
-                    // 404 or connection error — deployment likely gone
-                    info!(deployment = %self.deployment.id, "cleanup: deployment gone");
-                    return;
+                {
+                    tracing::warn!(
+                        deployment = %self.deployment.id,
+                        error = %e,
+                        "cleanup: teardown_target failed (resources may be orphaned)"
+                    );
                 }
             }
-            tokio::time::sleep(poll_interval).await;
         }
-        tracing::warn!(
-            deployment = %self.deployment.id,
-            "cleanup: timed out waiting for destroy"
-        );
+
+        info!(deployment = %self.deployment.id, "cleanup: complete");
     }
 }
 

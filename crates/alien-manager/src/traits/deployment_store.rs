@@ -107,6 +107,8 @@ pub trait DeploymentStore: Send + Sync {
 
     async fn delete_deployment(&self, id: &str) -> Result<(), AlienError>;
 
+    async fn set_delete_pending(&self, id: &str) -> Result<(), AlienError>;
+
     async fn set_retry_requested(&self, id: &str) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, id: &str) -> Result<(), AlienError>;

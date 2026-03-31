@@ -13,12 +13,15 @@ use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
     StackSettings,
 };
+use alien_deployment::{
+    loop_contract::{LoopOperation, LoopOutcome},
+    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::Client as ServerClient;
 use clap::Parser;
 use std::str::FromStr;
-use tokio::time::{sleep, Duration};
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -786,65 +789,301 @@ pub async fn push_initial_setup(
     result
 }
 
+/// Run the push-model deletion flow for a deployment.
+///
+/// Fetches deployment and release state from the manager, acquires a sync lock,
+/// steps the deployment through DeletePending → Deleting → Deleted (or DeleteFailed),
+/// reconciles state back to the manager, and releases the lock.
+pub async fn push_deletion(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    client_config: ClientConfig,
+) -> Result<()> {
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status: DeploymentStatus =
+        serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Unknown deployment status: {}", deployment.status),
+            })?;
+
+    let stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    let environment_info = deployment
+        .environment_info
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize environment_info from manager".to_string(),
+        })?;
+    let runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    let current_release = if let Some(ref release_id) = deployment.current_release_id {
+        match client.get_release().id(release_id).send().await {
+            Ok(resp) => {
+                let rel = resp.into_inner();
+                let platform_stack_value = match platform {
+                    Platform::Aws => rel.stack.aws,
+                    Platform::Gcp => rel.stack.gcp,
+                    Platform::Azure => rel.stack.azure,
+                    Platform::Kubernetes => rel.stack.kubernetes,
+                    Platform::Local => rel.stack.local,
+                    Platform::Test => rel.stack.test,
+                };
+                platform_stack_value
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .map(|stack| ReleaseInfo {
+                        release_id: rel.id,
+                        version: None,
+                        description: None,
+                        stack,
+                    })
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut state = DeploymentState {
+        status,
+        platform,
+        current_release,
+        target_release: None,
+        stack_state,
+        environment_info,
+        runtime_metadata,
+        retry_requested: deployment.retry_requested,
+    };
+
+    let stack_settings: StackSettings = deployment
+        .stack_settings
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_settings from manager".to_string(),
+        })?
+        .unwrap_or_default();
+
+    let config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+        "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
+        "environmentVariables": {
+            "variables": [],
+            "hash": "",
+            "createdAt": ""
+        }
+    }))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to construct deployment config".to_string(),
+    })?;
+
+    // Acquire sync lock with retry
+    let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
+    let max_acquire_attempts = 60;
+    for attempt in 1..=max_acquire_attempts {
+        let resp = client
+            .acquire()
+            .body(alien_manager_api::types::AcquireRequest {
+                session: session.clone(),
+                deployment_ids: Some(vec![deployment_id.to_string()]),
+                statuses: None,
+                platforms: None,
+                limit: None,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DeploymentFailed {
+                operation: "acquire sync lock for deletion".to_string(),
+            })?;
+
+        if !resp.into_inner().deployments.is_empty() {
+            break;
+        }
+
+        if attempt == max_acquire_attempts {
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                operation: "acquire sync lock for deletion: timed out waiting for lock".to_string(),
+            }));
+        }
+
+        output::info(&format!(
+            "Waiting for deployment lock (attempt {}/{})",
+            attempt, max_acquire_attempts
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    // Re-fetch deployment under lock
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status: DeploymentStatus =
+        serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Unknown deployment status: {}", deployment.status),
+            })?;
+
+    state.status = status;
+    state.stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    state.runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    // Deletion step loop
+    let result = run_deletion_step_loop(&mut state, &config, &client_config, deployment_id).await;
+
+    // Always reconcile + release, even on error
+    let state_json = serde_json::to_value(&state).unwrap_or_default();
+    if let Err(e) = client
+        .reconcile()
+        .body(alien_manager_api::types::ReconcileRequest {
+            deployment_id: deployment_id.to_string(),
+            session: session.clone(),
+            state: state_json,
+            update_heartbeat: Some(false),
+            error: None,
+        })
+        .send()
+        .await
+    {
+        tracing::error!("Failed to reconcile deployment state: {e}");
+        output::error(&format!("Failed to reconcile deployment state: {e}"));
+    }
+
+    if let Err(e) = client
+        .release()
+        .body(alien_manager_api::types::ReleaseRequest {
+            deployment_id: deployment_id.to_string(),
+            session: session.clone(),
+        })
+        .send()
+        .await
+    {
+        tracing::error!("Failed to release sync lock: {e}");
+        output::error(&format!("Failed to release sync lock: {e}"));
+    }
+
+    result
+}
+
+/// Inner step loop for push_deletion. Steps until Deleted (success) or
+/// DeleteFailed (error). Separated so the caller can always reconcile + release.
+async fn run_deletion_step_loop(
+    state: &mut DeploymentState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+    _deployment_id: &str,
+) -> Result<()> {
+    let policy = RunnerPolicy {
+        max_steps: 200,
+        operation: LoopOperation::Delete,
+        delay_threshold: None,
+    };
+
+    let result = shared_run_step_loop(state, config, client_config, &policy)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "deletion".to_string(),
+        })?;
+
+    match result.loop_result.outcome {
+        LoopOutcome::Success => {
+            output::success("Deployment deleted successfully.");
+            Ok(())
+        }
+        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
+            operation: format!(
+                "deletion failed at status {:?}",
+                result.loop_result.final_status
+            ),
+        })),
+        LoopOutcome::Neutral => Ok(()),
+    }
+}
+
 /// Inner step loop for push_initial_setup. Separated so the caller can
 /// always reconcile + release regardless of the outcome.
 async fn run_step_loop(
     state: &mut DeploymentState,
     config: &DeploymentConfig,
     client_config: &ClientConfig,
-    deployment_id: &str,
+    _deployment_id: &str,
 ) -> Result<()> {
-    let max_steps = 200;
+    let policy = RunnerPolicy {
+        max_steps: 200,
+        operation: LoopOperation::Deploy,
+        delay_threshold: None,
+    };
 
-    for step_count in 1..=max_steps {
-        info!("Step {}: status = {:?}", step_count, state.status);
-        output::info(&format!("Step {}: {:?}", step_count, state.status));
+    let result = shared_run_step_loop(state, config, client_config, &policy)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "initial setup".to_string(),
+        })?;
 
-        let step_result =
-            alien_deployment::step(state.clone(), config.clone(), client_config.clone(), None)
-                .await
-                .context(ErrorData::DeploymentFailed {
-                    operation: "initial setup".to_string(),
-                })?;
-
-        *state = step_result.state;
-
-        // Synced or Running — done
-        if state.status.is_synced() || matches!(state.status, DeploymentStatus::Running) {
+    match result.loop_result.outcome {
+        LoopOutcome::Success => {
             output::success("Initial setup complete. Manager will continue deployment.");
-            return Ok(());
+            Ok(())
         }
-
-        // Failed — report error
-        if state.status.is_failed() {
-            if let Some(err) = step_result.error {
-                return Err(AlienError::new(ErrorData::DeploymentFailed {
-                    operation: format!("initial setup: {}", err),
-                }));
-            }
-            return Err(AlienError::new(ErrorData::DeploymentFailed {
-                operation: "initial setup".to_string(),
-            }));
-        }
-
-        // Provisioning/Updating — hand off to manager
-        if matches!(
-            state.status,
-            DeploymentStatus::Provisioning | DeploymentStatus::Updating
-        ) {
+        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
+            operation: format!(
+                "initial setup failed at status {:?}",
+                result.loop_result.final_status
+            ),
+        })),
+        LoopOutcome::Neutral => {
             output::success("Initial setup complete. Manager will continue provisioning.");
-            return Ok(());
-        }
-
-        if let Some(delay_ms) = step_result.suggested_delay_ms {
-            sleep(Duration::from_millis(delay_ms)).await;
+            Ok(())
         }
     }
-
-    Err(AlienError::new(ErrorData::DeploymentFailed {
-        operation: format!(
-            "initial setup exceeded {} steps for deployment {}",
-            max_steps, deployment_id
-        ),
-    }))
 }

@@ -6,6 +6,7 @@ use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::{ClientConfig, Platform};
+use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopStopReason};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt;
@@ -541,24 +542,39 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         steps.sync_deployment_resources(&stack_state.resources);
     }
 
-    // Deployment loop
-    let max_steps = 400;
-    let mut step_count = 0;
+    // Deployment loop — uses shared loop contract for status classification.
+    // Per-step reconcile is required because the platform sync API returns
+    // updated state and config after each reconcile.
+    let max_steps: usize = 400;
 
-    loop {
-        step_count += 1;
-        if step_count > max_steps {
-            return Err(AlienError::new(ErrorData::GenericError {
-                message: format!("Deployment exceeded maximum steps ({})", max_steps),
-            }));
+    for _step_count in 1..=max_steps {
+        // Check for terminal status before running a step
+        if let Some(loop_result) = classify_status(&current.status, LoopOperation::Deploy) {
+            match loop_result.outcome {
+                LoopOutcome::Success => {
+                    steps.complete(2, Some("Resources ready".to_string()));
+                    steps.activate(3, Some("Promoting release".to_string()));
+                    steps.complete(3, Some("Deployment is running".to_string()));
+                    break;
+                }
+                LoopOutcome::Failure => {
+                    steps.fail(2, Some(format!("{:?}", current.status)));
+                    return Err(AlienError::new(ErrorData::DeploymentFailed {
+                        message: format!("deployment failed at {:?}", current.status),
+                    }));
+                }
+                LoopOutcome::Neutral => {
+                    // Handoff (Provisioning/Updating) — loop will continue
+                    // via reconcile; the platform may drive these forward.
+                }
+            }
         }
 
-        // Call alien_deployment::step() directly
         let step_result = alien_deployment::step(
             current.clone(),
             config.clone(),
             client_config.clone(),
-            None, // Use default PlatformServiceProvider
+            None,
         )
         .await
         .context(ErrorData::GenericError {
@@ -570,28 +586,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             steps.sync_deployment_resources(&stack_state.resources);
         }
 
-        // Check if deployment is complete
-        let is_success_release = step_result.state.status.is_synced()
-            && matches!(
-                step_result.state.status,
-                alien_deployment::DeploymentStatus::Running
-            );
+        // Classify the post-step status
+        let classification = classify_status(&step_result.state.status, LoopOperation::Deploy);
 
-        if is_success_release {
-            info!("🎉 Deployment complete!");
-        }
-
-        // Check for failure states
-        let is_failure = matches!(
-            step_result.state.status,
-            alien_deployment::DeploymentStatus::ProvisioningFailed
-                | alien_deployment::DeploymentStatus::UpdateFailed
-                | alien_deployment::DeploymentStatus::DeleteFailed
-                | alien_deployment::DeploymentStatus::RefreshFailed
-                | alien_deployment::DeploymentStatus::InitialSetupFailed
-        );
-
-        // Apply update to platform using sync API
+        // Reconcile to platform after every step so the platform has the
+        // latest state, and we get back updated state/config.
         let state_sdk: alien_platform_api::types::SyncReconcileRequestState =
             serde_json::from_value(
                 serde_json::to_value(&step_result.state)
@@ -621,7 +620,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             })
             .transpose()?;
 
-        // Convert deployment_id to typed ID
         let deployment_id_typed: alien_platform_api::types::SyncReconcileRequestDeploymentId =
             tracked_deployment
                 .deployment_id
@@ -633,18 +631,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                     })
                 })?;
 
-        let reconcile_request = alien_platform_api::types::SyncReconcileRequest {
-            deployment_id: deployment_id_typed,
-            session: Some(session_id.clone()),
-            state: state_sdk,
-            error: error_sdk,
-            update_heartbeat: Some(step_result.update_heartbeat),
-        };
-
         let reconcile_response = sdk_client
             .sync_reconcile()
             .workspace(&workspace_name)
-            .body(reconcile_request)
+            .body(alien_platform_api::types::SyncReconcileRequest {
+                deployment_id: deployment_id_typed,
+                session: Some(session_id.clone()),
+                state: state_sdk,
+                error: error_sdk,
+                update_heartbeat: Some(step_result.update_heartbeat),
+            })
             .send()
             .await
             .into_sdk_error()
@@ -653,39 +649,46 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             })?
             .into_inner();
 
-        // Handle failures AFTER the platform has been updated
-        if is_failure {
-            let failed_status = step_result.state.status;
-            steps.fail(2, Some(format!("{failed_status:?}")));
-
-            let operation = match failed_status {
-                alien_deployment::DeploymentStatus::InitialSetupFailed => "initial setup",
-                alien_deployment::DeploymentStatus::ProvisioningFailed => "provisioning",
-                alien_deployment::DeploymentStatus::UpdateFailed => "update",
-                alien_deployment::DeploymentStatus::DeleteFailed => "deletion",
-                _ => "deployment",
-            };
-
-            if let Some(error) = step_result.error {
-                return Err(error.context(ErrorData::DeploymentFailed {
-                    message: format!("{operation} failed"),
-                }));
-            } else {
-                return Err(AlienError::new(ErrorData::DeploymentFailed {
-                    message: format!("{operation} failed"),
-                }));
+        // Act on the classification AFTER reconcile so the platform always
+        // has the latest state, even on failure.
+        if let Some(loop_result) = classification {
+            match loop_result.outcome {
+                LoopOutcome::Success => {
+                    steps.complete(2, Some("Resources ready".to_string()));
+                    steps.activate(3, Some("Promoting release".to_string()));
+                    steps.complete(3, Some("Deployment is running".to_string()));
+                    break;
+                }
+                LoopOutcome::Failure => {
+                    steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
+                    if let Some(error) = step_result.error {
+                        return Err(error.context(ErrorData::DeploymentFailed {
+                            message: format!(
+                                "{} failed",
+                                describe_failed_status(&loop_result.final_status)
+                            ),
+                        }));
+                    }
+                    return Err(AlienError::new(ErrorData::DeploymentFailed {
+                        message: format!(
+                            "{} failed",
+                            describe_failed_status(&loop_result.final_status)
+                        ),
+                    }));
+                }
+                LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
+                    // Handoff to manager — stop the loop, deployment continues
+                    // on the manager side.
+                    steps.complete(2, Some("Resources ready".to_string()));
+                    steps.activate(3, Some("Promoting release".to_string()));
+                    steps.complete(3, Some("Deployment is running".to_string()));
+                    break;
+                }
+                LoopOutcome::Neutral => {}
             }
         }
 
-        // Handle success
-        if is_success_release {
-            steps.complete(2, Some("Resources ready".to_string()));
-            steps.activate(3, Some("Promoting release".to_string()));
-            steps.complete(3, Some("Deployment is running".to_string()));
-            break;
-        }
-
-        // Update current state for next iteration
+        // Update current state from reconcile response for next iteration
         current = serde_json::from_value(
             serde_json::to_value(&reconcile_response.current)
                 .into_alien_error()
@@ -698,9 +701,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to parse updated deployment state".to_string(),
         })?;
 
-        // Refresh config from the platform's latest view so domain_metadata
-        // (cert/DNS status, cert chain), env vars, and other platform-side
-        // fields stay current across the whole deployment loop.
+        // Refresh config from the platform's latest view so domain_metadata,
+        // env vars, and other platform-side fields stay current.
         if let Some(target) = &reconcile_response.target {
             config = serde_json::from_value(
                 serde_json::to_value(&target.config)
@@ -715,7 +717,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             })?;
         }
 
-        // Wait if suggested
         if let Some(delay_ms) = step_result.suggested_delay_ms {
             sleep(Duration::from_millis(delay_ms)).await;
         }
@@ -738,6 +739,17 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn describe_failed_status(status: &alien_deployment::DeploymentStatus) -> &'static str {
+    match status {
+        alien_deployment::DeploymentStatus::InitialSetupFailed => "initial setup",
+        alien_deployment::DeploymentStatus::ProvisioningFailed => "provisioning",
+        alien_deployment::DeploymentStatus::UpdateFailed => "update",
+        alien_deployment::DeploymentStatus::DeleteFailed => "deletion",
+        alien_deployment::DeploymentStatus::RefreshFailed => "refresh",
+        _ => "deployment",
+    }
 }
 
 async fn deploy_local_dev_task(args: DeployArgs, port: u16) -> Result<()> {

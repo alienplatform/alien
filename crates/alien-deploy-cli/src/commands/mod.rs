@@ -8,4 +8,4 @@ pub use agent::{agent_command, AgentArgs};
 pub use down::{down_command, DownArgs};
 pub use list::{list_command, ListArgs};
 pub use status::{status_command, StatusArgs};
-pub use up::{push_initial_setup, up_command, UpArgs};
+pub use up::{push_deletion, push_initial_setup, up_command, UpArgs};

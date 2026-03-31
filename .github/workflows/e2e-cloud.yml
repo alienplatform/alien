@@ -494,3 +494,85 @@ jobs:
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} --no-capture
+
+  # ── Cleanup safety net ───────────────────────────────────────────────
+  # Runs after all test jobs (even on failure/cancellation) to delete
+  # orphaned cloud resources in the dedicated test target accounts.
+
+  cleanup:
+    needs: [push-test, pull-test]
+    if: always()
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Clean up AWS resources
+        if: always()
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-2
+        run: |
+          echo "Deleting CloudFormation stacks in target account..."
+          STACKS=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
+                                  CREATE_FAILED UPDATE_FAILED DELETE_FAILED \
+            --query 'StackSummaries[].StackName' --output text) || true
+          for stack in $STACKS; do
+            echo "Deleting stack: $stack"
+            aws cloudformation delete-stack --stack-name "$stack" || true
+          done
+
+          echo "Waiting for stack deletions to complete..."
+          for stack in $STACKS; do
+            aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
+          done
+
+      - name: Clean up GCP resources
+        if: always()
+        continue-on-error: true
+        env:
+          GCP_TARGET_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+        run: |
+          echo '${{ secrets.TEST_GCP_TARGET_SA_KEY }}' > /tmp/gcp-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json --quiet || true
+          gcloud config set project "$GCP_TARGET_PROJECT_ID" --quiet || true
+
+          echo "Deleting Cloud Run services in target project..."
+          SERVICES=$(gcloud run services list --platform=managed --region=us-east4 \
+            --format='value(name)' 2>/dev/null) || true
+          for svc in $SERVICES; do
+            echo "Deleting Cloud Run service: $svc"
+            gcloud run services delete "$svc" --platform=managed --region=us-east4 --quiet || true
+          done
+
+          echo "Deleting orphaned Cloud Functions in target project..."
+          FUNCTIONS=$(gcloud functions list --regions=us-east4 \
+            --format='value(name)' 2>/dev/null) || true
+          for fn in $FUNCTIONS; do
+            echo "Deleting Cloud Function: $fn"
+            gcloud functions delete "$fn" --region=us-east4 --quiet || true
+          done
+
+          rm -f /tmp/gcp-key.json
+
+      - name: Clean up Azure resources
+        if: always()
+        continue-on-error: true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+        run: |
+          az login --service-principal \
+            -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" \
+            --output none || true
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID" || true
+
+          echo "Deleting resource groups in target subscription..."
+          GROUPS=$(az group list --query "[].name" -o tsv 2>/dev/null) || true
+          for rg in $GROUPS; do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait || true
+          done

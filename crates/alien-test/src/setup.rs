@@ -129,3 +129,39 @@ pub async fn setup_target(
 
     Ok(())
 }
+
+/// Tears down a deployment by running the deletion state machine locally
+/// with target-environment credentials.
+///
+/// Mirrors `setup_target` but drives DeletePending → Deleting → Deleted
+/// via `alien_deploy_cli::commands::push_deletion`.
+pub async fn teardown_target(
+    config: &TestConfig,
+    platform: Platform,
+    deployment_id: &str,
+    manager: &Arc<TestManager>,
+) -> anyhow::Result<()> {
+    info!(
+        platform = %platform.as_str(),
+        %deployment_id,
+        "teardown_target: delegating to push_deletion"
+    );
+
+    let target_config = build_target_client_config(config, platform)?;
+
+    alien_deploy_cli::commands::push_deletion(
+        manager.client(),
+        deployment_id,
+        platform,
+        target_config,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("push_deletion failed: {}", e))?;
+
+    info!(
+        %deployment_id,
+        "teardown_target complete — deployment resources deleted"
+    );
+
+    Ok(())
+}

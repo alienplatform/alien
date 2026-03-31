@@ -879,15 +879,6 @@ impl AwsServiceAccountController {
                     .unwrap_or(false)
             });
 
-            info!(
-                sa_id = %service_account.id,
-                profile_name = %profile_name,
-                managing_role_arn = %aws_management.managing_role_arn,
-                managing_account_id = ?managing_account_id,
-                is_lambda_role = is_lambda_role,
-                "ECR cross-account check for service account"
-            );
-
             if is_lambda_role {
                 if let Some(ref mgmt_account) = managing_account_id {
                     all_statements.push(AwsIamStatement {
@@ -930,20 +921,6 @@ impl AwsServiceAccountController {
                 resource_id: Some(service_account.id.clone()),
             })
         })?;
-
-        info!(
-            sa_id = %service_account.id,
-            policy_size_bytes = policy_document.len(),
-            statement_count = final_policy.statement.len(),
-            "Generated IAM policy document"
-        );
-
-        // Log the full policy so we can diagnose cross-account ECR issues
-        info!(
-            sa_id = %service_account.id,
-            policy_document = %policy_document,
-            "Full IAM policy document"
-        );
 
         if policy_document.len() > 10_240 {
             warn!(

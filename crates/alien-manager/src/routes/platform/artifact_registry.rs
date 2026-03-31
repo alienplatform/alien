@@ -236,6 +236,7 @@ pub async fn add_cross_account_access(
             account_ids: vec![request.account_id.clone()],
             allowed_service_types: vec![ComputeServiceType::Function],
             role_arns: vec![],
+            regions: vec![],
         }),
         "gcp" => CrossAccountAccess::Gcp(GcpCrossAccountAccess {
             project_numbers: vec![request.account_id.clone()],
@@ -298,6 +299,7 @@ pub async fn remove_cross_account_access(
             account_ids: vec![request.account_id.clone()],
             allowed_service_types: vec![ComputeServiceType::Function],
             role_arns: vec![],
+            regions: vec![],
         }),
         "gcp" => CrossAccountAccess::Gcp(GcpCrossAccountAccess {
             project_numbers: vec![request.account_id.clone()],

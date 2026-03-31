@@ -38,4 +38,4 @@ pub use config::TestConfig;
 pub use deployment::TestDeployment;
 pub use e2e::{Binding, DeploymentModel, Language, TestContext};
 pub use manager::TestManager;
-pub use setup::setup_target;
+pub use setup::{setup_target, teardown_target};

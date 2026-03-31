@@ -406,6 +406,7 @@ async fn finalize(
         credential_resolver: credential_resolver.clone(),
         command_server,
         config: config.clone(),
+        bindings_provider: server_bindings.bindings_provider.clone(),
     };
 
     // --- Router ---

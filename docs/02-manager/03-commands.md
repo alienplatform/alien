@@ -94,6 +94,19 @@ Push dispatch requires two things: a push endpoint in the deployment's stack sta
 
 `NullCommandDispatcher` is available for pull-only setups where no push dispatch is needed. Deployments still poll as a fallback even when push dispatch is configured.
 
+### Dispatch Rules
+
+The deployment model (push vs pull) does NOT affect command dispatch. All deployments poll for commands via the lease API. Push dispatch is an optimization for lower latency — it notifies the deployment immediately instead of waiting for the next poll cycle.
+
+| Target | Dispatch | Mechanism |
+|--------|----------|-----------|
+| AWS Lambda | Push | `lambda:InvokeFunction` (async) |
+| GCP Cloud Run | Push | Pub/Sub topic |
+| Azure Container App | Push | Service Bus queue |
+| K8s / Local containers | Poll | `ALIEN_COMMANDS_POLLING_URL` lease API |
+
+Push-capable targets (Lambda, Cloud Run, Container App) also poll as a fallback. If push dispatch fails or is unavailable, the next poll cycle picks up the command.
+
 ## Large Payloads
 
 Command params and responses under 150KB are stored inline. Larger payloads go to blob storage (Command Storage) and the command envelope contains a reference URL instead.

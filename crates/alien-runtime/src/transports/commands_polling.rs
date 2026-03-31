@@ -232,7 +232,7 @@ impl CommandsPolling {
         let params = alien_commands::runtime::decode_params_bytes(&envelope)
             .await
             .context(ErrorData::EventProcessingFailed {
-                event_type: "ArcCommand".to_string(),
+                event_type: "Command".to_string(),
                 reason: "Failed to decode params".to_string(),
             })?;
 
@@ -291,7 +291,7 @@ impl CommandsPolling {
                 let command_response = CommandResponse::error("HANDLER_ERROR", &e);
                 let _ = submit_response(&envelope, command_response).await;
                 return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: "ArcCommand".to_string(),
+                    event_type: "Command".to_string(),
                     reason: e,
                 }));
             }

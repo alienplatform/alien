@@ -310,6 +310,17 @@ impl DeploymentStore for PlatformApiDeploymentStore {
         Ok(())
     }
 
+    async fn set_delete_pending(&self, id: &str) -> Result<(), AlienError> {
+        // The platform API already sets delete-pending and returns 202.
+        self.platform_client
+            .delete_deployment()
+            .id(id)
+            .send()
+            .await
+            .into_sdk_error()?;
+        Ok(())
+    }
+
     async fn set_retry_requested(&self, id: &str) -> Result<(), AlienError> {
         self.platform_client
             .retry_deployment()

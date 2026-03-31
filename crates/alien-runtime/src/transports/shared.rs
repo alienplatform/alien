@@ -2,7 +2,7 @@
 //!
 //! Contains common code used by CloudRun, ContainerApp, and Local transports:
 //! - HTTP request forwarding to application
-//! - ARC envelope parsing and response submission
+//! - Commands envelope parsing and response submission
 //! - CloudEvents parsing from HTTP headers
 
 use alien_bindings::control::ArcCommand;
@@ -120,7 +120,7 @@ pub async fn forward_http_request(
 /// Try to parse a queue message as a command envelope (detection only).
 ///
 /// Returns `Some(Envelope)` if the message contains a valid command envelope,
-/// `None` otherwise. Does NOT decode params — use `envelope_to_arc_command`
+/// `None` otherwise. Does NOT decode params — use `envelope_to_command`
 /// for async param decoding (handles both inline and storage modes).
 pub fn try_parse_envelope(qm: &alien_core::QueueMessage) -> Option<Envelope> {
     let json_str = match &qm.payload {
@@ -138,7 +138,7 @@ pub fn try_parse_envelope(qm: &alien_core::QueueMessage) -> Option<Envelope> {
 }
 
 /// Convert an Envelope into an ArcCommand, fetching storage params if needed.
-pub async fn envelope_to_arc_command(envelope: &Envelope) -> Option<ArcCommand> {
+pub async fn envelope_to_command(envelope: &Envelope) -> Option<ArcCommand> {
     let params_bytes = alien_commands::runtime::decode_params_bytes(envelope)
         .await
         .ok()?;
@@ -162,10 +162,10 @@ pub async fn envelope_to_arc_command(envelope: &Envelope) -> Option<ArcCommand> 
     })
 }
 
-/// Try to parse a queue message as an ARC envelope (legacy sync API).
+/// Try to parse a queue message as a command envelope (legacy sync API).
 ///
 /// WARNING: Returns empty params for storage mode. Prefer `try_parse_envelope`
-/// + `envelope_to_arc_command` for proper storage param support.
+/// + `envelope_to_command` for proper storage param support.
 pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcCommand> {
     let envelope = try_parse_envelope(qm)?;
 

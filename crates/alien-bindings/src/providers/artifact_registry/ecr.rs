@@ -131,17 +131,36 @@ impl EcrArtifactRegistry {
         for service_type in &aws_access.allowed_service_types {
             match service_type {
                 ComputeServiceType::Function => {
-                    // Add Lambda service access if Function service type is specified
                     if !aws_access.account_ids.is_empty() {
-                        // Use aws:sourceAccount (not aws:sourceARN) because
-                        // Lambda doesn't populate sourceARN during CreateFunction
-                        // — the function doesn't exist yet, so the condition
-                        // would always deny.
-                        let source_accounts: Vec<&String> =
-                            aws_access.account_ids.iter().collect();
+                        // Build sourceArn patterns per AWS docs:
+                        // https://docs.aws.amazon.com/lambda/latest/dg/images-create.html
+                        // Pattern: arn:aws:lambda:{region}:{account_id}:function:*
+                        let source_arns: Vec<String> = aws_access
+                            .account_ids
+                            .iter()
+                            .flat_map(|account_id| {
+                                if aws_access.regions.is_empty() {
+                                    vec![format!(
+                                        "arn:aws:lambda:*:{}:function:*",
+                                        account_id
+                                    )]
+                                } else {
+                                    aws_access
+                                        .regions
+                                        .iter()
+                                        .map(|region| {
+                                            format!(
+                                                "arn:aws:lambda:{}:{}:function:*",
+                                                region, account_id
+                                            )
+                                        })
+                                        .collect()
+                                }
+                            })
+                            .collect();
 
                         statements.push(json!({
-                            "Sid": "LambdaServiceAccess",
+                            "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
                             "Effect": "Allow",
                             "Principal": {
                                 "Service": "lambda.amazonaws.com"
@@ -151,13 +170,13 @@ impl EcrArtifactRegistry {
                                 "ecr:GetDownloadUrlForLayer"
                             ],
                             "Condition": {
-                                "StringEquals": {
-                                    "aws:sourceAccount": source_accounts
+                                "StringLike": {
+                                    "aws:sourceArn": source_arns
                                 }
                             }
                         }));
                     }
-                } // Future service types would be handled here
+                }
             }
         }
 
@@ -404,6 +423,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             CrossAccountAccess::Aws(aws_access) => aws_access,
             _ => AwsCrossAccountAccess {
                 account_ids: Vec::new(),
+                regions: Vec::new(),
                 allowed_service_types: Vec::new(),
                 role_arns: Vec::new(),
             },
@@ -411,33 +431,37 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
         // Merge new permissions with existing ones
         let mut merged_account_ids = current_aws_access.account_ids;
+        let mut merged_regions = current_aws_access.regions;
         let mut merged_service_types = current_aws_access.allowed_service_types;
         let mut merged_role_arns = current_aws_access.role_arns;
 
-        // Add new account IDs
         for account_id in aws_access.account_ids {
             if !merged_account_ids.contains(&account_id) {
                 merged_account_ids.push(account_id);
             }
         }
 
-        // Add new service types
+        for region in aws_access.regions {
+            if !merged_regions.contains(&region) {
+                merged_regions.push(region);
+            }
+        }
+
         for service_type in aws_access.allowed_service_types {
             if !merged_service_types.contains(&service_type) {
                 merged_service_types.push(service_type);
             }
         }
 
-        // Add new role ARNs
         for role_arn in aws_access.role_arns {
             if !merged_role_arns.contains(&role_arn) {
                 merged_role_arns.push(role_arn);
             }
         }
 
-        // Build the combined access configuration
         let merged_access = AwsCrossAccountAccess {
             account_ids: merged_account_ids,
+            regions: merged_regions,
             allowed_service_types: merged_service_types,
             role_arns: merged_role_arns,
         };
@@ -482,24 +506,20 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             }
         };
 
-        // Remove specified permissions from existing ones
         let mut filtered_account_ids = current_aws_access.account_ids;
+        let mut filtered_regions = current_aws_access.regions;
         let mut filtered_service_types = current_aws_access.allowed_service_types;
         let mut filtered_role_arns = current_aws_access.role_arns;
 
-        // Remove account IDs
         filtered_account_ids.retain(|id| !aws_access.account_ids.contains(id));
-
-        // Remove service types
+        filtered_regions.retain(|r| !aws_access.regions.contains(r));
         filtered_service_types
             .retain(|service_type| !aws_access.allowed_service_types.contains(service_type));
-
-        // Remove role ARNs
         filtered_role_arns.retain(|arn| !aws_access.role_arns.contains(arn));
 
-        // Build the filtered access configuration
         let filtered_access = AwsCrossAccountAccess {
             account_ids: filtered_account_ids,
+            regions: filtered_regions,
             allowed_service_types: filtered_service_types,
             role_arns: filtered_role_arns,
         };
@@ -538,10 +558,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         let response = match response {
             Ok(response) => response,
             Err(_) => {
-                // If no policy exists, return empty permissions
                 return Ok(CrossAccountPermissions {
                     access: CrossAccountAccess::Aws(AwsCrossAccountAccess {
                         account_ids: Vec::new(),
+                        regions: Vec::new(),
                         allowed_service_types: Vec::new(),
                         role_arns: Vec::new(),
                     }),
@@ -586,8 +606,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                     }
                 }
 
-                // Check for Lambda service access
-                if statement["Sid"] == "LambdaServiceAccess" {
+                // Check for Lambda service access (both old and new Sid names)
+                if statement["Sid"] == "LambdaECRImageCrossAccountRetrievalPolicy"
+                    || statement["Sid"] == "LambdaServiceAccess"
+                {
                     if statement["Principal"]["Service"] == "lambda.amazonaws.com" {
                         allowed_service_types.push(ComputeServiceType::Function);
                     }
@@ -615,10 +637,11 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         Ok(CrossAccountPermissions {
             access: CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids,
+                regions: Vec::new(),
                 allowed_service_types,
                 role_arns,
             }),
-            last_updated: None, // ECR doesn't provide policy modification time
+            last_updated: None,
         })
     }
 

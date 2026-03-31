@@ -73,6 +73,7 @@ impl GrpcArtifactRegistry {
                             account_ids: aws.account_ids.clone(),
                             allowed_service_types: proto_service_types,
                             role_arns: aws.role_arns.clone(),
+                            regions: aws.regions.clone(),
                         }
                     )),
                 }
@@ -125,6 +126,7 @@ impl GrpcArtifactRegistry {
                     account_ids: aws.account_ids,
                     allowed_service_types: service_types,
                     role_arns: aws.role_arns,
+                    regions: vec![],
                 })
             }
             Some(crate::grpc::artifact_registry_service::alien_bindings::artifact_registry::cross_account_access::Access::Gcp(gcp)) => {

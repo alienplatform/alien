@@ -1,6 +1,26 @@
 # alien-test
 
-E2E test infrastructure crate for Alien.
+E2E test harness for cross-cloud deployment testing.
+
+## Core Principle
+
+E2E tests must simulate real user flows. If a test needs manual cloud infrastructure setup (IAM roles, ECR policies, cross-account access), that signals the **product** is missing functionality.
+
+## What the Product Handles
+
+- Cross-account registry access (automated in sync/reconcile)
+- IAM role creation during initial setup
+- Service account impersonation
+- Management permission auto-generation
+
+## Acceptable Test Infrastructure
+
+- Starting TestManager
+- Creating releases/deployments via API
+- Starting agent containers (pull mode)
+- Waiting for health checks
+- Making HTTP requests to deployed functions
+- Provisioning test data via manager APIs
 
 ## Purpose
 
@@ -47,6 +67,26 @@ async fn example_with_cloud() {
 - Use **"deployment"** not "agent" for deployed application instances
 - Use **"manager"** not "server" for the control plane
 - Use **"commands"** not "ARC" for the remote command system
+
+## Test Structure
+
+Tests use `TestContext` which orchestrates:
+1. Manager startup with standalone defaults
+2. Stack evaluation, build, and push
+3. Release/deployment creation
+4. Push initial setup (push mode) or agent startup (pull mode)
+5. Health verification
+6. Cleanup via `push_deletion` (push mode) or agent teardown
+
+## Cleanup
+
+`TestContext::cleanup()` calls `teardown_target()` which runs the deletion state machine (`push_deletion`) with target credentials. No polling loops — deterministic.
+
+## Don't
+
+- Don't add manual cross-account registry access calls — that's automated in sync/reconcile
+- Don't skip cleanup — leaked resources hit cloud quotas
+- Don't use fire-and-forget DELETE — always run the deletion state machine
 
 ## Debugging E2E Failures
 

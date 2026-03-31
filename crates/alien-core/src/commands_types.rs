@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Protocol version identifier
-pub const ARC_PROTOCOL_VERSION: &str = "arc.v1";
+pub const COMMANDS_PROTOCOL_VERSION: &str = "arc.v1";
 
 /// Default inline size limit in bytes (150 KB)
 /// This is the most conservative platform limit (Azure Service Bus Standard at 256KB)
 /// with headroom for base64 encoding (~4/3 inflation) and envelope metadata.
-pub const ARC_INLINE_MAX_BYTES: usize = 150_000;
+pub const COMMANDS_INLINE_MAX_BYTES: usize = 150_000;
 
 /// Command states in the ARC protocol lifecycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,7 +303,7 @@ impl Envelope {
         response_handling: ResponseHandling,
     ) -> Self {
         Self {
-            protocol: ARC_PROTOCOL_VERSION.to_string(),
+            protocol: COMMANDS_PROTOCOL_VERSION.to_string(),
             deployment_id: deployment_id.into(),
             command_id: command_id.into(),
             attempt,
@@ -316,11 +316,11 @@ impl Envelope {
 
     /// Validate the envelope structure
     pub fn validate(&self) -> Result<()> {
-        if self.protocol != ARC_PROTOCOL_VERSION {
+        if self.protocol != COMMANDS_PROTOCOL_VERSION {
             return Err(AlienError::new(ErrorData::InvalidEnvelope {
                 message: format!(
                     "Invalid protocol version: expected {}, got {}",
-                    ARC_PROTOCOL_VERSION, self.protocol
+                    COMMANDS_PROTOCOL_VERSION, self.protocol
                 ),
                 field: Some("protocol".to_string()),
             }));

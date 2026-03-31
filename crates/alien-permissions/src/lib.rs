@@ -1,5 +1,6 @@
 pub mod error;
 pub mod generators;
+pub mod initial_setup;
 pub mod registry;
 pub mod variables;
 
