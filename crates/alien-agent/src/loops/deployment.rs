@@ -175,7 +175,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
                 EnvironmentVariable {
                     name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
                     value: "true".to_string(),
-                    var_type: EnvironmentVariableType::Secret,
+                    var_type: EnvironmentVariableType::Plain,
                     target_resources: None,
                 },
                 EnvironmentVariable {
