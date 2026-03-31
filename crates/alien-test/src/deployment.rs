@@ -241,14 +241,52 @@ impl TestDeployment {
                                 }
                             }
                             "storage" => {
-                                // For storage mode, read the file from the local backend
-                                if let Some(file_path) = body_spec
+                                if let Some(backend) = body_spec
                                     .get("storageGetRequest")
                                     .and_then(|r| r.get("backend"))
-                                    .and_then(|b| b.get("filePath"))
-                                    .and_then(|v| v.as_str())
                                 {
-                                    let bytes = tokio::fs::read(file_path).await?;
+                                    let backend_type = backend
+                                        .get("type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+
+                                    let bytes = match backend_type {
+                                        "http" => {
+                                            // HTTP backend: fetch from presigned URL
+                                            let url = backend
+                                                .get("url")
+                                                .and_then(|v| v.as_str())
+                                                .ok_or("Storage HTTP backend missing 'url'")?;
+                                            let method = backend
+                                                .get("method")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("GET");
+                                            let mut req = match method {
+                                                "POST" => http.post(url),
+                                                "PUT" => http.put(url),
+                                                _ => http.get(url),
+                                            };
+                                            // Add any headers from the backend
+                                            if let Some(headers) =
+                                                backend.get("headers").and_then(|h| h.as_object())
+                                            {
+                                                for (k, v) in headers {
+                                                    if let Some(v_str) = v.as_str() {
+                                                        req = req.header(k.as_str(), v_str);
+                                                    }
+                                                }
+                                            }
+                                            req.send().await?.bytes().await?.to_vec()
+                                        }
+                                        _ => {
+                                            // File backend: read from local file path
+                                            let file_path = backend
+                                                .get("filePath")
+                                                .and_then(|v| v.as_str())
+                                                .ok_or("Storage backend missing 'filePath'")?;
+                                            tokio::fs::read(file_path).await?
+                                        }
+                                    };
                                     let result: Value = serde_json::from_slice(&bytes)?;
                                     return Ok(result);
                                 }

@@ -618,7 +618,7 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     let ecr_region = extract_ecr_region(ecr_repo_url)?;
 
     let aws_config = AwsClientConfig {
-        region: ecr_region,
+        region: ecr_region.clone(),
         account_id,
         credentials: AwsCredentials::AccessKeys {
             access_key_id: mgmt.access_key_id.clone(),
@@ -687,6 +687,68 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
         target_account = %target_account_id,
         "ECR cross-account pull policy set"
     );
+
+    // If the target account is in a different region, also set the policy on
+    // the replicated ECR repository in that region. ECR private image
+    // replication copies images but NOT repository policies, so Lambda in
+    // the target region won't be able to pull without an explicit policy.
+    if target.region != ecr_region {
+        info!(
+            target_region = %target.region,
+            ecr_region = %ecr_region,
+            "Setting ECR cross-account policy on replicated repo in target region"
+        );
+
+        let target_region_config = AwsClientConfig {
+            region: target.region.clone(),
+            account_id: mgmt
+                .account_id
+                .as_ref()
+                .context("AWS_MANAGEMENT_ACCOUNT_ID required")?
+                .clone(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: mgmt.access_key_id.clone(),
+                secret_access_key: mgmt.secret_access_key.clone(),
+                session_token: mgmt.session_token.clone(),
+            },
+            service_overrides: None,
+        };
+
+        let target_cred_provider =
+            alien_aws_clients::AwsCredentialProvider::from_config(target_region_config)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to create AWS credential provider for target region: {}",
+                        e
+                    )
+                })?;
+
+        let target_ecr_client =
+            EcrClient::new(reqwest::Client::new(), target_cred_provider);
+
+        target_ecr_client
+            .set_repository_policy(SetRepositoryPolicyRequest {
+                repository_name: repo_name.to_string(),
+                policy_text: policy.to_string(),
+                registry_id: None,
+                force: Some(true),
+            })
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to set ECR repository policy in target region {}: {}",
+                    target.region,
+                    e
+                )
+            })?;
+
+        info!(
+            repo = %repo_name,
+            target_region = %target.region,
+            "ECR cross-account pull policy set on replicated repo"
+        );
+    }
 
     Ok(())
 }
