@@ -1420,16 +1420,7 @@
           "retryRequested": {
             "type": "boolean"
           },
-          "runtimeMetadata": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RuntimeMetadata"
-              }
-            ]
-          },
+          "runtimeMetadata": {},
           "stackSettings": {},
           "stackState": {},
           "status": {

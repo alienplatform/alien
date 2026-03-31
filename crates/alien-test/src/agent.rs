@@ -78,6 +78,11 @@ impl TestAlienAgent {
             "-e".to_string(), format!("SYNC_TOKEN={}", manager.admin_token),
             "-e".to_string(), format!("PLATFORM={}", platform.as_str()),
             "-e".to_string(), format!("AGENT_ENCRYPTION_KEY={}", encryption_key),
+            // Set ALIEN_API_KEY so the agent's preflight checks
+            // (DnsTlsRequiredCheck, HorizonRequiredCheck) skip themselves.
+            // Without this, cloud platform deployments with public ingress
+            // are blocked because the agent thinks it's running standalone.
+            "-e".to_string(), format!("ALIEN_API_KEY={}", manager.admin_token),
         ];
 
         // Inject target account credentials for cloud platforms so the agent

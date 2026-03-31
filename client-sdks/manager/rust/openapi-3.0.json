@@ -1376,10 +1376,7 @@
           "retryRequested": {
             "type": "boolean"
           },
-          "runtimeMetadata": {
-            "$ref": "#/components/schemas/RuntimeMetadata",
-            "nullable": true
-          },
+          "runtimeMetadata": {},
           "stackSettings": {},
           "stackState": {},
           "status": {
