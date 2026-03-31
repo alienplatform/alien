@@ -181,6 +181,16 @@ async fn sync_with_manager(
                 message: "Failed to parse sync response".to_string(),
             })?;
 
+    // Persist the commands URL so the deployment loop can inject it into
+    // deployed functions. This is the public URL cloud functions use to poll
+    // for pending commands (vs. the agent's local sync URL which is only
+    // reachable from the machine running the agent).
+    if let Some(ref commands_url) = sync_response.commands_url {
+        if let Err(e) = state.db.set_commands_url(commands_url).await {
+            error!(error = %e, "Failed to persist commands_url");
+        }
+    }
+
     // Check if there's a new target
     let has_update = sync_response.target.is_some();
 

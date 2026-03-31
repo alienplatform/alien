@@ -26,6 +26,11 @@ pub struct SyncResponse {
     /// None means no changes needed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetDeployment>,
+    /// Public URL for the commands API (e.g. `https://manager.example.com/v1`).
+    /// Cloud-deployed functions use this to poll for pending commands.
+    /// When absent, the agent falls back to its sync URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands_url: Option<String>,
 }
 
 /// Target deployment state for the agent to converge toward.
@@ -65,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_sync_response_empty() {
-        let resp = SyncResponse { target: None };
+        let resp = SyncResponse { target: None, commands_url: None };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
         assert!(json.get("target").is_none());
@@ -73,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_sync_response_roundtrip_no_target() {
-        let resp = SyncResponse { target: None };
+        let resp = SyncResponse { target: None, commands_url: None };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
         assert!(deserialized.target.is_none());

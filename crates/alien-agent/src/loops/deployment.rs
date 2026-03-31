@@ -156,9 +156,18 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
             enriched_config.stack_settings = stack_settings.clone();
         }
 
-        // Inject commands polling configuration from agent's sync token
+        // Inject commands polling configuration from agent's sync token.
+        // Use the commands_url from the manager's sync response (public URL reachable
+        // by cloud functions) rather than the agent's local sync URL.
         if let Some(ref sync_config) = state.config.sync {
             use alien_core::{EnvironmentVariable, EnvironmentVariableType};
+
+            // Prefer the commands_url from the manager (set during sync), fall back
+            // to constructing one from the agent's own sync URL.
+            let commands_url = match state.db.get_commands_url().await {
+                Ok(Some(url)) => url,
+                _ => format!("{}/v1", sync_config.url),
+            };
 
             let mut vars = enriched_config.environment_variables.variables.clone();
 
@@ -171,7 +180,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
                 },
                 EnvironmentVariable {
                     name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
-                    value: format!("{}/v1", sync_config.url),
+                    value: commands_url,
                     var_type: EnvironmentVariableType::Plain,
                     target_resources: None,
                 },
