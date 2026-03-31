@@ -6,7 +6,6 @@
 //! - CloudEvents parsing from HTTP headers
 
 use alien_bindings::control::ArcCommand;
-use alien_bindings::grpc::control_service::TaskResult;
 use alien_commands::Envelope;
 use axum::{
     body::{Body, Bytes},
@@ -206,42 +205,6 @@ pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcComman
     })
 }
 
-/// Submit ARC response from gRPC event response.
-pub async fn submit_arc_response(
-    arc_command: &ArcCommand,
-    result: TaskResult,
-) -> std::result::Result<(), String> {
-    let command_response = if result.success {
-        alien_commands::CommandResponse::success(&result.response_data)
-    } else {
-        alien_commands::CommandResponse::error(
-            result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
-            result
-                .error_message
-                .unwrap_or_else(|| "Unknown error".to_string()),
-        )
-    };
-
-    submit_arc_response_direct(arc_command, command_response).await
-}
-
-/// Submit ARC response directly.
-pub async fn submit_arc_response_direct(
-    arc_command: &ArcCommand,
-    response: alien_commands::CommandResponse,
-) -> std::result::Result<(), String> {
-    let client = reqwest::Client::new();
-    let request = alien_commands::SubmitResponseRequest { response };
-
-    client
-        .put(&arc_command.response_url)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    Ok(())
-}
 
 /// Parse CloudEvent from HTTP headers and body.
 ///

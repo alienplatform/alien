@@ -31,8 +31,7 @@ use tracing::{debug, error, info, warn};
 
 use super::shared::{
     create_forward_client, envelope_to_arc_command, forward_http_request,
-    parse_cloudevent_from_http, submit_arc_response, submit_arc_response_direct,
-    try_parse_envelope,
+    parse_cloudevent_from_http, try_parse_envelope,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
@@ -367,7 +366,7 @@ async fn handle_pubsub_cloudevent(
                 if let Some(envelope) = try_parse_envelope(&qm) {
                     match envelope_to_arc_command(&envelope).await {
                         Some(arc_command) => {
-                            if let Err(e) = handle_arc_command(&arc_command, state).await {
+                            if let Err(e) = handle_arc_command(&envelope, &arc_command, state).await {
                                 error!(error = %e, "Failed to handle ARC command");
                             }
                         }
@@ -395,6 +394,7 @@ async fn handle_pubsub_cloudevent(
 
 /// Handle an ARC command
 async fn handle_arc_command(
+    envelope: &alien_commands::Envelope,
     arc_command: &ArcCommand,
     state: &TransportState,
 ) -> std::result::Result<(), String> {
@@ -403,20 +403,32 @@ async fn handle_arc_command(
         payload: Some(control::task::Payload::ArcCommand(arc_command.clone())),
     };
 
-    match state
+    let arc_response = match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(300))
         .await
     {
-        Ok(result) => submit_arc_response(arc_command, result).await,
-        Err(e) => {
-            let error_response = alien_commands::CommandResponse::error(
-                "PROCESSING_FAILED",
-                format!("Command processing failed: {}", e),
-            );
-            submit_arc_response_direct(arc_command, error_response).await
+        Ok(result) => {
+            if result.success {
+                alien_commands::CommandResponse::success(&result.response_data)
+            } else {
+                alien_commands::CommandResponse::error(
+                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
+                    result
+                        .error_message
+                        .unwrap_or_else(|| "Unknown error".to_string()),
+                )
+            }
         }
-    }
+        Err(e) => alien_commands::CommandResponse::error(
+            "PROCESSING_FAILED",
+            format!("Command processing failed: {}", e),
+        ),
+    };
+
+    alien_commands::runtime::submit_response(envelope, arc_response)
+        .await
+        .map_err(|e| format!("Failed to submit response: {}", e))
 }
 
 /// Pub/Sub push message format (non-CloudEvent)
@@ -483,7 +495,7 @@ async fn handle_pubsub_push_message(
         debug!(command_id = %envelope.command_id, "Pub/Sub push message is a command envelope");
         match envelope_to_arc_command(&envelope).await {
             Some(arc_command) => {
-                if let Err(e) = handle_arc_command(&arc_command, state).await {
+                if let Err(e) = handle_arc_command(&envelope, &arc_command, state).await {
                     error!(error = %e, "Failed to handle ARC command from Pub/Sub push");
                 }
             }
