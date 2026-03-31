@@ -5,11 +5,23 @@
     "aws": [
       {
         "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
             "ecr:BatchCheckLayerAvailability",
             "ecr:GetDownloadUrlForLayer",
             "ecr:BatchGetImage",
-            "ecr:GetAuthorizationToken",
             "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages"

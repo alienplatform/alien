@@ -332,8 +332,12 @@ impl LambdaClient {
             | "InvalidRequestContentException"
             | "UnsupportedMediaTypeException" => {
                 // IAM eventual consistency: Lambda may return InvalidParameterValueException
-                // when it cannot yet assume a just-created execution role.
-                if message.contains("cannot be assumed") || message.contains("not authorized") {
+                // when it cannot yet assume a just-created execution role, or when ECR
+                // cross-account permissions haven't propagated yet.
+                if message.contains("cannot be assumed")
+                    || message.contains("not authorized")
+                    || message.contains("does not have permission to access the ECR image")
+                {
                     ErrorData::RemoteServiceUnavailable { message }
                 } else {
                     ErrorData::InvalidInput {

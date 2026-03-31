@@ -6,10 +6,22 @@
       // Cross-account ECR image pull from managing account's registry
       {
         "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
             "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer",
-            "ecr:GetAuthorizationToken"
+            "ecr:GetDownloadUrlForLayer"
           ]
         },
         "binding": {
