@@ -118,11 +118,12 @@ pub async fn forward_http_request(
     }
 }
 
-/// Try to parse a queue message as an ARC envelope.
+/// Try to parse a queue message as a command envelope (detection only).
 ///
-/// Returns `Some(ArcCommand)` if the message contains a valid ARC envelope,
-/// `None` otherwise.
-pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcCommand> {
+/// Returns `Some(Envelope)` if the message contains a valid command envelope,
+/// `None` otherwise. Does NOT decode params — use `envelope_to_arc_command`
+/// for async param decoding (handles both inline and storage modes).
+pub fn try_parse_envelope(qm: &alien_core::QueueMessage) -> Option<Envelope> {
     let json_str = match &qm.payload {
         alien_core::MessagePayload::Json(v) => serde_json::to_string(v).ok()?,
         alien_core::MessagePayload::Text(s) => s.clone(),
@@ -130,12 +131,45 @@ pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcComman
 
     let envelope: Envelope = serde_json::from_str(&json_str).ok()?;
 
-    // Validate it's actually an ARC envelope
     if envelope.protocol != alien_commands::PROTOCOL_VERSION {
         return None;
     }
 
-    // Decode params
+    Some(envelope)
+}
+
+/// Convert an Envelope into an ArcCommand, fetching storage params if needed.
+pub async fn envelope_to_arc_command(envelope: &Envelope) -> Option<ArcCommand> {
+    let params_bytes = alien_commands::runtime::decode_params_bytes(envelope)
+        .await
+        .ok()?;
+
+    Some(ArcCommand {
+        command_id: envelope.command_id.clone(),
+        command_name: envelope.command.clone(),
+        params: params_bytes,
+        attempt: envelope.attempt,
+        deadline: envelope.deadline.map(|dt| Timestamp {
+            seconds: dt.timestamp(),
+            nanos: dt.timestamp_subsec_nanos() as i32,
+        }),
+        max_inline_bytes: envelope.response_handling.max_inline_bytes,
+        storage_upload_url: envelope
+            .response_handling
+            .storage_upload_request
+            .url()
+            .to_string(),
+        response_url: envelope.response_handling.submit_response_url.clone(),
+    })
+}
+
+/// Try to parse a queue message as an ARC envelope (legacy sync API).
+///
+/// WARNING: Returns empty params for storage mode. Prefer `try_parse_envelope`
+/// + `envelope_to_arc_command` for proper storage param support.
+pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcCommand> {
+    let envelope = try_parse_envelope(qm)?;
+
     let params_bytes = match &envelope.params {
         alien_commands::BodySpec::Inline { inline_base64 } => {
             use base64::{engine::general_purpose, Engine as _};
@@ -145,8 +179,6 @@ pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcComman
             storage_get_request,
             ..
         } => {
-            // For storage params, we'd need to fetch from storage
-            // For now, return empty - the handler can fetch if needed
             if storage_get_request.is_some() {
                 vec![]
             } else {

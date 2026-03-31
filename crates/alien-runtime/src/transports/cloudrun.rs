@@ -30,8 +30,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use super::shared::{
-    create_forward_client, forward_http_request, parse_cloudevent_from_http, submit_arc_response,
-    submit_arc_response_direct, try_parse_arc_envelope,
+    create_forward_client, envelope_to_arc_command, forward_http_request,
+    parse_cloudevent_from_http, submit_arc_response, submit_arc_response_direct,
+    try_parse_envelope,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
@@ -363,9 +364,16 @@ async fn handle_pubsub_cloudevent(
         Ok(queue_messages) => {
             for qm in queue_messages {
                 // Check if this is an ARC envelope
-                if let Some(arc_command) = try_parse_arc_envelope(&qm) {
-                    if let Err(e) = handle_arc_command(&arc_command, state).await {
-                        error!(error = %e, "Failed to handle ARC command");
+                if let Some(envelope) = try_parse_envelope(&qm) {
+                    match envelope_to_arc_command(&envelope).await {
+                        Some(arc_command) => {
+                            if let Err(e) = handle_arc_command(&arc_command, state).await {
+                                error!(error = %e, "Failed to handle ARC command");
+                            }
+                        }
+                        None => {
+                            error!(command_id = %envelope.command_id, "Failed to decode command params");
+                        }
                     }
                 } else {
                     // Regular queue message
@@ -471,10 +479,17 @@ async fn handle_pubsub_push_message(
         attempt_count: None,
     };
 
-    if let Some(arc_command) = try_parse_arc_envelope(&qm) {
-        debug!(command_id = %arc_command.command_id, "Pub/Sub push message is a command envelope");
-        if let Err(e) = handle_arc_command(&arc_command, state).await {
-            error!(error = %e, "Failed to handle ARC command from Pub/Sub push");
+    if let Some(envelope) = try_parse_envelope(&qm) {
+        debug!(command_id = %envelope.command_id, "Pub/Sub push message is a command envelope");
+        match envelope_to_arc_command(&envelope).await {
+            Some(arc_command) => {
+                if let Err(e) = handle_arc_command(&arc_command, state).await {
+                    error!(error = %e, "Failed to handle ARC command from Pub/Sub push");
+                }
+            }
+            None => {
+                error!(command_id = %envelope.command_id, "Failed to decode command params from Pub/Sub push");
+            }
         }
     } else {
         // Regular queue message
