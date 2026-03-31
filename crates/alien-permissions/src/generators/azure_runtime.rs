@@ -78,7 +78,15 @@ impl AzureRuntimePermissionsGenerator {
                 })
             })?;
 
-        let role_name = self.generate_role_name(&permission_set.id);
+        let base_role_name = self.generate_role_name(&permission_set.id);
+        // Include the stack prefix in the role name to avoid 409
+        // RoleDefinitionWithSameNameExists conflicts when multiple deployments
+        // coexist in the same subscription.
+        let role_name = if let Some(ref prefix) = context.stack_prefix {
+            format!("{} ({})", base_role_name, prefix)
+        } else {
+            base_role_name
+        };
 
         // Aggregate actions and data actions from all platform permissions
         let mut all_actions = Vec::new();

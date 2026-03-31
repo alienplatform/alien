@@ -52,8 +52,8 @@ fn test_azure_role_name_generation() {
         .generate_role_definition(&permission_set, BindingTarget::Stack, &context)
         .expect("Should generate Azure role definition successfully");
 
-    // Verify that the role name is properly formatted
-    assert_eq!(result.name, "Complex Permission Set With Dashes");
+    // Verify that the role name is properly formatted (includes stack prefix)
+    assert_eq!(result.name, "Complex Permission Set With Dashes (my-stack)");
     assert_eq!(result.is_custom, true);
 }
 

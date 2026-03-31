@@ -3,7 +3,7 @@ source: crates/alien-permissions/tests/azure_runtime.rs
 expression: result
 ---
 {
-  "Name": "Storage Data Read",
+  "Name": "Storage Data Read (my-stack)",
   "IsCustom": true,
   "Description": "Allows reading data from storage resources",
   "Actions": [
