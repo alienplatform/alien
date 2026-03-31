@@ -528,11 +528,26 @@ impl ResourcePermissionsHelper {
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
 
-        Ok(PermissionContext::new()
+        let mut permission_ctx = PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(resource_group)
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(resource_name.to_string()))
+            .with_resource_name(resource_name.to_string());
+
+        // Resolve storage account name from infrastructure outputs if available.
+        // Many permission sets (kv/*, storage/*) reference ${storageAccountName}
+        // in their Azure binding scopes.
+        if let Ok(sa_outputs) = ctx
+            .state
+            .get_resource_outputs::<alien_core::AzureStorageAccountOutputs>(
+                "default-storage-account",
+            )
+        {
+            permission_ctx =
+                permission_ctx.with_storage_account_name(sa_outputs.account_name.clone());
+        }
+
+        Ok(permission_ctx)
     }
 
     /// Build GCP permission context for a resource
