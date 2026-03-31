@@ -658,8 +658,8 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                     "ecr:GetDownloadUrlForLayer"
                 ],
                 "Condition": {
-                    "StringLike": {
-                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                    "ArnLike": {
+                        "aws:sourceARN": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
                     }
                 }
             },

@@ -150,7 +150,7 @@ impl EcrArtifactRegistry {
                                 "ecr:GetDownloadUrlForLayer"
                             ],
                             "Condition": {
-                                "StringLike": {
+                                "ArnLike": {
                                     "aws:sourceARN": source_arns
                                 }
                             }
