@@ -14,7 +14,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
-    generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
+    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
 
@@ -857,6 +857,54 @@ impl AwsServiceAccountController {
                 })?;
 
             all_statements.extend(policy.statement);
+        }
+
+        // Cross-account ECR pull: when a managing account is configured and this
+        // service account is used by Lambda functions, add ECR permissions so Lambda
+        // can pull container images from the management account's ECR registry.
+        if let Some(aws_management) = ctx.get_aws_management_config()? {
+            let managing_account_id =
+                alien_permissions::PermissionContext::extract_account_id_from_role_arn(
+                    &aws_management.managing_role_arn,
+                );
+            let is_lambda_role = ctx.desired_stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Function>()
+                    .map(|f| {
+                        f.get_permissions()
+                            == service_account
+                                .id
+                                .strip_suffix("-sa")
+                                .unwrap_or(&service_account.id)
+                    })
+                    .unwrap_or(false)
+            });
+
+            if is_lambda_role {
+                if let Some(ref mgmt_account) = managing_account_id {
+                    all_statements.push(AwsIamStatement {
+                        sid: "EcrCrossAccountAuth".to_string(),
+                        effect: "Allow".to_string(),
+                        action: vec!["ecr:GetAuthorizationToken".to_string()],
+                        resource: vec!["*".to_string()],
+                        condition: None,
+                    });
+                    all_statements.push(AwsIamStatement {
+                        sid: "EcrCrossAccountPull".to_string(),
+                        effect: "Allow".to_string(),
+                        action: vec![
+                            "ecr:BatchGetImage".to_string(),
+                            "ecr:GetDownloadUrlForLayer".to_string(),
+                        ],
+                        resource: vec![format!(
+                            "arn:aws:ecr:*:{}:repository/*",
+                            mgmt_account
+                        )],
+                        condition: None,
+                    });
+                }
+            }
         }
 
         if all_statements.is_empty() {

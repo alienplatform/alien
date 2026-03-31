@@ -734,20 +734,6 @@ pub async fn setup(
             );
             crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
 
-            // AWS: grant the execution role (created during InitialSetup) ECR pull
-            // permissions for the management account's container registry. Lambda uses
-            // the execution role to pull the container image during CreateFunction, and
-            // for cross-account ECR this requires identity-based ECR permissions on the
-            // execution role in addition to the ECR repo's resource-based policy.
-            if platform == Platform::Aws {
-                if let Some(prefix) = extract_resource_prefix(manager.client(), &deployment.id).await? {
-                    crate::build_push::grant_execution_role_ecr_pull(&config, &prefix).await?;
-                    // Allow IAM policy to propagate before the manager starts Provisioning.
-                    info!("Waiting for IAM propagation after execution role ECR grant");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
-            }
-
             // GCP: grant the RSM SA (created during InitialSetup) read access to the
             // management project's Artifact Registry. During Provisioning, the manager
             // impersonates the RSM SA — Cloud Run requires the caller to have AR access
@@ -875,29 +861,6 @@ pub async fn setup(
 ///
 /// After InitialSetup, the `remote-stack-management` resource outputs contain the
 /// RSM SA email in `access_configuration`.
-/// Extract the resource prefix from the deployment's stack state.
-async fn extract_resource_prefix(
-    client: &alien_manager_api::Client,
-    deployment_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let resp = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
-
-    if let Some(ref state_value) = resp.stack_state {
-        let stack_state: alien_core::StackState = serde_json::from_value(state_value.clone())
-            .context("Failed to deserialize stack_state from manager API")?;
-        info!(resource_prefix = %stack_state.resource_prefix, "Extracted resource prefix from deployment state");
-        return Ok(Some(stack_state.resource_prefix));
-    }
-
-    info!("No stack_state found in deployment — cannot extract resource prefix");
-    Ok(None)
-}
-
 async fn extract_rsm_sa_email(
     client: &alien_manager_api::Client,
     deployment_id: &str,
