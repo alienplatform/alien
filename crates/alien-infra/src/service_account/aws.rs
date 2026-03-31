@@ -931,6 +931,28 @@ impl AwsServiceAccountController {
             })
         })?;
 
+        info!(
+            sa_id = %service_account.id,
+            policy_size_bytes = policy_document.len(),
+            statement_count = final_policy.statement.len(),
+            "Generated IAM policy document"
+        );
+
+        // Log the full policy so we can diagnose cross-account ECR issues
+        info!(
+            sa_id = %service_account.id,
+            policy_document = %policy_document,
+            "Full IAM policy document"
+        );
+
+        if policy_document.len() > 10_240 {
+            warn!(
+                sa_id = %service_account.id,
+                policy_size_bytes = policy_document.len(),
+                "IAM inline policy exceeds 10,240 byte limit — PutRolePolicy will fail"
+            );
+        }
+
         Ok(policy_document)
     }
 
