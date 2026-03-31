@@ -640,8 +640,9 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     //
     // Two statements:
     // 1. Lambda service principal — with the two ECR pull actions Lambda needs
-    //    for cross-account image retrieval. The aws:sourceArn condition scopes
-    //    access to Lambda functions in the target account only.
+    //    for cross-account image retrieval. Uses aws:sourceAccount (not
+    //    aws:sourceARN) because Lambda doesn't populate sourceARN during
+    //    CreateFunction — the function doesn't exist yet.
     // 2. Target account root — so the execution role's identity-based ECR
     //    permissions can authorize pulls (required for cross-account ECR access).
     let policy = serde_json::json!({
@@ -658,8 +659,8 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                     "ecr:GetDownloadUrlForLayer"
                 ],
                 "Condition": {
-                    "ArnLike": {
-                        "aws:sourceARN": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                    "StringEquals": {
+                        "aws:sourceAccount": target_account_id
                     }
                 }
             },

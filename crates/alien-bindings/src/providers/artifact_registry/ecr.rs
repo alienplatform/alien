@@ -133,11 +133,12 @@ impl EcrArtifactRegistry {
                 ComputeServiceType::Function => {
                     // Add Lambda service access if Function service type is specified
                     if !aws_access.account_ids.is_empty() {
-                        let source_arns: Vec<String> = aws_access
-                            .account_ids
-                            .iter()
-                            .map(|account_id| format!("arn:aws:lambda:*:{}:function:*", account_id))
-                            .collect();
+                        // Use aws:sourceAccount (not aws:sourceARN) because
+                        // Lambda doesn't populate sourceARN during CreateFunction
+                        // — the function doesn't exist yet, so the condition
+                        // would always deny.
+                        let source_accounts: Vec<&String> =
+                            aws_access.account_ids.iter().collect();
 
                         statements.push(json!({
                             "Sid": "LambdaServiceAccess",
@@ -150,8 +151,8 @@ impl EcrArtifactRegistry {
                                 "ecr:GetDownloadUrlForLayer"
                             ],
                             "Condition": {
-                                "ArnLike": {
-                                    "aws:sourceARN": source_arns
+                                "StringEquals": {
+                                    "aws:sourceAccount": source_accounts
                                 }
                             }
                         }));
