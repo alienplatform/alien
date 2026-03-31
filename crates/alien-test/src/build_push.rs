@@ -635,11 +635,13 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
 
     // Policy: allow Lambda service to pull images cross-account.
-    // Two principals are needed:
-    // 1. Lambda service principal — for image pull during function deployment
-    // 2. Target account root — for ECR authorization and cache management
-    // The Lambda service principal statement intentionally omits the sourceArn
-    // condition because the function doesn't exist yet during CreateFunction.
+    // Two statements are needed:
+    // 1. Lambda service principal — with aws:sourceArn condition scoped to the
+    //    target account. The condition is REQUIRED for cross-account access;
+    //    without it AWS denies the pull. We use a wildcard function ARN since
+    //    the specific function doesn't exist yet during CreateFunction.
+    // 2. Target account root — so the account's IAM principals (e.g. the
+    //    execution role) can also pull images.
     let policy = serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
@@ -651,11 +653,13 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                 },
                 "Action": [
                     "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:SetRepositoryPolicy",
-                    "ecr:DeleteRepositoryPolicy",
-                    "ecr:GetRepositoryPolicy"
-                ]
+                    "ecr:GetDownloadUrlForLayer"
+                ],
+                "Condition": {
+                    "StringLike": {
+                        "aws:sourceARN": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                    }
+                }
             },
             {
                 "Sid": "TargetAccountAccess",
@@ -665,8 +669,7 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                 },
                 "Action": [
                     "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:GetAuthorizationToken"
+                    "ecr:GetDownloadUrlForLayer"
                 ]
             }
         ]

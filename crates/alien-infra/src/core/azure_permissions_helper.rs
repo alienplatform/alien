@@ -193,18 +193,22 @@ impl AzurePermissionsHelper {
                 "Applying Azure role definition and assignment"
             );
 
-            // Deterministic UUID so re-running the same deployment updates
-            // the existing role definition instead of creating a duplicate.
+            // Deterministic UUID keyed on (prefix, profile, permission_set) — NOT on
+            // resource_id — so that every resource using the same permission set
+            // shares a single role definition.  Azure rejects two custom roles
+            // with the same name in a tenant even if their IDs differ (409
+            // RoleDefinitionWithSameNameExists), and the name only depends on
+            // (permission_set, stack_prefix), so the UUID must follow suit.
             let role_definition_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
                 format!(
-                    "alien:azure:res-role-def:{}:{}:{}:{}",
-                    ctx.resource_prefix, resource_id, profile_name, permission_set.id
+                    "alien:azure:res-role-def:{}:{}:{}",
+                    ctx.resource_prefix, profile_name, permission_set.id
                 )
                 .as_bytes(),
             )
             .to_string();
-            match Self::create_role_definition(
+            match Self::create_or_update_role_definition_with_scope_merge(
                 authorization_client,
                 resource_scope,
                 &role_definition_id,
@@ -216,7 +220,7 @@ impl AzurePermissionsHelper {
                     info!(
                         role_definition_id = %role_definition_id,
                         role_name = %azure_role_definition.name,
-                        "Successfully created Azure role definition"
+                        "Successfully created/updated Azure role definition"
                     );
                 }
                 Err(e) => {
@@ -242,9 +246,13 @@ impl AzurePermissionsHelper {
             )
             .to_string();
             let azure_config = ctx.get_azure_config()?;
+            // Reference the role definition at subscription scope — the
+            // canonical location — rather than at the resource scope.  The
+            // role definition UUID is now shared across resources, so the
+            // scope used during creation may belong to a different resource.
             let full_role_definition_id = format!(
                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                resource_scope.to_scope_string(azure_config),
+                Scope::Subscription.to_scope_string(azure_config),
                 role_definition_id
             );
 
@@ -281,13 +289,40 @@ impl AzurePermissionsHelper {
         Ok(())
     }
 
-    /// Create an Azure role definition
-    async fn create_role_definition(
+    /// Create or update an Azure role definition, merging assignable_scopes
+    /// when the role already exists.
+    ///
+    /// Because multiple resources can share the same permission set (and
+    /// therefore the same role definition UUID), each resource may need its
+    /// scope added to the role's `assignable_scopes`.  This method first
+    /// tries to GET the existing definition; if found, it unions the scopes
+    /// before PUTting the update.
+    async fn create_or_update_role_definition_with_scope_merge(
         authorization_client: &Arc<dyn AuthorizationApi>,
         scope: &Scope,
         role_definition_id: &str,
         azure_role_definition: &alien_permissions::generators::AzureRoleDefinition,
     ) -> Result<()> {
+        // Check if the role definition already exists so we can merge scopes.
+        let merged_scopes = match authorization_client
+            .get_role_definition(scope, role_definition_id.to_string())
+            .await
+        {
+            Ok(existing) => {
+                let mut scopes: Vec<String> = existing
+                    .properties
+                    .map(|p| p.assignable_scopes)
+                    .unwrap_or_default();
+                for new_scope in &azure_role_definition.assignable_scopes {
+                    if !scopes.contains(new_scope) {
+                        scopes.push(new_scope.clone());
+                    }
+                }
+                scopes
+            }
+            Err(_) => azure_role_definition.assignable_scopes.clone(),
+        };
+
         let role_definition = RoleDefinition {
             id: None,
             name: None,
@@ -296,7 +331,7 @@ impl AzurePermissionsHelper {
                 role_name: Some(azure_role_definition.name.clone()),
                 type_: Some("CustomRole".to_string()),
                 description: Some(azure_role_definition.description.clone()),
-                assignable_scopes: azure_role_definition.assignable_scopes.clone(),
+                assignable_scopes: merged_scopes,
                 permissions: vec![Permission {
                     actions: azure_role_definition.actions.clone(),
                     not_actions: azure_role_definition.not_actions.clone(),
@@ -463,17 +498,20 @@ impl AzurePermissionsHelper {
             let scope_string = format!("/{}", resource_scope.to_scope_string(azure_config));
             azure_role_definition.assignable_scopes = vec![scope_string];
 
+            // Deterministic UUID keyed on (prefix, permission_set) — NOT on
+            // resource_id — so every resource shares the same management role
+            // definition for a given permission set.
             let role_definition_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
                 format!(
-                    "alien:azure:mgmt-res-role-def:{}:{}:{}",
-                    ctx.resource_prefix, resource_id, permission_set.id
+                    "alien:azure:mgmt-res-role-def:{}:{}",
+                    ctx.resource_prefix, permission_set.id
                 )
                 .as_bytes(),
             )
             .to_string();
 
-            match Self::create_role_definition(
+            match Self::create_or_update_role_definition_with_scope_merge(
                 &authorization_client,
                 resource_scope,
                 &role_definition_id,
@@ -485,7 +523,7 @@ impl AzurePermissionsHelper {
                     info!(
                         role_definition_id = %role_definition_id,
                         permission_set = %permission_set.id,
-                        "Management role definition created for resource"
+                        "Management role definition created/updated for resource"
                     );
                 }
                 Err(e) => {
@@ -500,7 +538,7 @@ impl AzurePermissionsHelper {
 
             let full_role_definition_id = format!(
                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                resource_scope.to_scope_string(azure_config),
+                Scope::Subscription.to_scope_string(azure_config),
                 role_definition_id
             );
 
