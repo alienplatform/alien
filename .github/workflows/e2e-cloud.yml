@@ -528,6 +528,49 @@ jobs:
             aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
           done
 
+          echo "Deleting orphaned Lambda functions with alien- prefix..."
+          LAMBDAS=$(aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `alien-`)].FunctionName' --output text) || true
+          for fn in $LAMBDAS; do
+            echo "Deleting Lambda function: $fn"
+            aws lambda delete-function --function-name "$fn" || true
+          done
+
+          echo "Deleting orphaned SQS queues with alien- prefix..."
+          QUEUES=$(aws sqs list-queues --queue-name-prefix alien- --query 'QueueUrls[]' --output text 2>/dev/null) || true
+          for queue in $QUEUES; do
+            echo "Deleting SQS queue: $queue"
+            aws sqs delete-queue --queue-url "$queue" || true
+          done
+
+          echo "Deleting orphaned DynamoDB tables with alien- prefix..."
+          TABLES=$(aws dynamodb list-tables --query 'TableNames[?starts_with(@, `alien-`)]' --output text) || true
+          for table in $TABLES; do
+            echo "Deleting DynamoDB table: $table"
+            aws dynamodb delete-table --table-name "$table" || true
+          done
+
+          echo "Deleting orphaned SSM parameters with /alien- prefix..."
+          PARAMS=$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/alien-" --query 'Parameters[].Name' --output text) || true
+          for param in $PARAMS; do
+            echo "Deleting SSM parameter: $param"
+            aws ssm delete-parameter --name "$param" || true
+          done
+
+          echo "Deleting orphaned IAM roles with alien- prefix..."
+          ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
+          for role in $ROLES; do
+            echo "Detaching policies and deleting IAM role: $role"
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
+            for policy in $POLICIES; do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$policy" || true
+            done
+            INLINE=$(aws iam list-role-policies --role-name "$role" --query 'PolicyNames[]' --output text) || true
+            for ip in $INLINE; do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$ip" || true
+            done
+            aws iam delete-role --role-name "$role" || true
+          done
+
       - name: Clean up GCP resources
         if: always()
         continue-on-error: true
@@ -552,6 +595,34 @@ jobs:
           for fn in $FUNCTIONS; do
             echo "Deleting Cloud Function: $fn"
             gcloud functions delete "$fn" --region=us-east4 --quiet || true
+          done
+
+          echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
+          TOPICS=$(gcloud pubsub topics list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for topic in $TOPICS; do
+            echo "Deleting Pub/Sub topic: $topic"
+            gcloud pubsub topics delete "$topic" --quiet || true
+          done
+
+          echo "Deleting orphaned Secret Manager secrets with alien- prefix..."
+          SECRETS=$(gcloud secrets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for secret in $SECRETS; do
+            echo "Deleting secret: $secret"
+            gcloud secrets delete "$secret" --quiet || true
+          done
+
+          echo "Deleting orphaned GCS buckets with alien- prefix..."
+          BUCKETS=$(gcloud storage buckets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for bucket in $BUCKETS; do
+            echo "Deleting GCS bucket: $bucket"
+            gcloud storage rm -r "gs://$bucket" --quiet || true
+          done
+
+          echo "Deleting orphaned service accounts with alien- prefix..."
+          SAS=$(gcloud iam service-accounts list --format='value(email)' --filter='email:alien-' 2>/dev/null) || true
+          for sa in $SAS; do
+            echo "Deleting service account: $sa"
+            gcloud iam service-accounts delete "$sa" --quiet || true
           done
 
           rm -f /tmp/gcp-key.json

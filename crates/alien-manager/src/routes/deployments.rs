@@ -571,6 +571,7 @@ async fn get_deployment_info(
     tag = "deployments",
     params(
         ("id" = String, Path, description = "Deployment ID"),
+        ("force" = Option<bool>, Query, description = "Force delete without running cleanup (immediately removes record)"),
     ),
     responses(
         (status = 202, description = "Deployment deletion enqueued"),

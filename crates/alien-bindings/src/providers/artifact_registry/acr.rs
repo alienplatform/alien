@@ -5,9 +5,12 @@ use crate::{
         CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
     },
 };
-use alien_azure_clients::long_running_operation::OperationResult;
+use alien_azure_clients::long_running_operation::{
+    LongRunningOperationApi, LongRunningOperationClient, OperationResult,
+};
 use alien_azure_clients::models::containerregistry::{
-    ScopeMapProperties, TokenProperties, TokenPropertiesStatus,
+    GenerateCredentialsParameters, GenerateCredentialsResult, ScopeMapProperties, TokenProperties,
+    TokenPropertiesStatus,
 };
 use alien_azure_clients::{
     containerregistry::{
@@ -16,17 +19,15 @@ use alien_azure_clients::{
     AzureClientConfig, AzureTokenCache,
 };
 use alien_core::bindings::{AcrArtifactRegistryBinding, ArtifactRegistryBinding};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use chrono;
-use serde_json::{json, Value};
-use std::collections::HashMap;
 use tracing::{info, warn};
 
 /// Azure Container Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
 pub struct AcrArtifactRegistry {
     acr_client: AzureContainerRegistryClient,
+    lro_client: LongRunningOperationClient,
     binding_name: String,
     registry_name: String,
     registry_endpoint: String,
@@ -80,10 +81,12 @@ impl AcrArtifactRegistry {
         let registry_endpoint = format!("{}.azurecr.io", registry_name);
         let client = crate::http_client::create_http_client();
         let acr_client =
-            AzureContainerRegistryClient::new(client, AzureTokenCache::new(azure_config.clone()));
+            AzureContainerRegistryClient::new(client.clone(), AzureTokenCache::new(azure_config.clone()));
+        let lro_client = LongRunningOperationClient::new(client, AzureTokenCache::new(azure_config.clone()));
 
         Ok(Self {
             acr_client,
+            lro_client,
             binding_name,
             registry_name,
             registry_endpoint,
@@ -316,65 +319,225 @@ impl ArtifactRegistry for AcrArtifactRegistry {
         &self,
         repo_id: &str,
         permissions: ArtifactRegistryPermissions,
-        ttl_seconds: Option<u32>,
+        _ttl_seconds: Option<u32>,
     ) -> Result<ArtifactRegistryCredentials> {
         let repo_name = repo_id;
 
         info!(
             repo_name = %repo_name,
             permissions = ?permissions,
-            ttl_seconds = ?ttl_seconds,
-            "Generating Azure Container Registry credentials using built-in tokens"
+            "Generating Azure Container Registry credentials via scope map + token"
         );
 
-        // For Azure Container Registry, we can use the admin credentials or registry tokens
-        // The built-in token mechanism provides temporary access tokens
+        // Deterministic names so repeated calls for the same repo reuse resources.
+        let scope_map_name = self.make_azure_resource_name(repo_name, "pull-scope");
+        let token_name = self.make_azure_resource_name(repo_name, "pull-token");
 
-        // TODO: In a real implementation, we would:
-        // 1. Use the Azure Container Registry token mechanism to generate a token with appropriate scope
-        // 2. The scope would be determined by the permissions parameter (pull vs push+pull)
-        // 3. Use the Azure authentication to create tokens for the registry
-
-        // For now, we'll use a placeholder implementation that demonstrates the concept
-        // In practice, this would involve calling Azure Container Registry APIs to generate tokens
-
-        let scope = match permissions {
-            ArtifactRegistryPermissions::Pull => "repository:*:pull",
-            ArtifactRegistryPermissions::PushPull => "repository:*:pull,push",
+        // 1. Create (or update) a scope map with the requested permissions.
+        let actions = match permissions {
+            ArtifactRegistryPermissions::Pull => {
+                vec![format!("repositories/{}/content/read", repo_name)]
+            }
+            ArtifactRegistryPermissions::PushPull => {
+                vec![
+                    format!("repositories/{}/content/read", repo_name),
+                    format!("repositories/{}/content/write", repo_name),
+                ]
+            }
         };
 
-        warn!(
-            scope = %scope,
-            "Azure Container Registry credential generation using placeholder - should use ACR token APIs"
+        let scope_map_result = self
+            .acr_client
+            .create_scope_map(
+                &self.resource_group_name,
+                &self.registry_name,
+                &scope_map_name,
+                &ScopeMapProperties {
+                    description: Some(format!(
+                        "Alien auto-generated scope map for {}",
+                        repo_name
+                    )),
+                    actions,
+                    creation_date: None,
+                    provisioning_state: None,
+                    type_: None,
+                },
+            )
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to create ACR scope map for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+
+        scope_map_result
+            .wait_for_operation_completion(&self.lro_client, "CreateScopeMap", &scope_map_name)
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed waiting for ACR scope map creation for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+
+        // Get the scope map ID.
+        let scope_map = self
+            .acr_client
+            .get_scope_map(&self.resource_group_name, &self.registry_name, &scope_map_name)
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to get ACR scope map for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+        let scope_map_id = scope_map.id.ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_credentials".to_string(),
+                reason: "Scope map missing ID after creation".to_string(),
+            })
+        })?;
+
+        // 2. Create (or update) a token linked to the scope map.
+        let token_result = self
+            .acr_client
+            .create_token(
+                &self.resource_group_name,
+                &self.registry_name,
+                &token_name,
+                &TokenProperties {
+                    scope_map_id: Some(scope_map_id),
+                    status: Some(TokenPropertiesStatus::Enabled),
+                    credentials: None,
+                    creation_date: None,
+                    provisioning_state: None,
+                },
+            )
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to create ACR token for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+
+        token_result
+            .wait_for_operation_completion(&self.lro_client, "CreateToken", &token_name)
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed waiting for ACR token creation for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+
+        // Get the token to retrieve its resource ID.
+        let token = self
+            .acr_client
+            .get_token(&self.resource_group_name, &self.registry_name, &token_name)
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to get ACR token for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+        let token_id = token.id.ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_credentials".to_string(),
+                reason: "Token missing ID after creation".to_string(),
+            })
+        })?;
+
+        // 3. Generate credentials (username + password) for the token.
+        let cred_op = self
+            .acr_client
+            .generate_credentials(
+                &self.resource_group_name,
+                &self.registry_name,
+                &GenerateCredentialsParameters {
+                    token_id: Some(token_id),
+                    expiry: None,
+                    name: None,
+                },
+            )
+            .await
+            .map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to generate ACR credentials for '{}'", repo_name),
+                    Some(repo_name.to_string()),
+                )
+            })?;
+
+        // Extract credentials from the operation result.
+        // Azure only returns the password in the generateCredentials response —
+        // subsequent GETs on the token do NOT include the password value.
+        let cred_result = match cred_op {
+            OperationResult::Completed(result) => result,
+            OperationResult::LongRunning(lro) => {
+                self.lro_client
+                    .wait_for_completion(&lro, "GenerateCredentials", &token_name)
+                    .await
+                    .map_err(|e| {
+                        map_cloud_client_error(
+                            e,
+                            format!(
+                                "Failed waiting for ACR credential generation for '{}'",
+                                repo_name
+                            ),
+                            Some(repo_name.to_string()),
+                        )
+                    })?;
+
+                self.lro_client
+                    .fetch_location_result::<GenerateCredentialsResult>(
+                        &lro,
+                        "GenerateCredentials",
+                        &token_name,
+                    )
+                    .await
+                    .map_err(|e| {
+                        map_cloud_client_error(
+                            e,
+                            format!(
+                                "Failed to fetch ACR credential result for '{}'",
+                                repo_name
+                            ),
+                            Some(repo_name.to_string()),
+                        )
+                    })?
+            }
+        };
+
+        let password = cred_result
+            .passwords
+            .into_iter()
+            .find_map(|p| p.value)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "generate_credentials".to_string(),
+                    reason: "generateCredentials returned no password value".to_string(),
+                })
+            })?;
+
+        info!(
+            repo_name = %repo_name,
+            token = %token_name,
+            "ACR pull credentials generated successfully"
         );
-
-        // In a real implementation, we would call the Azure Container Registry APIs
-        // to generate a registry token with the appropriate scope and TTL
-        // For now, return a placeholder response
-
-        // Calculate expiration time
-        let expires_at = if let Some(ttl) = ttl_seconds {
-            Some((chrono::Utc::now() + chrono::Duration::seconds(ttl as i64)).to_rfc3339())
-        } else {
-            Some((chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339())
-            // Default 1 hour
-        };
-
-        // For Azure Container Registry, we would typically return:
-        // - username: the token name or service principal client ID
-        // - password: the token password or service principal secret/access token
-
-        // TODO: Replace this with actual Azure Container Registry token generation
-        // This is a placeholder that shows the expected structure
-        let permissions_str = match permissions {
-            ArtifactRegistryPermissions::Pull => "pull",
-            ArtifactRegistryPermissions::PushPull => "pushpull",
-        };
 
         Ok(ArtifactRegistryCredentials {
-            username: format!("alien-token-{}", permissions_str),
-            password: format!("placeholder-token-for-{}-access", scope),
-            expires_at,
+            username: token_name,
+            password,
+            expires_at: None,
         })
     }
 

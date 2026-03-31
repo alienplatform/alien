@@ -94,7 +94,6 @@ pub async fn setup_target(
     deployment: &TestDeployment,
     manager: &Arc<TestManager>,
     management_config: Option<ManagementConfig>,
-    image_pull_credentials: Option<alien_core::ImagePullCredentials>,
 ) -> anyhow::Result<()> {
     if !config.has_platform(platform) {
         anyhow::bail!(
@@ -117,7 +116,7 @@ pub async fn setup_target(
         platform,
         target_config,
         management_config,
-        image_pull_credentials,
+        None,
     )
     .await
     .map_err(|e| anyhow::anyhow!("push_initial_setup failed: {}", e))?;

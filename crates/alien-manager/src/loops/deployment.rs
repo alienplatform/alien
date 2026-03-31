@@ -317,7 +317,10 @@ impl DeploymentLoop {
             artifact_registry: None,
             compute_backend: None,
             external_bindings: ExternalBindings::new(),
-            image_pull_credentials: None,
+            image_pull_credentials: deployment
+                .runtime_metadata
+                .as_ref()
+                .and_then(|m| m.image_pull_credentials.clone()),
             public_urls: None,
             domain_metadata: None,
             monitoring: None,

@@ -261,13 +261,32 @@ async fn reconcile(
     if let (Some(ref bindings_provider), Some(ref env_info)) =
         (&state.bindings_provider, &deployment_state.environment_info)
     {
-        crate::registry_access::reconcile_registry_access(
+        let pull_creds = crate::registry_access::reconcile_registry_access(
             bindings_provider,
             &req.deployment_id,
             env_info,
             &deployment_state.status,
+            deployment_state.stack_state.as_ref(),
         )
         .await;
+
+        // Persist Azure ACR pull credentials in runtime_metadata so the
+        // deployment loop can inject them into the DeploymentConfig.
+        if pull_creds.is_some() {
+            let mut updated_state = deployment_state;
+            let metadata = updated_state.runtime_metadata.get_or_insert_default();
+            metadata.image_pull_credentials = pull_creds;
+            let _ = state
+                .deployment_store
+                .reconcile(ReconcileData {
+                    deployment_id: req.deployment_id.clone(),
+                    session: "registry-access".to_string(),
+                    state: updated_state,
+                    update_heartbeat: false,
+                    error: None,
+                })
+                .await;
+        }
     }
 
     Json(ReconcileResponse {
@@ -367,13 +386,30 @@ async fn agent_sync(
                 if let (Some(ref bindings_provider), Some(ref env_info)) =
                     (&state.bindings_provider, &agent_state.environment_info)
                 {
-                    crate::registry_access::reconcile_registry_access(
+                    let pull_creds = crate::registry_access::reconcile_registry_access(
                         bindings_provider,
                         &req.deployment_id,
                         env_info,
                         &agent_state.status,
+                        agent_state.stack_state.as_ref(),
                     )
                     .await;
+
+                    if pull_creds.is_some() {
+                        let mut updated_state = agent_state;
+                        let metadata = updated_state.runtime_metadata.get_or_insert_default();
+                        metadata.image_pull_credentials = pull_creds;
+                        let _ = state
+                            .deployment_store
+                            .reconcile(ReconcileData {
+                                deployment_id: req.deployment_id.clone(),
+                                session: "registry-access".to_string(),
+                                state: updated_state,
+                                update_heartbeat: false,
+                                error: None,
+                            })
+                            .await;
+                    }
                 }
             }
             Err(e) => {
