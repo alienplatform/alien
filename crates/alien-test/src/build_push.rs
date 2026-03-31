@@ -635,39 +635,36 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
 
     // Policy: allow Lambda service to pull images cross-account.
-    // Three statements are needed:
-    // 1. Lambda service principal — with the FIVE ECR actions Lambda requires
-    //    for its internal image retrieval mechanism. The extra policy-management
-    //    actions (SetRepositoryPolicy, DeleteRepositoryPolicy, GetRepositoryPolicy)
-    //    are needed because Lambda validates it can manage the repo policy during
-    //    function creation. The aws:sourceARN condition scopes this to the target
-    //    account. We use a wildcard function ARN since the specific function
-    //    doesn't exist yet during CreateFunction.
-    // 2. Target account root — so the account's IAM principals can also pull.
+    // Follows the exact pattern from the AWS Lambda documentation:
+    // https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-images.html#gettingstarted-images-permissions
+    //
+    // Two statements:
+    // 1. Lambda service principal — with the two ECR pull actions Lambda needs
+    //    for cross-account image retrieval. The aws:sourceArn condition scopes
+    //    access to Lambda functions in the target account only.
+    // 2. Target account root — so the execution role's identity-based ECR
+    //    permissions can authorize pulls (required for cross-account ECR access).
     let policy = serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
             {
-                "Sid": "LambdaCrossAccountPull",
+                "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
                 "Effect": "Allow",
                 "Principal": {
                     "Service": "lambda.amazonaws.com"
                 },
                 "Action": [
                     "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:SetRepositoryPolicy",
-                    "ecr:DeleteRepositoryPolicy",
-                    "ecr:GetRepositoryPolicy"
+                    "ecr:GetDownloadUrlForLayer"
                 ],
                 "Condition": {
                     "StringLike": {
-                        "aws:sourceARN": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
+                        "aws:sourceArn": format!("arn:aws:lambda:*:{}:function:*", target_account_id)
                     }
                 }
             },
             {
-                "Sid": "TargetAccountAccess",
+                "Sid": "CrossAccountPermission",
                 "Effect": "Allow",
                 "Principal": {
                     "AWS": format!("arn:aws:iam::{}:root", target_account_id)
