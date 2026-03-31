@@ -867,19 +867,26 @@ impl AwsServiceAccountController {
                 alien_permissions::PermissionContext::extract_account_id_from_role_arn(
                     &aws_management.managing_role_arn,
                 );
+            let profile_name = service_account
+                .id
+                .strip_suffix("-sa")
+                .unwrap_or(&service_account.id);
             let is_lambda_role = ctx.desired_stack.resources().any(|(_, entry)| {
                 entry
                     .config
                     .downcast_ref::<Function>()
-                    .map(|f| {
-                        f.get_permissions()
-                            == service_account
-                                .id
-                                .strip_suffix("-sa")
-                                .unwrap_or(&service_account.id)
-                    })
+                    .map(|f| f.get_permissions() == profile_name)
                     .unwrap_or(false)
             });
+
+            info!(
+                sa_id = %service_account.id,
+                profile_name = %profile_name,
+                managing_role_arn = %aws_management.managing_role_arn,
+                managing_account_id = ?managing_account_id,
+                is_lambda_role = is_lambda_role,
+                "ECR cross-account check for service account"
+            );
 
             if is_lambda_role {
                 if let Some(ref mgmt_account) = managing_account_id {
