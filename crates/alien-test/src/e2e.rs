@@ -784,6 +784,21 @@ pub async fn setup(
                 )
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to start alien-agent container: {}", e))?;
+
+                // Give the agent a moment to start, then verify it's still running
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if let Some(ref cid) = agent.container_id {
+                    let status = crate::agent::docker_container_status(cid).await;
+                    if status != "running" {
+                        let logs = crate::agent::docker_container_logs(cid).await;
+                        anyhow::bail!(
+                            "Agent container {} exited (status: {}). Logs:\n{}",
+                            cid, status, logs
+                        );
+                    }
+                    info!(container_id = %cid, %status, "Agent container health check passed");
+                }
+
                 Some(agent)
             }
         }
@@ -791,13 +806,28 @@ pub async fn setup(
         None
     };
 
+    // Capture agent container ID for debug logging (avoids holding non-Send
+    // types across the wait_until_running await boundary).
+    let agent_container_id = agent
+        .as_ref()
+        .and_then(|a| a.container_id.clone());
+
     // Wait for the deployment to be running (populates URL).
     // For push: the manager's deployment loop drives this.
     // For pull: the alien-agent drives this via sync + deployment loop.
-    deployment
+    let wait_result = deployment
         .wait_until_running(Duration::from_secs(600))
         .await
-        .map_err(|e| anyhow::anyhow!("Deployment failed to reach running: {}", e))?;
+        .map_err(|e| e.to_string());
+
+    if let Err(err_msg) = wait_result {
+        // On timeout, dump agent container logs for debugging pull mode failures
+        if let Some(ref cid) = agent_container_id {
+            let logs = crate::agent::docker_container_logs(cid).await;
+            tracing::error!(container_id = %cid, "Agent container logs on timeout:\n{}", logs);
+        }
+        return Err(anyhow::anyhow!("Deployment failed to reach running: {}", err_msg));
+    }
     info!(
         deployment_id = %deployment.id,
         url = ?deployment.url,

@@ -280,3 +280,29 @@ impl TestAlienAgent {
         Self::start_container(manager.as_ref(), image, platform, config).await
     }
 }
+
+/// Get the status of a Docker container (e.g. "running", "exited").
+pub async fn docker_container_status(container_id: &str) -> String {
+    tokio::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Status}}", container_id])
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Get the combined stdout+stderr logs of a Docker container.
+pub async fn docker_container_logs(container_id: &str) -> String {
+    tokio::process::Command::new("docker")
+        .args(["logs", "--tail", "200", container_id])
+        .output()
+        .await
+        .map(|o| {
+            format!(
+                "stdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )
+        })
+        .unwrap_or_else(|e| format!("failed to get logs: {}", e))
+}
