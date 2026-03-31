@@ -14,7 +14,7 @@ use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
 use alien_core::{Function, FunctionCode, Platform};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::TestConfig;
 
@@ -579,7 +579,7 @@ async fn ensure_azure_acr_cross_account_access(
 /// Set an ECR repository policy allowing Lambda in the target account to
 /// pull images from the management account's ECR repository.
 async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Result<()> {
-    use alien_aws_clients::aws::ecr::SetRepositoryPolicyRequest;
+    use alien_aws_clients::aws::ecr::{GetRepositoryPolicyRequest, SetRepositoryPolicyRequest};
     use alien_aws_clients::{EcrApi, EcrClient};
     use alien_core::{AwsClientConfig, AwsCredentials};
 
@@ -693,7 +693,8 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     info!(
         repo = %repo_name,
         target_account = %target_account_id,
-        "ECR cross-account pull policy set"
+        policy = %policy,
+        "ECR cross-account pull policy set on source region"
     );
 
     // If the target account is in a different region, also set the policy on
@@ -751,11 +752,31 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
                 )
             })?;
 
-        info!(
-            repo = %repo_name,
-            target_region = %target.region,
-            "ECR cross-account pull policy set on replicated repo"
-        );
+        // Verify the policy was actually applied by reading it back
+        match target_ecr_client
+            .get_repository_policy(GetRepositoryPolicyRequest {
+                repository_name: repo_name.to_string(),
+                registry_id: None,
+            })
+            .await
+        {
+            Ok(resp) => {
+                info!(
+                    repo = %repo_name,
+                    target_region = %target.region,
+                    policy_text = %resp.policy_text,
+                    "ECR cross-account pull policy verified on replicated repo"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    repo = %repo_name,
+                    target_region = %target.region,
+                    error = %e,
+                    "Failed to verify ECR repository policy on replicated repo"
+                );
+            }
+        }
     }
 
     Ok(())
