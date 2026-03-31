@@ -782,6 +782,143 @@ async fn ensure_aws_ecr_cross_account_access(config: &TestConfig) -> anyhow::Res
     Ok(())
 }
 
+/// Wait for ECR image replication from the source region to the target region.
+///
+/// ECR replication copies images asynchronously. When Lambda is deployed in a
+/// different region from the ECR source, it uses the replicated image. This
+/// function polls the target-region ECR until the image tag is available.
+pub async fn wait_for_ecr_replication(
+    config: &TestConfig,
+    image_tags: &[String],
+) -> anyhow::Result<()> {
+    use alien_aws_clients::aws::ecr::{BatchGetImageRequest, ImageIdentifier};
+    use alien_aws_clients::{EcrApi, EcrClient};
+    use alien_core::{AwsClientConfig, AwsCredentials};
+
+    let mgmt = config
+        .aws_mgmt
+        .as_ref()
+        .context("AWS management credentials required")?;
+    let target = config
+        .aws_target
+        .as_ref()
+        .context("AWS target credentials required")?;
+    let ecr_repo_url = config
+        .aws_resources
+        .ecr_repository
+        .as_ref()
+        .context("ALIEN_TEST_AWS_ECR_REPOSITORY required")?;
+
+    let repo_name = ecr_repo_url
+        .split('/')
+        .last()
+        .context("Invalid ECR repository URL format")?;
+    let ecr_region = extract_ecr_region(ecr_repo_url)?;
+
+    // If Lambda deploys in the same region as ECR, no replication needed.
+    if target.region == ecr_region {
+        return Ok(());
+    }
+
+    let account_id = mgmt
+        .account_id
+        .as_ref()
+        .context("AWS_MANAGEMENT_ACCOUNT_ID required")?
+        .clone();
+
+    // ECR client for the target (replica) region, using management credentials.
+    let target_ecr_config = AwsClientConfig {
+        region: target.region.clone(),
+        account_id: account_id.clone(),
+        credentials: AwsCredentials::AccessKeys {
+            access_key_id: mgmt.access_key_id.clone(),
+            secret_access_key: mgmt.secret_access_key.clone(),
+            session_token: mgmt.session_token.clone(),
+        },
+        service_overrides: None,
+    };
+
+    let cred_provider =
+        alien_aws_clients::AwsCredentialProvider::from_config(target_ecr_config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create ECR credential provider: {}", e))?;
+    let ecr_client = EcrClient::new(reqwest::Client::new(), cred_provider);
+
+    let image_ids: Vec<ImageIdentifier> = image_tags
+        .iter()
+        .map(|tag| ImageIdentifier {
+            image_tag: Some(tag.clone()),
+            image_digest: None,
+        })
+        .collect();
+
+    let max_wait = std::time::Duration::from_secs(300);
+    let poll_interval = std::time::Duration::from_secs(5);
+    let start = std::time::Instant::now();
+
+    info!(
+        repo = %repo_name,
+        source_region = %ecr_region,
+        target_region = %target.region,
+        tags = ?image_tags,
+        "Waiting for ECR image replication to target region"
+    );
+
+    loop {
+        let resp = ecr_client
+            .batch_get_image(BatchGetImageRequest::builder()
+                .repository_name(repo_name.to_string())
+                .image_ids(image_ids.clone())
+                .build())
+            .await;
+
+        match resp {
+            Ok(r) if r.failures.is_empty() => {
+                info!(
+                    elapsed_secs = start.elapsed().as_secs(),
+                    "ECR image replication complete"
+                );
+                return Ok(());
+            }
+            Ok(r) => {
+                let missing: Vec<_> = r
+                    .failures
+                    .iter()
+                    .filter_map(|f| f.image_id.image_tag.as_deref())
+                    .collect();
+                if start.elapsed() > max_wait {
+                    anyhow::bail!(
+                        "ECR replication timed out after {}s. Missing tags: {:?}",
+                        max_wait.as_secs(),
+                        missing
+                    );
+                }
+                info!(
+                    elapsed_secs = start.elapsed().as_secs(),
+                    missing = ?missing,
+                    "ECR replication in progress, waiting..."
+                );
+            }
+            Err(e) => {
+                if start.elapsed() > max_wait {
+                    anyhow::bail!(
+                        "ECR replication check failed after {}s: {}",
+                        max_wait.as_secs(),
+                        e
+                    );
+                }
+                info!(
+                    elapsed_secs = start.elapsed().as_secs(),
+                    error = %e,
+                    "ECR replication check error, retrying..."
+                );
+            }
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 /// Add an IAM binding on the management project's GAR repository allowing
 /// the target project's Cloud Run service agent to pull images.
 async fn ensure_gcp_gar_cross_account_access(config: &TestConfig) -> anyhow::Result<()> {

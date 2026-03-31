@@ -417,6 +417,24 @@ fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 
 /// Deploy a test app to the given platform with the specified model and language.
 ///
+/// Extract ECR image tags from a pushed stack's function resources.
+fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
+    use alien_core::Function;
+
+    stack
+        .resources()
+        .filter_map(|(_, entry)| {
+            let func = entry.config.downcast_ref::<Function>()?;
+            if let alien_core::FunctionCode::Image { ref image } = func.code {
+                // Image URI: "123.dkr.ecr.us-east-1.amazonaws.com/repo:tag"
+                image.split(':').last().map(|t| t.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Mirrors the production `alien build` + `alien release` + `alien deploy` flow:
 /// 1. Evaluate the TypeScript config file to get the Stack JSON
 /// 2. Parse into a `Stack`, build from source, push images to registry
@@ -470,6 +488,17 @@ pub async fn deploy_test_app(
 
     let pushed_stack = build_and_push_stack(stack, platform, &config, &app_path).await?;
     info!("Stack built and pushed to registry");
+
+    // AWS cross-region: wait for ECR replication before deployment starts.
+    // Lambda requires images in the same region. When the ECR source is in a
+    // different region, images are replicated asynchronously and may not be
+    // available immediately after push.
+    if platform == Platform::Aws && config.aws_target.is_some() {
+        let ecr_tags: Vec<String> = extract_ecr_image_tags(&pushed_stack);
+        if !ecr_tags.is_empty() {
+            crate::build_push::wait_for_ecr_replication(&config, &ecr_tags).await?;
+        }
+    }
 
     // Step 3: Re-serialize the pushed stack into StackByPlatform and create a release
     let pushed_stack_json =

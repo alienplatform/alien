@@ -44,6 +44,10 @@ pub trait EcrApi: Send + Sync + Debug {
         &self,
         request: GetAuthorizationTokenRequest,
     ) -> Result<GetAuthorizationTokenResponse>;
+    async fn batch_get_image(
+        &self,
+        request: BatchGetImageRequest,
+    ) -> Result<BatchGetImageResponse>;
     async fn describe_registry(&self) -> Result<DescribeRegistryResponse>;
     async fn put_replication_configuration(
         &self,
@@ -410,6 +414,23 @@ impl EcrApi for EcrClient {
             .await
     }
 
+    async fn batch_get_image(
+        &self,
+        request: BatchGetImageRequest,
+    ) -> Result<BatchGetImageResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize BatchGetImageRequest for repository '{}'",
+                    request.repository_name
+                ),
+            },
+        )?;
+
+        self.post_json("BatchGetImage", body, &request.repository_name)
+            .await
+    }
+
     async fn describe_registry(&self) -> Result<DescribeRegistryResponse> {
         self.post_json("DescribeRegistry", "{}".to_string(), "registry")
             .await
@@ -677,4 +698,54 @@ pub struct PutReplicationConfigurationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PutReplicationConfigurationResponse {
     pub replication_configuration: ReplicationConfiguration,
+}
+
+// -------------------------------------------------------------------------
+// BatchGetImage
+// -------------------------------------------------------------------------
+
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchGetImageRequest {
+    pub repository_name: String,
+    pub image_ids: Vec<ImageIdentifier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_media_types: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchGetImageResponse {
+    #[serde(default)]
+    pub images: Vec<EcrImage>,
+    #[serde(default)]
+    pub failures: Vec<ImageFailure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageIdentifier {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_digest: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EcrImage {
+    pub registry_id: String,
+    pub repository_name: String,
+    pub image_id: ImageIdentifier,
+    pub image_manifest: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageFailure {
+    pub image_id: ImageIdentifier,
+    pub failure_code: String,
+    pub failure_reason: String,
 }
