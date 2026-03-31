@@ -133,8 +133,12 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
-            bindings.push(Binding::ExternalSecret);
             bindings.push(Binding::Events);
+            // ExternalSecret requires the manager to access the cloud vault directly,
+            // which only works in push mode (manager has target account credentials).
+            if model == DeploymentModel::Push {
+                bindings.push(Binding::ExternalSecret);
+            }
         }
         Platform::Kubernetes => {
             bindings.push(Binding::Kv);
@@ -836,7 +840,11 @@ pub async fn setup(
 
     // Provision the external test secret via the manager vault API.
     // Cloud platforms have vault resources that are now provisioned and ready.
-    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+    // Only for push mode — the manager needs target account credentials to
+    // access the cloud vault, which pull-mode agents manage directly.
+    if model == DeploymentModel::Push
+        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+    {
         provision_external_secret(&manager, &deployment).await?;
     }
 
