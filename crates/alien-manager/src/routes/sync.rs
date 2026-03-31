@@ -96,6 +96,11 @@ pub struct ReleaseRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSyncRequest {
     pub deployment_id: String,
+    /// Current deployment state as reported by the agent.
+    /// When present, the manager updates the deployment record to reflect
+    /// the agent's progress (status, stack_state, etc.).
+    #[serde(default)]
+    pub current_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -317,6 +322,40 @@ async fn agent_sync(
     // Must be a deployment token matching this deployment
     if !subject.can_access_deployment(&req.deployment_id) && !subject.is_admin() {
         return ErrorData::forbidden("Access denied").into_response();
+    }
+
+    // If the agent reported its current state, persist it to the deployment record.
+    // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
+    // back to the manager so that API consumers can observe deployment progress.
+    if let Some(ref current_state_value) = req.current_state {
+        match serde_json::from_value::<DeploymentState>(current_state_value.clone()) {
+            Ok(agent_state) => {
+                if let Err(e) = state
+                    .deployment_store
+                    .reconcile(ReconcileData {
+                        deployment_id: req.deployment_id.clone(),
+                        session: "agent-sync".to_string(),
+                        state: agent_state,
+                        update_heartbeat: true,
+                        error: None,
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        deployment_id = %req.deployment_id,
+                        error = %e,
+                        "Failed to reconcile agent-reported state"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    deployment_id = %req.deployment_id,
+                    error = %e,
+                    "Failed to deserialize agent current_state"
+                );
+            }
+        }
     }
 
     let deployment = match state
