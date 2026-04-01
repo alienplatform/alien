@@ -288,7 +288,15 @@ export class EventLoop {
     })
 
     for await (const task of stream) {
-      await this.handleTask(task)
+      try {
+        await this.handleTask(task)
+      } catch (error) {
+        // Catch errors here so the for-await loop continues processing tasks
+        // instead of breaking and reconnecting (which could miss buffered tasks).
+        console.error(
+          `[alien:event-loop] handleTask threw (task will not break stream): id=${task.taskId} error=${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
     }
     console.log(`[alien:event-loop] waitForTasks stream ended`)
   }
@@ -359,10 +367,16 @@ export class EventLoop {
       console.error(
         `[alien:event-loop] Task error: id=${task.taskId} error=${error instanceof Error ? error.message : String(error)}`,
       )
-      await this.sendTaskResult(task.taskId, {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      })
+      try {
+        await this.sendTaskResult(task.taskId, {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } catch (sendError) {
+        console.error(
+          `[alien:event-loop] Failed to send error result: id=${task.taskId} sendError=${sendError instanceof Error ? sendError.message : String(sendError)}`,
+        )
+      }
     }
   }
 
