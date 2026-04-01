@@ -365,13 +365,28 @@ jobs:
         with:
           name: env-test-e2e
 
-      - name: Acquire Azure OIDC token
+      - name: Acquire Azure OIDC token and start refresh loop
         if: matrix.needs_oidc
         run: |
+          # Acquire initial OIDC token
           TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
           echo "$TOKEN" > /tmp/azure-oidc-token
           echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+
+          # Start background loop to refresh the token every 4 minutes
+          # (GitHub OIDC tokens expire after 5 minutes)
+          (
+            while true; do
+              sleep 240
+              NEW_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+              if [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
+                echo "$NEW_TOKEN" > /tmp/azure-oidc-token
+              fi
+            done
+          ) &
+          echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@nightly
 
