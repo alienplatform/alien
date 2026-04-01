@@ -229,11 +229,22 @@ impl TestDeployment {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
+                        info!(
+                            command_id = %command_id,
+                            mode = %mode,
+                            "Command succeeded, decoding response"
+                        );
+
                         match mode {
                             "inline" => {
                                 if let Some(inline_b64) =
                                     body_spec.get("inlineBase64").and_then(|v| v.as_str())
                                 {
+                                    info!(
+                                        command_id = %command_id,
+                                        b64_len = inline_b64.len(),
+                                        "Decoding inline base64 response"
+                                    );
                                     let decoded =
                                         general_purpose::STANDARD.decode(inline_b64)?;
                                     let result: Value = serde_json::from_slice(&decoded)?;
@@ -249,6 +260,12 @@ impl TestDeployment {
                                         .get("type")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
+
+                                    info!(
+                                        command_id = %command_id,
+                                        backend_type = %backend_type,
+                                        "Downloading response from storage"
+                                    );
 
                                     let bytes = match backend_type {
                                         "http" => {
@@ -276,7 +293,25 @@ impl TestDeployment {
                                                     }
                                                 }
                                             }
-                                            req.send().await?.bytes().await?.to_vec()
+                                            let resp = req.send().await?;
+                                            let status = resp.status();
+                                            let body_bytes = resp.bytes().await?.to_vec();
+                                            info!(
+                                                command_id = %command_id,
+                                                http_status = %status,
+                                                body_len = body_bytes.len(),
+                                                "Storage download complete"
+                                            );
+                                            if !status.is_success() {
+                                                let preview = String::from_utf8_lossy(
+                                                    &body_bytes[..body_bytes.len().min(500)]
+                                                );
+                                                return Err(format!(
+                                                    "Storage download failed ({}): {}",
+                                                    status, preview
+                                                ).into());
+                                            }
+                                            body_bytes
                                         }
                                         _ => {
                                             // File backend: read from local file path
@@ -287,12 +322,44 @@ impl TestDeployment {
                                             tokio::fs::read(file_path).await?
                                         }
                                     };
-                                    let result: Value = serde_json::from_slice(&bytes)?;
+                                    info!(
+                                        command_id = %command_id,
+                                        response_bytes = bytes.len(),
+                                        "Parsing storage response as JSON"
+                                    );
+                                    let result: Value = serde_json::from_slice(&bytes)
+                                        .map_err(|e| {
+                                            let preview = String::from_utf8_lossy(
+                                                &bytes[..bytes.len().min(200)]
+                                            );
+                                            format!(
+                                                "JSON parse error: {}. First 200 bytes: {}",
+                                                e, preview
+                                            )
+                                        })?;
                                     return Ok(result);
+                                } else {
+                                    info!(
+                                        command_id = %command_id,
+                                        body_spec = %body_spec,
+                                        "Storage mode but no storageGetRequest found"
+                                    );
                                 }
                             }
-                            _ => {}
+                            _ => {
+                                info!(
+                                    command_id = %command_id,
+                                    body_spec = %body_spec,
+                                    "Unknown response mode"
+                                );
+                            }
                         }
+                    } else {
+                        info!(
+                            command_id = %command_id,
+                            status_data = %status_data,
+                            "Command succeeded but no response body found"
+                        );
                     }
                     // If no decodable response, return the status data itself
                     return Ok(status_data);
