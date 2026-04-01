@@ -371,6 +371,8 @@ export class EventLoop {
     taskId: string,
     result: { success: boolean; error?: string; data?: unknown },
   ): Promise<void> {
+    // Use a 30-second deadline to prevent hanging if the gRPC response is delayed
+    const deadline = new Date(Date.now() + 30_000)
     await wrapGrpcCall(
       "ControlService",
       "SendTaskResult",
@@ -379,15 +381,21 @@ export class EventLoop {
           const responseData = result.data
             ? new TextEncoder().encode(JSON.stringify(result.data))
             : new Uint8Array()
-          await this.client.sendTaskResult({
-            taskId,
-            success: { responseData },
-          })
+          await this.client.sendTaskResult(
+            {
+              taskId,
+              success: { responseData },
+            },
+            { deadline },
+          )
         } else {
-          await this.client.sendTaskResult({
-            taskId,
-            error: { code: "ERROR", message: result.error ?? "Unknown error" },
-          })
+          await this.client.sendTaskResult(
+            {
+              taskId,
+              error: { code: "ERROR", message: result.error ?? "Unknown error" },
+            },
+            { deadline },
+          )
         }
       },
       {},

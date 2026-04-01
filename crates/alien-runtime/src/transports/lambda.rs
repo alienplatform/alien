@@ -835,7 +835,7 @@ async fn handle_command_streaming(
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
-    info!(command_id = %command_id, command = %command_name, "Command received");
+    info!(command_id = %command_id, command = %command_name, "Command received via Lambda");
 
     // Decode params
     let params = alien_commands::runtime::decode_params_bytes(&envelope)
@@ -860,12 +860,19 @@ async fn handle_command_streaming(
     };
 
     // Send task and wait for result
+    info!(command_id = %command_id, "Sending command task to application via gRPC");
     match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(300))
         .await
     {
         Ok(result) => {
+            info!(
+                command_id = %command_id,
+                success = result.success,
+                response_size = result.response_data.len(),
+                "Received command result from application"
+            );
             let command_response = if result.success {
                 if result.response_data.is_empty() {
                     CommandResponse::success(b"{}")
@@ -881,14 +888,17 @@ async fn handle_command_streaming(
                 )
             };
 
+            info!(command_id = %command_id, "Submitting command response to manager");
             if let Err(e) = submit_response(&envelope, command_response).await {
-                error!(error = %e, "Failed to submit command response");
+                error!(command_id = %command_id, error = %e, "Failed to submit command response");
+            } else {
+                info!(command_id = %command_id, "Command response submitted successfully");
             }
         }
         Err(e) => {
+            error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
             let command_response = CommandResponse::error("HANDLER_ERROR", &e);
             let _ = submit_response(&envelope, command_response).await;
-            error!(error = %e, "Command handler error");
         }
     }
 

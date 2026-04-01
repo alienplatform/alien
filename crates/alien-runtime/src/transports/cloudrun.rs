@@ -398,17 +398,29 @@ async fn handle_command(
     command: &ArcCommand,
     state: &TransportState,
 ) -> std::result::Result<(), String> {
+    let command_id = &command.command_id;
+    let command_name = &command.command_name;
+
+    info!(command_id = %command_id, command = %command_name, "Command received via Cloud Run");
+
     let task = Task {
         task_id: command.command_id.clone(),
         payload: Some(control::task::Payload::ArcCommand(command.clone())),
     };
 
+    info!(command_id = %command_id, "Sending command task to application via gRPC");
     let command_response = match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(300))
         .await
     {
         Ok(result) => {
+            info!(
+                command_id = %command_id,
+                success = result.success,
+                response_size = result.response_data.len(),
+                "Received command result from application"
+            );
             if result.success {
                 alien_commands::CommandResponse::success(&result.response_data)
             } else {
@@ -420,15 +432,24 @@ async fn handle_command(
                 )
             }
         }
-        Err(e) => alien_commands::CommandResponse::error(
-            "PROCESSING_FAILED",
-            format!("Command processing failed: {}", e),
-        ),
+        Err(e) => {
+            error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
+            alien_commands::CommandResponse::error(
+                "PROCESSING_FAILED",
+                format!("Command processing failed: {}", e),
+            )
+        }
     };
 
+    info!(command_id = %command_id, "Submitting command response to manager");
     alien_commands::runtime::submit_response(envelope, command_response)
         .await
-        .map_err(|e| format!("Failed to submit response: {}", e))
+        .map_err(|e| {
+            error!(command_id = %command_id, error = %e, "Failed to submit command response");
+            format!("Failed to submit response: {}", e)
+        })?;
+    info!(command_id = %command_id, "Command response submitted successfully");
+    Ok(())
 }
 
 /// Pub/Sub push message format (non-CloudEvent)
