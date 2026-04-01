@@ -174,15 +174,26 @@ impl ControlGrpcServer {
         }
 
         // Send the task
-        self.task_tx
+        let receiver_count = self
+            .task_tx
             .send(task)
             .map_err(|e| format!("Failed to send task: {}", e))?;
+
+        info!(task_id = %task_id, receiver_count = receiver_count, "Task broadcast to subscribers, waiting for result");
 
         // Wait for result with timeout
         let result = tokio::time::timeout(timeout, result_rx.recv())
             .await
-            .map_err(|_| "Task result timeout".to_string())?
-            .ok_or_else(|| "Result channel closed".to_string())?;
+            .map_err(|_| {
+                warn!(task_id = %task_id, timeout_secs = timeout.as_secs(), "Task result timeout — app never sent result");
+                "Task result timeout".to_string()
+            })?
+            .ok_or_else(|| {
+                warn!(task_id = %task_id, "Result channel closed without sending result");
+                "Result channel closed".to_string()
+            })?;
+
+        info!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
 
         // Clean up channel
         {
@@ -293,22 +304,33 @@ impl ControlService for ControlGrpcServer {
         let req = request.into_inner();
         let task_id = req.task_id;
 
-        debug!(task_id = %task_id, "Received task result");
-
-        let result = match req.result {
-            Some(alien_bindings::control::send_task_result_request::Result::Success(s)) => {
-                Ok(TaskResult::success(s.response_data))
+        let (result, result_desc) = match req.result {
+            Some(alien_bindings::control::send_task_result_request::Result::Success(ref s)) => {
+                let desc = format!("success, response_data_len={}", s.response_data.len());
+                (
+                    Ok(TaskResult::success(s.response_data.clone())),
+                    desc,
+                )
             }
-            Some(alien_bindings::control::send_task_result_request::Result::Error(e)) => {
-                Ok(TaskResult::error(e.code, e.message))
+            Some(alien_bindings::control::send_task_result_request::Result::Error(ref e)) => {
+                let desc = format!("error, code={}, message={}", e.code, e.message);
+                (Ok(TaskResult::error(e.code.clone(), e.message.clone())), desc)
             }
-            None => Err("No result in response".to_string()),
+            None => (Err("No result in response".to_string()), "none".to_string()),
         };
+
+        info!(task_id = %task_id, result = %result_desc, "Received task result from app via gRPC");
 
         // Send to waiting channel if any
         let channels = self.result_channels.lock().await;
         if let Some(tx) = channels.get(&task_id) {
-            let _ = tx.send(result).await;
+            if let Err(e) = tx.send(result).await {
+                warn!(task_id = %task_id, "Failed to send result to waiting channel: {:?}", e);
+            } else {
+                info!(task_id = %task_id, "Result forwarded to send_task caller");
+            }
+        } else {
+            warn!(task_id = %task_id, "No waiting channel found for task result (task may have already timed out)");
         }
 
         Ok(Response::new(SendTaskResultResponse { acknowledged: true }))

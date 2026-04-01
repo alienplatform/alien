@@ -408,10 +408,11 @@ async fn handle_command(
         payload: Some(control::task::Payload::ArcCommand(command.clone())),
     };
 
+    // Use 120s timeout so we have time to submit an error response if the app hangs.
     info!(command_id = %command_id, "Sending command task to application via gRPC");
     let command_response = match state
         .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
+        .send_task(task, std::time::Duration::from_secs(120))
         .await
     {
         Ok(result) => {

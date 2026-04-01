@@ -269,7 +269,11 @@ impl TestDeployment {
 
                                     let bytes = match backend_type {
                                         "http" => {
-                                            // HTTP backend: fetch from presigned URL
+                                            // HTTP backend: fetch from presigned URL.
+                                            // Use a plain client (no default Authorization header)
+                                            // because presigned URLs already carry auth in query
+                                            // params, and S3/GCS reject dual auth.
+                                            let plain_http = reqwest::Client::new();
                                             let url = backend
                                                 .get("url")
                                                 .and_then(|v| v.as_str())
@@ -279,9 +283,9 @@ impl TestDeployment {
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("GET");
                                             let mut req = match method {
-                                                "POST" => http.post(url),
-                                                "PUT" => http.put(url),
-                                                _ => http.get(url),
+                                                "POST" => plain_http.post(url),
+                                                "PUT" => plain_http.put(url),
+                                                _ => plain_http.get(url),
                                             };
                                             // Add any headers from the backend
                                             if let Some(headers) =

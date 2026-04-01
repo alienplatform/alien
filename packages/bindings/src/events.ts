@@ -268,8 +268,7 @@ export class EventLoop {
       try {
         await this.processTasks()
       } catch (error) {
-        // Log error and continue
-        console.error("Error processing tasks:", error)
+        console.error("[alien:event-loop] processTasks threw:", error)
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
     }
@@ -283,6 +282,7 @@ export class EventLoop {
   }
 
   private async processTasks(): Promise<void> {
+    console.log(`[alien:event-loop] Opening waitForTasks stream`)
     const stream = this.client.waitForTasks({
       applicationId: this.applicationId,
     })
@@ -290,14 +290,27 @@ export class EventLoop {
     for await (const task of stream) {
       await this.handleTask(task)
     }
+    console.log(`[alien:event-loop] waitForTasks stream ended`)
   }
 
   private async handleTask(task: Task): Promise<void> {
     try {
       // Handle commands
       if (task.arcCommand) {
+        console.log(
+          `[alien:event-loop] Received command task: id=${task.taskId} command=${task.arcCommand.commandName}`,
+        )
         const result = await this.handleCommand(task.arcCommand)
+        const responseData = result
+          ? new TextEncoder().encode(JSON.stringify(result))
+          : new Uint8Array()
+        console.log(
+          `[alien:event-loop] Command handler completed: id=${task.taskId} responseSize=${responseData.length}`,
+        )
         await this.sendTaskResult(task.taskId, { success: true, data: result })
+        console.log(
+          `[alien:event-loop] sendTaskResult completed: id=${task.taskId}`,
+        )
         return
       }
 
@@ -343,6 +356,9 @@ export class EventLoop {
       await this.sendTaskResult(task.taskId, { success: true })
     } catch (error) {
       // Report error
+      console.error(
+        `[alien:event-loop] Task error: id=${task.taskId} error=${error instanceof Error ? error.message : String(error)}`,
+      )
       await this.sendTaskResult(task.taskId, {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -371,8 +387,8 @@ export class EventLoop {
     taskId: string,
     result: { success: boolean; error?: string; data?: unknown },
   ): Promise<void> {
-    // Use a 30-second deadline to prevent hanging if the gRPC response is delayed
-    const deadline = new Date(Date.now() + 30_000)
+    // Use a 30-second timeout to prevent hanging if the gRPC response is delayed
+    const signal = AbortSignal.timeout(30_000)
     await wrapGrpcCall(
       "ControlService",
       "SendTaskResult",
@@ -386,7 +402,7 @@ export class EventLoop {
               taskId,
               success: { responseData },
             },
-            { deadline },
+            { signal },
           )
         } else {
           await this.client.sendTaskResult(
@@ -394,7 +410,7 @@ export class EventLoop {
               taskId,
               error: { code: "ERROR", message: result.error ?? "Unknown error" },
             },
-            { deadline },
+            { signal },
           )
         }
       },
