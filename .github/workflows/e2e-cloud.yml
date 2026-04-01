@@ -447,6 +447,10 @@ jobs:
             test_filter: pull_gcp_rust
           - name: pull-gcp-typescript
             test_filter: pull_gcp_typescript
+          - name: pull-azure-rust
+            test_filter: pull_azure_rust
+          - name: pull-azure-typescript
+            test_filter: pull_azure_typescript
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
