@@ -24,7 +24,7 @@ use alien_manager_api::Client as ServerClient;
 use async_trait::async_trait;
 use clap::Parser;
 use std::str::FromStr;
-use tracing::info;
+
 
 /// Transport for the push-model CLI that reconciles state via the manager API.
 ///
@@ -47,7 +47,7 @@ impl DeploymentLoopTransport for PushCliTransport<'_> {
         state: &DeploymentState,
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
-    ) -> Result<StepReconcileResult, AlienError> {
+    ) -> std::result::Result<StepReconcileResult, AlienError> {
         let state_json = serde_json::to_value(state)
             .into_alien_error()
             .context(GenericError {
