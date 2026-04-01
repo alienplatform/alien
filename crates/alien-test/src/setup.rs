@@ -15,7 +15,13 @@ use crate::deployment::TestDeployment;
 use crate::manager::TestManager;
 
 /// Build a `ClientConfig` from the test config's **target** credentials.
-fn build_target_client_config(
+///
+/// For AWS, if `AWS_TARGET_PROVISIONING_ROLE_ARN` is set, assumes that role
+/// via STS first. This is required because `lambda:CreateFunction` with a
+/// cross-account ECR image requires the **calling principal** (not just the
+/// execution role) to have `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer`
+/// on the management account's ECR repository.
+async fn build_target_client_config(
     config: &TestConfig,
     platform: Platform,
 ) -> anyhow::Result<ClientConfig> {
@@ -25,6 +31,55 @@ fn build_target_client_config(
                 .aws_target
                 .as_ref()
                 .context("Missing AWS target credentials")?;
+
+            // If a provisioning role is configured, assume it to get credentials
+            // with cross-account ECR access for Lambda image deployment.
+            if let Some(ref role_arn) = target.provisioning_role_arn {
+                info!(
+                    role_arn = %role_arn,
+                    "Assuming provisioning role for cross-account ECR access"
+                );
+
+                let aws_config = alien_core::AwsClientConfig {
+                    account_id: target.account_id.clone().unwrap_or_default(),
+                    region: target.region.clone(),
+                    credentials: alien_core::AwsCredentials::AccessKeys {
+                        access_key_id: target.access_key_id.clone(),
+                        secret_access_key: target.secret_access_key.clone(),
+                        session_token: target.session_token.clone(),
+                    },
+                    service_overrides: None,
+                };
+
+                let sts_client =
+                    alien_aws_clients::StsClient::new(reqwest::Client::new(), aws_config);
+
+                use alien_aws_clients::StsApi;
+                let assume_response = sts_client
+                    .assume_role(
+                        alien_aws_clients::aws::sts::AssumeRoleRequest::builder()
+                            .role_arn(role_arn.clone())
+                            .role_session_name("alien-e2e-provisioning".to_string())
+                            .duration_seconds(3600)
+                            .build(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to assume provisioning role: {}", e))?;
+
+                let creds = assume_response.assume_role_result.credentials;
+
+                return Ok(ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+                    account_id: target.account_id.clone().unwrap_or_default(),
+                    region: target.region.clone(),
+                    credentials: alien_core::AwsCredentials::AccessKeys {
+                        access_key_id: creds.access_key_id,
+                        secret_access_key: creds.secret_access_key,
+                        session_token: Some(creds.session_token),
+                    },
+                    service_overrides: None,
+                })));
+            }
+
             Ok(ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
                 account_id: target.account_id.clone().unwrap_or_default(),
                 region: target.region.clone(),
@@ -109,7 +164,7 @@ pub async fn setup_target(
         "setup_target: delegating to push_initial_setup"
     );
 
-    let target_config = build_target_client_config(config, platform)?;
+    let target_config = build_target_client_config(config, platform).await?;
 
     alien_deploy_cli::commands::push_initial_setup(
         manager.client(),
@@ -147,7 +202,7 @@ pub async fn teardown_target(
         "teardown_target: delegating to push_deletion"
     );
 
-    let target_config = build_target_client_config(config, platform)?;
+    let target_config = build_target_client_config(config, platform).await?;
 
     alien_deploy_cli::commands::push_deletion(
         manager.client(),

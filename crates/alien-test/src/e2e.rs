@@ -733,17 +733,7 @@ pub async fn setup(
         // function deployment (InitialSetup creates Lambda/Cloud Run which validates
         // image access). Returns image pull credentials for Azure (token-based).
         let image_pull_credentials = if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-            let creds = crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
-
-            // AWS ECR cross-account policies take time to propagate to the Lambda
-            // service. Without this wait, Lambda creation fails with 403 because
-            // it cannot yet pull the cross-account ECR image.
-            if platform == Platform::Aws {
-                info!("Waiting 30s for ECR cross-account policy propagation");
-                tokio::time::sleep(Duration::from_secs(30)).await;
-            }
-
-            creds
+            crate::build_push::ensure_cross_account_registry_access(platform, &config).await?
         } else {
             None
         };
@@ -787,11 +777,6 @@ pub async fn setup(
             "Cloud pull mode: ensuring cross-account registry access (no RSM)"
         );
         crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
-
-        if platform == Platform::Aws {
-            info!("Waiting 30s for ECR cross-account policy propagation");
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
     }
 
     // For pull model: start alien-agent container BEFORE waiting for Running,

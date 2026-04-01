@@ -15,6 +15,9 @@ pub struct AwsConfig {
     pub session_token: Option<String>,
     pub region: String,
     pub account_id: Option<String>,
+    /// Optional IAM role to assume before provisioning resources.
+    /// Required for cross-account ECR image access during Lambda creation.
+    pub provisioning_role_arn: Option<String>,
 }
 
 /// AWS-specific test resources provisioned by Terraform.
@@ -162,6 +165,7 @@ impl TestConfig {
             session_token: env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             region,
             account_id: env::var("AWS_MANAGEMENT_ACCOUNT_ID").ok(),
+            provisioning_role_arn: None,
         })
     }
 
@@ -175,6 +179,9 @@ impl TestConfig {
             session_token: env::var("AWS_TARGET_SESSION_TOKEN").ok(),
             region,
             account_id: env::var("AWS_TARGET_ACCOUNT_ID").ok(),
+            provisioning_role_arn: env::var("AWS_TARGET_PROVISIONING_ROLE_ARN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
