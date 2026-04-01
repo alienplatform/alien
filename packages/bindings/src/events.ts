@@ -12,6 +12,7 @@ import type {
   StorageEventType,
 } from "@alienplatform/core"
 import { type Channel, createClient } from "nice-grpc"
+import { createGrpcChannel, getGrpcEndpoint } from "./channel.js"
 import { getCommands, runCommand } from "./commands.js"
 import {
   ControlServiceDefinition,
@@ -215,12 +216,27 @@ export function getEventHandlers(): Map<
  */
 export class EventLoop {
   private readonly client: GeneratedClient
+  private sendClient: GeneratedClient | undefined
   private readonly applicationId: string
   private running = false
 
   constructor(channel: Channel, applicationId: string) {
     this.client = createClient(ControlServiceDefinition, channel)
     this.applicationId = applicationId
+  }
+
+  /**
+   * Get or create a separate gRPC client for sending task results.
+   * Uses a dedicated channel to avoid HTTP/2 multiplexing issues
+   * with the long-lived waitForTasks stream on some runtimes (e.g. Bun).
+   */
+  private async getSendClient(): Promise<GeneratedClient> {
+    if (!this.sendClient) {
+      const endpoint = getGrpcEndpoint()
+      const sendChannel = await createGrpcChannel(endpoint)
+      this.sendClient = createClient(ControlServiceDefinition, sendChannel)
+    }
+    return this.sendClient
   }
 
   /**
@@ -401,6 +417,9 @@ export class EventLoop {
     taskId: string,
     result: { success: boolean; error?: string; data?: unknown },
   ): Promise<void> {
+    // Use a separate gRPC client (dedicated channel) to avoid HTTP/2
+    // multiplexing issues with the long-lived waitForTasks stream.
+    const client = await this.getSendClient()
     // Use a 30-second timeout to prevent hanging if the gRPC response is delayed
     const signal = AbortSignal.timeout(30_000)
     await wrapGrpcCall(
@@ -411,7 +430,7 @@ export class EventLoop {
           const responseData = result.data
             ? new TextEncoder().encode(JSON.stringify(result.data))
             : new Uint8Array()
-          await this.client.sendTaskResult(
+          await client.sendTaskResult(
             {
               taskId,
               success: { responseData },
@@ -419,7 +438,7 @@ export class EventLoop {
             { signal },
           )
         } else {
-          await this.client.sendTaskResult(
+          await client.sendTaskResult(
             {
               taskId,
               error: { code: "ERROR", message: result.error ?? "Unknown error" },

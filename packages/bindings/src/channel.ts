@@ -4,7 +4,15 @@
 
 import { AlienError } from "@alienplatform/core"
 import { type Channel, createChannel } from "nice-grpc"
+import { type ChannelOptions } from "@grpc/grpc-js"
 import { GrpcConnectionError, MissingEnvVarError } from "./errors.js"
+
+/** Default channel options for gRPC connections */
+const DEFAULT_CHANNEL_OPTIONS: ChannelOptions = {
+  // Explicit message size limits (128 MB) to avoid platform-specific defaults
+  "grpc.max_send_message_length": 128 * 1024 * 1024,
+  "grpc.max_receive_message_length": 128 * 1024 * 1024,
+}
 
 /** Environment variable containing the gRPC endpoint */
 const GRPC_ENDPOINT_VAR = "ALIEN_BINDINGS_GRPC_ADDRESS"
@@ -40,7 +48,7 @@ export function getGrpcEndpoint(): string {
  */
 export async function createGrpcChannel(address: string): Promise<Channel> {
   try {
-    return createChannel(address)
+    return createChannel(address, undefined, DEFAULT_CHANNEL_OPTIONS)
   } catch (error) {
     throw (await AlienError.from(error)).withContext(
       GrpcConnectionError.create({
