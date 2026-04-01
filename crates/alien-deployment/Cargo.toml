@@ -21,6 +21,7 @@ alien-azure-clients = { workspace = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+async-trait = { workspace = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

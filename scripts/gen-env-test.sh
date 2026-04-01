@@ -87,7 +87,6 @@ AWS_TARGET_REGION='${aws_target_region}'
 AWS_TARGET_ACCESS_KEY_ID='${aws_target_access_key_id}'
 AWS_TARGET_SECRET_ACCESS_KEY='${aws_target_secret_access_key}'
 AWS_TARGET_ACCOUNT_ID='${aws_target_account_id}'
-AWS_TARGET_PROVISIONING_ROLE_ARN='arn:aws:iam::${aws_target_account_id}:role/alien-test-provisioning'
 
 # AWS test resources
 ALIEN_TEST_AWS_S3_BUCKET='${aws_s3_bucket}'

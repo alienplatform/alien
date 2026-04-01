@@ -727,16 +727,11 @@ pub async fn setup(
 
     if model == DeploymentModel::Push {
         // ── Push model: cross-account deployment via manager ─────────
-
-        // Cross-account registry access: ensure the management account's container
-        // registry allows the target account to pull images. Must happen before
-        // function deployment (InitialSetup creates Lambda/Cloud Run which validates
-        // image access). Returns image pull credentials for Azure (token-based).
-        let image_pull_credentials = if config.has_platform(platform) && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-            crate::build_push::ensure_cross_account_registry_access(platform, &config).await?
-        } else {
-            None
-        };
+        //
+        // Registry access (ECR/GAR cross-account IAM, ACR pull tokens) and
+        // RSM SA GAR access are now handled automatically by the manager's
+        // `reconcile_registry_access()` during sync/reconcile. No manual
+        // grants needed here.
 
         // Cross-account setup: if management + target credentials are both
         // configured, run InitialSetup with target credentials (mirrors the
@@ -750,33 +745,8 @@ pub async fn setup(
                 has_management_config = management_config.is_some(),
                 "Running setup_target for cross-account deployment"
             );
-            crate::setup::setup_target(&config, platform, &deployment, &manager, management_config, image_pull_credentials).await?;
-
-            // GCP: grant the RSM SA (created during InitialSetup) read access to the
-            // management project's Artifact Registry. During Provisioning, the manager
-            // impersonates the RSM SA — Cloud Run requires the caller to have AR access
-            // when updating services with cross-project images.
-            if platform == Platform::Gcp {
-                if let Some(rsm_sa_email) = extract_rsm_sa_email(manager.client(), &deployment.id).await? {
-                    crate::build_push::grant_rsm_gar_access(&config, &rsm_sa_email).await?;
-                    // Allow GCP IAM to propagate before the manager starts Provisioning.
-                    info!("Waiting for IAM propagation after RSM SA AR access grant");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
-            }
+            crate::setup::setup_target(&config, platform, &deployment, &manager, management_config).await?;
         }
-    } else if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        // ── Cloud pull model: agent deploys directly with target creds ──
-        //
-        // No RSM or cross-account IAM needed — the agent runs in the target
-        // environment with direct credentials. We still need cross-account
-        // registry access so the cloud provider can pull images from the
-        // management registry.
-        info!(
-            deployment_id = %deployment.id,
-            "Cloud pull mode: ensuring cross-account registry access (no RSM)"
-        );
-        crate::build_push::ensure_cross_account_registry_access(platform, &config).await?;
     }
 
     // For pull model: start alien-agent container BEFORE waiting for Running,
@@ -873,47 +843,6 @@ pub async fn setup(
         model,
         agent,
     })
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Extract the RSM service account email from the deployment's stack state.
-///
-/// After InitialSetup, the RSM resource's outputs contain the SA email (GCP)
-/// or role ARN (AWS) that the manager will impersonate during Provisioning.
-async fn extract_rsm_sa_email(
-    client: &alien_manager_api::Client,
-    deployment_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let resp = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get deployment: {}", e))?;
-
-    if let Some(ref state_value) = resp.stack_state {
-        let stack_state: alien_core::StackState = serde_json::from_value(state_value.clone())
-            .context("Failed to deserialize stack_state from manager API")?;
-
-        for (_id, resource) in &stack_state.resources {
-            if resource.resource_type == "remote-stack-management" {
-                if let Some(ref outputs) = resource.outputs {
-                    if let Some(rsm) = outputs
-                        .downcast_ref::<alien_core::RemoteStackManagementOutputs>()
-                    {
-                        info!(rsm_sa = %rsm.access_configuration, "Extracted RSM SA email from deployment state");
-                        return Ok(Some(rsm.access_configuration.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    info!("No RSM SA email found in deployment state");
-    Ok(None)
 }
 
 /// Convenience entry point that runs the full E2E test flow including

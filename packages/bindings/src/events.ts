@@ -298,7 +298,6 @@ export class EventLoop {
   }
 
   private async processTasks(): Promise<void> {
-    console.log(`[alien:event-loop] Opening waitForTasks stream`)
     const stream = this.client.waitForTasks({
       applicationId: this.applicationId,
     })
@@ -314,27 +313,14 @@ export class EventLoop {
         )
       }
     }
-    console.log(`[alien:event-loop] waitForTasks stream ended`)
   }
 
   private async handleTask(task: Task): Promise<void> {
     try {
       // Handle commands
       if (task.arcCommand) {
-        console.log(
-          `[alien:event-loop] Received command task: id=${task.taskId} command=${task.arcCommand.commandName}`,
-        )
         const result = await this.handleCommand(task.arcCommand)
-        const responseData = result
-          ? new TextEncoder().encode(JSON.stringify(result))
-          : new Uint8Array()
-        console.log(
-          `[alien:event-loop] Command handler completed: id=${task.taskId} responseSize=${responseData.length}`,
-        )
         await this.sendTaskResult(task.taskId, { success: true, data: result })
-        console.log(
-          `[alien:event-loop] sendTaskResult completed: id=${task.taskId}`,
-        )
         return
       }
 

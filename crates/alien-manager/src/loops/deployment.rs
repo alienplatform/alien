@@ -19,16 +19,18 @@ use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ExternalBindings, ReleaseInfo,
 };
-use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopStopReason};
+use alien_deployment::loop_contract::LoopOperation;
+use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::LocalBindingsProvider;
 
 use crate::config::ManagerConfig;
-use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
+use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::{
     CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings, TelemetryBackend,
 };
+use crate::transports::ManagerTransport;
 
 /// Maximum number of step() calls per deployment per tick.
 const MAX_STEPS_PER_TICK: usize = 100;
@@ -349,9 +351,8 @@ impl DeploymentLoop {
             _ => Arc::new(DefaultPlatformServiceProvider::default()),
         };
 
-        // 7. Step loop — call step() repeatedly until stable or delayed.
-        // Note: step() takes ownership of state, so we clone before each call
-        // to retain the last known state if step() fails.
+        // 7. Step loop — use the shared runner with ManagerTransport for
+        //    per-step reconciliation (state persistence + registry access).
         let operation = if matches!(
             state.status,
             DeploymentStatus::DeletePending
@@ -363,112 +364,54 @@ impl DeploymentLoop {
             LoopOperation::Deploy
         };
 
-        let mut last_step_error: Option<serde_json::Value> = None;
-        for i in 0..MAX_STEPS_PER_TICK {
-            info!(
-                deployment_id = %deployment_id,
-                status = ?state.status,
-                step = i,
-                "Running deployment step"
-            );
-
-            let state_snapshot = state.clone();
-            let step_result = alien_deployment::step(
-                state_snapshot,
-                config.clone(),
-                client_config.clone(),
-                Some(service_provider.clone()),
-            )
-            .await;
-
-            match step_result {
-                Ok(result) => {
-                    state = result.state;
-
-                    if let Some(ref err) = result.error {
-                        warn!(
-                            deployment_id = %deployment_id,
-                            error = %err,
-                            "Deployment step returned error"
-                        );
-                        last_step_error = Some(serde_json::to_value(err).unwrap_or_default());
-                    } else {
-                        last_step_error = None;
-                    }
-
-                    if let Some(loop_result) = classify_status(&state.status, operation) {
-                        if loop_result.stop_reason != LoopStopReason::Handoff {
-                            debug!(
-                                deployment_id = %deployment_id,
-                                status = ?state.status,
-                                stop_reason = ?loop_result.stop_reason,
-                                outcome = ?loop_result.outcome,
-                                "Deployment reached terminal state"
-                            );
-                            break;
-                        }
-                    }
-
-                    // If step suggests a delay above threshold, actually sleep for that
-                    // duration before yielding to the next tick. This is critical for
-                    // phase transitions like InitialSetup → Provisioning where AWS IAM
-                    // inline policies need time to propagate (eventual consistency).
-                    if let Some(delay_ms) = result.suggested_delay_ms {
-                        if delay_ms > SUGGESTED_DELAY_THRESHOLD_MS {
-                            // Cap at 60s to prevent pathological delays
-                            let sleep_ms = delay_ms.min(60_000);
-                            debug!(
-                                deployment_id = %deployment_id,
-                                delay_ms = delay_ms,
-                                sleep_ms = sleep_ms,
-                                "Step suggests delay, sleeping before next tick"
-                            );
-                            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        deployment_id = %deployment_id,
-                        error = %e,
-                        "Deployment step() failed"
-                    );
-                    last_step_error = Some(serde_json::to_value(&e).unwrap_or_default());
-                    // state retains its value from before the failed step.
-                    // We still reconcile below to persist the current state.
-                    break;
-                }
-            }
-        }
-
-        // 8. Reconcile — write the new state back.
-        let reconcile_data = ReconcileData {
-            deployment_id: deployment_id.clone(),
-            session: session.to_string(),
-            state: state.clone(),
-            update_heartbeat: state.status == DeploymentStatus::Running,
-            error: last_step_error,
+        let policy = RunnerPolicy {
+            max_steps: MAX_STEPS_PER_TICK,
+            operation,
+            delay_threshold: Some(Duration::from_millis(SUGGESTED_DELAY_THRESHOLD_MS)),
         };
 
-        match self.deployment_store.reconcile(reconcile_data).await {
-            Ok(_record) => {
+        let transport = ManagerTransport::new(
+            self.deployment_store.clone(),
+            self.server_bindings.bindings_provider.clone(),
+            session.to_string(),
+        );
+
+        let mut config = config;
+        let runner_result = alien_deployment::runner::run_step_loop(
+            &mut state,
+            &mut config,
+            &client_config,
+            &deployment_id,
+            &policy,
+            &transport,
+            Some(service_provider),
+        )
+        .await;
+
+        match &runner_result {
+            Ok(RunnerResult {
+                loop_result,
+                steps_executed,
+            }) => {
                 info!(
                     deployment_id = %deployment_id,
-                    status = ?state.status,
-                    "Deployment reconciled"
+                    status = ?loop_result.final_status,
+                    stop_reason = ?loop_result.stop_reason,
+                    outcome = ?loop_result.outcome,
+                    steps = steps_executed,
+                    "Deployment step loop completed"
                 );
             }
             Err(e) => {
                 error!(
                     deployment_id = %deployment_id,
                     error = %e,
-                    "Failed to reconcile deployment"
+                    "Deployment step loop failed"
                 );
             }
         }
 
-        // 9. Handle deleted deployments — clean up the record.
+        // 8. Handle deleted deployments — clean up the record.
         if state.status == DeploymentStatus::Deleted {
             info!(deployment_id = %deployment_id, "Deployment deleted, removing record");
             if let Err(e) = self
@@ -484,12 +427,13 @@ impl DeploymentLoop {
             }
         }
 
-        // 10. Notify dev-mode watchers of state change.
+        // 9. Notify dev-mode watchers of state change.
         if let Some(ref tx) = self.dev_status_tx {
             let _ = tx.send(());
         }
 
-        Ok(())
+        // Propagate step loop errors to the caller (which logs and releases the lock).
+        runner_result.map(|_| ()).map_err(|e| e.into_generic())
     }
 
     /// Build the environment variables snapshot injected into containers/functions.

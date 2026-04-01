@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tracing::info;
+use tracing::debug;
 
 use crate::manager::TestManager;
 
@@ -75,7 +75,7 @@ impl TestDeployment {
                 })?;
 
             let status = resp.status.as_str();
-            info!(deployment = %self.id, %status, "polling deployment status");
+            debug!(deployment = %self.id, %status, "polling deployment status");
 
             if status == "running" {
                 // Extract the public URL from stack_state resource outputs.
@@ -98,7 +98,7 @@ impl TestDeployment {
                                 };
                                 if let Some(url) = url {
                                     self.url = Some(url.to_string());
-                                    info!(
+                                    debug!(
                                         deployment = %self.id,
                                         resource = %resource_id,
                                         %url,
@@ -115,7 +115,7 @@ impl TestDeployment {
                     if let Some(ref env_info) = resp.environment_info {
                         if let Some(url) = env_info.get("url").and_then(|v| v.as_str()) {
                             self.url = Some(url.to_string());
-                            info!(deployment = %self.id, %url, "deployment URL from environment_info");
+                            debug!(deployment = %self.id, %url, "deployment URL from environment_info");
                         }
                     }
                 }
@@ -192,7 +192,7 @@ impl TestDeployment {
             .ok_or("Command response missing 'commandId'")?
             .to_string();
 
-        info!(command_id = %command_id, command = %name, "Command created, polling for result");
+        debug!(command_id = %command_id, command = %name, "Command created, polling for result");
 
         // Step 2: Poll for command completion
         let poll_interval = Duration::from_secs(2);
@@ -229,7 +229,7 @@ impl TestDeployment {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
-                        info!(
+                        debug!(
                             command_id = %command_id,
                             mode = %mode,
                             "Command succeeded, decoding response"
@@ -240,7 +240,7 @@ impl TestDeployment {
                                 if let Some(inline_b64) =
                                     body_spec.get("inlineBase64").and_then(|v| v.as_str())
                                 {
-                                    info!(
+                                    debug!(
                                         command_id = %command_id,
                                         b64_len = inline_b64.len(),
                                         "Decoding inline base64 response"
@@ -261,7 +261,7 @@ impl TestDeployment {
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
 
-                                    info!(
+                                    debug!(
                                         command_id = %command_id,
                                         backend_type = %backend_type,
                                         "Downloading response from storage"
@@ -300,7 +300,7 @@ impl TestDeployment {
                                             let resp = req.send().await?;
                                             let status = resp.status();
                                             let body_bytes = resp.bytes().await?.to_vec();
-                                            info!(
+                                            debug!(
                                                 command_id = %command_id,
                                                 http_status = %status,
                                                 body_len = body_bytes.len(),
@@ -326,7 +326,7 @@ impl TestDeployment {
                                             tokio::fs::read(file_path).await?
                                         }
                                     };
-                                    info!(
+                                    debug!(
                                         command_id = %command_id,
                                         response_bytes = bytes.len(),
                                         "Parsing storage response as JSON"
@@ -343,7 +343,7 @@ impl TestDeployment {
                                         })?;
                                     return Ok(result);
                                 } else {
-                                    info!(
+                                    debug!(
                                         command_id = %command_id,
                                         body_spec = %body_spec,
                                         "Storage mode but no storageGetRequest found"
@@ -351,7 +351,7 @@ impl TestDeployment {
                                 }
                             }
                             _ => {
-                                info!(
+                                debug!(
                                     command_id = %command_id,
                                     body_spec = %body_spec,
                                     "Unknown response mode"
@@ -359,7 +359,7 @@ impl TestDeployment {
                             }
                         }
                     } else {
-                        info!(
+                        debug!(
                             command_id = %command_id,
                             status_data = %status_data,
                             "Command succeeded but no response body found"
@@ -406,7 +406,7 @@ impl TestDeployment {
                 format!("Failed to upgrade deployment {}: {}", self.id, e).into()
             })?;
 
-        info!(deployment = %self.id, "deployment upgrade (redeploy) triggered");
+        debug!(deployment = %self.id, "deployment upgrade (redeploy) triggered");
         Ok(())
     }
 
@@ -446,7 +446,7 @@ impl TestDeployment {
                 format!("Failed to destroy deployment {}: {}", self.id, e).into()
             })?;
 
-        info!(deployment = %self.id, "deployment destroyed");
+        debug!(deployment = %self.id, "deployment destroyed");
         Ok(())
     }
 }
