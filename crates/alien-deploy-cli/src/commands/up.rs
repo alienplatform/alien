@@ -755,6 +755,15 @@ pub async fn push_initial_setup(
     // Step loop with lock release guard
     let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;
 
+    // Persist image_pull_credentials in runtime_metadata so the manager's
+    // deployment loop can use them during Provisioning (Azure ACR needs
+    // explicit registry auth credentials).
+    if let Some(creds) = &config.image_pull_credentials {
+        if let Some(ref mut rm) = state.runtime_metadata {
+            rm.image_pull_credentials = Some(creds.clone());
+        }
+    }
+
     // Always reconcile + release, even on error.
     let state_json = serde_json::to_value(&state).unwrap_or_default();
     if let Err(e) = client
