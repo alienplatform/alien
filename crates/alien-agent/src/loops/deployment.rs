@@ -11,24 +11,76 @@
 //! The loop runs steps continuously, respecting the suggested delay between each step,
 //! until the deployment is synced (Running, Failed, or Deleted).
 
+use crate::config::AgentConfig;
+use crate::db::AgentDb;
 use crate::AgentState;
-use alien_core::{ClientConfig, DeploymentStatus, KubernetesClientConfig, Platform};
-use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopStopReason};
-use alien_error::Context;
+use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, KubernetesClientConfig, Platform};
+use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
+use alien_deployment::runner::{RunnerPolicy, RunnerResult};
+use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
+use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::error::{ErrorData, Result};
 
+/// Transport implementation that persists state to the agent's local DB
+/// and re-reads config each step to pick up sync loop changes.
+struct AgentTransport {
+    db: Arc<AgentDb>,
+    agent_config: AgentConfig,
+    platform: Platform,
+}
+
+#[async_trait]
+impl DeploymentLoopTransport for AgentTransport {
+    async fn reconcile_step(
+        &self,
+        _deployment_id: &str,
+        state: &DeploymentState,
+        _step_error: Option<&AlienError>,
+        _update_heartbeat: bool,
+    ) -> std::result::Result<StepReconcileResult, AlienError> {
+        // Persist state to local DB after each step
+        self.db
+            .set_deployment_state(state)
+            .await
+            .map_err(|e| e.into_generic())?;
+
+        // Re-read config from DB (sync loop may have updated it)
+        let config = self
+            .db
+            .get_deployment_config()
+            .await
+            .map_err(|e| e.into_generic())?;
+
+        let enriched_config = match config {
+            Some(config) => Some(enrich_config(
+                config,
+                &self.agent_config,
+                self.platform,
+                &self.db,
+            ).await.map_err(|e| e.into_generic())?),
+            None => None,
+        };
+
+        Ok(StepReconcileResult {
+            state: None,
+            config: enriched_config,
+        })
+    }
+}
+
 /// Run the deployment loop
 ///
 /// This loop:
 /// 1. Checks local database for pending updates (set by sync loop)
 /// 2. Checks approval status if manual approval is required
-/// 3. Runs alien-deployment::step() continuously until synced, respecting suggested delays
-/// 4. Updates local state in database after each step
+/// 3. Runs alien-deployment::runner::run_step_loop() with AgentTransport
+/// 4. AgentTransport persists state and re-reads config after each step
 /// 5. Sync loop will pick up changes and report to manager
 pub async fn run_deployment_loop(state: Arc<AgentState>) {
     let interval = Duration::from_secs(state.config.deployment_interval_seconds);
@@ -108,159 +160,164 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
 
     let operation = if matches!(
         current.status,
-        DeploymentStatus::DeletePending
-            | DeploymentStatus::Deleting
-            | DeploymentStatus::DeleteFailed
+        alien_core::DeploymentStatus::DeletePending
+            | alien_core::DeploymentStatus::Deleting
+            | alien_core::DeploymentStatus::DeleteFailed
     ) {
         LoopOperation::Delete
     } else {
         LoopOperation::Deploy
     };
 
-    let mut step_count = 0;
-    const MAX_STEPS_PER_ITERATION: usize = 100;
+    // Get deployment ID (used for logging in runner)
+    let deployment_id = state
+        .db
+        .get_deployment_id()
+        .await?
+        .unwrap_or_else(|| "unknown".to_string());
 
-    loop {
-        if step_count >= MAX_STEPS_PER_ITERATION {
-            debug!(steps = step_count, "Max steps per iteration reached");
-            break;
+    // Build initial enriched config
+    let base_config = match state.db.get_deployment_config().await? {
+        Some(c) => c,
+        None => {
+            debug!("No deployment config found, skipping");
+            return Ok(0);
         }
+    };
+    let mut enriched_config = enrich_config(
+        base_config,
+        &state.config,
+        current.platform,
+        &state.db,
+    ).await?;
 
-        // Re-read config each step so domain_metadata, env vars, etc. stay current.
-        let config = match state.db.get_deployment_config().await? {
-            Some(c) => c,
-            None => {
-                debug!("Deployment config cleared, stopping deployment loop");
-                break;
-            }
-        };
+    // Resolve client config once (it doesn't change between steps)
+    let client_config = resolve_client_config(
+        current.platform,
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+    )
+    .await?;
+
+    let policy = RunnerPolicy {
+        max_steps: 100,
+        operation,
+        delay_threshold: None,
+    };
+
+    let transport = AgentTransport {
+        db: Arc::clone(&state.db),
+        agent_config: state.config.clone(),
+        platform: current.platform,
+    };
+
+    let result = alien_deployment::runner::run_step_loop(
+        &mut current,
+        &mut enriched_config,
+        &client_config,
+        &deployment_id,
+        &policy,
+        &transport,
+        state.service_provider.clone(),
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Deployment step loop failed".to_string(),
+    })?;
+
+    let RunnerResult {
+        loop_result,
+        steps_executed,
+    } = result;
+
+    if loop_result.stop_reason != LoopStopReason::Handoff {
+        if loop_result.outcome == LoopOutcome::Success {
+            debug!("Deployment synced, clearing deployment config");
+            state.db.clear_deployment_config().await?;
+        }
 
         info!(
-            status = ?current.status,
-            platform = ?current.platform,
-            step = step_count + 1,
-            "Running deployment step"
+            status = ?loop_result.final_status,
+            stop_reason = ?loop_result.stop_reason,
+            outcome = ?loop_result.outcome,
+            steps = steps_executed,
+            "Deployment reached terminal state"
         );
+    }
 
-        // Get client config from environment
-        let client_config = resolve_client_config(
-            current.platform,
-            &state.config.data_dir,
-            state.config.namespace.clone(),
-        )
-        .await?;
+    Ok(steps_executed)
+}
 
-        // Enrich deployment config with agent environment configuration
-        let mut enriched_config = config;
+/// Enrich a deployment config with agent-specific settings.
+///
+/// Applies external_bindings, public_urls, stack_settings from agent config,
+/// and injects commands polling env vars for K8s/Local platforms.
+async fn enrich_config(
+    mut config: DeploymentConfig,
+    agent_config: &AgentConfig,
+    platform: Platform,
+    db: &AgentDb,
+) -> Result<DeploymentConfig> {
+    // Pass through external bindings from agent config (Kubernetes platform)
+    if let Some(ref external_bindings) = agent_config.external_bindings {
+        config.external_bindings = external_bindings.clone();
+    }
 
-        // Pass through external bindings from agent config (Kubernetes platform)
-        if let Some(ref external_bindings) = state.config.external_bindings {
-            enriched_config.external_bindings = external_bindings.clone();
-        }
+    // Pass through public URLs from agent config
+    if agent_config.public_urls.is_some() {
+        config.public_urls = agent_config.public_urls.clone();
+    }
 
-        // Pass through public URLs from agent config
-        if state.config.public_urls.is_some() {
-            enriched_config.public_urls = state.config.public_urls.clone();
-        }
+    // Pass through stack settings from agent config
+    if let Some(ref stack_settings) = agent_config.stack_settings {
+        config.stack_settings = stack_settings.clone();
+    }
 
-        // Pass through stack settings from agent config
-        if let Some(ref stack_settings) = state.config.stack_settings {
-            enriched_config.stack_settings = stack_settings.clone();
-        }
+    // Inject commands polling env vars only for K8s/Local containers.
+    // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands
+    // via platform-native push (InvokeFunction, Pub/Sub, Service Bus) regardless
+    // of the deployment model (push vs pull).
+    let needs_polling = matches!(platform, Platform::Kubernetes | Platform::Local);
 
-        // Inject commands polling env vars only for K8s/Local containers.
-        // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands
-        // via platform-native push (InvokeFunction, Pub/Sub, Service Bus) regardless
-        // of the deployment model (push vs pull).
-        let needs_polling = matches!(
-            current.platform,
-            Platform::Kubernetes | Platform::Local
-        );
+    if needs_polling {
+        if let Some(ref sync_config) = agent_config.sync {
+            use alien_core::{EnvironmentVariable, EnvironmentVariableType};
 
-        if needs_polling {
-            if let Some(ref sync_config) = state.config.sync {
-                use alien_core::{EnvironmentVariable, EnvironmentVariableType};
+            let commands_url = match db.get_commands_url().await {
+                Ok(Some(url)) => url,
+                _ => format!("{}/v1", sync_config.url),
+            };
 
-                let commands_url = match state.db.get_commands_url().await {
-                    Ok(Some(url)) => url,
-                    _ => format!("{}/v1", sync_config.url),
-                };
+            let mut vars = config.environment_variables.variables.clone();
 
-                let mut vars = enriched_config.environment_variables.variables.clone();
+            vars.extend([
+                EnvironmentVariable {
+                    name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                    value: "true".to_string(),
+                    var_type: EnvironmentVariableType::Plain,
+                    target_resources: None,
+                },
+                EnvironmentVariable {
+                    name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                    value: commands_url,
+                    var_type: EnvironmentVariableType::Plain,
+                    target_resources: None,
+                },
+                EnvironmentVariable {
+                    name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                    value: sync_config.token.clone(),
+                    var_type: EnvironmentVariableType::Secret,
+                    target_resources: None,
+                },
+            ]);
 
-                vars.extend([
-                    EnvironmentVariable {
-                        name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
-                        value: "true".to_string(),
-                        var_type: EnvironmentVariableType::Plain,
-                        target_resources: None,
-                    },
-                    EnvironmentVariable {
-                        name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
-                        value: commands_url,
-                        var_type: EnvironmentVariableType::Plain,
-                        target_resources: None,
-                    },
-                    EnvironmentVariable {
-                        name: "ALIEN_COMMANDS_TOKEN".to_string(),
-                        value: sync_config.token.clone(),
-                        var_type: EnvironmentVariableType::Secret,
-                        target_resources: None,
-                    },
-                ]);
+            config.environment_variables.variables = vars;
 
-                enriched_config.environment_variables.variables = vars;
-
-                info!("Injected commands polling configuration for K8s/Local deployment");
-            }
-        }
-
-        // Execute the deployment step
-        let step_result = alien_deployment::step(
-            current.clone(),
-            enriched_config,
-            client_config,
-            state.service_provider.clone(),
-        )
-        .await
-        .context(ErrorData::DeploymentFailed {
-            message: "Deployment step failed".to_string(),
-        })?;
-
-        step_count += 1;
-
-        // Use the full state from step result
-        current = step_result.state;
-
-        // Persist state after each step
-        state.db.set_deployment_state(&current).await?;
-
-        if let Some(loop_result) = classify_status(&current.status, operation) {
-            if loop_result.stop_reason != LoopStopReason::Handoff {
-                if loop_result.outcome == LoopOutcome::Success {
-                    debug!("Deployment synced, clearing deployment config");
-                    state.db.clear_deployment_config().await?;
-                }
-
-                info!(
-                    status = ?current.status,
-                    stop_reason = ?loop_result.stop_reason,
-                    outcome = ?loop_result.outcome,
-                    steps = step_count,
-                    "Deployment reached terminal state"
-                );
-                break;
-            }
-        }
-
-        // Respect the suggested delay before next step
-        if let Some(delay_ms) = step_result.suggested_delay_ms {
-            debug!(delay_ms = delay_ms, "Waiting before next step");
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            info!("Injected commands polling configuration for K8s/Local deployment");
         }
     }
 
-    Ok(step_count)
+    Ok(config)
 }
 
 /// Resolve client config based on platform

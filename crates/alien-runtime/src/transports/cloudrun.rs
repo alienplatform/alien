@@ -409,14 +409,14 @@ async fn handle_command(
     };
 
     // Use 120s timeout so we have time to submit an error response if the app hangs.
-    info!(command_id = %command_id, "Sending command task to application via gRPC");
+    debug!(command_id = %command_id, "Sending command task to application via gRPC");
     let command_response = match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(120))
         .await
     {
         Ok(result) => {
-            info!(
+            debug!(
                 command_id = %command_id,
                 success = result.success,
                 response_size = result.response_data.len(),
@@ -442,14 +442,14 @@ async fn handle_command(
         }
     };
 
-    info!(command_id = %command_id, "Submitting command response to manager");
+    debug!(command_id = %command_id, "Submitting command response to manager");
     alien_commands::runtime::submit_response(envelope, command_response)
         .await
         .map_err(|e| {
             error!(command_id = %command_id, error = %e, "Failed to submit command response");
             format!("Failed to submit response: {}", e)
         })?;
-    info!(command_id = %command_id, "Command response submitted successfully");
+    debug!(command_id = %command_id, "Command response submitted successfully");
     Ok(())
 }
 

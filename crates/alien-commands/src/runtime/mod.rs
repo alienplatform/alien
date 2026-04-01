@@ -182,7 +182,7 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
 
             if body_size > envelope.response_handling.max_inline_bytes {
                 // Large response: upload to storage first
-                info!(
+                debug!(
                     command_id = %envelope.command_id,
                     body_size = body_size,
                     max_inline = envelope.response_handling.max_inline_bytes,
@@ -232,7 +232,7 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
                     }));
                 }
 
-                info!(
+                debug!(
                     command_id = %envelope.command_id,
                     upload_status = upload_response.status_code,
                     "Response body uploaded to storage successfully"
@@ -289,7 +289,7 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
         }));
     }
 
-    info!(
+    debug!(
         command_id = %envelope.command_id,
         processing_ms = start_time.elapsed().as_millis(),
         response_type = if final_response.is_success() { "success" } else { "error" },

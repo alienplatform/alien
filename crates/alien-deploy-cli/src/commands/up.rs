@@ -16,13 +16,108 @@ use alien_core::{
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome},
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
+    transport::{DeploymentLoopTransport, StepReconcileResult},
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::Client as ServerClient;
+use async_trait::async_trait;
 use clap::Parser;
 use std::str::FromStr;
 use tracing::info;
+
+/// Transport for the push-model CLI that reconciles state via the manager API.
+///
+/// Each `reconcile_step` call:
+/// 1. POSTs the current state to `/v1/sync/reconcile` so the manager persists it
+///    and runs server-side side-effects (e.g. cross-account registry access).
+/// 2. Re-fetches the deployment to pick up any changes the manager made (e.g.
+///    `image_pull_credentials` injected into `runtime_metadata` for Azure ACR).
+/// 3. Returns updated `DeploymentConfig` with credentials if present.
+struct PushCliTransport<'a> {
+    client: &'a ServerClient,
+    session: String,
+}
+
+#[async_trait]
+impl DeploymentLoopTransport for PushCliTransport<'_> {
+    async fn reconcile_step(
+        &self,
+        deployment_id: &str,
+        state: &DeploymentState,
+        step_error: Option<&AlienError>,
+        update_heartbeat: bool,
+    ) -> Result<StepReconcileResult, AlienError> {
+        let state_json = serde_json::to_value(state)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize state for reconcile".to_string(),
+            })?;
+
+        let error_json = step_error.map(|e| {
+            serde_json::to_value(e).unwrap_or_else(|_| {
+                serde_json::json!({ "message": e.to_string() })
+            })
+        });
+
+        // POST state to the manager
+        self.client
+            .reconcile()
+            .body(alien_manager_api::types::ReconcileRequest {
+                deployment_id: deployment_id.to_string(),
+                session: self.session.clone(),
+                state: state_json,
+                update_heartbeat: Some(update_heartbeat),
+                error: error_json,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to reconcile step via manager API".to_string(),
+            })?;
+
+        // Re-fetch the deployment to pick up server-side changes.
+        // The manager may inject image_pull_credentials into runtime_metadata
+        // after reconcile_registry_access (e.g. Azure ACR cross-account auth).
+        // We propagate these back as a state update so subsequent steps and
+        // the final reconcile carry them.
+        let deployment = self
+            .client
+            .get_deployment()
+            .id(deployment_id)
+            .send()
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to re-fetch deployment after reconcile".to_string(),
+            })?
+            .into_inner();
+
+        // Parse the manager's runtime_metadata and propagate it into the
+        // working state. This picks up image_pull_credentials and any other
+        // server-side mutations without needing to construct a full config.
+        let updated_state = deployment.runtime_metadata.and_then(|rm| {
+            let rm_typed: alien_core::RuntimeMetadata =
+                serde_json::from_value(rm).ok()?;
+            // Only return a state update if the manager added credentials
+            // that differ from what we already have.
+            if rm_typed.image_pull_credentials.is_some() {
+                let mut new_state = state.clone();
+                let runtime_md = new_state.runtime_metadata.get_or_insert_default();
+                runtime_md.image_pull_credentials = rm_typed.image_pull_credentials;
+                Some(new_state)
+            } else {
+                None
+            }
+        });
+
+        Ok(StepReconcileResult {
+            state: updated_state,
+            config: None,
+        })
+    }
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -519,7 +614,7 @@ async fn run_push_model(
             ),
         })?;
 
-    push_initial_setup(client, deployment_id, platform, client_config, None, None).await
+    push_initial_setup(client, deployment_id, platform, client_config, None).await
 }
 
 /// Run the push-model initial setup flow for a deployment.
@@ -535,7 +630,6 @@ pub async fn push_initial_setup(
     platform: Platform,
     client_config: ClientConfig,
     management_config: Option<alien_core::ManagementConfig>,
-    image_pull_credentials: Option<alien_core::ImagePullCredentials>,
 ) -> Result<()> {
     // Get deployment from manager
     let deployment = client
@@ -671,8 +765,6 @@ pub async fn push_initial_setup(
         message: "Failed to construct deployment config".to_string(),
     })?;
 
-    config.image_pull_credentials = image_pull_credentials;
-
     // Acquire sync lock — retry until the specific deployment is locked by us.
     // The manager's deployment loop may already hold the lock; we must wait for
     // it to release before proceeding. 2 minutes (60 × 2s) is sufficient because
@@ -752,19 +844,31 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    // Step loop with lock release guard
-    let result = run_step_loop(&mut state, &config, &client_config, deployment_id).await;
+    // Run the shared step loop with per-step reconciliation via the manager API
+    let transport = PushCliTransport {
+        client,
+        session: session.clone(),
+    };
+    let policy = RunnerPolicy {
+        max_steps: 200,
+        operation: LoopOperation::Deploy,
+        delay_threshold: None,
+    };
 
-    // Persist image_pull_credentials in runtime_metadata so the manager's
-    // deployment loop can use them during Provisioning (Azure ACR needs
-    // explicit registry auth credentials).
-    if let Some(creds) = &config.image_pull_credentials {
-        if let Some(ref mut rm) = state.runtime_metadata {
-            rm.image_pull_credentials = Some(creds.clone());
-        }
-    }
+    let runner_result = shared_run_step_loop(
+        &mut state,
+        &mut config,
+        &client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+    )
+    .await;
 
     // Always reconcile + release, even on error.
+    // The runner reconciles per-step, but a final reconcile ensures the
+    // terminal state is persisted and the lock is released cleanly.
     let state_json = serde_json::to_value(&state).unwrap_or_default();
     if let Err(e) = client
         .reconcile()
@@ -795,7 +899,27 @@ pub async fn push_initial_setup(
         output::error(&format!("Failed to release sync lock: {e}"));
     }
 
-    result
+    // Handle runner result after lock release
+    let result = runner_result.context(ErrorData::DeploymentFailed {
+        operation: "initial setup".to_string(),
+    })?;
+
+    match result.loop_result.outcome {
+        LoopOutcome::Success => {
+            output::success("Initial setup complete. Manager will continue deployment.");
+            Ok(())
+        }
+        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
+            operation: format!(
+                "initial setup failed at status {:?}",
+                result.loop_result.final_status
+            ),
+        })),
+        LoopOutcome::Neutral => {
+            output::success("Initial setup complete. Manager will continue provisioning.");
+            Ok(())
+        }
+    }
 }
 
 /// Run the push-model deletion flow for a deployment.
@@ -900,7 +1024,7 @@ pub async fn push_deletion(
         })?
         .unwrap_or_default();
 
-    let config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
         "environmentVariables": {
             "variables": [],
@@ -987,8 +1111,27 @@ pub async fn push_deletion(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    // Deletion step loop
-    let result = run_deletion_step_loop(&mut state, &config, &client_config, deployment_id).await;
+    // Run the shared step loop with per-step reconciliation via the manager API
+    let transport = PushCliTransport {
+        client,
+        session: session.clone(),
+    };
+    let policy = RunnerPolicy {
+        max_steps: 200,
+        operation: LoopOperation::Delete,
+        delay_threshold: None,
+    };
+
+    let runner_result = shared_run_step_loop(
+        &mut state,
+        &mut config,
+        &client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+    )
+    .await;
 
     // Always reconcile + release, even on error
     let state_json = serde_json::to_value(&state).unwrap_or_default();
@@ -1021,28 +1164,10 @@ pub async fn push_deletion(
         output::error(&format!("Failed to release sync lock: {e}"));
     }
 
-    result
-}
-
-/// Inner step loop for push_deletion. Steps until Deleted (success) or
-/// DeleteFailed (error). Separated so the caller can always reconcile + release.
-async fn run_deletion_step_loop(
-    state: &mut DeploymentState,
-    config: &DeploymentConfig,
-    client_config: &ClientConfig,
-    _deployment_id: &str,
-) -> Result<()> {
-    let policy = RunnerPolicy {
-        max_steps: 200,
-        operation: LoopOperation::Delete,
-        delay_threshold: None,
-    };
-
-    let result = shared_run_step_loop(state, config, client_config, &policy)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "deletion".to_string(),
-        })?;
+    // Handle runner result after lock release
+    let result = runner_result.context(ErrorData::DeploymentFailed {
+        operation: "deletion".to_string(),
+    })?;
 
     match result.loop_result.outcome {
         LoopOutcome::Success => {
@@ -1056,43 +1181,5 @@ async fn run_deletion_step_loop(
             ),
         })),
         LoopOutcome::Neutral => Ok(()),
-    }
-}
-
-/// Inner step loop for push_initial_setup. Separated so the caller can
-/// always reconcile + release regardless of the outcome.
-async fn run_step_loop(
-    state: &mut DeploymentState,
-    config: &DeploymentConfig,
-    client_config: &ClientConfig,
-    _deployment_id: &str,
-) -> Result<()> {
-    let policy = RunnerPolicy {
-        max_steps: 200,
-        operation: LoopOperation::Deploy,
-        delay_threshold: None,
-    };
-
-    let result = shared_run_step_loop(state, config, client_config, &policy)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "initial setup".to_string(),
-        })?;
-
-    match result.loop_result.outcome {
-        LoopOutcome::Success => {
-            output::success("Initial setup complete. Manager will continue deployment.");
-            Ok(())
-        }
-        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
-            operation: format!(
-                "initial setup failed at status {:?}",
-                result.loop_result.final_status
-            ),
-        })),
-        LoopOutcome::Neutral => {
-            output::success("Initial setup complete. Manager will continue provisioning.");
-            Ok(())
-        }
     }
 }

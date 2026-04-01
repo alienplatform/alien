@@ -543,57 +543,37 @@ jobs:
             aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
           done
 
-          echo "Deleting all Lambda functions in target account..."
-          LAMBDAS=$(aws lambda list-functions --query 'Functions[].FunctionName' --output text) || true
+          echo "Deleting orphaned Lambda functions with alien- prefix..."
+          LAMBDAS=$(aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `alien-`)].FunctionName' --output text) || true
           for fn in $LAMBDAS; do
             echo "Deleting Lambda function: $fn"
             aws lambda delete-function --function-name "$fn" || true
           done
 
-          echo "Deleting all SQS queues in target account..."
-          QUEUES=$(aws sqs list-queues --query 'QueueUrls[]' --output text 2>/dev/null) || true
+          echo "Deleting orphaned SQS queues with alien- prefix..."
+          QUEUES=$(aws sqs list-queues --queue-name-prefix alien- --query 'QueueUrls[]' --output text 2>/dev/null) || true
           for queue in $QUEUES; do
             echo "Deleting SQS queue: $queue"
             aws sqs delete-queue --queue-url "$queue" || true
           done
 
-          echo "Deleting all DynamoDB tables in target account..."
-          TABLES=$(aws dynamodb list-tables --query 'TableNames[]' --output text) || true
+          echo "Deleting orphaned DynamoDB tables with alien- prefix..."
+          TABLES=$(aws dynamodb list-tables --query 'TableNames[?starts_with(@, `alien-`)]' --output text) || true
           for table in $TABLES; do
             echo "Deleting DynamoDB table: $table"
             aws dynamodb delete-table --table-name "$table" || true
           done
 
-          echo "Deleting all SSM parameters in target account..."
-          PARAMS=$(aws ssm describe-parameters --query 'Parameters[].Name' --output text) || true
+          echo "Deleting orphaned SSM parameters with /alien- prefix..."
+          PARAMS=$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/alien-" --query 'Parameters[].Name' --output text) || true
           for param in $PARAMS; do
             echo "Deleting SSM parameter: $param"
             aws ssm delete-parameter --name "$param" || true
           done
 
-          echo "Deleting all S3 buckets in target account..."
-          BUCKETS=$(aws s3api list-buckets --query 'Buckets[].Name' --output text) || true
-          for bucket in $BUCKETS; do
-            echo "Emptying and deleting S3 bucket: $bucket"
-            aws s3 rm "s3://$bucket" --recursive || true
-            aws s3api delete-bucket --bucket "$bucket" || true
-          done
-
-          echo "Deleting all CodeBuild projects in target account..."
-          PROJECTS=$(aws codebuild list-projects --query 'projects[]' --output text) || true
-          for project in $PROJECTS; do
-            echo "Deleting CodeBuild project: $project"
-            aws codebuild delete-project --name "$project" || true
-          done
-
-          echo "Deleting orphaned IAM roles in target account..."
-          # Delete roles that match the test hex prefix pattern (8 chars + dash)
-          ROLES=$(aws iam list-roles --query 'Roles[].RoleName' --output text) || true
+          echo "Deleting orphaned IAM roles with alien- prefix..."
+          ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
           for role in $ROLES; do
-            # Skip AWS service-linked roles, system roles, and the provisioning role
-            if echo "$role" | grep -qE '^(aws-|AWSServiceRole|OrganizationAccountAccessRole|alien-test-provisioning)'; then
-              continue
-            fi
             echo "Detaching policies and deleting IAM role: $role"
             POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
             for policy in $POLICIES; do
@@ -604,13 +584,6 @@ jobs:
               aws iam delete-role-policy --role-name "$role" --policy-name "$ip" || true
             done
             aws iam delete-role --role-name "$role" || true
-          done
-
-          echo "Deleting orphaned ECR repositories in target account..."
-          REPOS=$(aws ecr describe-repositories --query 'repositories[].repositoryName' --output text 2>/dev/null) || true
-          for repo in $REPOS; do
-            echo "Deleting ECR repository: $repo"
-            aws ecr delete-repository --repository-name "$repo" --force || true
           done
 
       - name: Clean up GCP resources
@@ -639,75 +612,35 @@ jobs:
             gcloud functions delete "$fn" --region=us-east4 --quiet || true
           done
 
-          echo "Deleting orphaned Pub/Sub topics..."
-          TOPICS=$(gcloud pubsub topics list --format='value(name)' 2>/dev/null) || true
+          echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
+          TOPICS=$(gcloud pubsub topics list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
           for topic in $TOPICS; do
             echo "Deleting Pub/Sub topic: $topic"
             gcloud pubsub topics delete "$topic" --quiet || true
           done
 
-          echo "Deleting orphaned Pub/Sub subscriptions..."
-          SUBS=$(gcloud pubsub subscriptions list --format='value(name)' 2>/dev/null) || true
-          for sub in $SUBS; do
-            echo "Deleting Pub/Sub subscription: $sub"
-            gcloud pubsub subscriptions delete "$sub" --quiet || true
-          done
-
-          echo "Deleting orphaned Secret Manager secrets..."
-          SECRETS=$(gcloud secrets list --format='value(name)' 2>/dev/null) || true
+          echo "Deleting orphaned Secret Manager secrets with alien- prefix..."
+          SECRETS=$(gcloud secrets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
           for secret in $SECRETS; do
             echo "Deleting secret: $secret"
             gcloud secrets delete "$secret" --quiet || true
           done
 
-          echo "Deleting orphaned GCS buckets..."
-          BUCKETS=$(gcloud storage buckets list --format='value(name)' 2>/dev/null) || true
+          echo "Deleting orphaned GCS buckets with alien- prefix..."
+          BUCKETS=$(gcloud storage buckets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
           for bucket in $BUCKETS; do
             echo "Deleting GCS bucket: $bucket"
             gcloud storage rm -r "gs://$bucket" --quiet || true
           done
 
-          echo "Deleting test-generated service accounts..."
-          # Test SAs use 8-char hex prefix pattern (e.g. f8a23892-execution-sa@...)
-          gcloud iam service-accounts list --format='value(email)' 2>/dev/null | \
-            grep -E '^[a-z0-9]{8}-' | while read sa; do
+          echo "Deleting orphaned service accounts with alien- prefix..."
+          SAS=$(gcloud iam service-accounts list --format='value(email)' --filter='email:alien-' 2>/dev/null) || true
+          for sa in $SAS; do
             echo "Deleting service account: $sa"
             gcloud iam service-accounts delete "$sa" --quiet || true
           done
 
-          echo "Cleaning up stale IAM policy bindings (deleted members)..."
-          # Deleted SAs leave 'deleted:serviceAccount:...' bindings that accumulate
-          # and eventually hit the 1500 member limit
-          gcloud projects get-iam-policy "$GCP_TARGET_PROJECT_ID" --format=json > /tmp/iam-policy.json 2>/dev/null || true
-          python3 -c "
-          import json
-          with open('/tmp/iam-policy.json') as f:
-              policy = json.load(f)
-          removed = 0
-          cleaned = []
-          for b in policy.get('bindings', []):
-              new_members = [m for m in b.get('members', []) if not m.startswith('deleted:')]
-              removed += len(b.get('members', [])) - len(new_members)
-              if new_members:
-                  b['members'] = new_members
-                  cleaned.append(b)
-          policy['bindings'] = cleaned
-          with open('/tmp/iam-policy.json', 'w') as f:
-              json.dump(policy, f)
-          print(f'Removed {removed} stale IAM policy members')
-          " || true
-          gcloud projects set-iam-policy "$GCP_TARGET_PROJECT_ID" /tmp/iam-policy.json --quiet 2>/dev/null || true
-
-          echo "Deleting orphaned custom roles..."
-          ROLES=$(gcloud iam roles list --project="$GCP_TARGET_PROJECT_ID" --format='value(name)' 2>/dev/null) || true
-          for role in $ROLES; do
-            # Only delete roles with test stack prefix pattern
-            ROLE_ID=$(basename "$role")
-            echo "Deleting custom role: $ROLE_ID"
-            gcloud iam roles delete "$ROLE_ID" --project="$GCP_TARGET_PROJECT_ID" --quiet 2>/dev/null || true
-          done
-
-          rm -f /tmp/gcp-key.json /tmp/iam-policy.json
+          rm -f /tmp/gcp-key.json
 
       - name: Clean up Azure resources
         if: always()
@@ -728,14 +661,4 @@ jobs:
           for rg in $GROUPS; do
             echo "Deleting resource group: $rg"
             az group delete --name "$rg" --yes --no-wait || true
-          done
-
-          echo "Deleting orphaned custom role definitions..."
-          # Test role definitions use deterministic UUIDs from stack prefixes
-          ROLES=$(az role definition list --custom-role-only true \
-            --query "[?contains(roleName, '(')].{name:name, roleName:roleName}" -o tsv 2>/dev/null) || true
-          echo "$ROLES" | while IFS=$'\t' read -r name roleName; do
-            [ -z "$name" ] && continue
-            echo "Deleting custom role: $roleName ($name)"
-            az role definition delete --name "$name" 2>/dev/null || true
           done

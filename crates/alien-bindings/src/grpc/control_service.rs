@@ -179,7 +179,7 @@ impl ControlGrpcServer {
             .send(task)
             .map_err(|e| format!("Failed to send task: {}", e))?;
 
-        info!(task_id = %task_id, receiver_count = receiver_count, "Task broadcast to subscribers, waiting for result");
+        debug!(task_id = %task_id, receiver_count = receiver_count, "Task broadcast to subscribers, waiting for result");
 
         // Wait for result with timeout
         let result = tokio::time::timeout(timeout, result_rx.recv())
@@ -193,7 +193,7 @@ impl ControlGrpcServer {
                 "Result channel closed".to_string()
             })?;
 
-        info!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
+        debug!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
 
         // Clean up channel
         {
@@ -319,7 +319,7 @@ impl ControlService for ControlGrpcServer {
             None => (Err("No result in response".to_string()), "none".to_string()),
         };
 
-        info!(task_id = %task_id, result = %result_desc, "Received task result from app via gRPC");
+        debug!(task_id = %task_id, result = %result_desc, "Received task result from app via gRPC");
 
         // Send to waiting channel if any
         let channels = self.result_channels.lock().await;
@@ -327,7 +327,7 @@ impl ControlService for ControlGrpcServer {
             if let Err(e) = tx.send(result).await {
                 warn!(task_id = %task_id, "Failed to send result to waiting channel: {:?}", e);
             } else {
-                info!(task_id = %task_id, "Result forwarded to send_task caller");
+                debug!(task_id = %task_id, "Result forwarded to send_task caller");
             }
         } else {
             warn!(task_id = %task_id, "No waiting channel found for task result (task may have already timed out)");

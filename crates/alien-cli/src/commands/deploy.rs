@@ -5,18 +5,20 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ClientConfig, Platform};
-use alien_deployment::loop_contract::{classify_status, LoopOperation, LoopOutcome, LoopStopReason};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, Platform};
+use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
+use alien_deployment::runner::{RunnerPolicy, RunnerResult};
+use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt;
+use async_trait::async_trait;
 use clap::Parser;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
     Client,
 };
 use std::str::FromStr;
-use tokio::time::{sleep, Duration};
 use tracing::info;
 use uuid::Uuid;
 
@@ -123,6 +125,124 @@ impl Drop for DeploymentGuard {
                 }
             })
         });
+    }
+}
+
+/// Transport that reconciles deployment state via the Platform sync API.
+///
+/// Used by the CLI deploy command to persist state after each step through
+/// the shared [`alien_deployment::runner::run_step_loop`] runner.
+struct PlatformCliTransport {
+    sdk_client: SdkClient,
+    workspace_name: String,
+    session_id: String,
+}
+
+#[async_trait]
+impl DeploymentLoopTransport for PlatformCliTransport {
+    async fn reconcile_step(
+        &self,
+        deployment_id: &str,
+        state: &DeploymentState,
+        step_error: Option<&AlienError>,
+        update_heartbeat: bool,
+    ) -> Result<StepReconcileResult, AlienError> {
+        // Serialize state to SDK type
+        let state_sdk: alien_platform_api::types::SyncReconcileRequestState =
+            serde_json::from_value(serde_json::to_value(state).map_err(|e| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Failed to serialize deployment state: {e}"),
+                })
+            })?)
+            .map_err(|e| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Failed to convert state to SDK type: {e}"),
+                })
+            })?;
+
+        // Serialize step error to SDK type if present
+        let error_sdk = step_error
+            .map(|e| {
+                let json = serde_json::to_value(e).map_err(|e| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!("Failed to serialize deployment error: {e}"),
+                    })
+                })?;
+                serde_json::from_value(json).map_err(|e| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!("Failed to convert error to SDK type: {e}"),
+                    })
+                })
+            })
+            .transpose()?;
+
+        // Convert deployment_id to typed ID
+        let deployment_id_typed: alien_platform_api::types::SyncReconcileRequestDeploymentId =
+            deployment_id
+                .try_into()
+                .map_err(|_: alien_platform_api::types::error::ConversionError| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: "Invalid deployment ID format".to_string(),
+                    })
+                })?;
+
+        let reconcile_response = self
+            .sdk_client
+            .sync_reconcile()
+            .workspace(&self.workspace_name)
+            .body(alien_platform_api::types::SyncReconcileRequest {
+                deployment_id: deployment_id_typed,
+                session: Some(self.session_id.clone()),
+                state: state_sdk,
+                error: error_sdk,
+                update_heartbeat: Some(update_heartbeat),
+            })
+            .send()
+            .await
+            .into_sdk_error()
+            .map_err(|e| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Failed to reconcile deployment state: {e}"),
+                })
+            })?
+            .into_inner();
+
+        // Parse updated state from reconcile response
+        let updated_state: DeploymentState = serde_json::from_value(
+            serde_json::to_value(&reconcile_response.current).map_err(|e| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Failed to serialize updated deployment state: {e}"),
+                })
+            })?,
+        )
+        .map_err(|e| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("Failed to parse updated deployment state: {e}"),
+            })
+        })?;
+
+        // Parse updated config from reconcile response if present
+        let updated_config: Option<DeploymentConfig> = reconcile_response
+            .target
+            .as_ref()
+            .map(|target| {
+                let json = serde_json::to_value(&target.config).map_err(|e| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!("Failed to serialize deployment config: {e}"),
+                    })
+                })?;
+                serde_json::from_value(json).map_err(|e| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!("Failed to parse updated deployment config: {e}"),
+                    })
+                })
+            })
+            .transpose()?;
+
+        Ok(StepReconcileResult {
+            state: Some(updated_state),
+            config: updated_config,
+        })
     }
 }
 
@@ -542,183 +662,75 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         steps.sync_deployment_resources(&stack_state.resources);
     }
 
-    // Deployment loop — uses shared loop contract for status classification.
-    // Per-step reconcile is required because the platform sync API returns
-    // updated state and config after each reconcile.
-    let max_steps: usize = 400;
+    // Deployment loop — delegated to the shared runner with platform transport.
+    let transport = PlatformCliTransport {
+        sdk_client: sdk_client.clone(),
+        workspace_name: workspace_name.clone(),
+        session_id: session_id.clone(),
+    };
 
-    for _step_count in 1..=max_steps {
-        // Check for terminal status before running a step
-        if let Some(loop_result) = classify_status(&current.status, LoopOperation::Deploy) {
-            match loop_result.outcome {
-                LoopOutcome::Success => {
-                    steps.complete(2, Some("Resources ready".to_string()));
-                    steps.activate(3, Some("Promoting release".to_string()));
-                    steps.complete(3, Some("Deployment is running".to_string()));
-                    break;
-                }
-                LoopOutcome::Failure => {
-                    steps.fail(2, Some(format!("{:?}", current.status)));
-                    return Err(AlienError::new(ErrorData::DeploymentFailed {
-                        message: format!("deployment failed at {:?}", current.status),
-                    }));
-                }
-                LoopOutcome::Neutral => {
-                    // Handoff (Provisioning/Updating) — loop will continue
-                    // via reconcile; the platform may drive these forward.
-                }
-            }
+    let policy = RunnerPolicy {
+        max_steps: 400,
+        operation: LoopOperation::Deploy,
+        delay_threshold: None,
+    };
+
+    let RunnerResult {
+        loop_result,
+        steps_executed,
+    } = alien_deployment::runner::run_step_loop(
+        &mut current,
+        &mut config,
+        &client_config,
+        &tracked_deployment.deployment_id,
+        &policy,
+        &transport,
+        None,
+    )
+    .await
+    .context(ErrorData::GenericError {
+        message: "deployment step loop failed".to_string(),
+    })?;
+
+    info!(
+        steps_executed = steps_executed,
+        stop_reason = ?loop_result.stop_reason,
+        outcome = ?loop_result.outcome,
+        final_status = ?loop_result.final_status,
+        "Deployment loop finished"
+    );
+
+    // Handle runner outcome
+    match loop_result.outcome {
+        LoopOutcome::Success => {
+            steps.complete(2, Some("Resources ready".to_string()));
+            steps.activate(3, Some("Promoting release".to_string()));
+            steps.complete(3, Some("Deployment is running".to_string()));
         }
-
-        let step_result = alien_deployment::step(
-            current.clone(),
-            config.clone(),
-            client_config.clone(),
-            None,
-        )
-        .await
-        .context(ErrorData::GenericError {
-            message: "deployment step failed".to_string(),
-        })?;
-
-        steps.activate(2, Some(format!("{:?}", step_result.state.status)));
-        if let Some(stack_state) = step_result.state.stack_state.as_ref() {
-            steps.sync_deployment_resources(&stack_state.resources);
+        LoopOutcome::Failure => {
+            steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: format!(
+                    "{} failed",
+                    describe_failed_status(&loop_result.final_status)
+                ),
+            }));
         }
-
-        // Classify the post-step status
-        let classification = classify_status(&step_result.state.status, LoopOperation::Deploy);
-
-        // Reconcile to platform after every step so the platform has the
-        // latest state, and we get back updated state/config.
-        let state_sdk: alien_platform_api::types::SyncReconcileRequestState =
-            serde_json::from_value(
-                serde_json::to_value(&step_result.state)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: "Failed to serialize deployment state".to_string(),
-                    })?,
-            )
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to convert state to SDK type".to_string(),
-            })?;
-
-        let error_sdk = step_result
-            .error
-            .as_ref()
-            .map(|e| {
-                serde_json::from_value(serde_json::to_value(e).into_alien_error().context(
-                    ErrorData::ConfigurationError {
-                        message: "Failed to serialize deployment error".to_string(),
-                    },
-                )?)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to convert error to SDK type".to_string(),
-                })
-            })
-            .transpose()?;
-
-        let deployment_id_typed: alien_platform_api::types::SyncReconcileRequestDeploymentId =
-            tracked_deployment
-                .deployment_id
-                .as_str()
-                .try_into()
-                .map_err(|_: alien_platform_api::types::error::ConversionError| {
-                    AlienError::new(ErrorData::ConfigurationError {
-                        message: "Invalid deployment ID format".to_string(),
-                    })
-                })?;
-
-        let reconcile_response = sdk_client
-            .sync_reconcile()
-            .workspace(&workspace_name)
-            .body(alien_platform_api::types::SyncReconcileRequest {
-                deployment_id: deployment_id_typed,
-                session: Some(session_id.clone()),
-                state: state_sdk,
-                error: error_sdk,
-                update_heartbeat: Some(step_result.update_heartbeat),
-            })
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to reconcile deployment state".to_string(),
-            })?
-            .into_inner();
-
-        // Act on the classification AFTER reconcile so the platform always
-        // has the latest state, even on failure.
-        if let Some(loop_result) = classification {
-            match loop_result.outcome {
-                LoopOutcome::Success => {
-                    steps.complete(2, Some("Resources ready".to_string()));
-                    steps.activate(3, Some("Promoting release".to_string()));
-                    steps.complete(3, Some("Deployment is running".to_string()));
-                    break;
-                }
-                LoopOutcome::Failure => {
-                    steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
-                    if let Some(error) = step_result.error {
-                        return Err(error.context(ErrorData::DeploymentFailed {
-                            message: format!(
-                                "{} failed",
-                                describe_failed_status(&loop_result.final_status)
-                            ),
-                        }));
-                    }
-                    return Err(AlienError::new(ErrorData::DeploymentFailed {
-                        message: format!(
-                            "{} failed",
-                            describe_failed_status(&loop_result.final_status)
-                        ),
-                    }));
-                }
-                LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
-                    // Handoff to manager — stop the loop, deployment continues
-                    // on the manager side.
-                    steps.complete(2, Some("Resources ready".to_string()));
-                    steps.activate(3, Some("Promoting release".to_string()));
-                    steps.complete(3, Some("Deployment is running".to_string()));
-                    break;
-                }
-                LoopOutcome::Neutral => {}
-            }
+        LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
+            // Handoff to manager — deployment continues on the manager side.
+            steps.complete(2, Some("Resources ready".to_string()));
+            steps.activate(3, Some("Promoting release".to_string()));
+            steps.complete(3, Some("Deployment is running".to_string()));
         }
-
-        // Update current state from reconcile response for next iteration
-        current = serde_json::from_value(
-            serde_json::to_value(&reconcile_response.current)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to serialize updated deployment state".to_string(),
-                })?,
-        )
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to parse updated deployment state".to_string(),
-        })?;
-
-        // Refresh config from the platform's latest view so domain_metadata,
-        // env vars, and other platform-side fields stay current.
-        if let Some(target) = &reconcile_response.target {
-            config = serde_json::from_value(
-                serde_json::to_value(&target.config)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: "Failed to serialize deployment config".to_string(),
-                    })?,
-            )
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to parse updated deployment config".to_string(),
-            })?;
-        }
-
-        if let Some(delay_ms) = step_result.suggested_delay_ms {
-            sleep(Duration::from_millis(delay_ms)).await;
+        LoopOutcome::Neutral => {
+            // Unexpected neutral without handoff — treat as failure.
+            steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: format!(
+                    "deployment loop ended without resolution (stop_reason: {:?}, status: {:?})",
+                    loop_result.stop_reason, loop_result.final_status
+                ),
+            }));
         }
     }
 

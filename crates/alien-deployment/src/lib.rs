@@ -9,10 +9,11 @@ mod error;
 mod helpers;
 mod initial_setup;
 pub mod loop_contract;
-pub mod runner;
 mod pending;
 mod provisioning;
+pub mod runner;
 mod running;
+pub mod transport;
 mod updating;
 
 pub use error::{ErrorData, ResourceError, Result};

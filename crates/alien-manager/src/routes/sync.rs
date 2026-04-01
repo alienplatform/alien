@@ -258,30 +258,31 @@ async fn reconcile(
         Err(e) => return e.into_response(),
     };
 
+    // Run registry access reconciliation (cross-account IAM grants, Azure ACR
+    // pull token generation). If Azure creds are returned, persist them in
+    // runtime_metadata so callers receive them in the response.
+    let mut final_state = deployment_state;
     if let (Some(ref bindings_provider), Some(ref env_info)) =
-        (&state.bindings_provider, &deployment_state.environment_info)
+        (&state.bindings_provider, &final_state.environment_info)
     {
         let pull_creds = crate::registry_access::reconcile_registry_access(
             bindings_provider,
             &req.deployment_id,
             env_info,
-            &deployment_state.status,
-            deployment_state.stack_state.as_ref(),
+            &final_state.status,
+            final_state.stack_state.as_ref(),
         )
         .await;
 
-        // Persist Azure ACR pull credentials in runtime_metadata so the
-        // deployment loop can inject them into the DeploymentConfig.
         if pull_creds.is_some() {
-            let mut updated_state = deployment_state;
-            let metadata = updated_state.runtime_metadata.get_or_insert_default();
+            let metadata = final_state.runtime_metadata.get_or_insert_default();
             metadata.image_pull_credentials = pull_creds;
             let _ = state
                 .deployment_store
                 .reconcile(ReconcileData {
                     deployment_id: req.deployment_id.clone(),
                     session: "registry-access".to_string(),
-                    state: updated_state,
+                    state: final_state.clone(),
                     update_heartbeat: false,
                     error: None,
                 })
@@ -289,9 +290,13 @@ async fn reconcile(
         }
     }
 
+    // Return the actual state (including any server-side modifications like
+    // image_pull_credentials) so the caller can use them in subsequent steps.
+    let current = serde_json::to_value(&final_state).unwrap_or(req.state);
+
     Json(ReconcileResponse {
         success: true,
-        current: req.state,
+        current,
     })
     .into_response()
 }

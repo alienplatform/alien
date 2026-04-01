@@ -37,6 +37,7 @@ pub(crate) mod dev;
 pub mod loops;
 pub mod providers;
 pub mod registry_access;
+pub mod transports;
 pub mod routes;
 pub mod server;
 

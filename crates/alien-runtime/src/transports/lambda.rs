@@ -862,14 +862,14 @@ async fn handle_command_streaming(
     // Send task and wait for result.
     // Use 120s timeout (well under Lambda's 180s function timeout) so that if the
     // app never responds, we still have time to submit an error response.
-    info!(command_id = %command_id, "Sending command task to application via gRPC");
+    debug!(command_id = %command_id, "Sending command task to application via gRPC");
     match state
         .control_server
         .send_task(task, std::time::Duration::from_secs(120))
         .await
     {
         Ok(result) => {
-            info!(
+            debug!(
                 command_id = %command_id,
                 success = result.success,
                 response_size = result.response_data.len(),
@@ -890,11 +890,11 @@ async fn handle_command_streaming(
                 )
             };
 
-            info!(command_id = %command_id, "Submitting command response to manager");
+            debug!(command_id = %command_id, "Submitting command response to manager");
             if let Err(e) = submit_response(&envelope, command_response).await {
                 error!(command_id = %command_id, error = %e, "Failed to submit command response");
             } else {
-                info!(command_id = %command_id, "Command response submitted successfully");
+                debug!(command_id = %command_id, "Command response submitted successfully");
             }
         }
         Err(e) => {

@@ -44,6 +44,9 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 # Builder
 bon = { workspace = true }
 
+# Async
+async-trait = { workspace = true }
+
 # Utilities
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
