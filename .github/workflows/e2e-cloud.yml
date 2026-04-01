@@ -575,8 +575,8 @@ jobs:
           # Delete roles that match the test hex prefix pattern (8 chars + dash)
           ROLES=$(aws iam list-roles --query 'Roles[].RoleName' --output text) || true
           for role in $ROLES; do
-            # Skip AWS service-linked roles and other system roles
-            if echo "$role" | grep -qE '^(aws-|AWSServiceRole|OrganizationAccountAccessRole)'; then
+            # Skip AWS service-linked roles, system roles, and the provisioning role
+            if echo "$role" | grep -qE '^(aws-|AWSServiceRole|OrganizationAccountAccessRole|alien-test-provisioning)'; then
               continue
             fi
             echo "Detaching policies and deleting IAM role: $role"
