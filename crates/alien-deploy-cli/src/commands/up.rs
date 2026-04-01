@@ -77,8 +77,11 @@ impl DeploymentLoopTransport for PushCliTransport<'_> {
                 message: "Failed to reconcile step via manager API".to_string(),
             })?;
 
-        // Re-fetch the deployment to pick up server-side changes
-        // (e.g. image_pull_credentials injected by reconcile_registry_access)
+        // Re-fetch the deployment to pick up server-side changes.
+        // The manager may inject image_pull_credentials into runtime_metadata
+        // after reconcile_registry_access (e.g. Azure ACR cross-account auth).
+        // We propagate these back as a state update so subsequent steps and
+        // the final reconcile carry them.
         let deployment = self
             .client
             .get_deployment()
@@ -91,26 +94,27 @@ impl DeploymentLoopTransport for PushCliTransport<'_> {
             })?
             .into_inner();
 
-        // Extract image_pull_credentials from runtime_metadata if present.
-        // The API returns runtime_metadata as opaque JSON (serde_json::Value).
-        let updated_config = deployment
-            .runtime_metadata
-            .and_then(|rm| {
-                let rm_typed: alien_core::RuntimeMetadata =
-                    serde_json::from_value(rm).ok()?;
-                rm_typed.image_pull_credentials
-            })
-            .map(|creds| {
-                // Return a config update with just the credentials populated.
-                // The runner merges this into the working config.
-                let mut config = DeploymentConfig::default();
-                config.image_pull_credentials = Some(creds);
-                config
-            });
+        // Parse the manager's runtime_metadata and propagate it into the
+        // working state. This picks up image_pull_credentials and any other
+        // server-side mutations without needing to construct a full config.
+        let updated_state = deployment.runtime_metadata.and_then(|rm| {
+            let rm_typed: alien_core::RuntimeMetadata =
+                serde_json::from_value(rm).ok()?;
+            // Only return a state update if the manager added credentials
+            // that differ from what we already have.
+            if rm_typed.image_pull_credentials.is_some() {
+                let mut new_state = state.clone();
+                let runtime_md = new_state.runtime_metadata.get_or_insert_default();
+                runtime_md.image_pull_credentials = rm_typed.image_pull_credentials;
+                Some(new_state)
+            } else {
+                None
+            }
+        });
 
         Ok(StepReconcileResult {
-            state: None,
-            config: updated_config,
+            state: updated_state,
+            config: None,
         })
     }
 }
