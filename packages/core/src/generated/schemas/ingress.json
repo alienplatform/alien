@@ -1,0 +1,1 @@
+{"type":"string","description":"Controls network accessibility of the function.","enum":["public","private"],"x-readme-ref-name":"Ingress"}

@@ -1,0 +1,1 @@
+{"type":"string","description":"Local filesystem operations","enum":["put","get","delete"],"x-readme-ref-name":"LocalOperation"}

@@ -1,0 +1,1 @@
+{"type":"string","description":"The type of operation a presigned request performs","enum":["put","get","delete"],"x-readme-ref-name":"PresignedOperation"}

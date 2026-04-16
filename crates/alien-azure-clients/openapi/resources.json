@@ -1,0 +1,1948 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "ResourceManagementClient",
+    "version": "2025-04-01",
+    "description": "Provides operations for working with resources and resource groups."
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "Get_provider_resource_types.": {
+        "value": {
+          "value": [
+            {
+              "resourceType": "TestResourceType",
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
+              "locationMappings": [
+                {
+                  "location": "West US",
+                  "type": "EdgeZone",
+                  "extendedLocations": ["LosAngeles", "LosAngeles2"]
+                }
+              ],
+              "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+            },
+            {
+              "resourceType": "TestResourceTypeSibling",
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
+              "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+            }
+          ]
+        }
+      },
+      "Get_providers.": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.TestRP1",
+              "namespace": "Microsoft.TestRP1",
+              "registrationState": "Registering",
+              "registrationPolicy": "RegistrationRequired",
+              "resourceTypes": [
+                {
+                  "resourceType": "TestResourceType",
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
+                  "locationMappings": [
+                    {
+                      "location": "West US",
+                      "type": "EdgeZone",
+                      "extendedLocations": ["LosAngeles", "LosAngeles2"]
+                    }
+                  ],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "TestResourceTypeSibling",
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                }
+              ]
+            },
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources",
+              "namespace": "Microsoft.Resources",
+              "registrationState": "Registered",
+              "registrationPolicy": "RegistrationFree",
+              "resourceTypes": [
+                {
+                  "resourceType": "subscriptions",
+                  "locations": ["eastus", "eastus2", "westus"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
+                  "aliases": [],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "resourceGroups",
+                  "locations": ["centralus", "eastasia", "southeastasia"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
+                  "aliases": [],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "subscriptions/resourceGroups",
+                  "locations": ["eastus", "eastus2", "westus"],
+                  "apiVersions": ["2016-09-01", "2014-04-01-preview"],
+                  "aliases": [],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "bulkDelete",
+                  "locations": ["centralus", "eastasia"],
+                  "apiVersions": ["2014-04-01-preview"],
+                  "aliases": [],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "deployments",
+                  "locations": [],
+                  "apiVersions": ["2017-08-01", "2017-06-01"],
+                  "aliases": [],
+                  "capabilities": "SupportsTags"
+                },
+                {
+                  "resourceType": "tags",
+                  "locations": ["DevFabric"],
+                  "apiVersions": [],
+                  "aliases": [],
+                  "capabilities": "SupportsExtension"
+                }
+              ]
+            },
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.TestRP2",
+              "namespace": "Microsoft.TestRP2",
+              "registrationState": "NotRegistered",
+              "registrationPolicy": "RegistrationRequired",
+              "resourceTypes": [
+                {
+                  "resourceType": "TestResourceType",
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
+                  "locationMappings": [
+                    {
+                      "location": "West US",
+                      "type": "EdgeZone",
+                      "extendedLocations": ["LosAngeles", "LosAngeles2"]
+                    }
+                  ],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                },
+                {
+                  "resourceType": "TestResourceTypeSibling",
+                  "locations": ["West US"],
+                  "apiVersions": ["2018-01-01", "2015-05-01"],
+                  "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Get_provider.": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.TestRP1",
+          "namespace": "Microsoft.TestRP1",
+          "registrationState": "Registering",
+          "registrationPolicy": "RegistrationRequired",
+          "resourceTypes": [
+            {
+              "resourceType": "TestResourceType",
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
+              "locationMappings": [
+                {
+                  "location": "West US",
+                  "type": "EdgeZone",
+                  "extendedLocations": ["LosAngeles", "LosAngeles2"]
+                }
+              ],
+              "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+            },
+            {
+              "resourceType": "TestResourceTypeSibling",
+              "locations": ["West US"],
+              "apiVersions": ["2018-01-01", "2015-05-01"],
+              "capabilities": "CrossResourceGroupResourceMove, CrossSubscriptionResourceMove, SupportsTags, SupportsLocation"
+            }
+          ]
+        }
+      },
+      "Get_a_resource_provider_at_tenant_scope": {
+        "value": {
+          "namespace": "Microsoft.Storage",
+          "resourceTypes": [
+            {
+              "resourceType": "storageAccounts",
+              "locations": [
+                "East US",
+                "East US 2",
+                "East US 2 (Stage)",
+                "West US",
+                "West Europe",
+                "East Asia",
+                "Southeast Asia",
+                "Japan East",
+                "Japan West",
+                "North Central US",
+                "South Central US",
+                "Central US",
+                "North Europe",
+                "Brazil South",
+                "Australia East",
+                "Australia Southeast",
+                "South India",
+                "Central India",
+                "West India",
+                "Canada East",
+                "Canada Central",
+                "West US 2",
+                "West Central US",
+                "UK South",
+                "UK West",
+                "Korea Central",
+                "Korea South",
+                "East US 2 EUAP",
+                "Central US EUAP",
+                "France Central",
+                "France South",
+                "Australia Central",
+                "Australia Central 2",
+                "South Africa West",
+                "South Africa North",
+                "UAE Central",
+                "UAE North",
+                "Switzerland North",
+                "Switzerland West",
+                "Germany West Central",
+                "Germany North",
+                "Norway East",
+                "Norway West",
+                "South Central US STG",
+                "Brazil Southeast"
+              ],
+              "apiVersions": [
+                "2019-06-01",
+                "2019-04-01",
+                "2018-11-01",
+                "2018-07-01",
+                "2018-03-01-preview",
+                "2018-02-01",
+                "2017-10-01",
+                "2017-06-01",
+                "2016-12-01",
+                "2016-05-01",
+                "2016-01-01",
+                "2015-06-15",
+                "2015-05-01-preview"
+              ],
+              "defaultApiVersion": "2019-06-01",
+              "apiProfiles": [
+                {
+                  "profileVersion": "2019-03-01-hybrid",
+                  "apiVersion": "2017-10-01"
+                },
+                {
+                  "profileVersion": "2017-03-09-profile",
+                  "apiVersion": "2016-01-01"
+                },
+                {
+                  "profileVersion": "2018-03-01-hybrid",
+                  "apiVersion": "2016-01-01"
+                },
+                {
+                  "profileVersion": "2018-06-01-profile",
+                  "apiVersion": "2017-10-01"
+                }
+              ],
+              "aliases": [
+                {
+                  "name": "Microsoft.Storage/storageAccounts/accountType",
+                  "paths": [
+                    {
+                      "path": "properties.accountType",
+                      "apiVersions": ["2015-06-15", "2015-05-01-preview"]
+                    },
+                    {
+                      "path": "sku.name",
+                      "apiVersions": [
+                        "2018-11-01",
+                        "2018-11-09",
+                        "2018-07-01",
+                        "2018-03-01-Preview",
+                        "2018-02-01",
+                        "2017-10-01",
+                        "2017-06-01",
+                        "2016-12-01",
+                        "2016-05-01",
+                        "2016-01-01"
+                      ]
+                    }
+                  ],
+                  "defaultPath": "sku.name"
+                },
+                {
+                  "name": "Microsoft.Storage/storageAccounts/sku.name",
+                  "paths": [
+                    {
+                      "path": "properties.accountType",
+                      "apiVersions": ["2015-06-15", "2015-05-01-preview"]
+                    },
+                    {
+                      "path": "sku.name",
+                      "apiVersions": [
+                        "2018-11-01",
+                        "2018-11-09",
+                        "2018-07-01",
+                        "2018-03-01-Preview",
+                        "2018-02-01",
+                        "2017-10-01",
+                        "2017-06-01",
+                        "2016-12-01",
+                        "2016-05-01",
+                        "2016-01-01"
+                      ]
+                    }
+                  ],
+                  "defaultPath": "sku.name"
+                },
+                {
+                  "name": "Microsoft.Storage/storageAccounts/accessTier",
+                  "paths": [
+                    {
+                      "path": "properties.accessTier",
+                      "apiVersions": [
+                        "2018-11-01",
+                        "2018-11-09",
+                        "2018-07-01",
+                        "2018-03-01-Preview",
+                        "2018-02-01",
+                        "2017-10-01",
+                        "2017-06-01",
+                        "2016-12-01",
+                        "2016-05-01",
+                        "2016-01-01",
+                        "2015-06-15",
+                        "2015-05-01-preview"
+                      ]
+                    }
+                  ],
+                  "defaultPath": "properties.accessTier"
+                },
+                {
+                  "name": "Microsoft.Storage/storageAccounts/enableBlobEncryption",
+                  "paths": [
+                    {
+                      "path": "properties.encryption.services.blob.enabled",
+                      "apiVersions": [
+                        "2018-11-01",
+                        "2018-11-09",
+                        "2018-07-01",
+                        "2018-03-01-Preview",
+                        "2018-02-01",
+                        "2017-10-01",
+                        "2017-06-01",
+                        "2016-12-01",
+                        "2016-05-01",
+                        "2016-01-01",
+                        "2015-06-15",
+                        "2015-05-01-preview"
+                      ]
+                    }
+                  ],
+                  "defaultPath": "properties.encryption.services.blob.enabled"
+                },
+                {
+                  "name": "Microsoft.Storage/storageAccounts/enableFileEncryption",
+                  "paths": [
+                    {
+                      "path": "properties.encryption.services.file.enabled",
+                      "apiVersions": [
+                        "2018-11-01",
+                        "2018-11-09",
+                        "2018-07-01",
+                        "2018-03-01-Preview",
+                        "2018-02-01",
+                        "2017-10-01",
+                        "2017-06-01",
+                        "2016-12-01",
+                        "2016-05-01",
+                        "2016-01-01",
+                        "2015-06-15",
+                        "2015-05-01-preview"
+                      ]
+                    }
+                  ],
+                  "defaultPath": "properties.encryption.services.file.enabled"
+                },
+                {
+                  "name": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+                  "paths": [
+                    {
+                      "path": "properties.supportsHttpsTrafficOnly",
+                      "apiVersions": [
+                        "2018-11-09",
+                        "2018-03-01-Preview",
+                        "2016-05-01",
+                        "2016-01-01",
+                        "2015-06-15",
+                        "2015-05-01-preview"
+                      ],
+                      "metadata": {
+                        "type": "NotSpecified",
+                        "attributes": "None"
+                      }
+                    }
+                  ],
+                  "defaultPath": "properties.supportsHttpsTrafficOnly",
+                  "defaultMetadata": {
+                    "type": "Boolean",
+                    "attributes": "Modifiable"
+                  }
+                }
+              ],
+              "capabilities": "SupportsTags, SupportsLocation"
+            }
+          ]
+        }
+      },
+      "Create_or_update_a_resource_group": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/my-resource-group",
+          "name": "my-resource-group",
+          "location": "eastus",
+          "properties": {
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "Export_a_resource_group": {
+        "value": {
+          "template": {
+            "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "myResourceType_myFirstResource_name": {
+                "defaultValue": "myFirstResource",
+                "type": "String"
+              },
+              "myResourceType_mySecondResource_name": {
+                "defaultValue": "mySecondResource",
+                "type": "String"
+              },
+              "myResourceType_myFirstResource_secret": {
+                "type": "SecureString"
+              }
+            },
+            "variables": {},
+            "resources": [
+              {
+                "type": "My.RP/myResourceType",
+                "apiVersion": "2019-01-01",
+                "name": "[parameters('myResourceType_myFirstResource_name')]",
+                "location": "West US",
+                "properties": {
+                  "secret": "[parameters('myResourceType_myFirstResource_secret')]"
+                }
+              },
+              {
+                "type": "My.RP/myResourceType",
+                "apiVersion": "2019-01-01",
+                "name": "[parameters('myResourceType_mySecondResource_name')]",
+                "location": "West US",
+                "properties": {
+                  "customProperty": "hello!"
+                }
+              }
+            ]
+          },
+          "error": {
+            "code": "ExportTemplateCompletedWithErrors",
+            "message": "Export template operation completed with errors. Some resources were not exported. Please see details for more information.",
+            "details": []
+          }
+        }
+      },
+      "Export_a_resource_group_with_filtering": {
+        "value": {
+          "template": {
+            "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "myResourceType_myFirstResource_secret": {
+                "type": "SecureString"
+              }
+            },
+            "variables": {},
+            "resources": [
+              {
+                "type": "My.RP/myResourceType",
+                "apiVersion": "2019-01-01",
+                "name": "myFirstResource",
+                "location": "West US",
+                "properties": {
+                  "secret": "[parameters('myResourceType_myFirstResource_secret')]"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "Export_a_resource_group_as_Bicep": {
+        "value": {
+          "output": "\nparam myResourceType_myFirstResource_name string = 'myFirstResource'\nparam myResourceType_mySecondResource_name string = 'mySecondResource'\n\n@secure()\nparam myResourceType_myFirstResource_secret string = null\n\nresource myResourceType_myFirstResource_name_resource 'My.RP/myResourceType@2019-01-01' = {\n  name: myResourceType_myFirstResource_name\n  location: 'West US'\n  properties: {\n    secret: myResourceType_myFirstResource_secret\n  }\n}\n\nresource myResourceType_mySecondResource_name_resource 'My.RP/myResourceType@2019-01-01' = {\n  name: myResourceType_mySecondResource_name\n  location: 'West US'\n  properties: {\n    customProperty: 'hello!'\n  }\n}\n",
+          "error": {
+            "code": "ExportTemplateCompletedWithErrors",
+            "message": "Export template operation completed with errors. Some resources were not exported. Please see details for more information.",
+            "details": []
+          }
+        }
+      },
+      "Update_tags_on_a_resource": {
+        "value": {
+          "id": "subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/my-resource-group/providers/myPRNameSpace/VM/myVm",
+          "properties": {
+            "tags": {
+              "tagKey1": "tag-value-1",
+              "tagKey2": "tag-value-2"
+            }
+          }
+        }
+      },
+      "Update_tags_on_a_subscription": {
+        "value": {
+          "id": "subscriptions/00000000-0000-0000-0000-000000000000",
+          "properties": {
+            "tags": {
+              "tagKey1": "tag-value-1",
+              "tagKey2": "tag-value-2"
+            }
+          }
+        }
+      },
+      "Get_tags_on_a_resource": {
+        "value": {
+          "id": "subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/my-resource-group/providers/myPRNameSpace/VM/myVm",
+          "properties": {
+            "tags": {
+              "tagKey1": "tag-value-1",
+              "tagKey2": "tag-value-2"
+            }
+          }
+        }
+      },
+      "Get_tags_on_a_subscription": {
+        "value": {
+          "id": "subscriptions/00000000-0000-0000-0000-000000000000",
+          "properties": {
+            "tags": {
+              "tagKey1": "tag-value-1",
+              "tagKey2": "tag-value-2"
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "ScopeParameter": {
+        "name": "scope",
+        "in": "path",
+        "required": true,
+        "description": "The resource scope.",
+        "x-ms-parameter-location": "method",
+        "x-ms-skip-url-encoding": true,
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Update tags on a resource": {
+            "value": "subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/my-resource-group/providers/myPRNameSpace/VM/myVm"
+          },
+          "Update tags on a subscription": {
+            "value": "subscriptions/00000000-0000-0000-0000-000000000000"
+          },
+          "Get tags on a resource": {
+            "value": "subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/my-resource-group/providers/myPRNameSpace/VM/myVm"
+          },
+          "Get tags on a subscription": {
+            "value": "subscriptions/00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "GroupIdParameter": {
+        "name": "groupId",
+        "in": "path",
+        "required": true,
+        "description": "The management group ID.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "required": true,
+        "description": "The Microsoft Azure subscription ID.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get provider resource types.": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Get providers.": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Get provider.": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Create or update a resource group": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Force delete all the Virtual Machines in a resource group": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Force delete all the Virtual Machines and Virtual Machine Scale Sets in a resource group": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Export a resource group": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Export a resource group with filtering": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "Export a resource group as Bicep": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "The API version to use for this operation.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Get provider resource types.": {
+            "value": "2025-04-01"
+          },
+          "Get providers.": {
+            "value": "2025-04-01"
+          },
+          "Get provider.": {
+            "value": "2025-04-01"
+          },
+          "Get a resource provider at tenant scope": {
+            "value": "2025-04-01"
+          },
+          "Create or update a resource group": {
+            "value": "2025-04-01"
+          },
+          "Force delete all the Virtual Machines in a resource group": {
+            "value": "2025-04-01"
+          },
+          "Force delete all the Virtual Machines and Virtual Machine Scale Sets in a resource group": {
+            "value": "2025-04-01"
+          },
+          "Export a resource group": {
+            "value": "2025-04-01"
+          },
+          "Export a resource group with filtering": {
+            "value": "2025-04-01"
+          },
+          "Export a resource group as Bicep": {
+            "value": "2025-04-01"
+          },
+          "Update tags on a resource": {
+            "value": "2025-04-01"
+          },
+          "Update tags on a subscription": {
+            "value": "2025-04-01"
+          },
+          "Get tags on a resource": {
+            "value": "2025-04-01"
+          },
+          "Get tags on a subscription": {
+            "value": "2025-04-01"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the resource group. The name is case insensitive.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "Export a resource group": {
+            "value": "my-resource-group"
+          },
+          "Export a resource group with filtering": {
+            "value": "my-resource-group"
+          },
+          "Export a resource group as Bicep": {
+            "value": "my-resource-group"
+          }
+        }
+      }
+    },
+    "requestBodies": {
+      "ResourcesMoveInfo": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ResourcesMoveInfo"
+            }
+          }
+        },
+        "description": "Parameters for moving resources.",
+        "required": true
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "GenericResourceFilter": {
+        "properties": {
+          "resourceType": {
+            "type": "string",
+            "description": "The resource type."
+          },
+          "tagname": {
+            "type": "string",
+            "description": "The tag name."
+          },
+          "tagvalue": {
+            "type": "string",
+            "description": "The tag value."
+          }
+        },
+        "description": "Resource filter."
+      },
+      "ResourceGroupFilter": {
+        "properties": {
+          "tagName": {
+            "type": "string",
+            "description": "The tag name."
+          },
+          "tagValue": {
+            "type": "string",
+            "description": "The tag value."
+          }
+        },
+        "description": "Resource group filter."
+      },
+      "CloudError": {
+        "x-ms-external": true,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        },
+        "description": "An error response for a resource management request."
+      },
+      "ApiProfile": {
+        "properties": {
+          "profileVersion": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The profile version."
+          },
+          "apiVersion": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The API version."
+          }
+        }
+      },
+      "AliasPathMetadata": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "NotSpecified",
+              "Any",
+              "String",
+              "Object",
+              "Array",
+              "Integer",
+              "Number",
+              "Boolean"
+            ],
+            "x-ms-enum": {
+              "name": "AliasPathTokenType",
+              "modelAsString": true,
+              "values": [
+                {
+                  "value": "NotSpecified",
+                  "description": "The token type is not specified."
+                },
+                {
+                  "value": "Any",
+                  "description": "The token type can be anything."
+                },
+                {
+                  "value": "String",
+                  "description": "The token type is string."
+                },
+                {
+                  "value": "Object",
+                  "description": "The token type is object."
+                },
+                {
+                  "value": "Array",
+                  "description": "The token type is array."
+                },
+                {
+                  "value": "Integer",
+                  "description": "The token type is integer."
+                },
+                {
+                  "value": "Number",
+                  "description": "The token type is number."
+                },
+                {
+                  "value": "Boolean",
+                  "description": "The token type is boolean."
+                }
+              ]
+            },
+            "description": "The type of the token that the alias path is referring to."
+          },
+          "attributes": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["None", "Modifiable"],
+            "x-ms-enum": {
+              "name": "AliasPathAttributes",
+              "modelAsString": true,
+              "values": [
+                {
+                  "value": "None",
+                  "description": "The token that the alias path is referring to has no attributes."
+                },
+                {
+                  "value": "Modifiable",
+                  "description": "The token that the alias path is referring to is modifiable by policies with 'modify' effect."
+                }
+              ]
+            },
+            "description": "The attributes of the token that the alias path is referring to."
+          }
+        }
+      },
+      "AliasPath": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path of an alias."
+          },
+          "apiVersions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The API versions."
+          },
+          "pattern": {
+            "$ref": "#/components/schemas/AliasPattern"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AliasPathMetadata"
+          }
+        },
+        "description": "The type of the paths for alias."
+      },
+      "AliasPattern": {
+        "properties": {
+          "phrase": {
+            "type": "string",
+            "description": "The alias pattern phrase."
+          },
+          "variable": {
+            "type": "string",
+            "description": "The alias pattern variable."
+          },
+          "type": {
+            "type": "string",
+            "enum": ["NotSpecified", "Extract"],
+            "x-ms-enum": {
+              "name": "AliasPatternType",
+              "modelAsString": false,
+              "values": [
+                {
+                  "value": "NotSpecified",
+                  "description": "NotSpecified is not allowed."
+                },
+                {
+                  "value": "Extract",
+                  "description": "Extract is the only allowed value."
+                }
+              ]
+            },
+            "description": "The type of alias pattern"
+          }
+        },
+        "description": "The type of the pattern for an alias path."
+      },
+      "Alias": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The alias name."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasPath"
+            },
+            "x-ms-identifiers": [],
+            "description": "The paths for an alias."
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of the alias.",
+            "enum": ["NotSpecified", "PlainText", "Mask"],
+            "x-ms-enum": {
+              "name": "AliasType",
+              "modelAsString": false,
+              "values": [
+                {
+                  "value": "NotSpecified",
+                  "description": "Alias type is unknown (same as not providing alias type)."
+                },
+                {
+                  "value": "PlainText",
+                  "description": "Alias value is not secret."
+                },
+                {
+                  "value": "Mask",
+                  "description": "Alias value is secret."
+                }
+              ]
+            }
+          },
+          "defaultPath": {
+            "type": "string",
+            "description": "The default path for an alias."
+          },
+          "defaultPattern": {
+            "$ref": "#/components/schemas/AliasPattern"
+          },
+          "defaultMetadata": {
+            "$ref": "#/components/schemas/AliasPathMetadata"
+          }
+        },
+        "description": "The alias type. "
+      },
+      "ProviderExtendedLocation": {
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The azure location."
+          },
+          "type": {
+            "type": "string",
+            "description": "The extended location type."
+          },
+          "extendedLocations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The extended locations for the azure location."
+          }
+        },
+        "description": "The provider extended location. "
+      },
+      "ProviderResourceType": {
+        "properties": {
+          "resourceType": {
+            "type": "string",
+            "description": "The resource type."
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The collection of locations where this resource type can be created."
+          },
+          "locationMappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderExtendedLocation"
+            },
+            "x-ms-identifiers": ["location", "type"],
+            "description": "The location mappings that are supported by this resource type."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Alias"
+            },
+            "x-ms-identifiers": ["name"],
+            "description": "The aliases that are supported by this resource type."
+          },
+          "apiVersions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The API version."
+          },
+          "defaultApiVersion": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The default API version."
+          },
+          "zoneMappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ZoneMapping"
+            },
+            "x-ms-identifiers": ["location"]
+          },
+          "apiProfiles": {
+            "type": "array",
+            "readOnly": true,
+            "items": {
+              "$ref": "#/components/schemas/ApiProfile"
+            },
+            "x-ms-identifiers": ["apiVersion", "profileVersion"],
+            "description": "The API profiles for the resource provider."
+          },
+          "capabilities": {
+            "type": "string",
+            "description": "The additional capabilities offered by this resource type."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "The additional properties. "
+            },
+            "description": "The properties."
+          }
+        },
+        "description": "Resource type managed by the resource provider."
+      },
+      "Provider": {
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The provider ID."
+          },
+          "namespace": {
+            "type": "string",
+            "description": "The namespace of the resource provider."
+          },
+          "registrationState": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The registration state of the resource provider."
+          },
+          "registrationPolicy": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The registration policy of the resource provider."
+          },
+          "resourceTypes": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderResourceType"
+            },
+            "x-ms-identifiers": ["resourceType"],
+            "description": "The collection of provider resource types."
+          },
+          "providerAuthorizationConsentState": {
+            "type": "string",
+            "enum": ["NotSpecified", "Required", "NotRequired", "Consented"],
+            "description": "The provider authorization consent state.",
+            "x-ms-enum": {
+              "name": "ProviderAuthorizationConsentState",
+              "modelAsString": true
+            }
+          }
+        },
+        "description": "Resource provider information."
+      },
+      "ProviderListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provider"
+            },
+            "description": "An array of resource providers."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of resource providers."
+      },
+      "ProviderResourceTypeListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderResourceType"
+            },
+            "x-ms-identifiers": ["resourceType"],
+            "description": "An array of resource types."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of resource types of a resource provider."
+      },
+      "GenericResource": {
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "properties": {
+            "type": "object",
+            "description": "The resource properties."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind of the resource.",
+            "pattern": "^[-\\w\\._,\\(\\)]+$"
+          },
+          "managedBy": {
+            "type": "string",
+            "description": "ID of the resource that manages this resource."
+          },
+          "sku": {
+            "$ref": "#/components/schemas/Sku"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "description": "Resource information."
+      },
+      "ExtendedLocation": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["EdgeZone"],
+            "x-ms-enum": {
+              "name": "ExtendedLocationType",
+              "modelAsString": true
+            },
+            "description": "The extended location type."
+          },
+          "name": {
+            "type": "string",
+            "description": "The extended location name."
+          }
+        },
+        "description": "Resource extended location."
+      },
+      "GenericResourceExpanded": {
+        "properties": {
+          "createdTime": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The created time of the resource. This is only present if requested via the $expand query parameter."
+          },
+          "changedTime": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The changed time of the resource. This is only present if requested via the $expand query parameter."
+          },
+          "provisioningState": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The provisioning state of the resource. This is only present if requested via the $expand query parameter."
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GenericResource"
+          }
+        ],
+        "description": "Resource information."
+      },
+      "Plan": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The plan ID."
+          },
+          "publisher": {
+            "type": "string",
+            "description": "The publisher ID."
+          },
+          "product": {
+            "type": "string",
+            "description": "The offer ID."
+          },
+          "promotionCode": {
+            "type": "string",
+            "description": "The promotion code."
+          },
+          "version": {
+            "type": "string",
+            "description": "The plan's version."
+          }
+        },
+        "description": "Plan for the resource."
+      },
+      "Sku": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The SKU name."
+          },
+          "tier": {
+            "type": "string",
+            "description": "The SKU tier."
+          },
+          "size": {
+            "type": "string",
+            "description": "The SKU size."
+          },
+          "family": {
+            "type": "string",
+            "description": "The SKU family."
+          },
+          "model": {
+            "type": "string",
+            "description": "The SKU model."
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The SKU capacity."
+          }
+        },
+        "description": "SKU for the resource."
+      },
+      "Identity": {
+        "properties": {
+          "principalId": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The principal ID of resource identity."
+          },
+          "tenantId": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The tenant ID of resource."
+          },
+          "type": {
+            "type": "string",
+            "description": "The identity type.",
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
+            "x-ms-enum": {
+              "name": "ResourceIdentityType",
+              "modelAsString": false
+            }
+          },
+          "userAssignedIdentities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "x-ms-client-name": "IdentityUserAssignedIdentitiesValue",
+              "properties": {
+                "principalId": {
+                  "readOnly": true,
+                  "type": "string",
+                  "description": "The principal id of user assigned identity."
+                },
+                "clientId": {
+                  "readOnly": true,
+                  "type": "string",
+                  "description": "The client id of user assigned identity."
+                }
+              }
+            },
+            "description": "The list of user identities associated with the resource. The user identity dictionary key references will be ARM resource ids in the form: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}'."
+          }
+        },
+        "description": "Identity for the resource."
+      },
+      "ResourceListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenericResourceExpanded"
+            },
+            "description": "An array of resources."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of resource groups."
+      },
+      "ResourceGroup": {
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The ID of the resource group."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the resource group."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the resource group."
+          },
+          "properties": {
+            "$ref": "#/components/schemas/ResourceGroupProperties"
+          },
+          "location": {
+            "type": "string",
+            "description": "The location of the resource group. It cannot be changed after the resource group has been created. It must be one of the supported Azure locations."
+          },
+          "managedBy": {
+            "type": "string",
+            "description": "The ID of the resource that manages this resource group."
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "The additional properties. "
+            },
+            "description": "The tags attached to the resource group."
+          }
+        },
+        "required": ["location"],
+        "x-ms-azure-resource": true,
+        "description": "Resource group information."
+      },
+      "ResourceGroupPatchable": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the resource group."
+          },
+          "properties": {
+            "$ref": "#/components/schemas/ResourceGroupProperties"
+          },
+          "managedBy": {
+            "type": "string",
+            "description": "The ID of the resource that manages this resource group."
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "The additional properties. "
+            },
+            "description": "The tags attached to the resource group."
+          }
+        },
+        "description": "Resource group information."
+      },
+      "ResourceGroupProperties": {
+        "properties": {
+          "provisioningState": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The provisioning state. "
+          }
+        },
+        "description": "The resource group properties."
+      },
+      "ResourceGroupListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceGroup"
+            },
+            "description": "An array of resource groups."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of resource groups."
+      },
+      "ResourcesMoveInfo": {
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The IDs of the resources."
+          },
+          "targetResourceGroup": {
+            "type": "string",
+            "description": "The target resource group."
+          }
+        },
+        "description": "Parameters of move resources."
+      },
+      "ExportTemplateRequest": {
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The IDs of the resources to filter the export by. To export all resources, supply an array with single entry '*'."
+          },
+          "options": {
+            "type": "string",
+            "description": "The export template options. A CSV-formatted list containing zero or more of the following: 'IncludeParameterDefaultValue', 'IncludeComments', 'SkipResourceNameParameterization', 'SkipAllParameterization'"
+          },
+          "outputFormat": {
+            "type": "string",
+            "description": "The output format for the exported resources.",
+            "enum": ["Json", "Bicep"],
+            "x-ms-enum": {
+              "name": "ExportTemplateOutputFormat",
+              "modelAsString": true
+            }
+          }
+        },
+        "description": "Export resource group template request parameters."
+      },
+      "TagCount": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Type of count."
+          },
+          "value": {
+            "type": "integer",
+            "description": "Value of count."
+          }
+        },
+        "description": "Tag count."
+      },
+      "TagValue": {
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The tag value ID."
+          },
+          "tagValue": {
+            "type": "string",
+            "description": "The tag value."
+          },
+          "count": {
+            "$ref": "#/components/schemas/TagCount"
+          }
+        },
+        "x-ms-azure-resource": true,
+        "description": "Tag information."
+      },
+      "TagDetails": {
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The tag name ID."
+          },
+          "tagName": {
+            "type": "string",
+            "description": "The tag name."
+          },
+          "count": {
+            "$ref": "#/components/schemas/TagCount"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagValue"
+            },
+            "description": "The list of tag values."
+          }
+        },
+        "x-ms-azure-resource": true,
+        "description": "Tag details."
+      },
+      "TagsListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagDetails"
+            },
+            "description": "An array of tags."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of subscription tags."
+      },
+      "ResourceProviderOperationDisplayProperties": {
+        "properties": {
+          "publisher": {
+            "type": "string",
+            "description": "Operation description."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Operation provider."
+          },
+          "resource": {
+            "type": "string",
+            "description": "Operation resource."
+          },
+          "operation": {
+            "type": "string",
+            "description": "Resource provider operation."
+          },
+          "description": {
+            "type": "string",
+            "description": "Operation description."
+          }
+        },
+        "description": "Resource provider operation's display properties."
+      },
+      "Resource": {
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Resource ID"
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Resource name"
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Resource type"
+          },
+          "location": {
+            "type": "string",
+            "description": "Resource location"
+          },
+          "extendedLocation": {
+            "$ref": "#/components/schemas/ExtendedLocation"
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resource tags"
+          }
+        },
+        "x-ms-azure-resource": true,
+        "description": "Specified resource."
+      },
+      "SubResource": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Resource ID"
+          }
+        },
+        "x-ms-azure-resource": true,
+        "description": "Sub-resource."
+      },
+      "ResourceGroupExportResult": {
+        "properties": {
+          "template": {
+            "type": "object",
+            "description": "The template content. Used if outputFormat is empty or set to 'Json'."
+          },
+          "output": {
+            "type": "string",
+            "description": "The formatted export content. Used if outputFormat is set to 'Bicep'."
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        },
+        "description": "Resource group export result."
+      },
+      "Operation": {
+        "description": "Microsoft.Resources operation",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Operation name: {provider}/{resource}/{operation}",
+            "type": "string"
+          },
+          "display": {
+            "description": "The object that represents the operation.",
+            "properties": {
+              "provider": {
+                "description": "Service provider: Microsoft.Resources",
+                "type": "string"
+              },
+              "resource": {
+                "description": "Resource on which the operation is performed: Profile, endpoint, etc.",
+                "type": "string"
+              },
+              "operation": {
+                "description": "Operation type: Read, write, delete, etc.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Description of the operation.",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "OperationListResult": {
+        "description": "Result of the request to list Microsoft.Resources operations. It contains a list of operations and a URL link to get the next set of results.",
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "x-ms-identifiers": ["name"],
+            "description": "List of Microsoft.Resources operations."
+          },
+          "nextLink": {
+            "type": "string",
+            "description": "URL to get the next set of operation list results if there are any."
+          }
+        }
+      },
+      "Tags": {
+        "description": "A dictionary of name and value pairs.",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "The tag value."
+            }
+          }
+        }
+      },
+      "TagsPatchResource": {
+        "type": "object",
+        "description": "Wrapper resource for tags patch API request only.",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "The operation type for the patch API.",
+            "enum": ["Replace", "Merge", "Delete"],
+            "x-ms-enum": {
+              "name": "tagsPatchOperation",
+              "modelAsString": true,
+              "values": [
+                {
+                  "value": "Replace",
+                  "description": "The 'replace' option replaces the entire set of existing tags with a new set."
+                },
+                {
+                  "value": "Merge",
+                  "description": "The 'merge' option allows adding tags with new names and updating the values of tags with existing names."
+                },
+                {
+                  "value": "Delete",
+                  "description": "The 'delete' option allows selectively deleting tags based on given names or name/value pairs."
+                }
+              ]
+            }
+          },
+          "properties": {
+            "$ref": "#/components/schemas/Tags"
+          }
+        }
+      },
+      "TagsResource": {
+        "type": "object",
+        "description": "Wrapper resource for tags API requests and responses.",
+        "required": ["properties"],
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The ID of the tags wrapper resource."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the tags wrapper resource."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the tags wrapper resource."
+          },
+          "properties": {
+            "$ref": "#/components/schemas/Tags"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "Permission": {
+        "type": "object",
+        "readOnly": true,
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed actions."
+          },
+          "notActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Denied actions."
+          },
+          "dataActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed Data actions."
+          },
+          "notDataActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Denied Data actions."
+          }
+        },
+        "description": "Role definition permissions."
+      },
+      "RoleDefinition": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The role definition ID."
+          },
+          "name": {
+            "type": "string",
+            "description": "The role definition name."
+          },
+          "isServiceRole": {
+            "type": "boolean",
+            "description": "If this is a service role."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "x-ms-identifiers": [],
+            "description": "Role definition permissions."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Role definition assignable scopes."
+          }
+        },
+        "description": "Role definition properties."
+      },
+      "ProviderPermission": {
+        "type": "object",
+        "description": "The provider permission",
+        "properties": {
+          "applicationId": {
+            "type": "string",
+            "description": "The application id."
+          },
+          "roleDefinition": {
+            "$ref": "#/components/schemas/RoleDefinition"
+          },
+          "managedByRoleDefinition": {
+            "$ref": "#/components/schemas/RoleDefinition"
+          },
+          "providerAuthorizationConsentState": {
+            "type": "string",
+            "enum": ["NotSpecified", "Required", "NotRequired", "Consented"],
+            "description": "The provider authorization consent state.",
+            "x-ms-enum": {
+              "name": "ProviderAuthorizationConsentState",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "ProviderPermissionListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderPermission"
+            },
+            "x-ms-identifiers": [],
+            "description": "An array of provider permissions."
+          },
+          "nextLink": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "description": "List of provider permissions."
+      },
+      "ProviderConsentDefinition": {
+        "type": "object",
+        "description": "The provider consent.",
+        "properties": {
+          "consentToAuthorization": {
+            "type": "boolean",
+            "description": "A value indicating whether authorization is consented or not."
+          }
+        }
+      },
+      "ProviderRegistrationRequest": {
+        "type": "object",
+        "description": "The provider registration definition.",
+        "properties": {
+          "thirdPartyProviderConsent": {
+            "$ref": "#/components/schemas/ProviderConsentDefinition"
+          }
+        }
+      },
+      "ZoneMapping": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The location of the zone mapping."
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "title": "Error Response",
+        "description": "Common error response for all Azure Resource Manager APIs to return error details for failed operations. (This also follows the OData error response format.)",
+        "type": "object",
+        "properties": {
+          "code": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error code."
+          },
+          "message": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error message."
+          },
+          "target": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error target."
+          },
+          "details": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "x-ms-identifiers": ["message", "target"],
+            "description": "The error details."
+          },
+          "additionalInfo": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorAdditionalInfo"
+            },
+            "x-ms-identifiers": [],
+            "description": "The error additional info."
+          }
+        }
+      },
+      "ErrorAdditionalInfo": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The additional info type."
+          },
+          "info": {
+            "readOnly": true,
+            "type": "object",
+            "description": "The additional info."
+          }
+        },
+        "description": "The resource management error additional info."
+      }
+    }
+  }
+}

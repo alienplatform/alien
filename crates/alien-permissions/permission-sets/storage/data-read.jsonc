@@ -1,0 +1,79 @@
+{
+  // Allows reading data from storage resources
+  "id": "storage/data-read",
+  "description": "Allows reading data from storage buckets and containers",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "storage.buckets.get",
+            "storage.buckets.list",
+            "storage.objects.get",
+            "storage.objects.list",
+            "storage.objects.getIamPolicy",
+            "storage.multipartUploads.list",
+            "storage.multipartUploads.listParts"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": ["iam.serviceAccounts.signBlob"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/blobServices/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+            "Microsoft.Storage/storageAccounts/listKeys/action"
+          ],
+          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

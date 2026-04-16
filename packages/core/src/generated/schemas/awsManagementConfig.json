@@ -1,0 +1,1 @@
+{"type":"object","description":"AWS management configuration extracted from stack settings","required":["managingRoleArn"],"properties":{"managingRoleArn":{"type":"string","description":"The managing AWS IAM role ARN that can assume cross-account roles"}},"x-readme-ref-name":"AwsManagementConfig"}

@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package alien_bindings.vault;
+
+// Vault service for managing secret operations
+service VaultService {
+    // Get a secret value by name
+    rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+
+    // Set a secret value, creating it if it doesn't exist or updating it if it does
+    rpc SetSecret(SetSecretRequest) returns (SetSecretResponse);
+
+    // Delete a secret by name
+    rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+}
+
+// Messages for GetSecret
+message GetSecretRequest {
+    // Name of the vault binding to use
+    string binding_name = 1;
+    // Name of the secret to retrieve
+    string secret_name = 2;
+}
+
+message GetSecretResponse {
+    // The secret value
+    string value = 1;
+}
+
+// Messages for SetSecret
+message SetSecretRequest {
+    // Name of the vault binding to use
+    string binding_name = 1;
+    // Name of the secret to set
+    string secret_name = 2;
+    // Value to set for the secret
+    string value = 3;
+}
+
+message SetSecretResponse {
+    // Empty response on success
+}
+
+// Messages for DeleteSecret
+message DeleteSecretRequest {
+    // Name of the vault binding to use
+    string binding_name = 1;
+    // Name of the secret to delete
+    string secret_name = 2;
+}
+
+message DeleteSecretResponse {
+    // Empty response on success
+}

@@ -1,0 +1,45 @@
+{
+  "name": "alien",
+  "private": "true",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "homepage": "https://alien.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git"
+  },
+  "version": "1.0.0",
+  "scripts": {
+    "build": "turbo build",
+    "build:images": "echo 'Use GitHub Actions workflows (.github/workflows/images*.yml) for canonical image builds'",
+    "generate": "turbo run generate",
+    "generate:platform-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/platform/openapi.json --out client-sdks/platform/typescript && pnpm -C ./client-sdks/platform/typescript build",
+    "generate:manager-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/manager/openapi.json --out client-sdks/manager/typescript && pnpm -C ./client-sdks/manager/typescript build",
+    "generate:manager-openapi": "cargo run --bin alien-manager-schema-exporter --features openapi -p alien-manager -- --output crates/alien-manager/openapi.json && cp crates/alien-manager/openapi.json client-sdks/manager/openapi.json",
+    "generate:manager-rust-sdk": "pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/rust/openapi-3.0.json && cd client-sdks/manager/rust && node ../scripts/fix-openapi.mjs",
+    "test": "turbo test",
+    "test:examples": "./scripts/test-examples-local.sh",
+    "changeset": "changeset",
+    "version:npm": "changeset version",
+    "test:ts": "turbo test:ts --concurrency 15",
+    "format-and-lint": "biome check .",
+    "format-and-lint:fix": "biome check . --write"
+  },
+  "devDependencies": {
+    "@apiture/openapi-down-convert": "^0.14.2",
+    "@biomejs/biome": "1.9.4",
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.7",
+    "turbo": "^2.5.8"
+  },
+  "packageManager": "pnpm@10.11.0",
+  "pnpm": {
+    "overrides": {
+      "@alienplatform/sdk": "file:packages/sdk",
+      "@alienplatform/core": "file:packages/core",
+      "@alienplatform/typescript-config": "file:packages/config-typescript",
+      "@alienplatform/testing": "file:packages/testing",
+      "@alienplatform/platform-api": "file:client-sdks/platform/typescript"
+    }
+  }
+}

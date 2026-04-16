@@ -1,0 +1,762 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "NetworkManagementClient",
+    "description": "The Microsoft Azure Network management API provides a RESTful set of web services that interact with Microsoft Azure Networks service to manage your network resources. The API has entities that capture the relationship between an end user and the Microsoft Azure Networks service.",
+    "version": "2025-03-01"
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "Get_nat_gateway": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "Standard"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ]
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "Get_nat_gateway_with_StandardV2_Sku": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "StandardV2"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "publicIpAddressesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress2"
+              }
+            ],
+            "publicIpPrefixesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix2"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ],
+            "sourceVirtualNetwork": {
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet"
+            }
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "Create_nat_gateway": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "Standard"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ]
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "Create_nat_gateway_with_StandardV2_Sku": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "StandardV2"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "publicIpAddressesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress2"
+              }
+            ],
+            "publicIpPrefixesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix2"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ],
+            "sourceVirtualNetwork": {
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet"
+            }
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "Update_nat_gateway_tags": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "Standard"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ]
+          },
+          "tags": {
+            "tag1": "value1",
+            "tag2": "value2"
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "Update_nat_gateway_with_StandardV2_Sku_tags": {
+        "value": {
+          "name": "test-natGateway",
+          "sku": {
+            "name": "StandardV2"
+          },
+          "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+          "location": "westus",
+          "properties": {
+            "idleTimeoutInMinutes": 5,
+            "provisioningState": "Succeeded",
+            "publicIpAddresses": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+              }
+            ],
+            "publicIpPrefixes": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+              }
+            ],
+            "publicIpAddressesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress2"
+              }
+            ],
+            "publicIpPrefixesV6": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix2"
+              }
+            ],
+            "subnets": [
+              {
+                "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+              }
+            ],
+            "sourceVirtualNetwork": {
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet"
+            }
+          },
+          "tags": {
+            "tag1": "value1",
+            "tag2": "value2"
+          },
+          "type": "Microsoft.Network/natGateways"
+        }
+      },
+      "List_all_nat_gateways": {
+        "value": {
+          "value": [
+            {
+              "name": "test-natGateway",
+              "sku": {
+                "name": "Standard"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateways/test-natGateway",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ]
+              },
+              "type": "Microsoft.Network/natGateways"
+            },
+            {
+              "name": "test-natGateway2",
+              "sku": {
+                "name": "Standard"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/natGatewayes/test-natGateway2",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ]
+              },
+              "type": "Microsoft.Network/natGateways"
+            },
+            {
+              "name": "test-natGateway3",
+              "sku": {
+                "name": "StandardV2"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/natGatewayes/test-natGateway3",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "publicIpAddressesV6": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress2"
+                  }
+                ],
+                "publicIpPrefixesV6": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix2"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ],
+                "sourceVirtualNetwork": {
+                  "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet"
+                }
+              },
+              "type": "Microsoft.Network/natGateways"
+            }
+          ]
+        }
+      },
+      "List_nat_gateways_in_resource_group": {
+        "value": {
+          "value": [
+            {
+              "name": "test-natGateway",
+              "sku": {
+                "name": "Standard"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/natGateway/test-natGateway",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ]
+              },
+              "type": "Microsoft.Network/natGateways"
+            },
+            {
+              "name": "test-natGateway2",
+              "sku": {
+                "name": "Standard"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/natGateway/test-natGateway2",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ]
+              },
+              "type": "Microsoft.Network/natGateways"
+            },
+            {
+              "name": "test-natGateway3",
+              "sku": {
+                "name": "StandardV2"
+              },
+              "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/natGateway/test-natGateway3",
+              "location": "westus",
+              "properties": {
+                "idleTimeoutInMinutes": 5,
+                "provisioningState": "Succeeded",
+                "publicIpAddresses": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress1"
+                  }
+                ],
+                "publicIpPrefixes": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix1"
+                  }
+                ],
+                "publicIpAddressesV6": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPAddresses/PublicIpAddress2"
+                  }
+                ],
+                "publicIpPrefixesV6": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/publicIPPrefixes/PublicIpPrefix2"
+                  }
+                ],
+                "subnets": [
+                  {
+                    "id": "/subscriptions/subid/resourceGroups/rg2/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+                  }
+                ],
+                "sourceVirtualNetwork": {
+                  "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet"
+                }
+              },
+              "type": "Microsoft.Network/natGateways"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "Client API version.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Delete nat gateway": {
+            "value": "2025-03-01"
+          },
+          "Get nat gateway": {
+            "value": "2025-03-01"
+          },
+          "Get nat gateway with StandardV2 Sku": {
+            "value": "2025-03-01"
+          },
+          "Create nat gateway": {
+            "value": "2025-03-01"
+          },
+          "Create nat gateway with StandardV2 Sku": {
+            "value": "2025-03-01"
+          },
+          "Update nat gateway tags": {
+            "value": "2025-03-01"
+          },
+          "Update nat gateway with StandardV2 Sku tags": {
+            "value": "2025-03-01"
+          },
+          "List all nat gateways": {
+            "value": "2025-03-01"
+          },
+          "List nat gateways in resource group": {
+            "value": "2025-03-01"
+          }
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "required": true,
+        "description": "The subscription credentials which uniquely identify the Microsoft Azure subscription. The subscription ID forms part of the URI for every service call.",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "Delete nat gateway": {
+            "value": "subid"
+          },
+          "Get nat gateway": {
+            "value": "subid"
+          },
+          "Get nat gateway with StandardV2 Sku": {
+            "value": "subid"
+          },
+          "Create nat gateway": {
+            "value": "subid"
+          },
+          "Create nat gateway with StandardV2 Sku": {
+            "value": "subid"
+          },
+          "Update nat gateway tags": {
+            "value": "subid"
+          },
+          "Update nat gateway with StandardV2 Sku tags": {
+            "value": "subid"
+          },
+          "List all nat gateways": {
+            "value": "subid"
+          },
+          "List nat gateways in resource group": {
+            "value": "subid"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow.",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "NatGatewaySku": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of Nat Gateway SKU.",
+            "enum": ["Standard", "StandardV2"],
+            "x-ms-enum": {
+              "name": "NatGatewaySkuName",
+              "modelAsString": true
+            }
+          }
+        },
+        "description": "SKU of nat gateway."
+      },
+      "NatGatewayPropertiesFormat": {
+        "properties": {
+          "idleTimeoutInMinutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The idle timeout of the nat gateway."
+          },
+          "publicIpAddresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubResource"
+            },
+            "description": "An array of public ip addresses V4 associated with the nat gateway resource."
+          },
+          "publicIpAddressesV6": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubResource"
+            },
+            "description": "An array of public ip addresses V6 associated with the nat gateway resource."
+          },
+          "publicIpPrefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubResource"
+            },
+            "description": "An array of public ip prefixes V4 associated with the nat gateway resource."
+          },
+          "publicIpPrefixesV6": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubResource"
+            },
+            "description": "An array of public ip prefixes V6 associated with the nat gateway resource."
+          },
+          "subnets": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubResource"
+            },
+            "description": "An array of references to the subnets using this nat gateway resource."
+          },
+          "sourceVirtualNetwork": {
+            "$ref": "#/components/schemas/SubResource"
+          },
+          "resourceGuid": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The resource GUID property of the NAT gateway resource."
+          },
+          "provisioningState": {
+            "$ref": "#/components/schemas/ProvisioningState"
+          }
+        },
+        "description": "Nat Gateway properties."
+      },
+      "NatGateway": {
+        "properties": {
+          "sku": {
+            "$ref": "#/components/schemas/NatGatewaySku"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/NatGatewayPropertiesFormat"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of availability zones denoting the zone in which Nat Gateway should be deployed."
+          },
+          "etag": {
+            "readOnly": true,
+            "type": "string",
+            "description": "A unique read-only string that changes whenever the resource is updated."
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "description": "Nat Gateway resource."
+      },
+      "NatGatewayListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NatGateway"
+            },
+            "description": "A list of Nat Gateways that exists in a resource group."
+          },
+          "nextLink": {
+            "type": "string",
+            "description": "The URL to get the next set of results."
+          }
+        },
+        "description": "Response for ListNatGateways API service call."
+      },
+      "CloudErrorBody": {
+        "x-ms-external": true,
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "An identifier for the error. Codes are invariant and are intended to be consumed programmatically."
+          },
+          "message": {
+            "type": "string",
+            "description": "A message describing the error, intended to be suitable for display in a user interface."
+          },
+          "target": {
+            "type": "string",
+            "description": "The target of the particular error. For example, the name of the property in error."
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudErrorBody"
+            },
+            "description": "A list of additional details about the error."
+          }
+        },
+        "description": "An error response from the service."
+      },
+      "CloudError": {
+        "x-ms-external": true,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/CloudErrorBody"
+          }
+        },
+        "description": "An error response from the service."
+      },
+      "Resource": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Resource ID."
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Resource name."
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Resource type."
+          },
+          "location": {
+            "type": "string",
+            "description": "Resource location."
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resource tags."
+          }
+        },
+        "description": "Common resource representation.",
+        "x-ms-azure-resource": true
+      },
+      "SubResource": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Resource ID."
+          }
+        },
+        "description": "Reference to another subresource.",
+        "x-ms-azure-resource": true
+      },
+      "ProvisioningState": {
+        "type": "string",
+        "readOnly": true,
+        "description": "The current provisioning state.",
+        "enum": ["Succeeded", "Updating", "Deleting", "Failed"],
+        "x-ms-enum": {
+          "name": "ProvisioningState",
+          "modelAsString": true
+        }
+      },
+      "TagsObject": {
+        "properties": {
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resource tags."
+          }
+        },
+        "description": "Tags object for patch operations."
+      }
+    }
+  }
+}

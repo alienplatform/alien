@@ -1,0 +1,65 @@
+{
+  // Allows sending messages to queues and acknowledging messages (runtime access for functions)
+  "id": "queue/data-write",
+  "description": "Allows sending messages to queues and acknowledging received messages",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:SendMessage",
+            "sqs:DeleteMessage",
+            "sqs:ChangeMessageVisibility",
+            "sqs:GetQueueAttributes",
+            "sqs:GetQueueUrl"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.publish",
+            "pubsub.subscriptions.consume",
+            "pubsub.subscriptions.get"
+          ]
+        },
+        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
+        // for pubsub.topics.publish and pubsub.subscriptions.consume at runtime.
+        // Access is scoped per-stack via the service account identity instead.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

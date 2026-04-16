@@ -1,0 +1,4 @@
+{
+  "extends": "@alienplatform/typescript-config/base.json",
+  "exclude": ["node_modules", "kubb.config.ts"]
+}

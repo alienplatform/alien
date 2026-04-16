@@ -1,0 +1,5 @@
+- E2E tests must simulate real user flows. If a test needs manual cloud setup, that signals the product is missing functionality.
+- Don't add manual cross-account registry access calls — that's automated in sync/reconcile.
+- Don't skip cleanup — leaked resources hit cloud quotas.
+- Don't use fire-and-forget DELETE — always run the deletion state machine.
+- Use "deployment" not "agent", "manager" not "server", "commands" not "ARC".

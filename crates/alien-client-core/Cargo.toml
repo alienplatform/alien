@@ -1,0 +1,30 @@
+[package]
+name = "alien-client-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+alien-error = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+backon = { workspace = true }
+serde_path_to_error = "0.1.17"
+async-trait = { workspace = true }
+quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies.tracing-subscriber]
+workspace = true

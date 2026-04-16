@@ -1,0 +1,2802 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Alien Manager API",
+    "description": "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
+    "license": {
+      "name": "MIT"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Server is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands": {
+      "post": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "Create a new command",
+        "operationId": "create_command",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Command created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateCommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/leases": {
+      "post": {
+        "tags": [
+          "leases"
+        ],
+        "summary": "Acquire leases for polling deployments",
+        "operationId": "acquire_leases",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Leases acquired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/leases/{lease_id}/release": {
+      "post": {
+        "tags": [
+          "leases"
+        ],
+        "summary": "Release a lease",
+        "operationId": "release_lease",
+        "parameters": [
+          {
+            "name": "lease_id",
+            "in": "path",
+            "description": "Lease identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lease released successfully"
+          },
+          "404": {
+            "description": "Lease not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/{command_id}": {
+      "get": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "Get command status",
+        "operationId": "get_command_status",
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "description": "Command identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Command status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Command not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/{command_id}/payload": {
+      "get": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "Get command payload (params and response) from KV",
+        "description": "Returns the raw params and response data stored in the manager's KV store.\nReturns 404 if neither params nor response exist for this command.",
+        "operationId": "get_command_payload",
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "description": "Command identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Command payload data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandPayloadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Command payload not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "Store command payload data (params and/or response) directly into KV.",
+        "description": "Bypasses the command registry — useful for populating demo data or\nmigrating payload data. Does not validate command existence or state.",
+        "operationId": "store_command_payload",
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "description": "Command identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorePayloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Payload stored successfully"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/{command_id}/response": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Submit response from deployment",
+        "operationId": "submit_response",
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "description": "Command identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitResponseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Response submitted successfully"
+          },
+          "400": {
+            "description": "Invalid command or state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Command not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/commands/{command_id}/upload-complete": {
+      "post": {
+        "tags": [
+          "commands"
+        ],
+        "summary": "Mark upload as complete",
+        "operationId": "upload_complete",
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "description": "Command identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upload marked complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadCompleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command or state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Command not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/deployment-groups": {
+      "get": {
+        "tags": [
+          "deployment-groups"
+        ],
+        "operationId": "list_deployment_groups",
+        "responses": {
+          "200": {
+            "description": "List of deployment groups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListDeploymentGroupsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deployment-groups"
+        ],
+        "operationId": "create_deployment_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeploymentGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment group created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentGroupResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployment-groups/{id}": {
+      "get": {
+        "tags": [
+          "deployment-groups"
+        ],
+        "operationId": "get_deployment_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment group ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deployment group found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentGroupResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Deployment group not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployment-groups/{id}/tokens": {
+      "post": {
+        "tags": [
+          "deployment-groups"
+        ],
+        "operationId": "create_deployment_group_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment group ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTokenResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Deployment group not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "list_deployments",
+        "parameters": [
+          {
+            "name": "deploymentGroupId",
+            "in": "query",
+            "description": "Filter by deployment group ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "description": "Include related resources (e.g. deploymentGroup)",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of deployments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListDeploymentsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "create_deployment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Deployment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDeploymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/deployments/{id}": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deployment details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "delete_deployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Force delete without running cleanup (immediately removes record)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Deployment deletion enqueued"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/deployments/{id}/info": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_info",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deployment info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentInfoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/deployments/{id}/redeploy": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "redeploy",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redeploy requested"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/deployments/{id}/retry": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "retry_deployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retry requested"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/initialize": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "initialize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitializeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing deployment returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitializeResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "New deployment created with token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitializeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/releases": {
+      "post": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "create_release",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Release created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/releases/latest": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "get_latest_release",
+        "responses": {
+          "200": {
+            "description": "Latest release found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No releases found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/releases/{id}": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "get_release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Release ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Release not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/resolve-credentials": {
+      "post": {
+        "tags": [
+          "credentials"
+        ],
+        "operationId": "resolve_credentials",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveCredentialsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/sync": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "agent_sync",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Agent sync response with optional target state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSyncResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/sync/acquire": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "acquire",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcquireRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployments acquired for reconciliation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquireResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/sync/reconcile": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "reconcile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment state reconciled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/sync/release": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "release",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment lock released"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "tags": [
+          "whoami"
+        ],
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "description": "Returns the identity of the authenticated caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhoamiResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AcquireRequest": {
+        "type": "object",
+        "required": [
+          "session"
+        ],
+        "properties": {
+          "deploymentIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Platform"
+            },
+            "nullable": true
+          },
+          "session": {
+            "type": "string"
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          }
+        }
+      },
+      "AcquireResponse": {
+        "type": "object",
+        "required": [
+          "deployments"
+        ],
+        "properties": {
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcquiredDeploymentResponse"
+            }
+          }
+        }
+      },
+      "AcquiredDeploymentResponse": {
+        "type": "object",
+        "required": [
+          "deployment"
+        ],
+        "properties": {
+          "deployment": {}
+        }
+      },
+      "AgentSyncRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId"
+        ],
+        "properties": {
+          "currentState": {
+            "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
+          },
+          "deploymentId": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentSyncResponse": {
+        "type": "object",
+        "properties": {
+          "commandsUrl": {
+            "type": "string",
+            "description": "Public URL for the commands API. Cloud-deployed functions use this\nto poll for pending commands instead of the agent's local sync URL.",
+            "nullable": true
+          },
+          "target": {}
+        }
+      },
+      "AwsCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "certificateArn"
+        ],
+        "properties": {
+          "certificateArn": {
+            "type": "string"
+          }
+        }
+      },
+      "AzureCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "keyVaultCertificateId"
+        ],
+        "properties": {
+          "keyVaultCertificateId": {
+            "type": "string"
+          }
+        }
+      },
+      "BodySpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Inline base64-encoded body",
+            "required": [
+              "inlineBase64",
+              "mode"
+            ],
+            "properties": {
+              "inlineBase64": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Storage-backed body",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "storage"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Size of the body in bytes",
+                "minimum": 0,
+                "nullable": true
+              },
+              "storageGetRequest": {
+                "$ref": "#/components/schemas/PresignedRequest",
+                "description": "Pre-signed request for retrieving the body (for deployments)",
+                "nullable": true
+              },
+              "storagePutUsed": {
+                "type": "boolean",
+                "description": "Indicates storage upload was used for response submission",
+                "nullable": true
+              }
+            }
+          }
+        ],
+        "description": "Body specification supporting inline and storage modes"
+      },
+      "CommandPayloadResponse": {
+        "type": "object",
+        "description": "Payload response containing params and response data from KV",
+        "required": [
+          "commandId"
+        ],
+        "properties": {
+          "commandId": {
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "nullable": true
+          },
+          "response": {
+            "$ref": "#/components/schemas/CommandResponse",
+            "nullable": true
+          }
+        }
+      },
+      "CommandResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Command executed successfully",
+            "required": [
+              "response",
+              "status"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/BodySpec",
+                "description": "Response data (JSON, can be large)"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "success"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Command failed with an error",
+            "required": [
+              "code",
+              "message",
+              "status"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Error code"
+              },
+              "details": {
+                "type": "string",
+                "description": "Optional additional details",
+                "nullable": true
+              },
+              "message": {
+                "type": "string",
+                "description": "Error message"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Command response from deployment"
+      },
+      "CommandState": {
+        "type": "string",
+        "description": "Command states in the Commands protocol lifecycle",
+        "enum": [
+          "PENDING_UPLOAD",
+          "PENDING",
+          "DISPATCHED",
+          "SUCCEEDED",
+          "FAILED",
+          "EXPIRED"
+        ]
+      },
+      "CommandStatusResponse": {
+        "type": "object",
+        "description": "Response to status queries",
+        "required": [
+          "commandId",
+          "state",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current attempt number",
+            "minimum": 0
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "response": {
+            "$ref": "#/components/schemas/CommandResponse",
+            "description": "Response data (only for succeeded/failed state)",
+            "nullable": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Current command state"
+          }
+        }
+      },
+      "CommandsInfo": {
+        "type": "object",
+        "required": [
+          "url",
+          "deploymentId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCommandRequest": {
+        "type": "object",
+        "description": "Request to create a new command",
+        "required": [
+          "deploymentId",
+          "command",
+          "params"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command name (e.g., \"generate-report\", \"sync-data\")"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional deadline for command completion",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Target deployment identifier"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "description": "Optional idempotency key",
+            "nullable": true
+          },
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "description": "Command parameters (JSON, can be large)"
+          }
+        }
+      },
+      "CreateCommandResponse": {
+        "type": "object",
+        "description": "Response to command creation",
+        "required": [
+          "commandId",
+          "state",
+          "inlineAllowedUpTo",
+          "next"
+        ],
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "description": "Unique command identifier"
+          },
+          "inlineAllowedUpTo": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum inline body size allowed",
+            "minimum": 0
+          },
+          "next": {
+            "type": "string",
+            "description": "Next action for client: \"upload\" | \"poll\""
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Current command state"
+          },
+          "storageUpload": {
+            "$ref": "#/components/schemas/StorageUpload",
+            "description": "Storage upload info (only for storage mode)",
+            "nullable": true
+          }
+        }
+      },
+      "CreateDeploymentGroupRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "maxDeployments": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateDeploymentRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "platform"
+        ],
+        "properties": {
+          "deploymentGroupId": {
+            "type": "string",
+            "nullable": true
+          },
+          "environmentVariables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVariable"
+            },
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "stackSettings": {
+            "$ref": "#/components/schemas/StackSettings",
+            "nullable": true
+          }
+        }
+      },
+      "CreateDeploymentResponse": {
+        "type": "object",
+        "required": [
+          "deployment"
+        ],
+        "properties": {
+          "deployment": {
+            "$ref": "#/components/schemas/DeploymentResponse"
+          },
+          "token": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CreateReleaseRequest": {
+        "type": "object",
+        "required": [
+          "stack"
+        ],
+        "properties": {
+          "gitMetadata": {
+            "$ref": "#/components/schemas/GitMetadata",
+            "nullable": true
+          },
+          "stack": {
+            "$ref": "#/components/schemas/StackByPlatform"
+          }
+        }
+      },
+      "CreateTokenResponse": {
+        "type": "object",
+        "required": [
+          "token",
+          "deploymentGroupId"
+        ],
+        "properties": {
+          "deploymentGroupId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "CustomCertificateConfig": {
+        "type": "object",
+        "description": "Platform-specific certificate references for custom domains.",
+        "properties": {
+          "aws": {
+            "$ref": "#/components/schemas/AwsCustomCertificateConfig",
+            "description": "AWS ACM certificate ARN",
+            "nullable": true
+          },
+          "azure": {
+            "$ref": "#/components/schemas/AzureCustomCertificateConfig",
+            "description": "Azure Key Vault certificate ID",
+            "nullable": true
+          },
+          "gcp": {
+            "$ref": "#/components/schemas/GcpCustomCertificateConfig",
+            "description": "GCP Certificate Manager certificate name",
+            "nullable": true
+          }
+        }
+      },
+      "CustomDomainConfig": {
+        "type": "object",
+        "description": "Custom domain configuration for a single resource.",
+        "required": [
+          "domain",
+          "certificate"
+        ],
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/CustomCertificateConfig",
+            "description": "Customer-provided certificate reference."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Fully qualified domain name to use."
+          }
+        }
+      },
+      "DeploymentGroupMinimal": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentGroupResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "maxDeployments",
+          "deploymentCount",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "deploymentCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxDeployments": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentInfoResponse": {
+        "type": "object",
+        "required": [
+          "commands",
+          "resources",
+          "status",
+          "platform"
+        ],
+        "properties": {
+          "commands": {
+            "$ref": "#/components/schemas/CommandsInfo"
+          },
+          "error": {},
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResourceEntry"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentModel": {
+        "type": "string",
+        "description": "Deployment model: how updates are delivered to the remote environment.",
+        "enum": [
+          "push",
+          "pull"
+        ]
+      },
+      "DeploymentResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "platform",
+          "status",
+          "deploymentGroupId",
+          "retryRequested",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "currentReleaseId": {
+            "type": "string",
+            "nullable": true
+          },
+          "deploymentGroup": {
+            "$ref": "#/components/schemas/DeploymentGroupMinimal",
+            "nullable": true
+          },
+          "deploymentGroupId": {
+            "type": "string"
+          },
+          "desiredReleaseId": {
+            "type": "string",
+            "nullable": true
+          },
+          "environmentInfo": {},
+          "error": {},
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "retryRequested": {
+            "type": "boolean"
+          },
+          "runtimeMetadata": {},
+          "stackSettings": {},
+          "stackState": {},
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "DomainSettings": {
+        "type": "object",
+        "description": "Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.",
+        "properties": {
+          "customDomains": {
+            "type": "object",
+            "description": "Custom domain configuration per resource ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CustomDomainConfig"
+            },
+            "nullable": true
+          }
+        }
+      },
+      "Envelope": {
+        "type": "object",
+        "description": "Commands envelope sent to deployments",
+        "required": [
+          "protocol",
+          "deploymentId",
+          "commandId",
+          "attempt",
+          "command",
+          "params",
+          "responseHandling"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number (starts at 1)",
+            "minimum": 0
+          },
+          "command": {
+            "type": "string",
+            "description": "Command name (e.g., \"generate-report\", \"sync-data\")"
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Unique command identifier"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Command deadline",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Target deployment identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "description": "Command parameters (JSON, can be large)"
+          },
+          "protocol": {
+            "type": "string",
+            "description": "Protocol version identifier"
+          },
+          "responseHandling": {
+            "$ref": "#/components/schemas/ResponseHandling",
+            "description": "Response handling configuration"
+          }
+        }
+      },
+      "EnvironmentVariable": {
+        "type": "object",
+        "description": "Environment variable for deployment",
+        "required": [
+          "name",
+          "value",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "targetResources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Target resource patterns (null = all resources, Some = wildcard patterns)",
+            "nullable": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/EnvironmentVariableType",
+            "description": "Variable type (plain or secret)"
+          },
+          "value": {
+            "type": "string",
+            "description": "Variable value (decrypted - deployment has access to decryption keys)"
+          }
+        }
+      },
+      "EnvironmentVariableType": {
+        "type": "string",
+        "description": "Type of environment variable",
+        "enum": [
+          "plain",
+          "secret"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Error response wrapper for API endpoints",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "GcpCustomCertificateConfig": {
+        "type": "object",
+        "required": [
+          "certificateName"
+        ],
+        "properties": {
+          "certificateName": {
+            "type": "string"
+          }
+        }
+      },
+      "GitMetadata": {
+        "type": "object",
+        "properties": {
+          "commitMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "commitRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "commitSha": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "GitMetadataResponse": {
+        "type": "object",
+        "properties": {
+          "commitMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "commitRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "commitSha": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "HeartbeatsMode": {
+        "type": "string",
+        "description": "How heartbeat health checks are handled.",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "InitializeRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform",
+            "nullable": true
+          }
+        }
+      },
+      "InitializeResponse": {
+        "type": "object",
+        "required": [
+          "deploymentId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LeaseInfo": {
+        "type": "object",
+        "description": "Lease information",
+        "required": [
+          "leaseId",
+          "leaseExpiresAt",
+          "commandId",
+          "attempt",
+          "envelope"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number",
+            "minimum": 0
+          },
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "envelope": {
+            "$ref": "#/components/schemas/Envelope",
+            "description": "Commands envelope to process"
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When lease expires"
+          },
+          "leaseId": {
+            "type": "string",
+            "description": "Unique lease identifier"
+          }
+        }
+      },
+      "LeaseRequest": {
+        "type": "object",
+        "description": "Request for acquiring leases",
+        "required": [
+          "deploymentId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment identifier"
+          },
+          "leaseSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lease duration in seconds",
+            "minimum": 0
+          },
+          "maxLeases": {
+            "type": "integer",
+            "description": "Maximum number of leases to acquire",
+            "minimum": 0
+          }
+        }
+      },
+      "LeaseResponse": {
+        "type": "object",
+        "description": "Response to lease acquisition",
+        "required": [
+          "leases"
+        ],
+        "properties": {
+          "leases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeaseInfo"
+            },
+            "description": "Acquired leases (empty array if none available)"
+          }
+        }
+      },
+      "ListDeploymentGroupsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentGroupResponse"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ListDeploymentsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentResponse"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LocalOperation": {
+        "type": "string",
+        "description": "Local filesystem operations",
+        "enum": [
+          "put",
+          "get",
+          "delete"
+        ]
+      },
+      "NetworkSettings": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use the cloud provider's default VPC/network.\n\nDesigned for fast dev/test provisioning. No isolated VPC is created, so there\nis nothing to wait for or clean up. VMs receive ephemeral public IPs for internet\naccess — no NAT gateway is provisioned.\n\n- **AWS**: Discovers the account's default VPC. Subnets are public with auto-assigned IPs.\n- **GCP**: Discovers the project's `default` network and regional subnet. Instance\n  templates include an `AccessConfig` to assign an ephemeral external IP.\n- **Azure**: Azure has no default VNet, so one is created along with a NAT Gateway.\n  VMs stay private and use NAT for egress.\n\nNot recommended for production. Use `Create` instead.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "use-default"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Create a new isolated VPC/VNet with a managed NAT gateway.\n\nAll networking infrastructure is provisioned by Alien and cleaned up on delete.\nVMs use private IPs only; all outbound traffic routes through the NAT gateway.\n\nRecommended for production deployments.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "availability_zones": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of availability zones (default: 2).",
+                "minimum": 0
+              },
+              "cidr": {
+                "type": "string",
+                "description": "VPC/VNet CIDR block. If not specified, auto-generated from stack ID\nto reduce conflicts (e.g., \"10.{hash}.0.0/16\").",
+                "nullable": true
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VPC (AWS).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (NAT, proxy, VPN, etc.).",
+            "required": [
+              "vpc_id",
+              "public_subnet_ids",
+              "private_subnet_ids",
+              "type"
+            ],
+            "properties": {
+              "private_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of private subnets"
+              },
+              "public_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IDs of public subnets (required for public ingress)"
+              },
+              "security_group_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional security group IDs to use"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vpc-aws"
+                ]
+              },
+              "vpc_id": {
+                "type": "string",
+                "description": "The ID of the existing VPC"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VPC (GCP).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (Cloud NAT, proxy, VPN, etc.).",
+            "required": [
+              "network_name",
+              "subnet_name",
+              "region",
+              "type"
+            ],
+            "properties": {
+              "network_name": {
+                "type": "string",
+                "description": "The name of the existing VPC network"
+              },
+              "region": {
+                "type": "string",
+                "description": "The region of the subnet"
+              },
+              "subnet_name": {
+                "type": "string",
+                "description": "The name of the subnet to use"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vpc-gcp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an existing VNet (Azure).\n\nAlien validates the references but creates no networking infrastructure.\nThe customer is responsible for routing and egress (NAT Gateway, proxy, VPN, etc.).",
+            "required": [
+              "vnet_resource_id",
+              "public_subnet_name",
+              "private_subnet_name",
+              "type"
+            ],
+            "properties": {
+              "private_subnet_name": {
+                "type": "string",
+                "description": "Name of the private subnet within the VNet"
+              },
+              "public_subnet_name": {
+                "type": "string",
+                "description": "Name of the public subnet within the VNet"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "byo-vnet-azure"
+                ]
+              },
+              "vnet_resource_id": {
+                "type": "string",
+                "description": "The full resource ID of the existing VNet"
+              }
+            }
+          }
+        ],
+        "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
+      },
+      "Platform": {
+        "type": "string",
+        "description": "Represents the target cloud platform.",
+        "enum": [
+          "aws",
+          "gcp",
+          "azure",
+          "kubernetes",
+          "local",
+          "test"
+        ]
+      },
+      "PresignedOperation": {
+        "type": "string",
+        "description": "The type of operation a presigned request performs",
+        "enum": [
+          "put",
+          "get",
+          "delete"
+        ]
+      },
+      "PresignedRequest": {
+        "type": "object",
+        "description": "A presigned request that can be serialized, stored, and executed later.\nHides implementation details for different storage backends.",
+        "required": [
+          "backend",
+          "expiration",
+          "operation",
+          "path"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/PresignedRequestBackend",
+            "description": "The storage backend this request targets"
+          },
+          "expiration": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this presigned request expires"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/PresignedOperation",
+            "description": "The operation this request performs"
+          },
+          "path": {
+            "type": "string",
+            "description": "The path this request operates on"
+          }
+        }
+      },
+      "PresignedRequestBackend": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "HTTP-based request (AWS S3, GCP GCS, Azure Blob)",
+            "required": [
+              "url",
+              "method",
+              "headers",
+              "type"
+            ],
+            "properties": {
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "method": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "http"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Local filesystem operation",
+            "required": [
+              "filePath",
+              "operation",
+              "type"
+            ],
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/LocalOperation"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Storage backend representation for different presigned request types"
+      },
+      "ReconcileRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "session",
+          "state"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "error": {},
+          "session": {
+            "type": "string"
+          },
+          "state": {},
+          "updateHeartbeat": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReconcileResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "current"
+        ],
+        "properties": {
+          "current": {},
+          "nativeImageHost": {
+            "type": "string",
+            "description": "Native image registry host for Lambda/Cloud Run.\nReturned so push clients can set it on their local DeploymentConfig.",
+            "nullable": true
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReleaseRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "session"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleaseResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "stack",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "gitMetadata": {
+            "$ref": "#/components/schemas/GitMetadataResponse",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "stack": {
+            "$ref": "#/components/schemas/StackByPlatform"
+          }
+        }
+      },
+      "ResolveCredentialsRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveCredentialsResponse": {
+        "type": "object",
+        "required": [
+          "clientConfig"
+        ],
+        "properties": {
+          "clientConfig": {}
+        }
+      },
+      "ResourceEntry": {
+        "type": "object",
+        "required": [
+          "resourceType"
+        ],
+        "properties": {
+          "publicUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceType": {
+            "type": "string"
+          }
+        }
+      },
+      "ResponseHandling": {
+        "type": "object",
+        "description": "Response handling configuration for deployments",
+        "required": [
+          "maxInlineBytes",
+          "submitResponseUrl",
+          "storageUploadRequest"
+        ],
+        "properties": {
+          "maxInlineBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum response body size that can be submitted inline",
+            "minimum": 0
+          },
+          "storageUploadRequest": {
+            "$ref": "#/components/schemas/PresignedRequest",
+            "description": "Pre-signed request for uploading large response bodies"
+          },
+          "submitResponseUrl": {
+            "type": "string",
+            "description": "URL where deployments submit responses"
+          }
+        }
+      },
+      "ScopeInfo": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "deploymentGroupId": {
+            "type": "string",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "StackByPlatform": {
+        "type": "object",
+        "description": "The release API accepts stacks keyed by platform.\nOnly one platform stack needs to be present.",
+        "properties": {
+          "aws": {},
+          "azure": {},
+          "gcp": {},
+          "kubernetes": {},
+          "local": {},
+          "test": {}
+        }
+      },
+      "StackSettings": {
+        "type": "object",
+        "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
+        "properties": {
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel",
+            "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."
+          },
+          "domains": {
+            "$ref": "#/components/schemas/DomainSettings",
+            "description": "Domain configuration (future).",
+            "nullable": true
+          },
+          "externalBindings": {
+            "type": "object",
+            "description": "External bindings for pre-existing infrastructure.\nAllows using existing resources (MinIO, Redis, shared Container Apps\nEnvironment, etc.) instead of having Alien provision them.\nRequired for Kubernetes platform, optional for cloud platforms.",
+            "nullable": true
+          },
+          "heartbeats": {
+            "$ref": "#/components/schemas/HeartbeatsMode",
+            "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkSettings",
+            "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
+            "nullable": true
+          },
+          "telemetry": {
+            "$ref": "#/components/schemas/TelemetryMode",
+            "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
+          },
+          "updates": {
+            "$ref": "#/components/schemas/UpdatesMode",
+            "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
+          }
+        }
+      },
+      "StorageUpload": {
+        "type": "object",
+        "description": "Storage upload information",
+        "required": [
+          "putRequest",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Expiration time for upload URL"
+          },
+          "putRequest": {
+            "$ref": "#/components/schemas/PresignedRequest",
+            "description": "Pre-signed request for uploading command params"
+          }
+        }
+      },
+      "StorePayloadRequest": {
+        "type": "object",
+        "description": "Request to store payload data directly in KV by command_id.\n\nThis bypasses the normal command lifecycle (create → dispatch → respond)\nand writes params/response directly into KV. Used by the demo service\nto populate payload data for commands created outside the command flow.",
+        "properties": {
+          "params": {
+            "$ref": "#/components/schemas/BodySpec",
+            "nullable": true
+          },
+          "response": {
+            "$ref": "#/components/schemas/CommandResponse",
+            "nullable": true
+          }
+        }
+      },
+      "SubmitResponseRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CommandResponse",
+            "description": "The command response"
+          }
+        ],
+        "description": "Request to submit a command response (from deployment)"
+      },
+      "TelemetryMode": {
+        "type": "string",
+        "description": "How telemetry (logs, metrics, traces) is handled.",
+        "enum": [
+          "off",
+          "auto",
+          "approval-required"
+        ]
+      },
+      "UpdatesMode": {
+        "type": "string",
+        "description": "How updates are delivered to the deployment.",
+        "enum": [
+          "auto",
+          "approval-required"
+        ]
+      },
+      "UploadCompleteRequest": {
+        "type": "object",
+        "description": "Request to mark upload as complete",
+        "required": [
+          "size"
+        ],
+        "properties": {
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of uploaded data",
+            "minimum": 0
+          }
+        }
+      },
+      "UploadCompleteResponse": {
+        "type": "object",
+        "description": "Response to upload completion",
+        "required": [
+          "commandId",
+          "state"
+        ],
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "description": "Command identifier"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState",
+            "description": "Updated command state"
+          }
+        }
+      },
+      "WhoamiResponse": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "scope"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeInfo"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Health check"
+    },
+    {
+      "name": "identity",
+      "description": "Authentication identity"
+    },
+    {
+      "name": "deployments",
+      "description": "Deployment lifecycle management"
+    },
+    {
+      "name": "releases",
+      "description": "Release management"
+    },
+    {
+      "name": "deployment-groups",
+      "description": "Deployment group management"
+    },
+    {
+      "name": "sync",
+      "description": "Agent sync and state reconciliation"
+    },
+    {
+      "name": "credentials",
+      "description": "Credential resolution for deployments"
+    },
+    {
+      "name": "telemetry",
+      "description": "OTLP telemetry ingestion"
+    },
+    {
+      "name": "commands",
+      "description": "Command management"
+    },
+    {
+      "name": "leases",
+      "description": "Lease management for polling deployments"
+    },
+    {
+      "name": "deployments",
+      "description": "Deployment response submission"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+- Don't add platform-specific logic here — that belongs in `alien-infra` controllers.
+- Don't skip the state machine — always go through all states, even if no-op.
+- Don't duplicate loop contract tests — the canonical tests live here.

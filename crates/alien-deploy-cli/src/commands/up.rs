@@ -1,0 +1,1277 @@
+//! Deploy command — sets up and runs a deployment.
+//!
+//! Push model (AWS, GCP, Azure): runs initial setup locally, then the manager
+//! continues reconciliation remotely.
+//!
+//! Pull model (Local, Kubernetes): installs and starts the alien-agent service.
+
+use crate::deployment_tracking::DeploymentTracker;
+use crate::error::{ErrorData, Result};
+use crate::output;
+use alien_core::embedded_config::DeployCliConfig;
+use alien_core::{
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
+    StackSettings,
+};
+use alien_deployment::{
+    loop_contract::{LoopOperation, LoopOutcome},
+    manager_api_transport::{
+        acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+    },
+    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
+};
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::ClientConfigExt;
+use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use alien_platform_api::Client as PlatformClient;
+use alien_platform_api::SdkResultExt;
+use alien_cli_common::network::{self, NetworkArgs};
+use clap::Parser;
+use std::str::FromStr;
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    about = "Deploy the application to a target environment",
+    after_help = "EXAMPLES:
+    # Deploy to AWS using a deployment group token
+    alien-deploy up --token ax_dg_abc123... --platform aws
+
+    # Deploy with an isolated VPC
+    alien-deploy up --token ax_dg_abc123... --platform aws --network create
+
+    # Deploy into an existing VPC
+    alien-deploy up --token ax_dg_abc123... --platform aws --network byo --vpc-id vpc-0abc123 --public-subnet-ids subnet-pub1 --private-subnet-ids subnet-priv1
+
+    # Redeploy an existing tracked deployment
+    alien-deploy up --name production
+
+    # Deploy to a standalone (OSS) manager
+    ALIEN_MANAGER_URL=https://manager.example.com alien-deploy up --token tok_... --platform aws"
+)]
+pub struct UpArgs {
+    /// Authentication token (deployment or deployment group token)
+    #[arg(long, env = "ALIEN_TOKEN")]
+    pub token: Option<String>,
+
+    /// Manager URL override. When set, skips platform API discovery and talks
+    /// to the manager directly. Required for OSS standalone mode.
+    #[arg(long, env = "ALIEN_MANAGER_URL")]
+    pub manager_url: Option<String>,
+
+    /// Platform API base URL (default: https://api.alien.dev).
+    /// Used for manager discovery when ALIEN_MANAGER_URL is not set.
+    #[arg(long, env = "ALIEN_BASE_URL", default_value = "https://api.alien.dev")]
+    pub base_url: String,
+
+    /// Target platform (aws, gcp, azure)
+    #[arg(long)]
+    pub platform: Option<String>,
+
+    /// Allow experimental platforms (kubernetes, local)
+    #[arg(long)]
+    pub experimental: bool,
+
+    /// Deployment name (for tracking)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Encryption key for agent database (required for pull model)
+    #[arg(long, env = "AGENT_ENCRYPTION_KEY")]
+    pub encryption_key: Option<String>,
+
+    /// Skip confirmation prompt
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+
+    /// Run the agent in the foreground instead of installing as a service.
+    /// Useful for testing — Ctrl+C to stop.
+    #[arg(long)]
+    pub foreground: bool,
+
+    /// Data directory for agent state (foreground mode only).
+    /// Defaults to ~/.alien/agent-data.
+    #[arg(long)]
+    pub data_dir: Option<String>,
+
+    #[command(flatten)]
+    pub network: NetworkArgs,
+}
+
+pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    // Resolve token and platform from args, embedded config, or tracked deployment
+    let resolved = resolve_deployment_info(&args, embedded_config)?;
+    let token = resolved.token;
+    let platform_str = resolved.platform;
+    let name = resolved.name;
+
+    // Check for experimental platforms
+    if let Ok(p) = Platform::from_str(&platform_str) {
+        if p.is_experimental() && !args.experimental {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: format!(
+                    "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
+                    platform_str
+                ),
+            }));
+        }
+    }
+
+    let platform = Platform::from_str(&platform_str).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    let display_platform = match platform_str.as_str() {
+        "aws" => "AWS",
+        "gcp" => "Google Cloud",
+        "azure" => "Azure",
+        "kubernetes" => "Kubernetes",
+        "local" => "Local",
+        other => other,
+    };
+
+    // Resolve manager URL: explicit override → tracked → platform API discovery
+    let manager_url = match resolved.manager_url {
+        Some(url) => url,
+        None => {
+            output::info("Discovering manager via platform API...");
+            discover_manager_url(&args.base_url, &token, &platform_str).await?
+        }
+    };
+
+    let banner_title = embedded_config
+        .and_then(|c| c.display_name.as_deref())
+        .unwrap_or("Alien Deploy");
+    output::banner(banner_title);
+    output::label_value("Platform", display_platform);
+    output::label_value("Manager", &manager_url);
+    output::label_value("Name", &name);
+    eprintln!();
+
+    // Create authenticated manager client
+    let client = create_manager_client(&token, &manager_url)?;
+
+    // Initialize with manager
+    let init = initialize_deployment(&client, &token, platform, &name).await?;
+    let deployment_id = init.deployment_id;
+    output::success("Connected to manager");
+
+    // Use deployment-scoped token if the manager returned one, otherwise keep the original.
+    let effective_token = init.deployment_token.unwrap_or_else(|| token.clone());
+    let client = create_manager_client(&effective_token, &manager_url)?;
+
+    // Track the deployment locally
+    let mut tracker = DeploymentTracker::new()?;
+    tracker.track(
+        name.clone(),
+        deployment_id.clone(),
+        effective_token.clone(),
+        manager_url.clone(),
+        platform_str.clone(),
+    )?;
+
+    // Check if the deployment is already active — nothing to do.
+    let current_deployment = client
+        .get_deployment()
+        .id(&deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    if current_deployment.status == "running" {
+        eprintln!();
+        output::success(&format!("Deployment '{}' is already active.", name));
+        return Ok(());
+    }
+
+    match platform {
+        Platform::Local | Platform::Kubernetes => {
+            run_pull_model(
+                &args,
+                &manager_url,
+                &effective_token,
+                &deployment_id,
+                platform,
+            )
+            .await?;
+        }
+        Platform::Aws | Platform::Gcp | Platform::Azure => {
+            // Build progress callback
+            let progress = std::sync::Arc::new(std::sync::Mutex::new(
+                output::DeployProgress::new(),
+            ));
+            let progress_clone = progress.clone();
+            let on_progress: alien_deployment::runner::ProgressCallback =
+                Box::new(move |step_progress| {
+                    let mut p = progress_clone.lock().unwrap_or_else(|e| e.into_inner());
+                    p.update(step_progress);
+                });
+
+            run_push_model(
+                &client,
+                &deployment_id,
+                platform,
+                &manager_url,
+                &effective_token,
+                &args.network,
+                Some(on_progress),
+            )
+            .await?;
+
+            // Clear the live progress display
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.finish();
+        }
+        Platform::Test => {
+            output::info("Test platform — no deployment action needed.");
+        }
+    }
+
+    eprintln!();
+    output::success(&format!("Deployment '{}' is active.", name));
+
+    Ok(())
+}
+
+/// Resolved deployment info before manager connection.
+struct ResolvedInfo {
+    token: String,
+    /// Manager URL (from override, tracker, or to be discovered via platform API).
+    manager_url: Option<String>,
+    platform: String,
+    name: String,
+}
+
+fn resolve_deployment_info(
+    args: &UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<ResolvedInfo> {
+    // If name is provided, try to load from tracker
+    if let Some(ref name) = args.name {
+        let tracker = DeploymentTracker::new()?;
+        if let Some(tracked) = tracker.get(name) {
+            let token = args.token.clone().unwrap_or_else(|| tracked.token.clone());
+            let manager_url = args
+                .manager_url
+                .clone()
+                .or(Some(tracked.manager_url.clone()));
+            let platform = args
+                .platform
+                .clone()
+                .unwrap_or_else(|| tracked.platform.clone());
+            return Ok(ResolvedInfo {
+                token,
+                manager_url,
+                platform,
+                name: name.clone(),
+            });
+        }
+    }
+
+    // CLI args override embedded config, which overrides nothing (required)
+    let token = args
+        .token
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: "--token is required for new deployments. Use the deployment token from `alien onboard` (starts with `ax_dg_...`) or from the deploy page.".to_string(),
+            })
+        })?;
+
+    // Manager URL: explicit override only. If not set, will be discovered via platform API.
+    let manager_url = args.manager_url.clone();
+
+    let platform = args
+        .platform
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.default_platform.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: "--platform is required for new deployments. Choose from: aws, gcp, azure.".to_string(),
+            })
+        })?;
+
+    let name = match args.name.clone() {
+        Some(n) => n,
+        None if platform == "local" => hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "default".to_string()),
+        None => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: "--name is required for non-local deployments.".to_string(),
+            }));
+        }
+    };
+
+    Ok(ResolvedInfo {
+        token,
+        manager_url,
+        platform,
+        name,
+    })
+}
+
+/// Discover the manager URL via the platform API using a DG token.
+///
+/// Calls `whoami` to get the deployment group ID and workspace, then resolves
+/// the manager for the deployment group and platform.
+async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Result<String> {
+    use alien_platform_api::types::{Subject, SubjectScope};
+
+    let platform_client = create_platform_client(token, base_url)?;
+
+    // Get DG ID and workspace from token via whoami
+    let subject = platform_client
+        .whoami()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to validate token via platform API".to_string(),
+        })?
+        .into_inner();
+
+    let (dg_id, workspace) = match subject {
+        Subject::ServiceAccountSubject(sa) => match sa.scope {
+            SubjectScope::DeploymentGroup {
+                deployment_group_id,
+                ..
+            } => (deployment_group_id, sa.workspace_id),
+            _ => {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "Token is not a deployment group token. Set ALIEN_MANAGER_URL for non-DG tokens.".to_string(),
+                }));
+            }
+        },
+        _ => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "Token is not a service account token. Set ALIEN_MANAGER_URL for user tokens."
+                        .to_string(),
+            }));
+        }
+    };
+
+    // Resolve manager URL for this DG + platform
+    let platform_param: alien_platform_api::types::GetDeploymentGroupManagerPlatform =
+        platform.parse().map_err(|_| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: format!("Invalid platform: {platform}"),
+            })
+        })?;
+
+    let manager_response = platform_client
+        .get_deployment_group_manager()
+        .id(&dg_id)
+        .workspace(&workspace)
+        .platform(platform_param)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to resolve manager for deployment group. Ensure a healthy manager is available for this platform.".to_string(),
+        })?
+        .into_inner();
+
+    Ok(manager_response.manager_url)
+}
+
+fn create_platform_client(token: &str, base_url: &str) -> Result<PlatformClient> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+
+    Ok(PlatformClient::new_with_client(base_url, http_client))
+}
+
+pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerClient> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+
+    Ok(ServerClient::new_with_client(manager_url, http_client))
+}
+
+fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
+    match raw_status.to_ascii_lowercase().as_str() {
+        "pending" => Ok(DeploymentStatus::Pending),
+        "initial-setup" => Ok(DeploymentStatus::InitialSetup),
+        "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
+        "provisioning" => Ok(DeploymentStatus::Provisioning),
+        "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
+        "running" => Ok(DeploymentStatus::Running),
+        "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
+        "update-pending" => Ok(DeploymentStatus::UpdatePending),
+        "updating" => Ok(DeploymentStatus::Updating),
+        "update-failed" => Ok(DeploymentStatus::UpdateFailed),
+        "delete-pending" => Ok(DeploymentStatus::DeletePending),
+        "deleting" => Ok(DeploymentStatus::Deleting),
+        "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "deleted" => Ok(DeploymentStatus::Deleted),
+        "error" => Ok(DeploymentStatus::Error),
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Unknown deployment status returned by manager: {raw_status}"),
+        })),
+    }
+}
+
+fn deployment_status_str(status: DeploymentStatus) -> &'static str {
+    match status {
+        DeploymentStatus::Pending => "pending",
+        DeploymentStatus::InitialSetup => "initial-setup",
+        DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
+        DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::ProvisioningFailed => "provisioning-failed",
+        DeploymentStatus::Running => "running",
+        DeploymentStatus::RefreshFailed => "refresh-failed",
+        DeploymentStatus::UpdatePending => "update-pending",
+        DeploymentStatus::Updating => "updating",
+        DeploymentStatus::UpdateFailed => "update-failed",
+        DeploymentStatus::DeletePending => "delete-pending",
+        DeploymentStatus::Deleting => "deleting",
+        DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::Deleted => "deleted",
+        DeploymentStatus::Error => "error",
+    }
+}
+
+/// Result of initializing with the manager.
+struct InitResult {
+    deployment_id: String,
+    /// Deployment-scoped token returned by the manager (when using a deployment group token).
+    /// If present, this should replace the original token for subsequent requests.
+    deployment_token: Option<String>,
+}
+
+async fn initialize_deployment(
+    client: &ServerClient,
+    _token: &str,
+    platform: Platform,
+    name: &str,
+) -> Result<InitResult> {
+    let sdk_platform = match platform {
+        Platform::Aws => alien_manager_api::types::Platform::Aws,
+        Platform::Gcp => alien_manager_api::types::Platform::Gcp,
+        Platform::Azure => alien_manager_api::types::Platform::Azure,
+        Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Local => alien_manager_api::types::Platform::Local,
+        Platform::Test => alien_manager_api::types::Platform::Test,
+    };
+
+    let body = alien_manager_api::types::InitializeRequest {
+        name: Some(name.to_string()),
+        platform: Some(sdk_platform),
+    };
+
+    let response = client
+        .initialize()
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
+        })?;
+
+    let init = response.into_inner();
+    Ok(InitResult {
+        deployment_id: init.deployment_id,
+        deployment_token: init.token,
+    })
+}
+
+async fn run_pull_model(
+    args: &UpArgs,
+    manager_url: &str,
+    token: &str,
+    deployment_id: &str,
+    platform: Platform,
+) -> Result<()> {
+    match platform {
+        Platform::Kubernetes => run_kubernetes_pull_model(manager_url, token, deployment_id).await,
+        _ => run_local_pull_model(args, manager_url, token, &platform.to_string()).await,
+    }
+}
+
+async fn run_local_pull_model(
+    args: &UpArgs,
+    manager_url: &str,
+    token: &str,
+    platform: &str,
+) -> Result<()> {
+    let encryption_key = args.encryption_key.clone().unwrap_or_else(|| {
+        use super::agent::generate_encryption_key_public;
+        generate_encryption_key_public()
+    });
+
+    // Find or download the alien-agent binary
+    let binary_path = find_or_download_agent_binary().await?;
+
+    output::info(&format!("Agent binary: {}", binary_path.display()));
+
+    if args.foreground {
+        return run_agent_foreground(
+            &binary_path,
+            manager_url,
+            token,
+            platform,
+            &encryption_key,
+            args.data_dir.as_deref(),
+        )
+        .await;
+    }
+
+    output::info("Installing alien-agent as a system service...");
+
+    // Delegate to the agent install logic
+    let install_args = super::agent::InstallArgs {
+        binary: Some(binary_path),
+        sync_url: manager_url.to_string(),
+        sync_token: token.to_string(),
+        platform: platform.to_string(),
+        data_dir: None,
+        encryption_key: Some(encryption_key),
+    };
+
+    super::agent::install_service(install_args)?;
+
+    output::success("alien-agent installed and running as a system service.");
+    output::info("The agent will sync with the manager and deploy updates automatically.");
+    output::info("Use 'alien-deploy agent status' to check the service.");
+
+    Ok(())
+}
+
+/// Run the agent as a foreground child process (for testing).
+async fn run_agent_foreground(
+    binary_path: &std::path::Path,
+    manager_url: &str,
+    token: &str,
+    platform: &str,
+    encryption_key: &str,
+    data_dir_override: Option<&str>,
+) -> Result<()> {
+    output::info("Running agent in foreground (Ctrl+C to stop)...");
+
+    let data_dir = if let Some(dir) = data_dir_override {
+        std::path::PathBuf::from(dir)
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".alien")
+            .join("agent-data")
+    };
+
+    let status = tokio::process::Command::new(binary_path)
+        .arg("--platform")
+        .arg(platform)
+        .arg("--sync-url")
+        .arg(manager_url)
+        .arg("--sync-token")
+        .arg(token)
+        .arg("--encryption-key")
+        .arg(encryption_key)
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to run agent: {}", binary_path.display()),
+        })?;
+
+    if !status.success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Agent exited with status: {}", status),
+        }));
+    }
+
+    Ok(())
+}
+
+async fn run_kubernetes_pull_model(
+    manager_url: &str,
+    token: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    output::info("Kubernetes platform detected — use Helm to install the agent.");
+    output::info("");
+    output::info("Add the chart and install:");
+    println!();
+    println!("  helm install alien-agent ./charts/alien-agent \\");
+    println!("    --set syncUrl={} \\", manager_url);
+    println!("    --set syncToken={} \\", token);
+    println!("    --set encryptionKey=$(openssl rand -hex 32) \\",);
+    println!("    --set namespace=<your-app-namespace>");
+    println!();
+    output::info(&format!("Deployment ID: {}", deployment_id));
+    output::info("The agent will register with the manager on first sync.");
+
+    Ok(())
+}
+
+/// Default releases URL for downloading binaries.
+const DEFAULT_RELEASES_URL: &str = "https://releases.alien.dev";
+
+/// Find the alien-agent binary locally, or download it from the releases URL.
+async fn find_or_download_agent_binary() -> Result<std::path::PathBuf> {
+    // Try to find it locally first
+    if let Ok(path) = super::agent::which_agent_binary() {
+        return Ok(path);
+    }
+
+    // Download to ~/.alien/bin/alien-agent
+    let home = dirs::home_dir().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Could not determine home directory".to_string(),
+        })
+    })?;
+
+    let bin_dir = home.join(".alien").join("bin");
+    std::fs::create_dir_all(&bin_dir)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: bin_dir.display().to_string(),
+            reason: "Failed to create ~/.alien/bin directory".to_string(),
+        })?;
+
+    let binary_path = bin_dir.join("alien-agent");
+
+    let releases_url =
+        std::env::var("ALIEN_RELEASES_URL").unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
+
+    let (os, arch) = detect_os_arch()?;
+    let url = format!(
+        "{}/alien-agent/latest/{}-{}/alien-agent",
+        releases_url, os, arch
+    );
+
+    output::info(&format!("Downloading alien-agent from {}...", url));
+
+    let response =
+        reqwest::get(&url)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to download alien-agent from {}", url),
+            })?;
+
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to download alien-agent: HTTP {}", response.status()),
+        }));
+    }
+
+    let bytes =
+        response
+            .bytes()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to read alien-agent download response".to_string(),
+            })?;
+
+    std::fs::write(&binary_path, &bytes)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: binary_path.display().to_string(),
+            reason: "Failed to write alien-agent binary".to_string(),
+        })?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "chmod".to_string(),
+                file_path: binary_path.display().to_string(),
+                reason: "Failed to make alien-agent executable".to_string(),
+            })?;
+    }
+
+    output::success("alien-agent downloaded successfully.");
+
+    Ok(binary_path)
+}
+
+fn detect_os_arch() -> Result<(&'static str, &'static str)> {
+    let os = if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Unsupported OS: {}", std::env::consts::OS),
+        }));
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Unsupported architecture: {}", std::env::consts::ARCH),
+        }));
+    };
+
+    Ok((os, arch))
+}
+
+async fn run_push_model(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    manager_url: &str,
+    deployment_token: &str,
+    network_args: &NetworkArgs,
+    on_progress: Option<alien_deployment::runner::ProgressCallback>,
+) -> Result<()> {
+    let client_config = ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
+                platform
+            ),
+        })?;
+
+    push_initial_setup(
+        client,
+        deployment_id,
+        platform,
+        client_config,
+        None,
+        manager_url,
+        deployment_token,
+        Some(network_args),
+        on_progress,
+    )
+    .await
+}
+
+/// Run the push-model initial setup flow for a deployment.
+///
+/// Fetches deployment and release state from the manager, acquires a sync lock,
+/// steps the deployment through InitialSetup until it reaches Provisioning (or a
+/// terminal state), reconciles state back to the manager, and releases the lock.
+///
+/// This is used by both `alien-deploy up` (push model) and `alien-test` (e2e setup).
+pub async fn push_initial_setup(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    client_config: ClientConfig,
+    management_config: Option<alien_core::ManagementConfig>,
+    manager_base_url: &str,
+    deployment_token: &str,
+    network_args: Option<&NetworkArgs>,
+    on_progress: Option<alien_deployment::runner::ProgressCallback>,
+) -> Result<()> {
+    // Get deployment from manager
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    // Reconstruct DeploymentState from flat API response
+    let status = parse_deployment_status(&deployment.status)?;
+
+    let stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    let environment_info = deployment
+        .environment_info
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize environment_info from manager".to_string(),
+        })?;
+
+    // If there's a desired release, fetch the full release info
+    let target_release = if let Some(ref release_id) = deployment.desired_release_id {
+        match client.get_release().id(release_id).send().await {
+            Ok(resp) => {
+                let rel = resp.into_inner();
+                // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
+                // Extract the inner stack value for the target platform.
+                let mut platform_stack_value = match platform {
+                    Platform::Aws => rel.stack.aws,
+                    Platform::Gcp => rel.stack.gcp,
+                    Platform::Azure => rel.stack.azure,
+                    Platform::Kubernetes => rel.stack.kubernetes,
+                    Platform::Local => rel.stack.local,
+                    Platform::Test => rel.stack.test,
+                }
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Release {} has no stack for platform {}",
+                            release_id,
+                            platform.as_str()
+                        ),
+                    })
+                })?;
+
+                // No stack rewriting — release already stores proxy URIs.
+                // Controllers use image URIs as-is.
+                let stack = serde_json::from_value(platform_stack_value)
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to parse release stack".to_string(),
+                    })?;
+
+                Some(ReleaseInfo {
+                    release_id: rel.id,
+                    version: None,
+                    description: None,
+                    stack,
+                })
+            }
+            Err(e) => {
+                output::warn(&format!("Could not fetch release {}: {}", release_id, e));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut state = DeploymentState {
+        status,
+        platform,
+        current_release: None,
+        target_release,
+        stack_state,
+        environment_info,
+        runtime_metadata: None,
+        retry_requested: deployment.retry_requested,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    // Always override environment_info with the target client_config.
+    // The manager may have already run the Pending step with management
+    // credentials, setting environment_info to the management project.
+    // push_initial_setup runs with *target* credentials, so re-collecting
+    // ensures the environment_info reflects the actual target project.
+    match alien_deployment::collect_environment_info(platform, &client_config).await {
+        Ok(env_info) => {
+            state.environment_info = Some(env_info);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to collect target environment info: {e}");
+        }
+    }
+
+    // Reconstruct DeploymentConfig from stack_settings
+    let mut stack_settings: StackSettings = deployment
+        .stack_settings
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_settings from manager".to_string(),
+        })?
+        .unwrap_or_default();
+
+    // Override network settings if the customer provided CLI flags
+    if let Some(net_args) = network_args {
+        let network_override =
+            network::parse_network_settings(net_args, platform.as_str()).map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message: e,
+                })
+            })?;
+        if let Some(ns) = network_override {
+            stack_settings.network = Some(ns);
+        }
+    }
+
+    // Build a minimal config JSON and deserialize to get proper defaults
+    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+        "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
+        "managementConfig": serde_json::to_value(&management_config).unwrap_or_default(),
+        "environmentVariables": {
+            "variables": [],
+            "hash": "",
+            "createdAt": ""
+        }
+    }))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to construct deployment config".to_string(),
+    })?;
+
+    // Set manager URL and deployment token so controllers can configure
+    // pull auth (RegistryCredentials, imagePullSecrets) for the manager's registry.
+    config.manager_url = Some(manager_base_url.to_string());
+    config.deployment_token = Some(deployment_token.to_string());
+
+    // Extract external bindings from stack_settings (e.g., shared Container Apps Environment).
+    // The JSON deserialization above doesn't connect stack_settings.external_bindings to
+    // config.external_bindings, so we extract it explicitly.
+    if let Some(ref ext_bindings) = stack_settings.external_bindings {
+        config.external_bindings = ext_bindings.clone();
+    }
+
+    // Acquire sync lock — retry until the specific deployment is locked by us.
+    // The manager's deployment loop may already hold the lock; we must wait for
+    // it to release before proceeding. 2 minutes (60 × 2s) is sufficient because
+    // the manager skips Pending/InitialSetup for push-mode deployments — if it
+    // holds the lock, it checks push-mode + Pending and releases immediately.
+    // Acquire sync lock — retry until the specific deployment is locked by us.
+    let session = format!("push-setup-{}", uuid::Uuid::new_v4());
+    acquire_deployment(client, deployment_id, &session)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "acquire sync lock".to_string(),
+        })?;
+
+    // Re-fetch the deployment state now that we hold the lock.
+    // The manager may have advanced the state while we were waiting.
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status = parse_deployment_status(&deployment.status)?;
+
+    state.status = status;
+    state.stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    state.runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    tracing::info!(
+        has_runtime_metadata = state.runtime_metadata.is_some(),
+        "push_initial_setup: state after re-fetch (before step loop)"
+    );
+
+    // Run the shared step loop with per-step reconciliation via the manager API
+    let transport = ManagerApiTransport::new(client.clone(), session.clone());
+    let policy = RunnerPolicy {
+        max_steps: 400,
+        // Push model: run initial setup only, then hand off to the manager.
+        // The CLI drives Pending → InitialSetup → Provisioning, then stops.
+        // The manager picks up from Provisioning and drives to Running.
+        operation: LoopOperation::InitialSetup,
+        delay_threshold: None,
+    };
+
+    let runner_result = shared_run_step_loop(
+        &mut state,
+        &mut config,
+        &client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+        on_progress.as_ref(),
+    )
+    .await;
+
+    // Always reconcile + release, even on error.
+    final_reconcile(client, deployment_id, &session, &state).await;
+    release_deployment(client, deployment_id, &session).await;
+
+    // Handle runner result after lock release
+    let result = runner_result.context(ErrorData::DeploymentFailed {
+        operation: "initial setup".to_string(),
+    })?;
+
+    match result.loop_result.outcome {
+        LoopOutcome::Success => {
+            output::success("Deployment is running.");
+            Ok(())
+        }
+        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
+            operation: format!(
+                "deployment failed at status {}",
+                deployment_status_str(result.loop_result.final_status)
+            ),
+        })),
+        LoopOutcome::Neutral => {
+            output::success("Setup complete. Your deployment is being provisioned and will be ready shortly.");
+            Ok(())
+        }
+    }
+}
+
+/// Run the push-model deletion flow for a deployment.
+///
+/// Fetches deployment and release state from the manager, acquires a sync lock,
+/// steps the deployment through DeletePending → Deleting → Deleted (or DeleteFailed),
+/// reconciles state back to the manager, and releases the lock.
+pub async fn push_deletion(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    client_config: ClientConfig,
+) -> Result<()> {
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status = parse_deployment_status(&deployment.status)?;
+
+    let stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    let environment_info = deployment
+        .environment_info
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize environment_info from manager".to_string(),
+        })?;
+    let runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    let current_release = if let Some(ref release_id) = deployment.current_release_id {
+        match client.get_release().id(release_id).send().await {
+            Ok(resp) => {
+                let rel = resp.into_inner();
+                let platform_stack_value = match platform {
+                    Platform::Aws => rel.stack.aws,
+                    Platform::Gcp => rel.stack.gcp,
+                    Platform::Azure => rel.stack.azure,
+                    Platform::Kubernetes => rel.stack.kubernetes,
+                    Platform::Local => rel.stack.local,
+                    Platform::Test => rel.stack.test,
+                };
+                platform_stack_value
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .map(|stack| ReleaseInfo {
+                        release_id: rel.id,
+                        version: None,
+                        description: None,
+                        stack,
+                    })
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut state = DeploymentState {
+        status,
+        platform,
+        current_release: current_release.clone(),
+        target_release: current_release,
+        stack_state,
+        environment_info,
+        runtime_metadata,
+        retry_requested: deployment.retry_requested,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    let stack_settings: StackSettings = deployment
+        .stack_settings
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_settings from manager".to_string(),
+        })?
+        .unwrap_or_default();
+
+    let mut config: DeploymentConfig = serde_json::from_value(serde_json::json!({
+        "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
+        "environmentVariables": {
+            "variables": [],
+            "hash": "",
+            "createdAt": ""
+        }
+    }))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to construct deployment config".to_string(),
+    })?;
+
+    // Acquire sync lock with retry
+    let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
+    acquire_deployment(client, deployment_id, &session)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "acquire sync lock for deletion".to_string(),
+        })?;
+
+    // Re-fetch deployment under lock
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let status = parse_deployment_status(&deployment.status)?;
+
+    state.status = status;
+    state.stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state from manager".to_string(),
+        })?;
+    state.runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata from manager".to_string(),
+        })?;
+
+    // Run the shared step loop with per-step reconciliation via the manager API
+    let transport = ManagerApiTransport::new(client.clone(), session.clone());
+    let policy = RunnerPolicy {
+        max_steps: 400,
+        operation: LoopOperation::Delete,
+        delay_threshold: None,
+    };
+
+    let runner_result = shared_run_step_loop(
+        &mut state,
+        &mut config,
+        &client_config,
+        deployment_id,
+        &policy,
+        &transport,
+        None,
+        None,
+    )
+    .await;
+
+    // Always reconcile + release, even on error
+    final_reconcile(client, deployment_id, &session, &state).await;
+    release_deployment(client, deployment_id, &session).await;
+
+    // Handle runner result after lock release
+    let result = runner_result.context(ErrorData::DeploymentFailed {
+        operation: "deletion".to_string(),
+    })?;
+
+    match result.loop_result.outcome {
+        LoopOutcome::Success => {
+            output::success("Deployment deleted successfully.");
+            Ok(())
+        }
+        LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
+            operation: format!(
+                "deletion failed at status {}",
+                deployment_status_str(result.loop_result.final_status)
+            ),
+        })),
+        LoopOutcome::Neutral => Ok(()),
+    }
+}

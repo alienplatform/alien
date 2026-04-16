@@ -1,0 +1,27 @@
+# Multi-stage build for alien-agent Docker image
+# Used for Kubernetes deployments via Helm chart
+
+FROM cgr.dev/chainguard/wolfi-base:latest as binary-selector
+
+COPY target/aarch64-unknown-linux-musl/release/alien-agent /tmp/alien-agent-aarch64
+COPY target/x86_64-unknown-linux-musl/release/alien-agent /tmp/alien-agent-x86_64
+
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+       amd64)  cp /tmp/alien-agent-x86_64 /tmp/alien-agent ;; \
+       arm64)  cp /tmp/alien-agent-aarch64 /tmp/alien-agent ;; \
+    esac
+
+FROM cgr.dev/chainguard/wolfi-base:latest
+
+WORKDIR /app
+
+COPY --from=binary-selector /tmp/alien-agent /app/alien-agent
+RUN chmod +x /app/alien-agent
+
+RUN mkdir -p /var/lib/alien-agent && chown nonroot:nonroot /var/lib/alien-agent
+RUN chown -R nonroot:nonroot /app
+
+USER nonroot
+
+ENTRYPOINT ["/app/alien-agent"]

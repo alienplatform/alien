@@ -1,0 +1,3 @@
+- Don't add business logic here — the runtime is a process host, not a control plane.
+- Don't import alien-manager types — runtime is independent of the manager.
+- Use "commands" not "ARC".

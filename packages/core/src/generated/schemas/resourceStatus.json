@@ -1,0 +1,1 @@
+{"type":"string","description":"Represents the high-level status of a resource during its lifecycle.","enum":["pending","provisioning","provision-failed","running","updating","update-failed","deleting","delete-failed","deleted","refresh-failed"],"x-readme-ref-name":"ResourceStatus"}

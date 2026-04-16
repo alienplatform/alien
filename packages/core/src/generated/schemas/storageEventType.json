@@ -1,0 +1,1 @@
+{"type":"string","description":"Represents the type of storage event that occurred.","enum":["created","deleted","copied","metadataUpdated","restored","tierChanged","unknown"],"x-readme-ref-name":"StorageEventType"}

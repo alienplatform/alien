@@ -1,0 +1,536 @@
+use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
+use crate::azure::models::managed_identity::{CloudError, Identity, IdentityUpdate};
+use crate::azure::token_cache::AzureTokenCache;
+use alien_client_core::{ErrorData, Result};
+
+use alien_error::{Context, IntoAlienError};
+use async_trait::async_trait;
+use reqwest::{Client, Method, StatusCode};
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "test-utils")]
+use mockall::automock;
+
+// -----------------------------------------------------------------------------
+// Managed Identity API trait
+// -----------------------------------------------------------------------------
+
+#[cfg_attr(feature = "test-utils", automock)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait ManagedIdentityApi: Send + Sync + std::fmt::Debug {
+    async fn create_or_update_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+        identity: &Identity,
+    ) -> Result<Identity>;
+
+    async fn delete_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> Result<()>;
+
+    async fn get_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> Result<Identity>;
+
+    async fn update_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+        identity_update: &IdentityUpdate,
+    ) -> Result<Identity>;
+
+    async fn create_or_update_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+        credential: &FederatedIdentityCredential,
+    ) -> Result<FederatedIdentityCredential>;
+
+    async fn get_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<FederatedIdentityCredential>;
+
+    async fn delete_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<()>;
+
+    fn build_user_assigned_identity_id(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> String;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedIdentityCredential {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub properties: Option<FederatedCredentialProperties>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedCredentialProperties {
+    pub issuer: String,
+    pub subject: String,
+    pub audiences: Vec<String>,
+}
+
+// -----------------------------------------------------------------------------
+// Managed Identity client struct
+// -----------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct AzureManagedIdentityClient {
+    pub base: AzureClientBase,
+    pub token_cache: AzureTokenCache,
+}
+
+impl AzureManagedIdentityClient {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        let endpoint = token_cache.management_endpoint().to_string();
+        Self {
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
+            token_cache,
+        }
+    }
+
+    fn build_user_assigned_identity_url(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> String {
+        self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
+                self.token_cache.config().subscription_id, resource_group_name, resource_name
+            ),
+            Some(vec![("api-version", "2023-01-31".into())]),
+        )
+    }
+
+    fn build_federated_credential_url(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> String {
+        self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}/federatedIdentityCredentials/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                identity_name,
+                credential_name
+            ),
+            Some(vec![("api-version", "2023-01-31".into())]),
+        )
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ManagedIdentityApi for AzureManagedIdentityClient {
+    /// Create or update a user assigned identity
+    async fn create_or_update_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+        identity: &Identity,
+    ) -> Result<Identity> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
+
+        let body = serde_json::to_string(identity).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize user assigned identity: {}",
+                    resource_name
+                ),
+            },
+        )?;
+
+        let request_body = body.clone();
+        let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "CreateOrUpdateUserAssignedIdentity", resource_name)
+            .await?;
+
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateUserAssignedIdentity: failed to read response body for {}",
+                    resource_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: Some(request_body.clone()),
+                http_response_text: None,
+            })?;
+
+        let identity: Identity = serde_json::from_str(&body).into_alien_error().context(
+            ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateUserAssignedIdentity: JSON parse error for {}",
+                    resource_name
+                ),
+                url: url,
+                http_status: 200,
+                http_request_text: Some(request_body),
+                http_response_text: Some(body),
+            },
+        )?;
+
+        Ok(identity)
+    }
+
+    /// Delete a user assigned identity
+    async fn delete_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> Result<()> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
+
+        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let _resp = self
+            .base
+            .execute_request(signed, "DeleteUserAssignedIdentity", resource_name)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get a user assigned identity
+    async fn get_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> Result<Identity> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
+
+        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetUserAssignedIdentity", resource_name)
+            .await?;
+
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetUserAssignedIdentity: failed to read response body for {}",
+                    resource_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: None,
+            })?;
+
+        let identity: Identity = serde_json::from_str(&body).into_alien_error().context(
+            ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetUserAssignedIdentity: JSON parse error for {}",
+                    resource_name
+                ),
+                url: url,
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(body),
+            },
+        )?;
+
+        Ok(identity)
+    }
+
+    /// Update a user assigned identity
+    async fn update_user_assigned_identity(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+        identity_update: &IdentityUpdate,
+    ) -> Result<Identity> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_user_assigned_identity_url(resource_group_name, resource_name);
+
+        let body = serde_json::to_string(identity_update)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize user assigned identity update: {}",
+                    resource_name
+                ),
+            })?;
+
+        let request_body = body.clone();
+        let builder = AzureRequestBuilder::new(Method::PATCH, url.clone())
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "UpdateUserAssignedIdentity", resource_name)
+            .await?;
+
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure UpdateUserAssignedIdentity: failed to read response body for {}",
+                    resource_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: Some(request_body.clone()),
+                http_response_text: None,
+            })?;
+
+        let identity: Identity = serde_json::from_str(&body).into_alien_error().context(
+            ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure UpdateUserAssignedIdentity: JSON parse error for {}",
+                    resource_name
+                ),
+                url: url,
+                http_status: 200,
+                http_request_text: Some(request_body),
+                http_response_text: Some(body),
+            },
+        )?;
+
+        Ok(identity)
+    }
+
+    async fn create_or_update_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+        credential: &FederatedIdentityCredential,
+    ) -> Result<FederatedIdentityCredential> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_federated_credential_url(
+            resource_group_name,
+            identity_name,
+            credential_name,
+        );
+
+        let body = serde_json::to_string(credential)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize federated credential '{}'",
+                    credential_name
+                ),
+            })?;
+
+        let request_body = body.clone();
+        let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "CreateOrUpdateFederatedCredential", credential_name)
+            .await?;
+
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: format!(
+                    "Azure CreateOrUpdateFederatedCredential: failed to read response body for {}",
+                    credential_name
+                ),
+                    url: url.clone(),
+                    http_status: 200,
+                    http_request_text: Some(request_body.clone()),
+                    http_response_text: None,
+                })?;
+
+        let credential = serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateFederatedCredential: JSON parse error for {}",
+                    credential_name
+                ),
+                url,
+                http_status: 200,
+                http_request_text: Some(request_body),
+                http_response_text: Some(response_body),
+            })?;
+
+        Ok(credential)
+    }
+
+    async fn get_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<FederatedIdentityCredential> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_federated_credential_url(
+            resource_group_name,
+            identity_name,
+            credential_name,
+        );
+
+        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetFederatedCredential", credential_name)
+            .await?;
+
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: format!(
+                        "Azure GetFederatedCredential: failed to read response body for {}",
+                        credential_name
+                    ),
+                    url: url.clone(),
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: None,
+                })?;
+
+        let credential = serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetFederatedCredential: JSON parse error for {}",
+                    credential_name
+                ),
+                url,
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(response_body),
+            })?;
+
+        Ok(credential)
+    }
+
+    async fn delete_federated_credential(
+        &self,
+        resource_group_name: &str,
+        identity_name: &str,
+        credential_name: &str,
+    ) -> Result<()> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.build_federated_credential_url(
+            resource_group_name,
+            identity_name,
+            credential_name,
+        );
+
+        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let _resp = self
+            .base
+            .execute_request(signed, "DeleteFederatedCredential", credential_name)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Build the Azure resource ID for a user assigned identity
+    fn build_user_assigned_identity_id(
+        &self,
+        resource_group_name: &str,
+        resource_name: &str,
+    ) -> String {
+        format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
+            &self.token_cache.config().subscription_id, 
+            resource_group_name, 
+            resource_name
+        )
+    }
+}

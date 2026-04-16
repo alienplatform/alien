@@ -1,0 +1,3 @@
+name = "basic-function-rs"
+description = "The simplest Alien function, in Rust."
+language = "Rust"

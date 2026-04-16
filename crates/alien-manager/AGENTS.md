@@ -1,0 +1,6 @@
+- Don't add mode-specific logic to the library — it belongs in call sites (main.rs, alien dev).
+- Don't add a mode enum — the builder + traits IS the architecture.
+- Don't add local-dev bootstrapping to the builder — `alien dev` should do it after startup.
+- Don't import `ExecutionMode` — that's CLI-only.
+- Token hashing is required — SHA-256 with key_hash + key_prefix pattern. Prefixes: `ax_admin_`, `ax_dg_`.
+- Don't reference platform/, deepstore/, or horizon/ — this is OSS code.

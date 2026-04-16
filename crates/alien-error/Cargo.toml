@@ -1,0 +1,27 @@
+[package]
+name = "alien-error"
+version.workspace = true
+edition = "2021"
+description = "Error types for the Alien platform"
+license-file.workspace = true
+
+[lib]
+name = "alien_error"
+path = "src/lib.rs"
+
+[features]
+default = []
+openapi = ["utoipa"]
+anyhow = ["dep:anyhow"]
+axum = ["dep:axum"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+utoipa = { workspace = true, features = ["chrono"], optional = true }
+alien-error-derive = { workspace = true }
+anyhow = { workspace = true, optional = true }
+axum = { workspace = true, default-features = false, features = ["json"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }

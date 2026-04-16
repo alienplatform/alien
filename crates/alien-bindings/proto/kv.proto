@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package alien_bindings.kv;
+
+// KV service for key-value storage operations
+service KvService {
+    // Get a value by key
+    rpc Get(GetRequest) returns (GetResponse);
+
+    // Put a value with optional options
+    rpc Put(PutRequest) returns (PutResponse);
+
+    // Delete a key
+    rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+    // Check if a key exists
+    rpc Exists(ExistsRequest) returns (ExistsResponse);
+
+    // Scan keys with a prefix
+    rpc ScanPrefix(ScanPrefixRequest) returns (ScanPrefixResponse);
+}
+
+// Messages for Get
+message GetRequest {
+    // Name of the KV binding to use
+    string binding_name = 1;
+    // Key to retrieve
+    string key = 2;
+}
+
+message GetResponse {
+    // The value if found
+    optional bytes value = 1;
+}
+
+// Messages for Put
+message PutRequest {
+    // Name of the KV binding to use
+    string binding_name = 1;
+    // Key to store
+    string key = 2;
+    // Value to store
+    bytes value = 3;
+    // Optional put options
+    optional PutOptions options = 4;
+}
+
+message PutOptions {
+    // Optional TTL in seconds
+    optional uint64 ttl_seconds = 1;
+    // Only put if the key does not exist
+    bool if_not_exists = 2;
+}
+
+message PutResponse {
+    // Whether the operation succeeded (false if if_not_exists was true and key already existed)
+    bool success = 1;
+}
+
+// Messages for Delete
+message DeleteRequest {
+    // Name of the KV binding to use
+    string binding_name = 1;
+    // Key to delete
+    string key = 2;
+}
+
+message DeleteResponse {
+    // Empty response on success
+}
+
+// Messages for Exists
+message ExistsRequest {
+    // Name of the KV binding to use
+    string binding_name = 1;
+    // Key to check
+    string key = 2;
+}
+
+message ExistsResponse {
+    // Whether the key exists
+    bool exists = 1;
+}
+
+// Messages for ScanPrefix
+message ScanPrefixRequest {
+    // Name of the KV binding to use
+    string binding_name = 1;
+    // Prefix to scan for
+    string prefix = 2;
+    // Maximum number of items to return
+    optional uint32 limit = 3;
+    // Cursor for pagination
+    optional string cursor = 4;
+}
+
+message ScanPrefixResponse {
+    // Key-value pairs found
+    repeated KvItem items = 1;
+    // Next cursor for pagination (null if no more results)
+    optional string next_cursor = 2;
+}
+
+message KvItem {
+    // The key
+    string key = 1;
+    // The value
+    bytes value = 2;
+}

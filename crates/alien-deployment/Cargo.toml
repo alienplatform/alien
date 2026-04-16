@@ -1,0 +1,62 @@
+[package]
+name = "alien-deployment"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+[features]
+openapi = ["dep:utoipa"]
+
+[dependencies]
+# Core Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-preflights = { workspace = true, features = ["runtime-checks"] }
+
+# Cloud client crates
+alien-aws-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
+alien-azure-clients = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+
+# Manager API client SDK (for ManagerApiTransport)
+alien-manager-api = { workspace = true }
+
+# Logging
+tracing = "0.1"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+hostname = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# OpenAPI (optional)
+utoipa = { version = "5", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+indexmap = "2"
+chrono = "0.4"
+
+[dev-dependencies.alien-infra]
+workspace = true
+features = ["test"]
+
+[dev-dependencies.alien-bindings]
+workspace = true
+features = ["local"]
+

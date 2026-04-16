@@ -1,0 +1,21 @@
+{
+  "id": "azure-storage-account/heartbeat",
+  "description": "Allows readonly monitoring and health checks for azure-storage-account resources",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": ["Microsoft.Storage/storageAccounts/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

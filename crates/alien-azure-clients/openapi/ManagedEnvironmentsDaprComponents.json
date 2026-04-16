@@ -1,0 +1,689 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2025-01-01",
+    "title": "ContainerApps API Client"
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_Dapr_Components": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/myenvironment/daprcomponents/reddog",
+              "name": "reddog",
+              "type": "Microsoft.App/managedEnvironments/daprcomponents",
+              "properties": {
+                "componentType": "state.azure.cosmosdb",
+                "version": "v1",
+                "ignoreErrors": false,
+                "initTimeout": "50s",
+                "secrets": [
+                  {
+                    "name": "masterkey"
+                  }
+                ],
+                "metadata": [
+                  {
+                    "name": "url",
+                    "value": "<COSMOS-URL>"
+                  },
+                  {
+                    "name": "database",
+                    "value": "itemsDB"
+                  },
+                  {
+                    "name": "collection",
+                    "value": "items"
+                  },
+                  {
+                    "name": "masterkey",
+                    "secretRef": "masterkey"
+                  }
+                ],
+                "scopes": ["container-app-1", "container-app-2"]
+              }
+            },
+            {
+              "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/myenvironment/daprcomponents/vaultdog",
+              "name": "vaultdog",
+              "type": "Microsoft.App/managedEnvironments/daprcomponents",
+              "properties": {
+                "componentType": "state.azure.cosmosdb",
+                "version": "v1",
+                "ignoreErrors": false,
+                "initTimeout": "50s",
+                "secretStoreComponent": "my-secret-store",
+                "metadata": [
+                  {
+                    "name": "url",
+                    "value": "<COSMOS-URL>"
+                  },
+                  {
+                    "name": "database",
+                    "value": "itemsDB"
+                  },
+                  {
+                    "name": "collection",
+                    "value": "items"
+                  },
+                  {
+                    "name": "masterkey",
+                    "secretRef": "masterkey"
+                  }
+                ],
+                "scopes": ["container-app-1", "container-app-2"]
+              }
+            },
+            {
+              "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/myenvironment/daprcomponents/vaultdog",
+              "name": "vaultdog",
+              "type": "Microsoft.App/managedEnvironments/daprcomponents",
+              "properties": {
+                "componentType": "state.azure.cosmosdb",
+                "version": "v1",
+                "ignoreErrors": false,
+                "initTimeout": "50s",
+                "secretStoreComponent": "my-secret-store",
+                "metadata": [
+                  {
+                    "name": "url",
+                    "secretRef": "cosmosdb/url"
+                  },
+                  {
+                    "name": "database",
+                    "value": "itemsDB"
+                  },
+                  {
+                    "name": "collection",
+                    "value": "items"
+                  },
+                  {
+                    "name": "masterkey",
+                    "secretRef": "cosmosdb/masterkey"
+                  }
+                ],
+                "scopes": ["container-app-1", "container-app-2"]
+              }
+            }
+          ]
+        }
+      },
+      "Get_Dapr_Component_with_secrets": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1/daprcomponents/reddog",
+          "name": "reddog",
+          "type": "Microsoft.App/managedEnvironments/daprcomponents",
+          "properties": {
+            "componentType": "state.azure.cosmosdb",
+            "version": "v1",
+            "ignoreErrors": false,
+            "initTimeout": "50s",
+            "secrets": [
+              {
+                "name": "masterkey"
+              }
+            ],
+            "metadata": [
+              {
+                "name": "url",
+                "value": "<COSMOS-URL>"
+              },
+              {
+                "name": "database",
+                "value": "itemsDB"
+              },
+              {
+                "name": "collection",
+                "value": "items"
+              },
+              {
+                "name": "masterkey",
+                "secretRef": "masterkey"
+              }
+            ],
+            "scopes": ["container-app-1", "container-app-2"]
+          }
+        }
+      },
+      "Get_Dapr_Component_with_secret_store_component": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1/daprcomponents/reddog",
+          "name": "reddog",
+          "type": "Microsoft.App/managedEnvironments/daprcomponents",
+          "properties": {
+            "componentType": "state.azure.cosmosdb",
+            "version": "v1",
+            "ignoreErrors": false,
+            "initTimeout": "50s",
+            "secretStoreComponent": "my-secret-store",
+            "metadata": [
+              {
+                "name": "url",
+                "value": "<COSMOS-URL>"
+              },
+              {
+                "name": "database",
+                "value": "itemsDB"
+              },
+              {
+                "name": "collection",
+                "value": "items"
+              },
+              {
+                "name": "masterkey",
+                "secretRef": "masterkey"
+              }
+            ],
+            "scopes": ["container-app-1", "container-app-2"]
+          }
+        }
+      },
+      "Create_or_update_dapr_component_with_secrets": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1/daprcomponents/reddog",
+          "name": "reddog",
+          "type": "Microsoft.App/managedEnvironments/daprcomponents",
+          "properties": {
+            "componentType": "state.azure.cosmosdb",
+            "version": "v1",
+            "ignoreErrors": false,
+            "initTimeout": "50s",
+            "secrets": [
+              {
+                "name": "masterkey"
+              }
+            ],
+            "metadata": [
+              {
+                "name": "url",
+                "value": "<COSMOS-URL>"
+              },
+              {
+                "name": "database",
+                "value": "itemsDB"
+              },
+              {
+                "name": "collection",
+                "value": "items"
+              },
+              {
+                "name": "masterkey",
+                "secretRef": "masterkey"
+              }
+            ],
+            "scopes": ["container-app-1", "container-app-2"]
+          }
+        }
+      },
+      "Create_or_update_dapr_component_with_secret_store_component": {
+        "value": {
+          "id": "/subscriptions/8efdecc5-919e-44eb-b179-915dca89ebf9/resourceGroups/examplerg/providers/Microsoft.App/managedEnvironments/jlaw-demo1/daprcomponents/reddog",
+          "name": "reddog",
+          "type": "Microsoft.App/managedEnvironments/daprcomponents",
+          "properties": {
+            "componentType": "state.azure.cosmosdb",
+            "version": "v1",
+            "ignoreErrors": false,
+            "initTimeout": "50s",
+            "secretStoreComponent": "my-secret-store",
+            "metadata": [
+              {
+                "name": "url",
+                "value": "<COSMOS-URL>"
+              },
+              {
+                "name": "database",
+                "value": "itemsDB"
+              },
+              {
+                "name": "collection",
+                "value": "items"
+              },
+              {
+                "name": "masterkey",
+                "secretRef": "masterkey"
+              }
+            ],
+            "scopes": ["container-app-1", "container-app-2"]
+          }
+        }
+      },
+      "List_Container_Apps_Secrets": {
+        "value": {
+          "value": [
+            {
+              "name": "secret1"
+            },
+            {
+              "name": "secret2"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "description": "The ID of the target subscription.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Dapr Components": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Get Dapr Component with secrets": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Get Dapr Component with secret store component": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Create or update dapr component with secrets": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Create or update dapr component with secret store component": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "Delete dapr component": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          },
+          "List Container Apps Secrets": {
+            "value": "8efdecc5-919e-44eb-b179-915dca89ebf9"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "description": "The name of the resource group. The name is case insensitive.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List Dapr Components": {
+            "value": "examplerg"
+          },
+          "Get Dapr Component with secrets": {
+            "value": "examplerg"
+          },
+          "Get Dapr Component with secret store component": {
+            "value": "examplerg"
+          },
+          "Create or update dapr component with secrets": {
+            "value": "examplerg"
+          },
+          "Create or update dapr component with secret store component": {
+            "value": "examplerg"
+          },
+          "Delete dapr component": {
+            "value": "examplerg"
+          },
+          "List Container Apps Secrets": {
+            "value": "examplerg"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "description": "The API version to use for this operation.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Dapr Components": {
+            "value": "2025-01-01"
+          },
+          "Get Dapr Component with secrets": {
+            "value": "2025-01-01"
+          },
+          "Get Dapr Component with secret store component": {
+            "value": "2025-01-01"
+          },
+          "Create or update dapr component with secrets": {
+            "value": "2025-01-01"
+          },
+          "Create or update dapr component with secret store component": {
+            "value": "2025-01-01"
+          },
+          "Delete dapr component": {
+            "value": "2025-01-01"
+          },
+          "List Container Apps Secrets": {
+            "value": "2025-01-01"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "DefaultErrorResponse": {
+        "description": "App Service error response.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "description": "Error model.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Standardized string to programmatically identify the error.",
+                "type": "string",
+                "readOnly": true
+              },
+              "message": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "target": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "details": {
+                "type": "array",
+                "description": "Details or the error",
+                "items": {
+                  "description": "Detailed errors.",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "description": "Standardized string to programmatically identify the error.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "message": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "target": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    }
+                  },
+                  "readOnly": true
+                },
+                "x-ms-identifiers": ["code"]
+              },
+              "innererror": {
+                "description": "More information to debug error.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "readOnly": true
+          }
+        }
+      },
+      "systemData": {
+        "type": "object",
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "properties": {
+          "createdBy": {
+            "type": "string",
+            "description": "The identity that created the resource."
+          },
+          "createdByType": {
+            "type": "string",
+            "description": "The type of identity that created the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The timestamp of resource creation (UTC)."
+          },
+          "lastModifiedBy": {
+            "type": "string",
+            "description": "The identity that last modified the resource."
+          },
+          "lastModifiedByType": {
+            "type": "string",
+            "description": "The type of identity that last modified the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "type": "string",
+            "description": "The timestamp of resource last modification (UTC)"
+          }
+        },
+        "readOnly": true
+      },
+      "Resource": {
+        "type": "object",
+        "title": "Resource",
+        "description": "Common fields that are returned in the response for all Azure Resource Manager resources",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "arm-id",
+            "description": "Fully qualified resource ID for the resource. E.g. \"/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}\"",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the resource",
+            "readOnly": true
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of the resource. E.g. \"Microsoft.Compute/virtualMachines\" or \"Microsoft.Storage/storageAccounts\"",
+            "readOnly": true
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "ProxyResource": {
+        "type": "object",
+        "title": "Proxy Resource",
+        "description": "The resource model definition for a Azure Resource Manager proxy resource. It will not have tags and a location",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      },
+      "Secret": {
+        "description": "Secret definition.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Secret Name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Secret Value.",
+            "type": "string",
+            "x-ms-mutability": ["create", "update"],
+            "x-ms-secret": true
+          },
+          "identity": {
+            "description": "Resource ID of a managed identity to authenticate with Azure Key Vault, or System to use a system-assigned identity.",
+            "type": "string"
+          },
+          "keyVaultUrl": {
+            "description": "Azure Key Vault URL pointing to the secret referenced by the container app.",
+            "type": "string"
+          }
+        }
+      },
+      "DaprMetadata": {
+        "description": "Dapr component metadata.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Metadata property name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Metadata property value.",
+            "type": "string"
+          },
+          "secretRef": {
+            "description": "Name of the Dapr Component secret from which to pull the metadata property value.",
+            "type": "string"
+          }
+        }
+      },
+      "DaprComponent": {
+        "description": "Dapr Component.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Dapr Component resource specific properties",
+            "type": "object",
+            "properties": {
+              "componentType": {
+                "description": "Component type",
+                "type": "string"
+              },
+              "version": {
+                "description": "Component version",
+                "type": "string"
+              },
+              "ignoreErrors": {
+                "description": "Boolean describing if the component errors are ignores",
+                "type": "boolean",
+                "default": false
+              },
+              "initTimeout": {
+                "description": "Initialization timeout",
+                "type": "string"
+              },
+              "secrets": {
+                "description": "Collection of secrets used by a Dapr component",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Secret"
+                },
+                "x-ms-identifiers": ["name"]
+              },
+              "secretStoreComponent": {
+                "description": "Name of a Dapr component to retrieve component secrets from",
+                "type": "string"
+              },
+              "metadata": {
+                "description": "Component metadata",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DaprMetadata"
+                },
+                "x-ms-identifiers": ["name"]
+              },
+              "scopes": {
+                "description": "Names of container apps that can use this Dapr component",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "DaprComponentsCollection": {
+        "description": "Dapr Components ARM resource.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DaprComponent"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "DaprSecret": {
+        "description": "Dapr component Secret for ListSecrets Action",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Secret Name.",
+            "type": "string",
+            "readOnly": true
+          },
+          "value": {
+            "description": "Secret Value.",
+            "type": "string",
+            "x-ms-secret": true,
+            "readOnly": true
+          }
+        }
+      },
+      "DaprSecretsCollection": {
+        "description": "Dapr component Secrets Collection for ListSecrets Action.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of secrets used by a Dapr component",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DaprSecret"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      }
+    }
+  }
+}

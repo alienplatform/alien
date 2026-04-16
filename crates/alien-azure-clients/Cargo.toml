@@ -1,0 +1,67 @@
+[package]
+name = "alien-azure-clients"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+alien-client-core = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+http = { workspace = true }
+base64 = { workspace = true }
+urlencoding = { workspace = true }
+sha2 = { workspace = true }
+hmac = "0.12"
+backon = { workspace = true }
+url = { workspace = true }
+serde-aux = "4"
+async-trait = { workspace = true }
+mockall = { workspace = true, optional = true }
+
+# Azure specific dependencies
+regress = { version = "0.4.1" }
+# jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"] }
+
+[dev-dependencies]
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = { workspace = true }
+workspace_root = { workspace = true }
+dotenvy = { workspace = true }
+test-context = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+rcgen = { version = "0.13", features = ["pem"] }
+p12 = "0.6"
+pem = "3.0"
+
+[dev-dependencies.tracing-subscriber]
+workspace = true
+
+[features]
+default = []
+test-utils = ["dep:mockall"]
+
+[build-dependencies]
+prettyplease = "0.2.22"
+progenitor = { version = "0.11.0", default-features = false }
+serde_json = "1.0"
+syn = "2.0"
+openapiv3 = "2.2.0"
+quote = "1.0"

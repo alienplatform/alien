@@ -1,0 +1,1037 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_method:
+        description: "Deployment method"
+        type: choice
+        default: "All"
+        options:
+          - All
+          - Push
+          - Pull
+      platform_aws:
+        description: "Platform: AWS (aarch64)"
+        type: boolean
+        default: true
+      platform_gcp:
+        description: "Platform: GCP (x86_64)"
+        type: boolean
+        default: true
+      platform_azure:
+        description: "Platform: Azure (x86_64)"
+        type: boolean
+        default: true
+      local_linux:
+        description: "Platform: Local / Linux"
+        type: boolean
+        default: true
+      local_macos:
+        description: "Platform: Local / macOS"
+        type: boolean
+        default: false
+      local_windows:
+        description: "Platform: Local / Windows"
+        type: boolean
+        default: false
+      language:
+        description: "Language filter"
+        type: choice
+        default: "Rust"
+        options:
+          - All
+          - Rust
+          - TypeScript
+      build_images:
+        description: "Build container images (disable to use latest from main)"
+        type: boolean
+        default: true
+      skip_cleanup:
+        description: "Skip post-test resource cleanup (useful for debugging)"
+        type: boolean
+        default: false
+      test_filter:
+        description: "Additional nextest filter expression (optional)"
+        type: string
+        default: ""
+      foreground_agent:
+        description: "Run local agent in foreground (no service install, no sudo)"
+        type: boolean
+        default: true
+  merge_group:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  # ── Compute which tests, platforms, and architectures to run ────────
+  # Centralises all event-gating and input-filtering so downstream jobs
+  # only need a simple `if: needs.compute-matrix.outputs.<flag> == 'true'`.
+
+  compute-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      push_matrix: ${{ steps.set.outputs.push_matrix }}
+      pull_matrix: ${{ steps.set.outputs.pull_matrix }}
+      local_matrix: ${{ steps.set.outputs.local_matrix }}
+      has_push: ${{ steps.set.outputs.has_push }}
+      has_pull: ${{ steps.set.outputs.has_pull }}
+      has_local: ${{ steps.set.outputs.has_local }}
+      needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
+      needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
+      build_images: ${{ steps.set.outputs.build_images }}
+      skip_cleanup: ${{ steps.set.outputs.skip_cleanup }}
+      test_filter: ${{ steps.set.outputs.test_filter }}
+    steps:
+      - id: set
+        run: |
+          # Determine whether tests should run at all based on event type
+          SHOULD_RUN=false
+          case "${{ github.event_name }}" in
+            workflow_dispatch|merge_group)
+              SHOULD_RUN=true
+              ;;
+            pull_request)
+              IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
+              HAS_LABEL="${{ contains(join(github.event.pull_request.labels.*.name, ','), 'run-e2e') }}"
+              if [ "$IS_FORK" = "false" ] && [ "$HAS_LABEL" = "true" ]; then
+                SHOULD_RUN=true
+              fi
+              ;;
+          esac
+
+          if [ "$SHOULD_RUN" = "false" ]; then
+            echo 'push_matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo 'pull_matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo 'local_matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo "has_push=false" >> $GITHUB_OUTPUT
+            echo "has_pull=false" >> $GITHUB_OUTPUT
+            echo "has_local=false" >> $GITHUB_OUTPUT
+            echo "needs_x86_64=false" >> $GITHUB_OUTPUT
+            echo "needs_aarch64=false" >> $GITHUB_OUTPUT
+            echo "build_images=true" >> $GITHUB_OUTPUT
+            echo "skip_cleanup=false" >> $GITHUB_OUTPUT
+            echo "test_filter=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # For workflow_dispatch, read inputs; otherwise enable everything
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            AWS="${{ inputs.platform_aws }}"
+            GCP="${{ inputs.platform_gcp }}"
+            AZURE="${{ inputs.platform_azure }}"
+            LOCAL_LINUX="${{ inputs.local_linux }}"
+            LOCAL_MACOS="${{ inputs.local_macos }}"
+            LOCAL_WINDOWS="${{ inputs.local_windows }}"
+            LANG="${{ inputs.language }}"
+            BUILD_IMAGES="${{ inputs.build_images }}"
+            SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
+            TEST_FILTER="${{ inputs.test_filter }}"
+            case "${{ inputs.deploy_method }}" in
+              All)  PUSH=true;  PULL=true  ;;
+              Push) PUSH=true;  PULL=false ;;
+              Pull) PUSH=false; PULL=true  ;;
+            esac
+          else
+            AWS=true; GCP=true; AZURE=true
+            LOCAL_LINUX=true; LOCAL_MACOS=true; LOCAL_WINDOWS=true
+            PUSH=true; PULL=true
+            LANG=All; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
+          fi
+
+          # Build push matrix
+          PUSH_ENTRIES='[]'
+          if [ "$PUSH" = "true" ]; then
+            if [ "$AWS" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false}]')
+              fi
+            fi
+            if [ "$GCP" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false}]')
+              fi
+            fi
+            if [ "$AZURE" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true}]')
+              fi
+            fi
+          fi
+
+          # Build pull matrix
+          PULL_ENTRIES='[]'
+          if [ "$PULL" = "true" ]; then
+            if [ "$AWS" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-aws-rust","test_filter":"pull_aws_rust"}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-aws-typescript","test_filter":"pull_aws_typescript"}]')
+              fi
+            fi
+            if [ "$GCP" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-gcp-rust","test_filter":"pull_gcp_rust"}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-gcp-typescript","test_filter":"pull_gcp_typescript"}]')
+              fi
+            fi
+            if [ "$AZURE" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-azure-rust","test_filter":"pull_azure_rust"}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-azure-typescript","test_filter":"pull_azure_typescript"}]')
+              fi
+            fi
+          fi
+
+          HAS_PUSH=$([ "$(echo "$PUSH_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+          HAS_PULL=$([ "$(echo "$PULL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+
+          # Build local matrix (native agent on each OS)
+          LOCAL_ENTRIES='[]'
+          if [ "$LOCAL_LINUX" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_rust"}]')
+            fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-typescript","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_typescript"}]')
+            fi
+          fi
+          if [ "$LOCAL_MACOS" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-rust","os":"depot-macos-latest","test_filter":"pull_local_rust"}]')
+            fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-typescript","os":"depot-macos-latest","test_filter":"pull_local_typescript"}]')
+            fi
+          fi
+          if [ "$LOCAL_WINDOWS" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-rust","os":"depot-windows-2025-8","test_filter":"pull_local_rust"}]')
+            fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-typescript","os":"depot-windows-2025-8","test_filter":"pull_local_typescript"}]')
+            fi
+          fi
+
+          HAS_LOCAL=$([ "$(echo "$LOCAL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+
+          # Architecture needs: AWS→aarch64, GCP/Azure→x86_64
+          # Pull tests always run on ARM runners, so the agent Docker image
+          # must include an aarch64 binary whenever any pull tests are enabled.
+          ANY_TESTS=false
+          if [ "$HAS_PUSH" = "true" ] || [ "$HAS_PULL" = "true" ]; then ANY_TESTS=true; fi
+
+          NEEDS_X86_64=false
+          NEEDS_AARCH64=false
+          if [ "$ANY_TESTS" = "true" ]; then
+            if [ "$GCP" = "true" ] || [ "$AZURE" = "true" ]; then NEEDS_X86_64=true; fi
+            if [ "$AWS" = "true" ]; then NEEDS_AARCH64=true; fi
+          fi
+          # Pull tests run on ARM runners and use the agent Docker image,
+          # so aarch64 is always needed when pull tests are in the matrix.
+          if [ "$HAS_PULL" = "true" ]; then NEEDS_AARCH64=true; fi
+
+          echo "push_matrix=$(echo "$PUSH_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
+          echo "pull_matrix=$(echo "$PULL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
+          echo "local_matrix=$(echo "$LOCAL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
+          echo "has_push=$HAS_PUSH" >> $GITHUB_OUTPUT
+          echo "has_pull=$HAS_PULL" >> $GITHUB_OUTPUT
+          echo "has_local=$HAS_LOCAL" >> $GITHUB_OUTPUT
+          echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
+          echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
+          echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
+          echo "skip_cleanup=$SKIP_CLEANUP" >> $GITHUB_OUTPUT
+          echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
+
+  # ── Build alien-runtime + alien-agent for needed architectures ─────
+  # Combined into one cargo invocation per arch to share compilation of
+  # common dependencies (tokio, reqwest, serde, platform clients, etc.).
+
+  build-x86_64:
+    needs: [compute-matrix]
+    if: >-
+      needs.compute-matrix.outputs.build_images == 'true' &&
+      needs.compute-matrix.outputs.needs_x86_64 == 'true'
+    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: x86_64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build alien-runtime + alien-agent (x86_64)
+        run: depot cargo build --release -p alien-runtime -p alien-agent --target x86_64-unknown-linux-musl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-runtime-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-runtime
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-agent
+          retention-days: 1
+
+  build-aarch64:
+    needs: [compute-matrix]
+    if: >-
+      needs.compute-matrix.outputs.build_images == 'true' &&
+      needs.compute-matrix.outputs.needs_aarch64 == 'true'
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: aarch64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build alien-runtime + alien-agent (aarch64)
+        run: depot cargo build --release -p alien-runtime -p alien-agent --target aarch64-unknown-linux-musl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-runtime-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-runtime
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alien-agent-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-agent
+          retention-days: 1
+
+  # ── Build container images ─────────────────────────────────────────
+
+  build-base-image:
+    needs: [build-x86_64, build-aarch64]
+    if: |
+      !cancelled() && !failure() &&
+      (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    outputs:
+      base_image: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        if: needs.build-x86_64.result == 'success'
+        with:
+          name: alien-runtime-x86_64
+          path: target/x86_64-unknown-linux-musl/release/
+
+      - uses: actions/download-artifact@v4
+        if: needs.build-aarch64.result == 'success'
+        with:
+          name: alien-runtime-aarch64
+          path: target/aarch64-unknown-linux-musl/release/
+
+      - name: Ensure binary dirs exist and make executable
+        run: |
+          # Create placeholder dirs for skipped architectures so Dockerfile COPY doesn't fail
+          mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
+          # Create empty placeholder binaries for skipped architectures
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-runtime
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-runtime
+          chmod +x target/*/release/alien-runtime
+
+      - name: Compute Docker platforms
+        id: platforms
+        run: |
+          PLATFORMS=""
+          if [ "${{ needs.build-x86_64.result }}" = "success" ]; then
+            PLATFORMS="linux/amd64"
+          fi
+          if [ "${{ needs.build-aarch64.result }}" = "success" ]; then
+            [ -n "$PLATFORMS" ] && PLATFORMS="$PLATFORMS,"
+            PLATFORMS="${PLATFORMS}linux/arm64"
+          fi
+          echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: depot/setup-action@v1
+
+      - name: Build and push alien-base
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-base
+          platforms: ${{ steps.platforms.outputs.platforms }}
+          push: true
+          tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+          provenance: false
+
+  build-agent-image:
+    needs: [build-x86_64, build-aarch64]
+    if: |
+      !cancelled() && !failure() &&
+      (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    outputs:
+      agent_image: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        if: needs.build-x86_64.result == 'success'
+        with:
+          name: alien-agent-x86_64
+          path: target/x86_64-unknown-linux-musl/release/
+
+      - uses: actions/download-artifact@v4
+        if: needs.build-aarch64.result == 'success'
+        with:
+          name: alien-agent-aarch64
+          path: target/aarch64-unknown-linux-musl/release/
+
+      - name: Ensure binary dirs exist and make executable
+        run: |
+          mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-agent ] && touch target/x86_64-unknown-linux-musl/release/alien-agent
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-agent ] && touch target/aarch64-unknown-linux-musl/release/alien-agent
+          chmod +x target/*/release/alien-agent
+
+      - name: Compute Docker platforms
+        id: platforms
+        run: |
+          PLATFORMS=""
+          if [ "${{ needs.build-x86_64.result }}" = "success" ]; then
+            PLATFORMS="linux/amd64"
+          fi
+          if [ "${{ needs.build-aarch64.result }}" = "success" ]; then
+            [ -n "$PLATFORMS" ] && PLATFORMS="$PLATFORMS,"
+            PLATFORMS="${PLATFORMS}linux/arm64"
+          fi
+          echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: depot/setup-action@v1
+
+      - name: Build and push alien-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
+          platforms: ${{ steps.platforms.outputs.platforms }}
+          push: true
+          tags: ghcr.io/alienplatform/alien-agent:${{ github.sha }}
+          provenance: false
+
+  # ── Terraform setup ─────────────────────────────────────────────────
+
+  setup:
+    needs: [compute-matrix]
+    if: |
+      needs.compute-matrix.outputs.has_push == 'true' ||
+      needs.compute-matrix.outputs.has_pull == 'true' ||
+      needs.compute-matrix.outputs.has_local == 'true'
+    # Prevent concurrent terraform applies on the same workspace
+    concurrency:
+      group: terraform-test-infra
+      cancel-in-progress: false
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Mask non-secret infrastructure identifiers
+        run: |
+          # vars.* are not auto-masked by GitHub (only secrets.* are)
+          echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+
+      - name: Terraform init
+        working-directory: infra/test
+        run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform apply
+        working-directory: infra/test
+        run: terraform apply -auto-approve
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          TF_VAR_aws_management_access_key_id: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
+          TF_VAR_aws_management_secret_access_key: ${{ secrets.TEST_AWS_MGMT_SECRET_ACCESS_KEY }}
+          TF_VAR_aws_target_access_key_id: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          TF_VAR_aws_target_secret_access_key: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          TF_VAR_google_management_service_account_key: ${{ secrets.TEST_GCP_MGMT_SA_KEY }}
+          TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
+          TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
+          TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
+          TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
+          TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
+          TF_VAR_azure_management_client_secret: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
+          TF_VAR_azure_target_subscription_id: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+
+      - name: Set up Azure OIDC token
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SUBJECT="repo:${{ github.repository }}:pull_request"
+          else
+            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
+          fi
+          echo "Setting AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT"
+          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
+          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
+
+      - name: Generate .env.test
+        run: |
+          ./scripts/gen-env-test.sh
+          echo "--- verifying .env.test exists ---"
+          ls -la .env.test
+          wc -l .env.test
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+
+      - name: Mask all .env.test values
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Upload .env.test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-test-e2e
+          path: .env.test
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+  # ── E2E push test matrix ───────────────────────────────────────────
+
+  push-test:
+    needs: [compute-matrix, setup, build-base-image]
+    if: |
+      !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.has_push == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.push_matrix) }}
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - name: Acquire Azure OIDC token and start refresh loop
+        if: matrix.needs_oidc
+        run: |
+          # Acquire initial OIDC token
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+
+          # Start background loop to refresh the token every 4 minutes
+          # (GitHub OIDC tokens expire after 5 minutes)
+          (
+            while true; do
+              sleep 240
+              NEW_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+              if [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
+                echo "$NEW_TOKEN" > /tmp/azure-oidc-token
+              fi
+            done
+          ) &
+          echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Mask sensitive values from .env.test
+        run: |
+          while IFS= read -r line; do
+            # Skip comments and empty lines
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            # Extract value (strip key= prefix, then surrounding quotes)
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            # Skip empty values and mask the rest
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Run E2E push test
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+  # ── E2E pull test matrix ───────────────────────────────────────────
+
+  pull-test:
+    needs: [compute-matrix, setup, build-base-image, build-agent-image]
+    if: |
+      !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.has_pull == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.pull_matrix) }}
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - uses: docker/login-action@v3
+        if: needs.compute-matrix.outputs.build_images == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull agent image
+        if: needs.compute-matrix.outputs.build_images == 'true'
+        run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Mask sensitive values from .env.test
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Run E2E pull test
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+  # ── E2E local test matrix ──────────────────────────────────────────
+  # Installs alien-agent as an OS service via `alien-deploy up` on each
+  # OS (Linux, macOS, Windows), matching the real customer deployment flow.
+
+  local-test:
+    needs: [compute-matrix, setup]
+    if: |
+      !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.has_local == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.local_matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      # depot cargo works on Linux/macOS; Windows uses sccache directly
+      - uses: depot/setup-action@v1
+        if: runner.os != 'Windows'
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Build alien-agent and alien-deploy (Unix)
+        if: runner.os != 'Windows'
+        run: depot cargo build -p alien-agent -p alien-deploy-cli
+
+      - name: Build alien-agent and alien-deploy (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build -p alien-agent -p alien-deploy-cli
+
+      - name: Mask sensitive values from .env.test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Mask sensitive values from .env.test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-Content .env.test | ForEach-Object {
+            if ($_ -match '^([^#][^=]*)=(.*)$') {
+              $val = $matches[2]
+              if ($val -match "^'(.*)'$" -or $val -match '^"(.*)"$') {
+                $val = $matches[1]
+              }
+              if ($val) { Write-Output "::add-mask::$val" }
+            }
+          }
+
+      - name: Run E2E local test (Unix)
+        if: runner.os != 'Windows'
+        env:
+          ALIEN_AGENT_BINARY: target/debug/alien-agent
+          ALIEN_DEPLOY_BINARY: target/debug/alien-deploy
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_E2E_FOREGROUND: ${{ inputs.foreground_agent && '1' || '' }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+      - name: Run E2E local test (Windows)
+        if: runner.os == 'Windows'
+        env:
+          ALIEN_AGENT_BINARY: target/debug/alien-agent.exe
+          ALIEN_DEPLOY_BINARY: target/debug/alien-deploy.exe
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_E2E_FOREGROUND: ${{ inputs.foreground_agent && '1' || '' }}
+        shell: pwsh
+        run: |
+          Get-Content .env.test | ForEach-Object {
+            if ($_ -match '^([^#][^=]*)=(.*)$') {
+              $key = $matches[1]
+              $val = $matches[2]
+              # Strip surrounding single or double quotes (shell-style quoting in .env files)
+              if ($val -match "^'(.*)'$" -or $val -match '^"(.*)"$') {
+                $val = $matches[1]
+              }
+              [Environment]::SetEnvironmentVariable($key, $val, 'Process')
+            }
+          }
+          cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+  # ── Cleanup safety net ───────────────────────────────────────────────
+  # Runs after all test jobs (even on failure/cancellation) to delete
+  # orphaned cloud resources in the dedicated test target accounts.
+
+  cleanup:
+    needs: [compute-matrix, push-test, pull-test, local-test]
+    if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Clean up AWS resources
+        if: always()
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-2
+        run: |
+          echo "Deleting CloudFormation stacks in target account..."
+          STACKS=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
+                                  CREATE_FAILED UPDATE_FAILED DELETE_FAILED \
+            --query 'StackSummaries[].StackName' --output text) || true
+          for stack in $STACKS; do
+            echo "Deleting stack: $stack"
+            aws cloudformation delete-stack --stack-name "$stack" || true
+          done
+
+          echo "Waiting for stack deletions to complete..."
+          for stack in $STACKS; do
+            aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
+          done
+
+          echo "Deleting orphaned Lambda functions with alien- prefix..."
+          LAMBDAS=$(aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `alien-`)].FunctionName' --output text) || true
+          for fn in $LAMBDAS; do
+            echo "Deleting Lambda function: $fn"
+            aws lambda delete-function --function-name "$fn" || true
+          done
+
+          echo "Deleting orphaned SQS queues with alien- prefix..."
+          QUEUES=$(aws sqs list-queues --queue-name-prefix alien- --query 'QueueUrls[]' --output text 2>/dev/null) || true
+          for queue in $QUEUES; do
+            echo "Deleting SQS queue: $queue"
+            aws sqs delete-queue --queue-url "$queue" || true
+          done
+
+          echo "Deleting orphaned DynamoDB tables with alien- prefix..."
+          TABLES=$(aws dynamodb list-tables --query 'TableNames[?starts_with(@, `alien-`)]' --output text) || true
+          for table in $TABLES; do
+            echo "Deleting DynamoDB table: $table"
+            aws dynamodb delete-table --table-name "$table" || true
+          done
+
+          echo "Deleting orphaned SSM parameters with /alien- prefix..."
+          PARAMS=$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/alien-" --query 'Parameters[].Name' --output text) || true
+          for param in $PARAMS; do
+            echo "Deleting SSM parameter: $param"
+            aws ssm delete-parameter --name "$param" || true
+          done
+
+          echo "Deleting orphaned IAM roles with alien- prefix..."
+          ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
+          for role in $ROLES; do
+            echo "Detaching policies and deleting IAM role: $role"
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
+            for policy in $POLICIES; do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$policy" || true
+            done
+            INLINE=$(aws iam list-role-policies --role-name "$role" --query 'PolicyNames[]' --output text) || true
+            for ip in $INLINE; do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$ip" || true
+            done
+            aws iam delete-role --role-name "$role" || true
+          done
+
+      - name: Clean up GCP resources
+        if: always()
+        continue-on-error: true
+        env:
+          GCP_TARGET_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+        run: |
+          echo '${{ secrets.TEST_GCP_TARGET_SA_KEY }}' > /tmp/gcp-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json --quiet || true
+          gcloud config set project "$GCP_TARGET_PROJECT_ID" --quiet || true
+
+          echo "Deleting Cloud Run services in target project..."
+          SERVICES=$(gcloud run services list --platform=managed --region=us-east4 \
+            --format='value(name)' 2>/dev/null) || true
+          for svc in $SERVICES; do
+            echo "Deleting Cloud Run service: $svc"
+            gcloud run services delete "$svc" --platform=managed --region=us-east4 --quiet || true
+          done
+
+          echo "Deleting orphaned Cloud Functions in target project..."
+          FUNCTIONS=$(gcloud functions list --regions=us-east4 \
+            --format='value(name)' 2>/dev/null) || true
+          for fn in $FUNCTIONS; do
+            echo "Deleting Cloud Function: $fn"
+            gcloud functions delete "$fn" --region=us-east4 --quiet || true
+          done
+
+          echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
+          TOPICS=$(gcloud pubsub topics list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for topic in $TOPICS; do
+            echo "Deleting Pub/Sub topic: $topic"
+            gcloud pubsub topics delete "$topic" --quiet || true
+          done
+
+          echo "Deleting orphaned Secret Manager secrets with alien- prefix..."
+          SECRETS=$(gcloud secrets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for secret in $SECRETS; do
+            echo "Deleting secret: $secret"
+            gcloud secrets delete "$secret" --quiet || true
+          done
+
+          echo "Deleting orphaned GCS buckets with alien- prefix..."
+          BUCKETS=$(gcloud storage buckets list --format='value(name)' --filter='name:alien-' 2>/dev/null) || true
+          for bucket in $BUCKETS; do
+            echo "Deleting GCS bucket: $bucket"
+            gcloud storage rm -r "gs://$bucket" --quiet || true
+          done
+
+          echo "Deleting orphaned service accounts with alien- prefix..."
+          SAS=$(gcloud iam service-accounts list --format='value(email)' --filter='email:alien-' 2>/dev/null) || true
+          for sa in $SAS; do
+            echo "Deleting service account: $sa"
+            gcloud iam service-accounts delete "$sa" --quiet || true
+          done
+
+          rm -f /tmp/gcp-key.json
+
+      - name: Clean up Azure resources
+        if: always()
+        continue-on-error: true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+        run: |
+          az login --service-principal \
+            -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" \
+            --output none || true
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID" || true
+
+          echo "Deleting resource groups in target subscription (excluding shared env)..."
+          GROUPS=$(az group list --query "[?!starts_with(name, 'alien-e2e-shared-')].name" -o tsv 2>/dev/null) || true
+          for rg in $GROUPS; do
+            echo "Deleting resource group: $rg"
+            az group delete --name "$rg" --yes --no-wait || true
+          done

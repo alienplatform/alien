@@ -1,0 +1,32 @@
+[package]
+name = "alien-permissions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+regex = { workspace = true }
+json5 = "0.4"
+
+[build-dependencies]
+json5 = "0.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+alien-core = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+insta = { workspace = true, features = ["yaml", "json"] }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }
+anyhow = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+json5 = "0.4"

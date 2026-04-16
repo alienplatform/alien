@@ -1,0 +1,17 @@
+{
+  "name": "@alienplatform/examples-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "test": "pnpm run test:projects",
+    "test:projects": "pnpm -C basic-function-ts test && pnpm -C remote-worker-ts test && pnpm -C data-connector-ts test && pnpm -C event-pipeline-ts test"
+  },
+  "pnpm": {
+    "overrides": {
+      "@alienplatform/platform-api": "file:../client-sdks/platform/typescript",
+      "@alienplatform/core": "file:../packages/core",
+      "@alienplatform/sdk": "file:../packages/sdk",
+      "@alienplatform/testing": "file:../packages/testing"
+    }
+  }
+}

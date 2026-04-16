@@ -1,0 +1,21 @@
+# CreateProjectFromTemplatePackagesConfigResponse
+
+Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
+
+## Example Usage
+
+```typescript
+import { CreateProjectFromTemplatePackagesConfigResponse } from "@alienplatform/platform-api/models/operations";
+
+let value: CreateProjectFromTemplatePackagesConfigResponse = {};
+```
+
+## Fields
+
+| Field                                                                                                                                    | Type                                                                                                                                     | Required                                                                                                                                 | Description                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `cli`                                                                                                                                    | [operations.CreateProjectFromTemplateCliResponse](../../models/operations/createprojectfromtemplatecliresponse.md)                       | :heavy_minus_sign:                                                                                                                       | CLI package configuration. If null, CLI packages will not be generated.                                                                  |
+| `cloudformation`                                                                                                                         | [operations.CreateProjectFromTemplateCloudformationResponse](../../models/operations/createprojectfromtemplatecloudformationresponse.md) | :heavy_minus_sign:                                                                                                                       | CloudFormation package configuration. If null, CloudFormation packages will not be generated.                                            |
+| `agentImage`                                                                                                                             | [operations.CreateProjectFromTemplateAgentImageResponse](../../models/operations/createprojectfromtemplateagentimageresponse.md)         | :heavy_minus_sign:                                                                                                                       | Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.                   |
+| `helm`                                                                                                                                   | [operations.CreateProjectFromTemplateHelmResponse](../../models/operations/createprojectfromtemplatehelmresponse.md)                     | :heavy_minus_sign:                                                                                                                       | Helm chart package configuration. If null, Helm packages will not be generated.                                                          |
+| `terraform`                                                                                                                              | [operations.CreateProjectFromTemplateTerraformResponse](../../models/operations/createprojectfromtemplateterraformresponse.md)           | :heavy_minus_sign:                                                                                                                       | Terraform provider package configuration. If null, Terraform packages will not be generated.                                             |

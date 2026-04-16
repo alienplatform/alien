@@ -1,0 +1,24 @@
+[package]
+name = "alien-preflights"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-permissions = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+tracing = { workspace = true }
+indexmap = { workspace = true }
+utoipa = { workspace = true, optional = true }
+
+[features]
+default = []
+runtime-checks = []
+openapi = ["utoipa"]
+
+[dev-dependencies]
+tokio-test = "0.4"

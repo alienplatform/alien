@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".env"],
+  "globalPassThroughEnv": ["AWS_SECRET_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**", "esm/**", "*.cjs", "*.d.ts"]
+    },
+    "generate": {
+      "cache": false
+    },
+    "test": {
+      "cache": false
+    },
+    "test:ts": {
+      "dependsOn": ["^build", "build"],
+      "cache": false
+    },
+    "//#format-and-lint": {},
+    "//#format-and-lint:fix": {
+      "cache": false
+    }
+  }
+}

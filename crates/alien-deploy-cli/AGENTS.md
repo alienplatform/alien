@@ -1,0 +1,2 @@
+- Don't add deployment state machine logic — that belongs in `alien-deployment`.
+- Don't add manager-side logic — this is a client that talks to the manager API.

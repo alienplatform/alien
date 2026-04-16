@@ -1,0 +1,55 @@
+{
+  // Allows reading messages from queues (runtime access for functions)
+  "id": "queue/data-read",
+  "description": "Allows reading messages from message queues",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["sqs:ReceiveMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["pubsub.subscriptions.consume", "pubsub.subscriptions.get"]
+        },
+        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
+        // for pubsub.subscriptions.consume at runtime.
+        // Access is scoped per-stack via the service account identity instead.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/receive/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

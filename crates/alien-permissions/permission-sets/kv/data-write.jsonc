@@ -1,0 +1,73 @@
+{
+  "id": "kv/data-write",
+  "description": "Allows reading and writing data to key-value stores",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+            "dynamodb:Scan",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:DescribeTable"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "datastore.entities.get",
+            "datastore.entities.list",
+            "datastore.entities.create",
+            "datastore.entities.update",
+            "datastore.entities.delete"
+          ]
+        },
+        // Firestore uses the (default) database shared across stacks.
+        // Isolation is enforced at the collection level by the application (collection names
+        // are prefixed with kv-{stackPrefix}-). IAM conditions cannot scope to collections,
+        // so we use scope-only bindings.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/tableServices/read",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/read"
+          ],
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/write",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

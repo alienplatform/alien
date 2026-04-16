@@ -1,0 +1,218 @@
+{
+  "id": "container-cluster/execute",
+  "description": "Runtime permissions for Horizon VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
+  "platforms": {
+    "aws": [
+      // Cross-account ECR image pull from managing account's registry
+      {
+        "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          }
+        }
+      },
+      // Per-container SA impersonation: VM assumes any SA role in this stack
+      {
+        "grant": {
+          "actions": ["sts:AssumeRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      // EBS volume attach/detach for persistent storage containers.
+      // horizond calls ec2:AttachVolume/DetachVolume/DescribeVolumes at runtime.
+      // Describe* require Resource: "*" (AWS API limitation).
+      {
+        "grant": {
+          "actions": ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DescribeVolumes"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // ELB target registration: horizond registers/deregisters container instances
+      // with ALB/NLB target groups for load-balanced containers.
+      {
+        "grant": {
+          "actions": [
+            "elasticloadbalancing:RegisterTargets",
+            "elasticloadbalancing:DeregisterTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // Cross-project artifact registry image pull from managing project
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${managingProjectId}"
+          },
+          "resource": {
+            "scope": "projects/${managingProjectId}"
+          }
+        }
+      },
+      // Per-container SA impersonation: VM generates access tokens for container SAs
+      {
+        "grant": {
+          "permissions": ["iam.serviceAccounts.getAccessToken"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // Disk attach/detach for persistent storage containers (horizond runtime)
+      {
+        "grant": {
+          "permissions": [
+            "compute.instances.attachDisk",
+            "compute.instances.detachDisk",
+            "compute.instances.get",
+            "compute.disks.use"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // NEG target registration for load-balanced containers (horizond runtime)
+      {
+        "grant": {
+          "permissions": [
+            "compute.networkEndpointGroups.attachNetworkEndpoints",
+            "compute.networkEndpointGroups.detachNetworkEndpoints",
+            "compute.networkEndpointGroups.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      // Cross-subscription ACR image pull from managing subscription
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      },
+      // Disk attach/detach for persistent storage containers (horizond runtime)
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/disks/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Load balancer backend pool registration (horizond runtime)
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Network/loadBalancers/backendAddressPools/read",
+            "Microsoft.Network/loadBalancers/backendAddressPools/write",
+            "Microsoft.Network/loadBalancers/backendAddressPools/join/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+      // Note: Azure per-container identity impersonation works by attaching the
+      // container's user-assigned managed identity to the VMSS at provisioning time.
+      // Once attached, IMDS serves tokens without additional runtime permissions.
+      // This differs from AWS (sts:AssumeRole) and GCP (generateAccessToken).
+    ]
+  }
+}

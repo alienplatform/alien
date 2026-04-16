@@ -1,0 +1,72 @@
+{
+  "id": "build/execute",
+  "description": "Allows starting, stopping, and monitoring build executions",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "codebuild:StartBuild",
+            "codebuild:StartBuildBatch",
+            "codebuild:StopBuild",
+            "codebuild:StopBuildBatch",
+            "codebuild:RetryBuild",
+            "codebuild:RetryBuildBatch",
+            "codebuild:BatchGetBuilds",
+            "codebuild:BatchGetBuildBatches",
+            "codebuild:ListBuildsForProject"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "cloudbuild.builds.create",
+            "cloudbuild.builds.update",
+            "cloudbuild.builds.approve",
+            "cloudbuild.builds.get",
+            "cloudbuild.builds.list",
+            "iam.serviceAccounts.actAs"
+          ]
+        },
+        // Cloud Build IDs are auto-generated UUIDs — name-prefix conditions can never match.
+        // Conditions are fundamentally broken for builds. Must use scope-only.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/jobs/start/action",
+            "Microsoft.App/jobs/stop/action",
+            "Microsoft.App/jobs/executions/read",
+            "Microsoft.App/jobs/read"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

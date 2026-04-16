@@ -1,0 +1,3 @@
+name = "remote-worker-ts"
+description = "Execute tool calls in your customer's cloud. The AI worker pattern."
+language = "TypeScript"

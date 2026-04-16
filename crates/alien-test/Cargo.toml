@@ -1,0 +1,79 @@
+[package]
+name = "alien-test"
+version.workspace = true
+edition = "2021"
+description = "E2E test infrastructure for Alien"
+license-file.workspace = true
+
+[lib]
+name = "alien_test"
+path = "src/lib.rs"
+
+[dependencies]
+# Core Alien crates
+alien-manager = { workspace = true }
+alien-commands-client = { path = "../alien-commands-client" }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-manager-api = { workspace = true }
+alien-build = { workspace = true }
+alien-permissions = { workspace = true }
+alien-aws-clients = { workspace = true }
+alien-azure-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
+alien-client-config = { workspace = true }
+
+# OCI registry push
+dockdash = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# HTTP
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Env loading
+dotenvy = { workspace = true }
+
+# TOML config (for ManagerTomlConfig round-trip)
+toml = { workspace = true }
+
+# Temp dirs for SQLite
+tempfile = { workspace = true }
+
+# IDs
+uuid = { workspace = true, features = ["v4"] }
+
+# Token hashing
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# Deploy CLI (for push_initial_setup cross-account flow)
+alien-deploy-cli = { workspace = true }
+
+# Error handling (for e2e orchestration)
+anyhow = { workspace = true }
+
+# Base64 encoding for command params
+base64 = { workspace = true }
+
+# Random encryption key generation for agent containers
+rand = { workspace = true }
+
+# Ngrok tunnel for pull tests
+ngrok = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+url = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+test-context = { workspace = true }
+async-trait = { workspace = true }

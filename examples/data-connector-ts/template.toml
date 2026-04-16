@@ -1,0 +1,3 @@
+name = "data-connector-ts"
+description = "Query private databases behind the customer's firewall. Credentials stay in their cloud."
+language = "TypeScript"

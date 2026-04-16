@@ -1,0 +1,15 @@
+[package]
+name = "alien-error-derive"
+version.workspace = true
+edition = "2021"
+description = "Procedural macros for alien-error"
+license-file.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1"
+proc-macro2 = "1"
+syn = { version = "2", features = ["full"] }
+serde_json = "1" 

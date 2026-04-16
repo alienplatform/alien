@@ -1,0 +1,3 @@
+name = "basic-function-ts"
+description = "The simplest Alien function, in TypeScript."
+language = "TypeScript"

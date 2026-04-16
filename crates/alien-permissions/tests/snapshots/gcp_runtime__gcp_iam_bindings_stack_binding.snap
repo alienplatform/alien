@@ -1,0 +1,19 @@
+---
+source: crates/alien-permissions/tests/gcp_runtime.rs
+expression: result
+---
+{
+  "bindings": [
+    {
+      "role": "projects/my-project/roles/storageDataRead",
+      "members": [
+        "serviceAccount:my-sa@my-project.iam.gserviceaccount.com"
+      ],
+      "condition": {
+        "title": "Stack-prefixed only",
+        "description": "Limit to Stack-prefixed only",
+        "expression": "resource.name.startsWith('projects/_/buckets/my-stack-')"
+      }
+    }
+  ]
+}

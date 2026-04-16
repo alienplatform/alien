@@ -1,0 +1,70 @@
+{
+  // Allows creating and deleting vault parameters
+  "id": "vault/provision",
+  "description": "Allows creating and deleting vault parameters",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["secretmanager.secrets.create", "secretmanager.secrets.delete"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": [
+            "resourcemanager.projects.getIamPolicy",
+            "resourcemanager.projects.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": ["Microsoft.KeyVault/vaults/write", "Microsoft.KeyVault/vaults/delete"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+---
+source: crates/alien-permissions/tests/azure_runtime.rs
+expression: result
+---
+{
+  "Name": "Storage Data Read (my-stack)",
+  "IsCustom": true,
+  "Description": "Allows reading data from storage resources",
+  "Actions": [
+    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+  ],
+  "NotActions": [],
+  "DataActions": [
+    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+  ],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.Storage/storageAccounts/stcxpaymentsprod"
+  ]
+}

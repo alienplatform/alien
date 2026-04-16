@@ -1,0 +1,15 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+package-lock.json
+pnpm-lock.yaml
+
+# Alien
+.alien/
+
+# OS
+.DS_Store

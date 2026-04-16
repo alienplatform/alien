@@ -1,0 +1,20 @@
+# SyncAcquireResponseRuntimeMetadata
+
+Runtime metadata for deployment
+
+Stores deployment state that needs to persist across step calls.
+
+## Example Usage
+
+```typescript
+import { SyncAcquireResponseRuntimeMetadata } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireResponseRuntimeMetadata = {};
+```
+
+## Fields
+
+| Field                                                                                                                                              | Type                                                                                                                                               | Required                                                                                                                                           | Description                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lastSyncedEnvVarsHash`                                                                                                                            | *string*                                                                                                                                           | :heavy_minus_sign:                                                                                                                                 | Hash of the environment variables snapshot that was last synced to the vault<br/>Used to avoid redundant sync operations during incremental deployment |
+| `preparedStack`                                                                                                                                    | *models.SyncAcquireResponsePreparedStackUnion*                                                                                                     | :heavy_minus_sign:                                                                                                                                 | N/A                                                                                                                                                |

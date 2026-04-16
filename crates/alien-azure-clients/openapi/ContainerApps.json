@@ -1,0 +1,2879 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2025-01-01",
+    "title": "ContainerApps API Client"
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_Container_Apps_by_subscription": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+              "name": "testcontainerapp0",
+              "type": "Microsoft.App/containerApps",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "runningStatus": "Running",
+                "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "workloadProfileName": "My-GP-01",
+                "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+                "configuration": {
+                  "ingress": {
+                    "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                    "external": true,
+                    "targetPort": 3000,
+                    "transport": "auto",
+                    "customDomains": [
+                      {
+                        "name": "www.my-name.com",
+                        "bindingType": "SniEnabled",
+                        "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                      },
+                      {
+                        "name": "www.my--other-name.com",
+                        "bindingType": "SniEnabled",
+                        "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                      }
+                    ],
+                    "traffic": [
+                      {
+                        "weight": 80,
+                        "revisionName": "testcontainerapp0-ab1234"
+                      },
+                      {
+                        "weight": 20,
+                        "revisionName": "testcontainerapp0-ab4321",
+                        "label": "staging"
+                      }
+                    ],
+                    "ipSecurityRestrictions": [
+                      {
+                        "name": "Allow work IP A subnet",
+                        "description": "Allowing all IP's within the subnet below to access containerapp",
+                        "ipAddressRange": "192.168.1.1/32",
+                        "action": "Allow"
+                      },
+                      {
+                        "name": "Allow work IP B subnet",
+                        "description": "Allowing all IP's within the subnet below to access containerapp",
+                        "ipAddressRange": "192.168.1.1/8",
+                        "action": "Allow"
+                      }
+                    ],
+                    "stickySessions": {
+                      "affinity": "sticky"
+                    }
+                  },
+                  "dapr": {
+                    "enabled": true,
+                    "appPort": 3000,
+                    "appProtocol": "http",
+                    "httpReadBufferSize": 30,
+                    "httpMaxRequestSize": 10,
+                    "logLevel": "debug",
+                    "enableApiLogging": true
+                  },
+                  "runtime": {
+                    "java": {
+                      "enableMetrics": true
+                    }
+                  },
+                  "maxInactiveRevisions": 10,
+                  "service": {
+                    "type": "redis"
+                  }
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerapp0:v4",
+                      "name": "testcontainerapp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerapp0:v4",
+                      "name": "testinitcontainerApp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 5,
+                    "cooldownPeriod": 350,
+                    "pollingInterval": 35,
+                    "rules": [
+                      {
+                        "name": "httpscalingrule",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "50"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "serviceBinds": [
+                    {
+                      "serviceId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/service",
+                      "name": "service"
+                    }
+                  ]
+                },
+                "eventStreamEndpoint": "testEndpoint"
+              }
+            }
+          ]
+        }
+      },
+      "List_Container_Apps_by_resource_group": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+              "name": "testcontainerapp0",
+              "type": "Microsoft.App/containerApps",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "runningStatus": "Running",
+                "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "workloadProfileName": "My-GP-01",
+                "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+                "configuration": {
+                  "ingress": {
+                    "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                    "external": true,
+                    "targetPort": 3000,
+                    "transport": "auto",
+                    "customDomains": [
+                      {
+                        "name": "www.my-name.com",
+                        "bindingType": "SniEnabled",
+                        "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                      },
+                      {
+                        "name": "www.my--other-name.com",
+                        "bindingType": "SniEnabled",
+                        "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                      }
+                    ],
+                    "traffic": [
+                      {
+                        "weight": 80,
+                        "revisionName": "testcontainerapp0-ab1234"
+                      },
+                      {
+                        "weight": 20,
+                        "revisionName": "testcontainerapp0-ab4321",
+                        "label": "staging"
+                      }
+                    ],
+                    "ipSecurityRestrictions": [
+                      {
+                        "name": "Allow work IP A subnet",
+                        "description": "Allowing all IP's within the subnet below to access containerapp",
+                        "ipAddressRange": "192.168.1.1/32",
+                        "action": "Allow"
+                      },
+                      {
+                        "name": "Allow work IP B subnet",
+                        "description": "Allowing all IP's within the subnet below to access containerapp",
+                        "ipAddressRange": "192.168.1.1/8",
+                        "action": "Allow"
+                      }
+                    ],
+                    "stickySessions": {
+                      "affinity": "sticky"
+                    }
+                  },
+                  "dapr": {
+                    "enabled": true,
+                    "appPort": 3000,
+                    "appProtocol": "http",
+                    "httpReadBufferSize": 30,
+                    "httpMaxRequestSize": 10,
+                    "logLevel": "debug",
+                    "enableApiLogging": true
+                  },
+                  "runtime": {
+                    "java": {
+                      "enableMetrics": true
+                    }
+                  },
+                  "maxInactiveRevisions": 10
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerapp0:v4",
+                      "name": "testcontainerapp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerapp0:v4",
+                      "name": "testinitcontainerApp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 5,
+                    "cooldownPeriod": 350,
+                    "pollingInterval": 35,
+                    "rules": [
+                      {
+                        "name": "httpscalingrule",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "50"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "eventStreamEndpoint": "testEndpoint"
+              }
+            }
+          ]
+        }
+      },
+      "Get_Container_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "identity": {
+            "type": "SystemAssigned,UserAssigned",
+            "principalId": "24adfa4f-dedf-8dc0-ca29-b6d1a69ab319",
+            "tenantId": "23adfa4f-eedf-1dc0-ba29-a6d1a69ab3d0",
+            "userAssignedIdentities": {
+              "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity": {
+                "principalId": "74adfa4f-dedf-8dc0-ca29-b6d1a69ab312",
+                "clientId": "14adfa4f-eedf-1dc0-ba29-a6d1a69ab3df"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "Succeeded",
+            "runningStatus": "Running",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "workloadProfileName": "My-GP-01",
+            "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "transport": "auto",
+                "customDomains": [
+                  {
+                    "name": "www.my-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                  },
+                  {
+                    "name": "www.my--other-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                  }
+                ],
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapp0-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapp0-ab4321",
+                    "label": "staging"
+                  }
+                ],
+                "ipSecurityRestrictions": [
+                  {
+                    "name": "Allow work IP A subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/32",
+                    "action": "Allow"
+                  },
+                  {
+                    "name": "Allow work IP B subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/8",
+                    "action": "Allow"
+                  }
+                ],
+                "stickySessions": {
+                  "affinity": "sticky"
+                }
+              },
+              "dapr": {
+                "enabled": true,
+                "appPort": 3000,
+                "appProtocol": "http",
+                "httpReadBufferSize": 30,
+                "httpMaxRequestSize": 10,
+                "logLevel": "debug",
+                "enableApiLogging": true
+              },
+              "runtime": {
+                "java": {
+                  "enableMetrics": true
+                }
+              },
+              "maxInactiveRevisions": 10,
+              "service": {
+                "type": "redis"
+              },
+              "identitySettings": [
+                {
+                  "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity",
+                  "lifecycle": "All"
+                },
+                {
+                  "identity": "system",
+                  "lifecycle": "Init"
+                }
+              ]
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testcontainerapp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "volumeMounts": [
+                    {
+                      "volumeName": "azurefile",
+                      "mountPath": "/mnt/path1",
+                      "subPath": "subPath1"
+                    },
+                    {
+                      "volumeName": "nfsazurefile",
+                      "mountPath": "/mnt/path2",
+                      "subPath": "subPath2"
+                    }
+                  ]
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testinitcontainerApp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "cooldownPeriod": 350,
+                "pollingInterval": 35,
+                "rules": [
+                  {
+                    "name": "httpscalingrule",
+                    "http": {
+                      "metadata": {
+                        "concurrentRequests": "50"
+                      }
+                    }
+                  },
+                  {
+                    "name": "servicebus",
+                    "custom": {
+                      "type": "azure-servicebus",
+                      "metadata": {
+                        "queueName": "myqueue",
+                        "namespace": "mynamespace",
+                        "messageCount": "5"
+                      },
+                      "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity"
+                    }
+                  }
+                ]
+              },
+              "serviceBinds": [
+                {
+                  "serviceId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/service",
+                  "name": "service"
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "azurefile",
+                  "storageType": "AzureFile",
+                  "storageName": "storage"
+                },
+                {
+                  "name": "nfsazurefile",
+                  "storageType": "NfsAzureFile",
+                  "storageName": "nfsStorage"
+                }
+              ]
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Create_or_Update_Container_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "identity": {
+            "type": "SystemAssigned,UserAssigned",
+            "principalId": "24adfa4f-dedf-8dc0-ca29-b6d1a69ab319",
+            "tenantId": "23adfa4f-eedf-1dc0-ba29-a6d1a69ab3d0",
+            "userAssignedIdentities": {
+              "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity": {
+                "principalId": "74adfa4f-dedf-8dc0-ca29-b6d1a69ab312",
+                "clientId": "14adfa4f-eedf-1dc0-ba29-a6d1a69ab3df"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "InProgress",
+            "runningStatus": "Running",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "transport": "auto",
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapp0-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapp0-ab4321",
+                    "label": "staging"
+                  }
+                ]
+              },
+              "dapr": {
+                "enabled": true,
+                "appPort": 3000,
+                "appProtocol": "http",
+                "httpReadBufferSize": 30
+              },
+              "runtime": {
+                "java": {
+                  "enableMetrics": true
+                }
+              },
+              "identitySettings": [
+                {
+                  "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity",
+                  "lifecycle": "All"
+                },
+                {
+                  "identity": "system",
+                  "lifecycle": "Init"
+                }
+              ]
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testcontainerapp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "probes": [
+                    {
+                      "type": "Liveness",
+                      "httpGet": {
+                        "path": "/health",
+                        "port": 8080,
+                        "httpHeaders": [
+                          {
+                            "name": "Custom-Header",
+                            "value": "Awesome"
+                          }
+                        ]
+                      },
+                      "initialDelaySeconds": 3,
+                      "periodSeconds": 3
+                    }
+                  ],
+                  "volumeMounts": [
+                    {
+                      "volumeName": "azurefile",
+                      "mountPath": "/mnt/path1",
+                      "subPath": "subPath1"
+                    },
+                    {
+                      "volumeName": "nfsazurefile",
+                      "mountPath": "/mnt/path2",
+                      "subPath": "subPath2"
+                    }
+                  ]
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testinitcontainerApp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "cooldownPeriod": 350,
+                "pollingInterval": 35,
+                "rules": [
+                  {
+                    "name": "httpscalingrule",
+                    "http": {
+                      "metadata": {
+                        "concurrentRequests": "50"
+                      }
+                    }
+                  },
+                  {
+                    "name": "servicebus",
+                    "custom": {
+                      "type": "azure-servicebus",
+                      "metadata": {
+                        "queueName": "myqueue",
+                        "namespace": "mynamespace",
+                        "messageCount": "5"
+                      },
+                      "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity"
+                    }
+                  },
+                  {
+                    "name": "azure-queue",
+                    "azureQueue": {
+                      "accountName": "account1",
+                      "queueName": "queue1",
+                      "queueLength": 1,
+                      "identity": "system"
+                    }
+                  }
+                ]
+              },
+              "volumes": [
+                {
+                  "name": "azurefile",
+                  "storageType": "AzureFile",
+                  "storageName": "storage"
+                },
+                {
+                  "name": "nfsazurefile",
+                  "storageType": "NfsAzureFile",
+                  "storageName": "nfsStorage"
+                }
+              ]
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Create_or_Update_Tcp_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapptcp",
+          "name": "testcontainerapptcp",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "InProgress",
+            "runningStatus": "Progressing",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "latestRevisionFqdn": "testcontainerapptcp-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapptcp.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "exposedPort": 4000,
+                "transport": "tcp",
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapptcp-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapptcp-ab4321"
+                  }
+                ]
+              }
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapptcp:v4",
+                  "name": "testcontainerapptcp",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "probes": [
+                    {
+                      "type": "Liveness",
+                      "tcpSocket": {
+                        "port": 8080
+                      },
+                      "initialDelaySeconds": 3,
+                      "periodSeconds": 3
+                    }
+                  ]
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "cooldownPeriod": 350,
+                "pollingInterval": 35,
+                "rules": [
+                  {
+                    "name": "tcpscalingrule",
+                    "tcp": {
+                      "metadata": {
+                        "concurrentConnections": "50"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "Create_or_Update_ManagedBy_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerappmanagedby",
+          "name": "testcontainerappmanagedby",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "managedBy": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.AppPlatform/Spring/springapp",
+          "properties": {
+            "provisioningState": "InProgress",
+            "runningStatus": "Progressing",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "latestRevisionFqdn": "testcontainerappmanagedby-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerappmanagedby.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "exposedPort": 4000,
+                "transport": "tcp",
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerappmanagedby-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerappmanagedby-ab4321"
+                  }
+                ]
+              }
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappmanagedby:v4",
+                  "name": "testcontainerappmanagedby",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "probes": [
+                    {
+                      "type": "Liveness",
+                      "tcpSocket": {
+                        "port": 8080
+                      },
+                      "initialDelaySeconds": 3,
+                      "periodSeconds": 3
+                    }
+                  ]
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "cooldownPeriod": 350,
+                "pollingInterval": 35,
+                "rules": [
+                  {
+                    "name": "tcpscalingrule",
+                    "tcp": {
+                      "metadata": {
+                        "concurrentConnections": "50"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "Patch_Container_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "runningStatus": "Running",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "workloadProfileName": "My-GP-01",
+            "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "transport": "auto",
+                "customDomains": [
+                  {
+                    "name": "www.my-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                  },
+                  {
+                    "name": "www.my--other-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                  }
+                ],
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapp0-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapp0-ab4321",
+                    "label": "staging"
+                  }
+                ],
+                "ipSecurityRestrictions": [
+                  {
+                    "name": "Allow work IP A subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/32",
+                    "action": "Allow"
+                  },
+                  {
+                    "name": "Allow work IP B subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/8",
+                    "action": "Allow"
+                  }
+                ]
+              },
+              "dapr": {
+                "enabled": true,
+                "appPort": 3000,
+                "appProtocol": "http",
+                "httpReadBufferSize": 30,
+                "httpMaxRequestSize": 10,
+                "logLevel": "debug",
+                "enableApiLogging": true
+              },
+              "runtime": {
+                "java": {
+                  "enableMetrics": true
+                }
+              },
+              "maxInactiveRevisions": 10
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testcontainerapp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testinitcontainerApp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "rules": [
+                  {
+                    "name": "httpscalingrule",
+                    "http": {
+                      "metadata": {
+                        "concurrentRequests": "50"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Analyze_Custom_Hostname": {
+        "value": {
+          "hostName": "my.name.corp",
+          "isHostnameAlreadyVerified": true,
+          "customDomainVerificationTest": "Passed",
+          "customDomainVerificationFailureInfo": {},
+          "hasConflictOnManagedEnvironment": false,
+          "conflictingContainerAppResourceId": "",
+          "cNameRecords": ["cNameRecord1", "cNameRecord2"],
+          "txtRecords": ["txtRecord1", "txtRecord2"],
+          "aRecords": ["aRecord1", "aRecord2"],
+          "alternateCNameRecords": ["cNameRecord1", "cNameRecord2"],
+          "alternateTxtRecords": ["txtRecord1", "txtRecord2"]
+        }
+      },
+      "List_Container_Apps_Secrets": {
+        "value": {
+          "value": [
+            {
+              "name": "secret1"
+            },
+            {
+              "name": "secret2"
+            }
+          ]
+        }
+      },
+      "Get_Container_App_Auth_Token": {
+        "value": {
+          "id": "/subscriptions/651f8027-33e8-4ec4-97b4-f6e9f3dc8744/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps/accesstoken",
+          "location": "East US",
+          "properties": {
+            "token": "testToken",
+            "expires": "2022-07-14T19:22:50.3080223Z"
+          }
+        }
+      },
+      "Start_Container_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "runningStatus": "Running",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "workloadProfileName": "My-GP-01",
+            "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "transport": "auto",
+                "customDomains": [
+                  {
+                    "name": "www.my-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                  },
+                  {
+                    "name": "www.my--other-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                  }
+                ],
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapp0-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapp0-ab4321",
+                    "label": "staging"
+                  }
+                ],
+                "ipSecurityRestrictions": [
+                  {
+                    "name": "Allow work IP A subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/32",
+                    "action": "Allow"
+                  },
+                  {
+                    "name": "Allow work IP B subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/8",
+                    "action": "Allow"
+                  }
+                ]
+              },
+              "dapr": {
+                "enabled": true,
+                "appPort": 3000,
+                "appProtocol": "http",
+                "httpReadBufferSize": 30,
+                "httpMaxRequestSize": 10,
+                "logLevel": "debug",
+                "enableApiLogging": true
+              },
+              "runtime": {
+                "java": {
+                  "enableMetrics": true
+                }
+              },
+              "maxInactiveRevisions": 10
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testcontainerapp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testinitcontainerApp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "cooldownPeriod": 350,
+                "pollingInterval": 35,
+                "rules": [
+                  {
+                    "name": "httpscalingrule",
+                    "http": {
+                      "metadata": {
+                        "concurrentRequests": "50"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Stop_Container_App": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/containerApps/testcontainerapp0",
+          "name": "testcontainerapp0",
+          "type": "Microsoft.App/containerApps",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "runningStatus": "Stopped",
+            "managedEnvironmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "workloadProfileName": "My-GP-01",
+            "latestRevisionFqdn": "testcontainerapp0-pjxhsye.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+            "latestReadyRevisionName": "testcontainerapp0-pjxhsye",
+            "configuration": {
+              "ingress": {
+                "fqdn": "testcontainerapp0.demokube-t24clv0g.eastus.containerApps.k4apps.io",
+                "external": true,
+                "targetPort": 3000,
+                "transport": "auto",
+                "customDomains": [
+                  {
+                    "name": "www.my-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-name-dot-com"
+                  },
+                  {
+                    "name": "www.my--other-name.com",
+                    "bindingType": "SniEnabled",
+                    "certificateId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube/certificates/my-certificate-for-my-other-name-dot-com"
+                  }
+                ],
+                "traffic": [
+                  {
+                    "weight": 80,
+                    "revisionName": "testcontainerapp0-ab1234"
+                  },
+                  {
+                    "weight": 20,
+                    "revisionName": "testcontainerapp0-ab4321",
+                    "label": "staging"
+                  }
+                ],
+                "ipSecurityRestrictions": [
+                  {
+                    "name": "Allow work IP A subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/32",
+                    "action": "Allow"
+                  },
+                  {
+                    "name": "Allow work IP B subnet",
+                    "description": "Allowing all IP's within the subnet below to access containerapp",
+                    "ipAddressRange": "192.168.1.1/8",
+                    "action": "Allow"
+                  }
+                ]
+              },
+              "dapr": {
+                "enabled": true,
+                "appPort": 3000,
+                "appProtocol": "http",
+                "httpReadBufferSize": 30,
+                "httpMaxRequestSize": 10,
+                "logLevel": "debug",
+                "enableApiLogging": true
+              },
+              "runtime": {
+                "java": {
+                  "enableMetrics": true
+                }
+              },
+              "maxInactiveRevisions": 10
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testcontainerapp0",
+                  "resources": {
+                    "cpu": 0.2,
+                    "memory": "100Mi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerapp0:v4",
+                  "name": "testinitcontainerApp0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "scale": {
+                "minReplicas": 1,
+                "maxReplicas": 5,
+                "rules": [
+                  {
+                    "name": "httpscalingrule",
+                    "http": {
+                      "metadata": {
+                        "concurrentRequests": "50"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "description": "The ID of the target subscription.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Container Apps by subscription": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Container Apps by resource group": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Tcp App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update ManagedBy App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Delete Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Patch Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Analyze Custom Hostname": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Container Apps Secrets": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get Container App Auth Token": {
+            "value": "651f8027-33e8-4ec4-97b4-f6e9f3dc8744"
+          },
+          "Start Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Stop Container App": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "description": "The API version to use for this operation.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Container Apps by subscription": {
+            "value": "2025-01-01"
+          },
+          "List Container Apps by resource group": {
+            "value": "2025-01-01"
+          },
+          "Get Container App": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Container App": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Tcp App": {
+            "value": "2025-01-01"
+          },
+          "Create or Update ManagedBy App": {
+            "value": "2025-01-01"
+          },
+          "Delete Container App": {
+            "value": "2025-01-01"
+          },
+          "Patch Container App": {
+            "value": "2025-01-01"
+          },
+          "Analyze Custom Hostname": {
+            "value": "2025-01-01"
+          },
+          "List Container Apps Secrets": {
+            "value": "2025-01-01"
+          },
+          "Get Container App Auth Token": {
+            "value": "2025-01-01"
+          },
+          "Start Container App": {
+            "value": "2025-01-01"
+          },
+          "Stop Container App": {
+            "value": "2025-01-01"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "description": "The name of the resource group. The name is case insensitive.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List Container Apps by resource group": {
+            "value": "rg"
+          },
+          "Get Container App": {
+            "value": "rg"
+          },
+          "Create or Update Container App": {
+            "value": "rg"
+          },
+          "Create or Update Tcp App": {
+            "value": "rg"
+          },
+          "Create or Update ManagedBy App": {
+            "value": "rg"
+          },
+          "Delete Container App": {
+            "value": "rg"
+          },
+          "Patch Container App": {
+            "value": "rg"
+          },
+          "Analyze Custom Hostname": {
+            "value": "rg"
+          },
+          "List Container Apps Secrets": {
+            "value": "rg"
+          },
+          "Get Container App Auth Token": {
+            "value": "rg"
+          },
+          "Start Container App": {
+            "value": "rg"
+          },
+          "Stop Container App": {
+            "value": "rg"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Configuration": {
+        "description": "Non versioned Container App configuration properties that define the mutable settings of a Container app",
+        "type": "object",
+        "properties": {
+          "secrets": {
+            "description": "Collection of secrets used by a Container app",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Secret"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "activeRevisionsMode": {
+            "description": "ActiveRevisionsMode controls how active revisions are handled for the Container app:\n<list><item>Multiple: multiple revisions can be active.</item><item>Single: Only one revision can be active at a time. Revision weights can not be used in this mode. If no value if provided, this is the default.</item></list>",
+            "enum": ["Multiple", "Single"],
+            "type": "string",
+            "default": "Single",
+            "x-ms-enum": {
+              "name": "ActiveRevisionsMode",
+              "modelAsString": true
+            }
+          },
+          "ingress": {
+            "$ref": "#/components/schemas/Ingress"
+          },
+          "registries": {
+            "description": "Collection of private container registry credentials for containers used by the Container app",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryCredentials"
+            },
+            "x-ms-identifiers": ["server"]
+          },
+          "dapr": {
+            "$ref": "#/components/schemas/Dapr"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "maxInactiveRevisions": {
+            "format": "int32",
+            "description": "Optional. Max inactive revisions a Container App can have.",
+            "type": "integer"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          },
+          "identitySettings": {
+            "description": "Optional settings for Managed Identities that are assigned to the Container App. If a Managed Identity is not specified here, default settings will be used.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentitySettings"
+            },
+            "x-ms-identifiers": ["identity"]
+          }
+        }
+      },
+      "ContainerApp": {
+        "description": "Container App.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "extendedLocation": {
+            "$ref": "#/components/schemas/ExtendedLocation"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ManagedServiceIdentity"
+          },
+          "managedBy": {
+            "type": "string",
+            "x-ms-mutability": ["read", "create", "update"],
+            "description": "The fully qualified resource ID of the resource that manages this resource. Indicates if this resource is managed by another Azure resource. If this is present, complete mode deployment will not delete the resource if it is removed from the template since it is managed by another resource."
+          },
+          "properties": {
+            "description": "ContainerApp resource specific properties",
+            "type": "object",
+            "properties": {
+              "provisioningState": {
+                "description": "Provisioning state of the Container App.",
+                "enum": ["InProgress", "Succeeded", "Failed", "Canceled", "Deleting"],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "ContainerAppProvisioningState",
+                  "modelAsString": true
+                }
+              },
+              "runningStatus": {
+                "description": "Running status of the Container App.",
+                "enum": ["Progressing", "Running", "Stopped", "Suspended", "Ready"],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "ContainerAppRunningStatus",
+                  "modelAsString": true,
+                  "values": [
+                    {
+                      "value": "Progressing",
+                      "description": "Container App is transitioning between Stopped and Running states."
+                    },
+                    {
+                      "value": "Running",
+                      "description": "Container App is in Running state."
+                    },
+                    {
+                      "value": "Stopped",
+                      "description": "Container App is in Stopped state."
+                    },
+                    {
+                      "value": "Suspended",
+                      "description": "Container App Job is in Suspended state."
+                    },
+                    {
+                      "value": "Ready",
+                      "description": "Container App Job is in Ready state."
+                    }
+                  ]
+                }
+              },
+              "managedEnvironmentId": {
+                "description": "Deprecated. Resource ID of the Container App's environment.",
+                "type": "string",
+                "x-ms-mutability": ["create", "read"]
+              },
+              "environmentId": {
+                "description": "Resource ID of environment.",
+                "type": "string",
+                "x-ms-mutability": ["create", "read"]
+              },
+              "workloadProfileName": {
+                "$ref": "#/components/schemas/WorkloadProfileName"
+              },
+              "latestRevisionName": {
+                "description": "Name of the latest revision of the Container App.",
+                "type": "string",
+                "readOnly": true
+              },
+              "latestReadyRevisionName": {
+                "description": "Name of the latest ready revision of the Container App.",
+                "type": "string",
+                "readOnly": true
+              },
+              "latestRevisionFqdn": {
+                "description": "Fully Qualified Domain Name of the latest revision of the Container App.",
+                "type": "string",
+                "readOnly": true
+              },
+              "customDomainVerificationId": {
+                "description": "Id used to verify domain name ownership",
+                "type": "string",
+                "readOnly": true
+              },
+              "configuration": {
+                "$ref": "#/components/schemas/Configuration"
+              },
+              "template": {
+                "$ref": "#/components/schemas/Template"
+              },
+              "outboundIpAddresses": {
+                "description": "Outbound IP Addresses for container app.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "readOnly": true
+              },
+              "eventStreamEndpoint": {
+                "description": "The endpoint of the eventstream of the container app.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "ContainerAppCollection": {
+        "description": "Container App collection ARM resource.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerApp"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "Dapr": {
+        "description": "Container App Dapr configuration.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Boolean indicating if the Dapr side car is enabled",
+            "type": "boolean",
+            "default": false
+          },
+          "appId": {
+            "description": "Dapr application identifier",
+            "type": "string"
+          },
+          "appProtocol": {
+            "description": "Tells Dapr which protocol your application is using. Valid options are http and grpc. Default is http",
+            "enum": ["http", "grpc"],
+            "type": "string",
+            "default": "http",
+            "x-ms-enum": {
+              "name": "appProtocol",
+              "modelAsString": true
+            }
+          },
+          "appPort": {
+            "format": "int32",
+            "description": "Tells Dapr which port your application is listening on",
+            "type": "integer"
+          },
+          "httpReadBufferSize": {
+            "type": "integer",
+            "description": "Dapr max size of http header read buffer in KB to handle when sending multi-KB headers. Default is 65KB.",
+            "format": "int32"
+          },
+          "httpMaxRequestSize": {
+            "type": "integer",
+            "description": "Increasing max size of request body http and grpc servers parameter in MB to handle uploading of big files. Default is 4 MB.",
+            "format": "int32"
+          },
+          "logLevel": {
+            "description": "Sets the log level for the Dapr sidecar. Allowed values are debug, info, warn, error. Default is info.",
+            "enum": ["info", "debug", "warn", "error"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "logLevel",
+              "modelAsString": true
+            }
+          },
+          "enableApiLogging": {
+            "description": "Enables API logging for the Dapr sidecar",
+            "type": "boolean"
+          }
+        }
+      },
+      "Runtime": {
+        "description": "Container App Runtime configuration.",
+        "type": "object",
+        "properties": {
+          "java": {
+            "description": "Java app configuration",
+            "type": "object",
+            "properties": {
+              "enableMetrics": {
+                "description": "Enable jmx core metrics for the java app",
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "Ingress": {
+        "description": "Container App Ingress configuration.",
+        "type": "object",
+        "properties": {
+          "fqdn": {
+            "description": "Hostname.",
+            "type": "string",
+            "readOnly": true
+          },
+          "external": {
+            "description": "Bool indicating if app exposes an external http endpoint",
+            "default": false,
+            "type": "boolean"
+          },
+          "targetPort": {
+            "format": "int32",
+            "description": "Target Port in containers for traffic from ingress",
+            "type": "integer"
+          },
+          "exposedPort": {
+            "format": "int32",
+            "description": "Exposed Port in containers for TCP traffic from ingress",
+            "type": "integer"
+          },
+          "transport": {
+            "description": "Ingress transport protocol",
+            "enum": ["auto", "http", "http2", "tcp"],
+            "type": "string",
+            "default": "auto",
+            "x-ms-enum": {
+              "name": "IngressTransportMethod",
+              "modelAsString": true
+            }
+          },
+          "traffic": {
+            "description": "Traffic weights for app's revisions",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrafficWeight"
+            },
+            "x-ms-identifiers": ["revisionName"]
+          },
+          "customDomains": {
+            "description": "custom domain bindings for Container Apps' hostnames.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomDomain"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "allowInsecure": {
+            "description": "Bool indicating if HTTP connections to is allowed. If set to false HTTP connections are automatically redirected to HTTPS connections",
+            "type": "boolean",
+            "default": false
+          },
+          "ipSecurityRestrictions": {
+            "description": "Rules to restrict incoming IP address.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IpSecurityRestrictionRule"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "stickySessions": {
+            "description": "Sticky Sessions for Single Revision Mode",
+            "type": "object",
+            "properties": {
+              "affinity": {
+                "description": "Sticky Session Affinity",
+                "enum": ["sticky", "none"],
+                "type": "string",
+                "x-ms-enum": {
+                  "name": "affinity",
+                  "modelAsString": true
+                }
+              }
+            }
+          },
+          "clientCertificateMode": {
+            "description": "Client certificate mode for mTLS authentication. Ignore indicates server drops client certificate on forwarding. Accept indicates server forwards client certificate but does not require a client certificate. Require indicates server requires a client certificate.",
+            "enum": ["ignore", "accept", "require"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "IngressClientCertificateMode",
+              "modelAsString": true
+            }
+          },
+          "corsPolicy": {
+            "$ref": "#/components/schemas/CorsPolicy"
+          },
+          "additionalPortMappings": {
+            "description": "Settings to expose additional ports on container app",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngressPortMapping"
+            },
+            "x-ms-identifiers": ["targetPort"]
+          }
+        }
+      },
+      "RegistryCredentials": {
+        "description": "Container App Private Registry",
+        "type": "object",
+        "properties": {
+          "server": {
+            "description": "Container Registry Server",
+            "type": "string"
+          },
+          "username": {
+            "description": "Container Registry Username",
+            "type": "string"
+          },
+          "passwordSecretRef": {
+            "description": "The name of the Secret that contains the registry login password",
+            "type": "string"
+          },
+          "identity": {
+            "description": "A Managed Identity to use to authenticate with Azure Container Registry. For user-assigned identities, use the full user-assigned identity Resource ID. For system-assigned identities, use 'system'",
+            "type": "string"
+          }
+        }
+      },
+      "SecretsCollection": {
+        "description": "Container App Secrets Collection ARM resource.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerAppSecret"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "ContainerAppSecret": {
+        "description": "Container App Secret.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Secret Name.",
+            "type": "string",
+            "readOnly": true
+          },
+          "value": {
+            "description": "Secret Value.",
+            "type": "string",
+            "x-ms-secret": true,
+            "readOnly": true
+          },
+          "identity": {
+            "description": "Resource ID of a managed identity to authenticate with Azure Key Vault, or System to use a system-assigned identity.",
+            "type": "string",
+            "readOnly": true
+          },
+          "keyVaultUrl": {
+            "description": "Azure Key Vault URL pointing to the secret referenced by the container app.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "TrafficWeight": {
+        "description": "Traffic weight assigned to a revision",
+        "type": "object",
+        "properties": {
+          "revisionName": {
+            "description": "Name of a revision",
+            "type": "string"
+          },
+          "weight": {
+            "format": "int32",
+            "description": "Traffic weight assigned to a revision",
+            "type": "integer"
+          },
+          "latestRevision": {
+            "description": "Indicates that the traffic weight belongs to a latest stable revision",
+            "default": false,
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Associates a traffic label with a revision",
+            "type": "string"
+          }
+        }
+      },
+      "CustomDomain": {
+        "description": "Custom Domain of a Container App",
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "description": "Hostname.",
+            "type": "string"
+          },
+          "bindingType": {
+            "description": "Custom Domain binding type.",
+            "enum": ["Disabled", "SniEnabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "bindingType",
+              "modelAsString": true
+            }
+          },
+          "certificateId": {
+            "description": "Resource Id of the Certificate to be bound to this hostname. Must exist in the Managed Environment.",
+            "type": "string"
+          }
+        }
+      },
+      "IpSecurityRestrictionRule": {
+        "description": "Rule to restrict incoming IP address.",
+        "type": "object",
+        "required": ["name", "ipAddressRange", "action"],
+        "properties": {
+          "name": {
+            "description": "Name for the IP restriction rule.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Describe the IP restriction rule that is being sent to the container-app. This is an optional field.",
+            "type": "string"
+          },
+          "ipAddressRange": {
+            "description": "CIDR notation to match incoming IP address",
+            "type": "string"
+          },
+          "action": {
+            "description": "Allow or Deny rules to determine for incoming IP. Note: Rules can only consist of ALL Allow or ALL Deny",
+            "enum": ["Allow", "Deny"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "action",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "CorsPolicy": {
+        "description": "Cross-Origin-Resource-Sharing policy",
+        "type": "object",
+        "required": ["allowedOrigins"],
+        "properties": {
+          "allowedOrigins": {
+            "description": "Specifies the content for the access-control-allow-origins header",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedMethods": {
+            "description": "Specifies the content for the access-control-allow-methods header",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedHeaders": {
+            "description": "Specifies the content for the access-control-allow-headers header",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exposeHeaders": {
+            "description": "Specifies the content for the access-control-expose-headers header ",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxAge": {
+            "format": "int32",
+            "description": "Specifies the content for the access-control-max-age header",
+            "type": "integer"
+          },
+          "allowCredentials": {
+            "description": "Specifies whether the resource allows credentials",
+            "type": "boolean"
+          }
+        }
+      },
+      "IngressPortMapping": {
+        "description": "Port mappings of container app ingress",
+        "type": "object",
+        "required": ["external", "targetPort"],
+        "properties": {
+          "external": {
+            "description": "Specifies whether the app port is accessible outside of the environment",
+            "type": "boolean"
+          },
+          "targetPort": {
+            "format": "int32",
+            "description": "Specifies the port user's container listens on",
+            "type": "integer"
+          },
+          "exposedPort": {
+            "format": "int32",
+            "description": "Specifies the exposed port for the target port. If not specified, it defaults to target port",
+            "type": "integer"
+          }
+        }
+      },
+      "CustomHostnameAnalysisResult": {
+        "description": "Custom domain analysis.",
+        "type": "object",
+        "properties": {
+          "hostName": {
+            "description": "Host name that was analyzed",
+            "type": "string",
+            "readOnly": true
+          },
+          "isHostnameAlreadyVerified": {
+            "description": "<code>true</code> if hostname is already verified; otherwise, <code>false</code>.",
+            "type": "boolean",
+            "readOnly": true
+          },
+          "customDomainVerificationTest": {
+            "description": "DNS verification test result.",
+            "enum": ["Passed", "Failed", "Skipped"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "DnsVerificationTestResult",
+              "modelAsString": false
+            }
+          },
+          "customDomainVerificationFailureInfo": {
+            "description": "Raw failure information if DNS verification fails.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Standardized string to programmatically identify the error.",
+                "type": "string",
+                "readOnly": true
+              },
+              "message": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "target": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "details": {
+                "type": "array",
+                "description": "Details or the error",
+                "items": {
+                  "description": "Detailed errors.",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "description": "Standardized string to programmatically identify the error.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "message": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "target": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    }
+                  },
+                  "readOnly": true
+                },
+                "x-ms-identifiers": ["code"]
+              }
+            },
+            "readOnly": true
+          },
+          "hasConflictOnManagedEnvironment": {
+            "description": "<code>true</code> if there is a conflict on the Container App's managed environment; otherwise, <code>false</code>.",
+            "type": "boolean",
+            "readOnly": true
+          },
+          "conflictWithEnvironmentCustomDomain": {
+            "description": "<code>true</code> if there is a conflict on the Container App's managed environment level custom domain; otherwise, <code>false</code>.",
+            "type": "boolean",
+            "readOnly": true
+          },
+          "conflictingContainerAppResourceId": {
+            "description": "Name of the conflicting Container App on the Managed Environment if it's within the same subscription.",
+            "type": "string",
+            "readOnly": true
+          },
+          "cNameRecords": {
+            "description": "CName records visible for this hostname.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "txtRecords": {
+            "description": "TXT records visible for this hostname.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "aRecords": {
+            "description": "A records visible for this hostname.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "alternateCNameRecords": {
+            "description": "Alternate CName records visible for this hostname.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "alternateTxtRecords": {
+            "description": "Alternate TXT records visible for this hostname.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "x-ms-client-flatten": true
+      },
+      "ContainerAppAuthToken": {
+        "description": "Container App Auth Token.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "description": "Container App auth token resource specific properties",
+            "type": "object",
+            "properties": {
+              "token": {
+                "description": "Auth token value.",
+                "type": "string",
+                "x-ms-secret": true,
+                "readOnly": true
+              },
+              "expires": {
+                "description": "Token expiration date.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "Service": {
+        "description": "Container App to be a dev service",
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "description": "Dev ContainerApp service type",
+            "type": "string"
+          }
+        }
+      },
+      "DefaultErrorResponse": {
+        "description": "App Service error response.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "description": "Error model.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Standardized string to programmatically identify the error.",
+                "type": "string",
+                "readOnly": true
+              },
+              "message": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "target": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "details": {
+                "type": "array",
+                "description": "Details or the error",
+                "items": {
+                  "description": "Detailed errors.",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "description": "Standardized string to programmatically identify the error.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "message": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "target": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    }
+                  },
+                  "readOnly": true
+                },
+                "x-ms-identifiers": ["code"]
+              },
+              "innererror": {
+                "description": "More information to debug error.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "readOnly": true
+          }
+        }
+      },
+      "systemData": {
+        "type": "object",
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "properties": {
+          "createdBy": {
+            "type": "string",
+            "description": "The identity that created the resource."
+          },
+          "createdByType": {
+            "type": "string",
+            "description": "The type of identity that created the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The timestamp of resource creation (UTC)."
+          },
+          "lastModifiedBy": {
+            "type": "string",
+            "description": "The identity that last modified the resource."
+          },
+          "lastModifiedByType": {
+            "type": "string",
+            "description": "The type of identity that last modified the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "type": "string",
+            "description": "The timestamp of resource last modification (UTC)"
+          }
+        },
+        "readOnly": true
+      },
+      "Resource": {
+        "type": "object",
+        "title": "Resource",
+        "description": "Common fields that are returned in the response for all Azure Resource Manager resources",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "arm-id",
+            "description": "Fully qualified resource ID for the resource. E.g. \"/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}\"",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the resource",
+            "readOnly": true
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of the resource. E.g. \"Microsoft.Compute/virtualMachines\" or \"Microsoft.Storage/storageAccounts\"",
+            "readOnly": true
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "TrackedResource": {
+        "type": "object",
+        "title": "Tracked Resource",
+        "description": "The resource model definition for an Azure Resource Manager tracked top level resource which has 'tags' and a 'location'",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "description": "Resource tags.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-mutability": ["read", "create", "update"]
+          },
+          "location": {
+            "type": "string",
+            "description": "The geo-location where the resource lives",
+            "x-ms-mutability": ["read", "create"]
+          }
+        },
+        "required": ["location"],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      },
+      "ExtendedLocationType": {
+        "type": "string",
+        "description": "The type of extendedLocation.",
+        "enum": ["CustomLocation"],
+        "x-ms-enum": {
+          "name": "ExtendedLocationTypes",
+          "modelAsString": true
+        }
+      },
+      "ExtendedLocation": {
+        "type": "object",
+        "description": "The complex type of the extended location.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the extended location."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ExtendedLocationType"
+          }
+        }
+      },
+      "ManagedServiceIdentityType": {
+        "type": "string",
+        "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
+        "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
+        "x-ms-enum": {
+          "name": "ManagedServiceIdentityType",
+          "modelAsString": true
+        }
+      },
+      "UserAssignedIdentity": {
+        "type": "object",
+        "description": "User assigned identity properties",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The principal ID of the assigned identity.",
+            "readOnly": true
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The client ID of the assigned identity.",
+            "readOnly": true
+          }
+        }
+      },
+      "UserAssignedIdentities": {
+        "type": "object",
+        "title": "User-Assigned Identities",
+        "description": "The set of user assigned identities associated with the resource. The userAssignedIdentities dictionary keys will be ARM resource ids in the form: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}. The dictionary values can be empty objects ({}) in requests.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/UserAssignedIdentity"
+        }
+      },
+      "ManagedServiceIdentity": {
+        "type": "object",
+        "description": "Managed service identity (system assigned and/or user assigned identities)",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The service principal ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The tenant ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/ManagedServiceIdentityType"
+          },
+          "userAssignedIdentities": {
+            "$ref": "#/components/schemas/UserAssignedIdentities"
+          }
+        },
+        "required": ["type"]
+      },
+      "WorkloadProfileName": {
+        "description": "Workload profile name for container apps to execute on.",
+        "type": "string"
+      },
+      "Secret": {
+        "description": "Secret definition.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Secret Name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Secret Value.",
+            "type": "string",
+            "x-ms-mutability": ["create", "update"],
+            "x-ms-secret": true
+          },
+          "identity": {
+            "description": "Resource ID of a managed identity to authenticate with Azure Key Vault, or System to use a system-assigned identity.",
+            "type": "string"
+          },
+          "keyVaultUrl": {
+            "description": "Azure Key Vault URL pointing to the secret referenced by the container app.",
+            "type": "string"
+          }
+        }
+      },
+      "IdentitySettings": {
+        "description": "Optional settings for a Managed Identity that is assigned to the Container App.",
+        "type": "object",
+        "required": ["identity"],
+        "properties": {
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          },
+          "lifecycle": {
+            "description": "Use to select the lifecycle stages of a Container App during which the Managed Identity should be available.",
+            "enum": ["Init", "Main", "None", "All"],
+            "type": "string",
+            "default": "All",
+            "x-ms-enum": {
+              "name": "IdentitySettingsLifeCycle",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "EnvironmentVar": {
+        "description": "Container App container environment variable.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Environment variable name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Non-secret environment variable value.",
+            "type": "string"
+          },
+          "secretRef": {
+            "description": "Name of the Container App secret from which to pull the environment variable value.",
+            "type": "string"
+          }
+        }
+      },
+      "ContainerResources": {
+        "description": "Container App container resource requirements.",
+        "type": "object",
+        "properties": {
+          "cpu": {
+            "format": "double",
+            "description": "Required CPU in cores, e.g. 0.5",
+            "type": "number"
+          },
+          "memory": {
+            "description": "Required memory, e.g. \"250Mb\"",
+            "type": "string"
+          },
+          "ephemeralStorage": {
+            "description": "Ephemeral Storage, e.g. \"1Gi\"",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "VolumeMount": {
+        "description": "Volume mount for the Container App.",
+        "type": "object",
+        "properties": {
+          "volumeName": {
+            "description": "This must match the Name of a Volume.",
+            "type": "string"
+          },
+          "mountPath": {
+            "description": "Path within the container at which the volume should be mounted.Must not contain ':'.",
+            "type": "string"
+          },
+          "subPath": {
+            "description": "Path within the volume from which the container's volume should be mounted. Defaults to \"\" (volume's root).",
+            "type": "string"
+          }
+        }
+      },
+      "BaseContainer": {
+        "description": "Container App base container definition.",
+        "type": "object",
+        "properties": {
+          "image": {
+            "description": "Container image tag.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Custom container name.",
+            "type": "string"
+          },
+          "command": {
+            "description": "Container start command.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "description": "Container start command arguments.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "description": "Container environment variables.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVar"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ContainerResources"
+          },
+          "volumeMounts": {
+            "description": "Container volume mounts.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VolumeMount"
+            },
+            "x-ms-identifiers": ["volumeName"]
+          }
+        }
+      },
+      "InitContainer": {
+        "description": "Container App init container definition",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseContainer"
+          }
+        ]
+      },
+      "ContainerAppProbe": {
+        "description": "Probe describes a health check to be performed against a container to determine whether it is alive or ready to receive traffic.",
+        "type": "object",
+        "properties": {
+          "failureThreshold": {
+            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Defaults to 3. Minimum value is 1. Maximum value is 10.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "httpGet": {
+            "description": "HTTPGet specifies the http request to perform.",
+            "type": "object",
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "description": "Host name to connect to, defaults to the pod IP. You probably want to set \"Host\" in httpHeaders instead.",
+                "type": "string"
+              },
+              "httpHeaders": {
+                "description": "Custom headers to set in the request. HTTP allows repeated headers.",
+                "type": "array",
+                "items": {
+                  "description": "HTTPHeader describes a custom header to be used in HTTP probes",
+                  "type": "object",
+                  "required": ["name", "value"],
+                  "properties": {
+                    "name": {
+                      "description": "The header field name",
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "The header field value",
+                      "type": "string"
+                    }
+                  }
+                },
+                "x-ms-identifiers": ["name"]
+              },
+              "path": {
+                "description": "Path to access on the HTTP server.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Name or number of the port to access on the container. Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "scheme": {
+                "description": "Scheme to use for connecting to the host. Defaults to HTTP.",
+                "enum": ["HTTP", "HTTPS"],
+                "type": "string",
+                "x-ms-enum": {
+                  "name": "Scheme",
+                  "modelAsString": true
+                }
+              }
+            }
+          },
+          "initialDelaySeconds": {
+            "description": "Number of seconds after the container has started before liveness probes are initiated. Minimum value is 1. Maximum value is 60.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "periodSeconds": {
+            "description": "How often (in seconds) to perform the probe. Default to 10 seconds. Minimum value is 1. Maximum value is 240.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "successThreshold": {
+            "description": "Minimum consecutive successes for the probe to be considered successful after having failed. Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1. Maximum value is 10.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "tcpSocket": {
+            "description": "TCPSocket specifies an action involving a TCP port. TCP hooks not yet supported.",
+            "type": "object",
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "description": "Optional: Host name to connect to, defaults to the pod IP.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Number or name of the port to access on the container. Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.",
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "terminationGracePeriodSeconds": {
+            "description": "Optional duration in seconds the pod needs to terminate gracefully upon probe failure. The grace period is the duration in seconds after the processes running in the pod are sent a termination signal and the time when the processes are forcibly halted with a kill signal. Set this value longer than the expected cleanup time for your process. If this value is nil, the pod's terminationGracePeriodSeconds will be used. Otherwise, this value overrides the value provided by the pod spec. Value must be non-negative integer. The value zero indicates stop immediately via the kill signal (no opportunity to shut down). This is an alpha field and requires enabling ProbeTerminationGracePeriod feature gate. Maximum value is 3600 seconds (1 hour)",
+            "type": "integer",
+            "format": "int64"
+          },
+          "timeoutSeconds": {
+            "description": "Number of seconds after which the probe times out. Defaults to 1 second. Minimum value is 1. Maximum value is 240.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "type": {
+            "description": "The type of probe.",
+            "enum": ["Liveness", "Readiness", "Startup"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "Type",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "Container": {
+        "description": "Container App container definition",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseContainer"
+          }
+        ],
+        "properties": {
+          "probes": {
+            "description": "List of probes for the container.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerAppProbe"
+            },
+            "x-ms-identifiers": ["type"]
+          }
+        }
+      },
+      "ScaleRuleAuth": {
+        "description": "Auth Secrets for Scale Rule",
+        "type": "object",
+        "properties": {
+          "secretRef": {
+            "description": "Name of the secret from which to pull the auth params.",
+            "type": "string"
+          },
+          "triggerParameter": {
+            "description": "Trigger Parameter that uses the secret",
+            "type": "string"
+          }
+        }
+      },
+      "QueueScaleRule": {
+        "description": "Container App container Azure Queue based scaling rule.",
+        "type": "object",
+        "properties": {
+          "accountName": {
+            "description": "Storage account name. required if using managed identity to authenticate",
+            "type": "string"
+          },
+          "queueName": {
+            "description": "Queue name.",
+            "type": "string"
+          },
+          "queueLength": {
+            "format": "int32",
+            "description": "Queue length.",
+            "type": "integer"
+          },
+          "auth": {
+            "description": "Authentication secrets for the queue scale rule.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRuleAuth"
+            },
+            "x-ms-identifiers": ["triggerParameter"]
+          },
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          }
+        }
+      },
+      "CustomScaleRule": {
+        "description": "Container App container Custom scaling rule.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "Type of the custom scale rule\neg: azure-servicebus, redis etc.",
+            "type": "string"
+          },
+          "metadata": {
+            "description": "Metadata properties to describe custom scale rule.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "auth": {
+            "description": "Authentication secrets for the custom scale rule.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRuleAuth"
+            },
+            "x-ms-identifiers": ["triggerParameter"]
+          },
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          }
+        }
+      },
+      "HttpScaleRule": {
+        "description": "Container App container Http scaling rule.",
+        "type": "object",
+        "properties": {
+          "metadata": {
+            "description": "Metadata properties to describe http scale rule.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "auth": {
+            "description": "Authentication secrets for the custom scale rule.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRuleAuth"
+            },
+            "x-ms-identifiers": ["triggerParameter"]
+          },
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          }
+        }
+      },
+      "TcpScaleRule": {
+        "description": "Container App container Tcp scaling rule.",
+        "type": "object",
+        "properties": {
+          "metadata": {
+            "description": "Metadata properties to describe tcp scale rule.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "auth": {
+            "description": "Authentication secrets for the tcp scale rule.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRuleAuth"
+            },
+            "x-ms-identifiers": ["triggerParameter"]
+          },
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          }
+        }
+      },
+      "ScaleRule": {
+        "description": "Container App container scaling rule.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Scale Rule Name",
+            "type": "string"
+          },
+          "azureQueue": {
+            "$ref": "#/components/schemas/QueueScaleRule"
+          },
+          "custom": {
+            "$ref": "#/components/schemas/CustomScaleRule"
+          },
+          "http": {
+            "$ref": "#/components/schemas/HttpScaleRule"
+          },
+          "tcp": {
+            "$ref": "#/components/schemas/TcpScaleRule"
+          }
+        }
+      },
+      "Scale": {
+        "description": "Container App scaling configurations.",
+        "type": "object",
+        "properties": {
+          "minReplicas": {
+            "format": "int32",
+            "description": "Optional. Minimum number of container replicas.",
+            "type": "integer"
+          },
+          "maxReplicas": {
+            "format": "int32",
+            "description": "Optional. Maximum number of container replicas. Defaults to 10 if not set.",
+            "type": "integer",
+            "default": 10
+          },
+          "cooldownPeriod": {
+            "format": "int32",
+            "description": "Optional. KEDA Cooldown Period in seconds. Defaults to 300 seconds if not set.",
+            "type": "integer"
+          },
+          "pollingInterval": {
+            "format": "int32",
+            "description": "Optional. KEDA Polling Interval in seconds. Defaults to 30 seconds if not set.",
+            "type": "integer"
+          },
+          "rules": {
+            "description": "Scaling rules.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRule"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "SecretVolumeItem": {
+        "description": "Secret to be added to volume.",
+        "type": "object",
+        "properties": {
+          "secretRef": {
+            "description": "Name of the Container App secret from which to pull the secret value.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to project secret to. If no path is provided, path defaults to name of secret listed in secretRef.",
+            "type": "string"
+          }
+        }
+      },
+      "Volume": {
+        "description": "Volume definitions for the Container App.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Volume name.",
+            "type": "string"
+          },
+          "storageType": {
+            "description": "Storage type for the volume. If not provided, use EmptyDir.",
+            "enum": ["AzureFile", "EmptyDir", "Secret", "NfsAzureFile"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "StorageType",
+              "modelAsString": true
+            }
+          },
+          "storageName": {
+            "description": "Name of storage resource. No need to provide for EmptyDir and Secret.",
+            "type": "string"
+          },
+          "secrets": {
+            "description": "List of secrets to be added in volume. If no secrets are provided, all secrets in collection will be added to volume.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretVolumeItem"
+            },
+            "x-ms-identifiers": ["secretRef"]
+          },
+          "mountOptions": {
+            "description": "Mount options used while mounting the Azure file share or NFS Azure file share. Must be a comma-separated string.",
+            "type": "string"
+          }
+        }
+      },
+      "ServiceBind": {
+        "description": "Configuration to bind a ContainerApp to a dev ContainerApp Service",
+        "type": "object",
+        "properties": {
+          "serviceId": {
+            "description": "Resource id of the target service",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of the service bind",
+            "type": "string"
+          }
+        }
+      },
+      "Template": {
+        "description": "Container App versioned application definition.\nDefines the desired state of an immutable revision.\nAny changes to this section Will result in a new revision being created",
+        "type": "object",
+        "properties": {
+          "revisionSuffix": {
+            "description": "User friendly suffix that is appended to the revision name",
+            "type": "string"
+          },
+          "terminationGracePeriodSeconds": {
+            "description": "Optional duration in seconds the Container App Instance needs to terminate gracefully. Value must be non-negative integer. The value zero indicates stop immediately via the kill signal (no opportunity to shut down). If this value is nil, the default grace period will be used instead. Set this value longer than the expected cleanup time for your process. Defaults to 30 seconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "initContainers": {
+            "description": "List of specialized containers that run before app containers.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InitContainer"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "containers": {
+            "description": "List of container definitions for the Container App.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Container"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Scale"
+          },
+          "volumes": {
+            "description": "List of volume definitions for the Container App.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Volume"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "serviceBinds": {
+            "description": "List of container app services bound to the app",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceBind"
+            },
+            "x-ms-identifier": ["name"]
+          }
+        }
+      }
+    }
+  }
+}

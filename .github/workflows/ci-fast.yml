@@ -1,0 +1,113 @@
+name: CI Fast
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fast:
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            examples:
+              - 'examples/**'
+              - 'packages/**'
+              - 'crates/alien-cli/**'
+              - 'crates/alien-deploy-cli/**'
+              - 'crates/alien-agent/**'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install zig (needed by cargo-zigbuild for example builds)
+        run: pip3 install ziglang
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm format-and-lint
+
+      - name: TypeScript typecheck
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm test:ts
+
+      - name: Rust fast tests (non-cloud)
+        env:
+          AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          AXIOM_DATASET: dev
+        run: |
+          depot cargo nextest run --workspace \
+            --exclude alien-aws-clients \
+            --exclude alien-gcp-clients \
+            --exclude alien-azure-clients \
+            --exclude alien-k8s-clients \
+            --exclude alien-bindings \
+            --exclude byocdb \
+            --exclude endpoint-agent \
+            --exclude alien-test-server \
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+
+      - name: Build all CLIs
+        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-agent
+
+      - name: Build TypeScript packages
+        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm build
+
+      - name: Run examples
+        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          RUST_LOG: info
+          VERBOSE: "true"
+        run: pnpm test:examples

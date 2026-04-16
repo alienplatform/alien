@@ -1,0 +1,3 @@
+- Types here are exported to TypeScript via OpenAPI → Zod. New types need `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]` and must be added to `schema_exporter.rs`.
+- After modifying types: `pnpm generate && pnpm build` from workspace root.
+- Use "deployment" not "agent", "commands" not "ARC", "manager" not "server".

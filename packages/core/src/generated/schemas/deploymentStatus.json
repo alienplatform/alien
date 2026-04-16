@@ -1,0 +1,1 @@
+{"type":"string","description":"Deployment status in the deployment lifecycle","enum":["pending","initial-setup","initial-setup-failed","provisioning","provisioning-failed","running","refresh-failed","update-pending","updating","update-failed","delete-pending","deleting","delete-failed","deleted","error"],"x-readme-ref-name":"DeploymentStatus"}

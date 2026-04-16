@@ -1,0 +1,20 @@
+# SyncAcquireResponseCurrentReleaseExtendGcpStack
+
+GCP-specific binding specification
+
+## Example Usage
+
+```typescript
+import { SyncAcquireResponseCurrentReleaseExtendGcpStack } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireResponseCurrentReleaseExtendGcpStack = {
+  scope: "<value>",
+};
+```
+
+## Fields
+
+| Field                                                          | Type                                                           | Required                                                       | Description                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- |
+| `condition`                                                    | *models.SyncAcquireResponseCurrentReleaseExtendConditionUnion* | :heavy_minus_sign:                                             | N/A                                                            |
+| `scope`                                                        | *string*                                                       | :heavy_check_mark:                                             | Scope (project/resource level)                                 |

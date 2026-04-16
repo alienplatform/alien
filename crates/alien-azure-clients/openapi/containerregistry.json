@@ -1,0 +1,4928 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2025-04-01",
+    "title": "ContainerRegistryManagementClient"
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "CacheRuleList": {
+        "value": {
+          "value": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries/cacheRules",
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/cacheRules/myCacheRule",
+              "name": "myCacheRule",
+              "properties": {
+                "credentialSetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+                "sourceRepository": "docker.io/library/hello-world",
+                "targetRepository": "cached-docker-hub/hello-world",
+                "creationDate": "2022-11-07T18:20:33.8374968+00:00",
+                "provisioningState": "Succeeded"
+              }
+            }
+          ]
+        }
+      },
+      "CacheRuleGet": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/cacheRules",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/cacheRules/myCacheRule",
+          "name": "myCacheRule",
+          "properties": {
+            "credentialSetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+            "sourceRepository": "docker.io/library/hello-world",
+            "targetRepository": "cached-docker-hub/hello-world",
+            "creationDate": "2022-11-07T18:20:33.8374968+00:00",
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "CacheRuleCreate": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/cacheRules",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/cacheRules/myCacheRule",
+          "name": "myCacheRule",
+          "properties": {
+            "credentialSetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+            "sourceRepository": "docker.io/library/hello-world",
+            "targetRepository": "cached-docker-hub/hello-world",
+            "creationDate": "2022-11-07T18:20:33.8374968+00:00",
+            "provisioningState": "Creating"
+          }
+        }
+      },
+      "CacheRuleUpdate": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/cacheRules",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/cacheRules/myCacheRule",
+          "name": "myCacheRule",
+          "properties": {
+            "credentialSetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet2",
+            "sourceRepository": "docker.io/library/hello-world",
+            "targetRepository": "cached-docker-hub/hello-world",
+            "creationDate": "2022-11-07T18:20:33.8374968+00:00",
+            "provisioningState": "Updating"
+          }
+        }
+      },
+      "ConnectedRegistryGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/connectedRegistries/myConnectedRegistry",
+          "name": "myConnectedRegistry",
+          "type": "Microsoft.ContainerRegistry/registries/connectedRegistries",
+          "properties": {
+            "mode": "ReadWrite",
+            "activation": {
+              "status": "Inactive"
+            },
+            "parent": {
+              "syncProperties": {
+                "tokenId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/syncToken",
+                "schedule": "0 9 * * *",
+                "messageTtl": "P2D",
+                "syncWindow": "PT3H"
+              }
+            },
+            "clientTokenIds": [
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/client1Token"
+            ],
+            "logging": {
+              "logLevel": "Information",
+              "auditLogStatus": "Disabled"
+            },
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
+            "garbageCollection": {
+              "enabled": true,
+              "schedule": "0 5 * * *"
+            }
+          }
+        }
+      },
+      "ConnectedRegistryCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/connectedRegistries/myConnectedRegistry",
+          "name": "myConnectedRegistry",
+          "type": "Microsoft.ContainerRegistry/registries/connectedRegistries",
+          "properties": {
+            "mode": "ReadWrite",
+            "activation": {
+              "status": "Inactive"
+            },
+            "parent": {
+              "syncProperties": {
+                "tokenId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/syncToken",
+                "schedule": "0 9 * * *",
+                "messageTtl": "P2D",
+                "syncWindow": "PT3H"
+              }
+            },
+            "clientTokenIds": [
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/client1Token"
+            ],
+            "logging": {
+              "logLevel": "Information",
+              "auditLogStatus": "Disabled"
+            },
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
+            "garbageCollection": {
+              "enabled": true,
+              "schedule": "0 5 * * *"
+            }
+          }
+        }
+      },
+      "ConnectedRegistryUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/connectedRegistries/myConnectedRegistry",
+          "name": "myConnectedRegistry",
+          "type": "Microsoft.ContainerRegistry/registries/connectedRegistries",
+          "properties": {
+            "mode": "ReadWrite",
+            "parent": {
+              "syncProperties": {
+                "tokenId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/syncToken",
+                "schedule": "0 0 */10 * *",
+                "messageTtl": "P30D",
+                "syncWindow": "P2D"
+              }
+            },
+            "clientTokenIds": [
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/client1Token",
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/client2Token"
+            ],
+            "logging": {
+              "logLevel": "Debug",
+              "auditLogStatus": "Enabled"
+            },
+            "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
+            "garbageCollection": {
+              "enabled": true,
+              "schedule": "0 5 * * *"
+            }
+          }
+        }
+      },
+      "ConnectedRegistryList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/connectedRegistries/myConnectedRegistry",
+              "name": "myConnectedRegistry",
+              "type": "Microsoft.ContainerRegistry/registries/connectedRegistries",
+              "properties": {
+                "mode": "ReadWrite",
+                "activation": {
+                  "status": "Inactive"
+                },
+                "parent": {
+                  "syncProperties": {
+                    "tokenId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/syncToken",
+                    "schedule": "0 9 * * *",
+                    "messageTtl": "P2D",
+                    "syncWindow": "PT3H"
+                  }
+                },
+                "clientTokenIds": [
+                  "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/client1Token"
+                ],
+                "logging": {
+                  "logLevel": "Information",
+                  "auditLogStatus": "Disabled"
+                },
+                "notificationsList": ["hello-world:*:*", "sample/repo/*:1.0:*"],
+                "garbageCollection": {
+                  "enabled": true,
+                  "schedule": "0 5 * * *"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "CredentialSetList": {
+        "value": {
+          "value": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries/credentialSets",
+              "identity": {
+                "principalId": "00000000-0000-0000-0000-000000000000",
+                "tenantId": "00000000-0000-0000-0000-000000000000",
+                "type": "SystemAssigned"
+              },
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+              "name": "myCredentialSet",
+              "properties": {
+                "loginServer": "docker.io",
+                "authCredentials": [
+                  {
+                    "name": "Credential1",
+                    "usernameSecretIdentifier": "https://myvault.vault.azure.net/secrets/username",
+                    "passwordSecretIdentifier": "https://myvault.vault.azure.net/secrets/password",
+                    "credentialHealth": {
+                      "status": "Healthy"
+                    }
+                  }
+                ],
+                "creationDate": "2022-11-07T18:20:08.012276+00:00",
+                "provisioningState": "Succeeded"
+              }
+            }
+          ]
+        }
+      },
+      "CredentialSetGet": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/credentialSets",
+          "identity": {
+            "principalId": "00000000-0000-0000-0000-000000000000",
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "type": "SystemAssigned"
+          },
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+          "name": "myCredentialSet",
+          "properties": {
+            "loginServer": "docker.io",
+            "authCredentials": [
+              {
+                "name": "Credential1",
+                "usernameSecretIdentifier": "https://myvault.vault.azure.net/secrets/username",
+                "passwordSecretIdentifier": "https://myvault.vault.azure.net/secrets/password",
+                "credentialHealth": {
+                  "status": "Healthy"
+                }
+              }
+            ],
+            "creationDate": "2022-11-07T18:20:08.012276+00:00",
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "CredentialSetCreate": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/credentialSets",
+          "identity": {
+            "principalId": "00000000-0000-0000-0000-000000000000",
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "type": "SystemAssigned"
+          },
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+          "name": "myCredentialSet",
+          "properties": {
+            "loginServer": "docker.io",
+            "authCredentials": [
+              {
+                "name": "Credential1",
+                "usernameSecretIdentifier": "https://myvault.vault.azure.net/secrets/username",
+                "passwordSecretIdentifier": "https://myvault.vault.azure.net/secrets/password",
+                "credentialHealth": {
+                  "status": "Healthy"
+                }
+              }
+            ],
+            "creationDate": "2022-11-07T18:20:08.012276+00:00",
+            "provisioningState": "Creating"
+          }
+        }
+      },
+      "CredentialSetUpdate": {
+        "value": {
+          "type": "Microsoft.ContainerRegistry/registries/credentialSets",
+          "identity": {
+            "principalId": "00000000-0000-0000-0000-000000000000",
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "type": "SystemAssigned"
+          },
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/credentialSets/myCredentialSet",
+          "name": "myCredentialSet",
+          "properties": {
+            "loginServer": "docker.io",
+            "authCredentials": [
+              {
+                "name": "Credential1",
+                "usernameSecretIdentifier": "https://myvault.vault.azure.net/secrets/username2",
+                "passwordSecretIdentifier": "https://myvault.vault.azure.net/secrets/password2",
+                "credentialHealth": {
+                  "status": "Healthy"
+                }
+              }
+            ],
+            "creationDate": "2022-11-07T18:20:08.012276+00:00",
+            "provisioningState": "Updating"
+          }
+        }
+      },
+      "OperationList": {
+        "value": {
+          "value": [
+            {
+              "name": "Microsoft.ContainerRegistry/locations/deleteVirtualNetworkOrSubnets/action",
+              "display": {
+                "provider": "Microsoft ContainerRegistry",
+                "resource": "",
+                "operation": "Delete virtual network or subnets notifications",
+                "description": "Notifies Microsoft.ContainerRegistry that virtual network or subnet is being deleted"
+              }
+            }
+          ]
+        }
+      },
+      "RegistryCheckNameAvailable": {
+        "value": {
+          "nameAvailable": true
+        }
+      },
+      "RegistryCheckNameNotAvailable": {
+        "value": {
+          "nameAvailable": false,
+          "reason": "AlreadyExists",
+          "message": "The registry myRegistry is already in use."
+        }
+      },
+      "PrivateEndpointConnectionList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/privateEndpointConnections/myConnection",
+              "name": "myConnection",
+              "type": "Microsoft.ContainerRegistry/registries/privateEndpointConnections",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "privateEndpoint": {
+                  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.Network/privateEndpoints/peexample01"
+                },
+                "privateLinkServiceConnectionState": {
+                  "status": "Approved",
+                  "description": "Auto-Approved",
+                  "actionsRequired": "None"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "PrivateEndpointConnectionGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/privateEndpointConnections/myConnection",
+          "name": "myConnection",
+          "type": "Microsoft.ContainerRegistry/registries/privateEndpointConnections",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "privateEndpoint": {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.Network/privateEndpoints/peexample01"
+            },
+            "privateLinkServiceConnectionState": {
+              "status": "Approved",
+              "description": "Auto-Approved",
+              "actionsRequired": "None"
+            }
+          }
+        }
+      },
+      "PrivateEndpointConnectionCreateOrUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/privateEndpointConnections/myConnection",
+          "name": "myConnection",
+          "type": "Microsoft.ContainerRegistry/registries/privateEndpointConnections",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "privateEndpoint": {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.Network/privateEndpoints/peexample01"
+            },
+            "privateLinkServiceConnectionState": {
+              "status": "Approved",
+              "description": "Auto-Approved",
+              "actionsRequired": "None"
+            }
+          }
+        }
+      },
+      "RegistryList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+              "name": "myRegistry",
+              "type": "Microsoft.ContainerRegistry/registries",
+              "location": "westus",
+              "tags": {
+                "key": "value"
+              },
+              "sku": {
+                "name": "Standard",
+                "tier": "Standard"
+              },
+              "properties": {
+                "loginServer": "myRegistry.azurecr.io",
+                "creationDate": "2021-06-15T21:38:26.1537861Z",
+                "provisioningState": "Succeeded",
+                "adminUserEnabled": false,
+                "networkRuleSet": {
+                  "defaultAction": "Allow",
+                  "ipRules": []
+                },
+                "policies": {
+                  "quarantinePolicy": {
+                    "status": "disabled"
+                  },
+                  "trustPolicy": {
+                    "type": "Notary",
+                    "status": "disabled"
+                  },
+                  "retentionPolicy": {
+                    "days": 7,
+                    "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                    "status": "disabled"
+                  },
+                  "exportPolicy": {
+                    "status": "enabled"
+                  },
+                  "azureADAuthenticationAsArmPolicy": {
+                    "status": "enabled"
+                  }
+                },
+                "encryption": {
+                  "status": "disabled"
+                },
+                "dataEndpointEnabled": false,
+                "dataEndpointHostNames": [],
+                "privateEndpointConnections": [],
+                "publicNetworkAccess": "Enabled",
+                "networkRuleBypassOptions": "AzureServices",
+                "zoneRedundancy": "Disabled",
+                "anonymousPullEnabled": false
+              }
+            }
+          ]
+        }
+      },
+      "RegistryListByResourceGroup": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+              "name": "myRegistry",
+              "type": "Microsoft.ContainerRegistry/registries",
+              "location": "westus",
+              "tags": {
+                "key": "value"
+              },
+              "sku": {
+                "name": "Standard",
+                "tier": "Standard"
+              },
+              "properties": {
+                "loginServer": "myRegistry.azurecr.io",
+                "creationDate": "2021-06-15T21:38:26.1537861Z",
+                "provisioningState": "Succeeded",
+                "adminUserEnabled": false,
+                "networkRuleSet": {
+                  "defaultAction": "Allow",
+                  "ipRules": []
+                },
+                "policies": {
+                  "quarantinePolicy": {
+                    "status": "disabled"
+                  },
+                  "trustPolicy": {
+                    "type": "Notary",
+                    "status": "disabled"
+                  },
+                  "retentionPolicy": {
+                    "days": 7,
+                    "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                    "status": "disabled"
+                  },
+                  "exportPolicy": {
+                    "status": "enabled"
+                  },
+                  "azureADAuthenticationAsArmPolicy": {
+                    "status": "enabled"
+                  }
+                },
+                "encryption": {
+                  "status": "disabled"
+                },
+                "dataEndpointEnabled": false,
+                "dataEndpointHostNames": [],
+                "privateEndpointConnections": [],
+                "publicNetworkAccess": "Enabled",
+                "networkRuleBypassOptions": "AzureServices",
+                "zoneRedundancy": "Disabled",
+                "anonymousPullEnabled": false
+              }
+            }
+          ]
+        }
+      },
+      "RegistryGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+          "name": "myRegistry",
+          "type": "Microsoft.ContainerRegistry/registries",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "sku": {
+            "name": "Standard",
+            "tier": "Standard"
+          },
+          "properties": {
+            "loginServer": "myRegistry.azurecr.io",
+            "creationDate": "2021-06-15T21:38:26.1537861Z",
+            "provisioningState": "Succeeded",
+            "adminUserEnabled": false,
+            "networkRuleSet": {
+              "defaultAction": "Allow",
+              "ipRules": []
+            },
+            "policies": {
+              "quarantinePolicy": {
+                "status": "disabled"
+              },
+              "trustPolicy": {
+                "type": "Notary",
+                "status": "disabled"
+              },
+              "retentionPolicy": {
+                "days": 7,
+                "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                "status": "disabled"
+              },
+              "exportPolicy": {
+                "status": "enabled"
+              },
+              "azureADAuthenticationAsArmPolicy": {
+                "status": "enabled"
+              }
+            },
+            "encryption": {
+              "status": "disabled"
+            },
+            "dataEndpointEnabled": false,
+            "dataEndpointHostNames": [],
+            "privateEndpointConnections": [],
+            "publicNetworkAccess": "Enabled",
+            "networkRuleBypassOptions": "AzureServices",
+            "zoneRedundancy": "Disabled",
+            "anonymousPullEnabled": false
+          }
+        }
+      },
+      "RegistryCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+          "name": "myRegistry",
+          "type": "Microsoft.ContainerRegistry/registries",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "sku": {
+            "name": "Standard",
+            "tier": "Standard"
+          },
+          "properties": {
+            "loginServer": "myRegistry.azurecr.io",
+            "creationDate": "2021-06-15T21:38:26.1537861Z",
+            "provisioningState": "Creating",
+            "adminUserEnabled": true,
+            "networkRuleSet": {
+              "defaultAction": "Allow",
+              "ipRules": []
+            },
+            "policies": {
+              "quarantinePolicy": {
+                "status": "disabled"
+              },
+              "trustPolicy": {
+                "type": "Notary",
+                "status": "disabled"
+              },
+              "retentionPolicy": {
+                "days": 7,
+                "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                "status": "disabled"
+              },
+              "exportPolicy": {
+                "status": "enabled"
+              },
+              "azureADAuthenticationAsArmPolicy": {
+                "status": "enabled"
+              }
+            },
+            "encryption": {
+              "status": "disabled"
+            },
+            "dataEndpointEnabled": false,
+            "dataEndpointHostNames": [],
+            "privateEndpointConnections": [],
+            "publicNetworkAccess": "Enabled",
+            "networkRuleBypassOptions": "AzureServices",
+            "zoneRedundancy": "Disabled",
+            "anonymousPullEnabled": false
+          }
+        }
+      },
+      "RegistryCreateZoneRedundant": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+          "name": "myRegistry",
+          "type": "Microsoft.ContainerRegistry/registries",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "sku": {
+            "name": "Standard",
+            "tier": "Standard"
+          },
+          "properties": {
+            "loginServer": "myRegistry.azurecr.io",
+            "creationDate": "2021-06-15T21:38:26.1537861Z",
+            "provisioningState": "Creating",
+            "adminUserEnabled": false,
+            "networkRuleSet": {
+              "defaultAction": "Allow",
+              "ipRules": []
+            },
+            "policies": {
+              "quarantinePolicy": {
+                "status": "disabled"
+              },
+              "trustPolicy": {
+                "type": "Notary",
+                "status": "disabled"
+              },
+              "retentionPolicy": {
+                "days": 7,
+                "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                "status": "disabled"
+              },
+              "exportPolicy": {
+                "status": "enabled"
+              },
+              "azureADAuthenticationAsArmPolicy": {
+                "status": "enabled"
+              }
+            },
+            "encryption": {
+              "status": "disabled"
+            },
+            "dataEndpointEnabled": false,
+            "dataEndpointHostNames": [],
+            "privateEndpointConnections": [],
+            "publicNetworkAccess": "Enabled",
+            "networkRuleBypassOptions": "AzureServices",
+            "zoneRedundancy": "Enabled",
+            "anonymousPullEnabled": false
+          }
+        }
+      },
+      "RegistryUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry",
+          "name": "myRegistry",
+          "type": "Microsoft.ContainerRegistry/registries",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "sku": {
+            "name": "Standard",
+            "tier": "Standard"
+          },
+          "properties": {
+            "loginServer": "myRegistry.azurecr.io",
+            "creationDate": "2021-06-15T21:38:26.1537861Z",
+            "provisioningState": "Updating",
+            "adminUserEnabled": true,
+            "networkRuleSet": {
+              "defaultAction": "Allow",
+              "ipRules": []
+            },
+            "policies": {
+              "quarantinePolicy": {
+                "status": "disabled"
+              },
+              "trustPolicy": {
+                "type": "Notary",
+                "status": "disabled"
+              },
+              "retentionPolicy": {
+                "days": 7,
+                "lastUpdatedTime": "2021-06-15T21:40:12.8506835+00:00",
+                "status": "disabled"
+              },
+              "exportPolicy": {
+                "status": "enabled"
+              },
+              "azureADAuthenticationAsArmPolicy": {
+                "status": "enabled"
+              }
+            },
+            "encryption": {
+              "status": "disabled"
+            },
+            "dataEndpointEnabled": false,
+            "dataEndpointHostNames": [],
+            "privateEndpointConnections": [],
+            "publicNetworkAccess": "Enabled",
+            "networkRuleBypassOptions": "AzureServices",
+            "zoneRedundancy": "Disabled",
+            "anonymousPullEnabled": false
+          }
+        }
+      },
+      "RegistryListUsages": {
+        "value": {
+          "value": [
+            {
+              "name": "Size",
+              "limit": 107374182400,
+              "currentValue": 12345678,
+              "unit": "Bytes"
+            },
+            {
+              "name": "Webhooks",
+              "limit": 10,
+              "currentValue": 2,
+              "unit": "Count"
+            }
+          ]
+        }
+      },
+      "RegistryListPrivateLinkResources": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/privateLinkResources/registry",
+              "name": "registry",
+              "type": "Microsoft.ContainerRegistry/registries/privateLinkResources",
+              "properties": {
+                "groupId": "registry",
+                "requiredMembers": ["registry", "registry_data_myregion"],
+                "requiredZoneNames": ["privatelink.azurecr.io"]
+              }
+            }
+          ]
+        }
+      },
+      "RegistryGetPrivateLinkResource": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/privateLinkResources/registry",
+          "name": "registry",
+          "type": "Microsoft.ContainerRegistry/registries/privateLinkResources",
+          "properties": {
+            "groupId": "registry",
+            "requiredMembers": ["registry", "registry_data_myregion"],
+            "requiredZoneNames": ["privatelink.azurecr.io"]
+          }
+        }
+      },
+      "RegistryListCredentials": {
+        "value": {
+          "username": "myRegistry",
+          "passwords": [
+            {
+              "name": "password",
+              "value": "00000000000000000000000000000000"
+            },
+            {
+              "name": "password2",
+              "value": "00000000000000000000000000000000"
+            }
+          ]
+        }
+      },
+      "RegistryRegenerateCredential": {
+        "value": {
+          "username": "myRegistry",
+          "passwords": [
+            {
+              "name": "password",
+              "value": "00000000000000000000000000000000"
+            },
+            {
+              "name": "password2",
+              "value": "00000000000000000000000000000000"
+            }
+          ]
+        }
+      },
+      "ReplicationList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/replications/myReplication",
+              "name": "myReplication",
+              "type": "Microsoft.ContainerRegistry/registries/replications",
+              "location": "eastus",
+              "tags": {
+                "key": "value"
+              },
+              "properties": {
+                "provisioningState": "Succeeded",
+                "status": {
+                  "displayStatus": "Ready",
+                  "message": "The replication is ready.",
+                  "timestamp": "2017-03-01T23:15:37.0707808Z"
+                },
+                "regionEndpointEnabled": true,
+                "zoneRedundancy": "Disabled"
+              }
+            }
+          ]
+        }
+      },
+      "ReplicationGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/replications/myReplication",
+          "name": "myReplication",
+          "type": "Microsoft.ContainerRegistry/registries/replications",
+          "location": "eastus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "provisioningState": "Succeeded",
+            "status": {
+              "displayStatus": "Ready",
+              "message": "The replication is ready.",
+              "timestamp": "2017-03-01T23:15:37.0707808Z"
+            },
+            "regionEndpointEnabled": true,
+            "zoneRedundancy": "Disabled"
+          }
+        }
+      },
+      "ReplicationCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/replications/myReplication",
+          "name": "myReplication",
+          "type": "Microsoft.ContainerRegistry/registries/replications",
+          "location": "eastus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "provisioningState": "Creating",
+            "status": {
+              "displayStatus": "Provisioning",
+              "message": "The replication is provisioning.",
+              "timestamp": "2017-03-01T23:15:37.0707808Z"
+            },
+            "regionEndpointEnabled": true,
+            "zoneRedundancy": "Disabled"
+          }
+        }
+      },
+      "ReplicationCreateZoneRedundant": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/replications/myReplication",
+          "name": "myReplication",
+          "type": "Microsoft.ContainerRegistry/registries/replications",
+          "location": "eastus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "provisioningState": "Creating",
+            "status": {
+              "displayStatus": "Provisioning",
+              "message": "The replication is provisioning.",
+              "timestamp": "2017-03-01T23:15:37.0707808Z"
+            },
+            "regionEndpointEnabled": true,
+            "zoneRedundancy": "Enabled"
+          }
+        }
+      },
+      "ReplicationUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/replications/myReplication",
+          "name": "myReplication",
+          "type": "Microsoft.ContainerRegistry/registries/replications",
+          "location": "eastus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "provisioningState": "Updating",
+            "status": {
+              "displayStatus": "Provisioning",
+              "message": "The replication is provisioning.",
+              "timestamp": "2017-03-01T23:15:37.0707808Z"
+            },
+            "regionEndpointEnabled": true,
+            "zoneRedundancy": "Disabled"
+          }
+        }
+      },
+      "ScopeMapList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+              "name": "myScopeMap",
+              "type": "Microsoft.ContainerRegistry/registries/scopeMaps",
+              "properties": {
+                "creationDate": "2017-03-01T23:14:37.0707808Z",
+                "type": "IsUserDefined",
+                "actions": [
+                  "repositories/myrepository/contentWrite",
+                  "repositories/myrepository/delete"
+                ],
+                "provisioningState": "Succeeded"
+              }
+            }
+          ]
+        }
+      },
+      "ScopeMapGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+          "name": "myScopeMap",
+          "type": "Microsoft.ContainerRegistry/registries/scopeMaps",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "type": "IsUserDefined",
+            "actions": [
+              "repositories/myrepository/contentWrite",
+              "repositories/myrepository/delete"
+            ],
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "ScopeMapCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+          "name": "myScopeMap",
+          "type": "Microsoft.ContainerRegistry/registries/scopeMaps",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "type": "IsUserDefined",
+            "actions": [
+              "repositories/myrepository/contentWrite",
+              "repositories/myrepository/delete"
+            ],
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "ScopeMapUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+          "name": "myScopeMap",
+          "type": "Microsoft.ContainerRegistry/registries/scopeMaps",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "type": "IsUserDefined",
+            "actions": [
+              "repositories/myrepository/contentWrite",
+              "repositories/myrepository/contentRead"
+            ],
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "TokenList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/myToken",
+              "name": "myToken",
+              "type": "Microsoft.ContainerRegistry/registries/tokens",
+              "properties": {
+                "creationDate": "2017-03-01T23:14:37.0707808Z",
+                "scopeMapId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+                "provisioningState": "Succeeded",
+                "status": "enabled"
+              }
+            }
+          ]
+        }
+      },
+      "TokenGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/myToken",
+          "name": "myToken",
+          "type": "Microsoft.ContainerRegistry/registries/tokens",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "scopeMapId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+            "provisioningState": "Succeeded",
+            "status": "enabled"
+          }
+        }
+      },
+      "TokenCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/myToken",
+          "name": "myToken",
+          "type": "Microsoft.ContainerRegistry/registries/tokens",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "scopeMapId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myScopeMap",
+            "provisioningState": "Succeeded",
+            "status": "disabled",
+            "credentials": {
+              "certificates": [
+                {
+                  "name": "certificate1",
+                  "thumbprint": "feeb79a888bf1415f8e17c4965a2a5bb5c8a2ff7",
+                  "expiry": "2020-12-04T15:32:48.0707808Z"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "TokenUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/tokens/myToken",
+          "name": "myToken",
+          "type": "Microsoft.ContainerRegistry/registries/tokens",
+          "properties": {
+            "creationDate": "2017-03-01T23:14:37.0707808Z",
+            "scopeMapId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/scopeMaps/myNewScopeMap",
+            "provisioningState": "Succeeded",
+            "status": "enabled",
+            "credentials": {
+              "certificates": [
+                {
+                  "name": "certificate1",
+                  "encodedPemCertificate": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUc3akNDQk5hZ0F3SUJBZ0lURmdBQlR3UVpyZGdmdmhxdzBnQUFBQUZQQkRBTkJna3Foa2lHOXcwQkFRc0YKQURDQml6RUxNQWtHQTFVRUJoTUNWVk14RXpBUkJnTlZCQWdUQ2xkaGMyaHBibWQwYjI0eEVEQU9CZ05WQkFjVApCMUpsWkcxdmJtUXhIakFjQmdOVkJBb1RGVTFwWTNKdmMyOW1kQ0JEYjNKd2IzSmhkR2x2YmpFVk1CTUdBMVVFCkN4TU1UV2xqY205emIyWjBJRWxVTVI0d0hBWURWUVFERXhWTmFXTnliM052Wm5RZ1NWUWdWRXhUSUVOQklEUXcKSGhjTk1UZ3dOREV5TWpJek1qUTRXaGNOTWpBd05ERXlNakl6TWpRNFdqQTVNVGN3TlFZRFZRUURFeTV6WlhKMgphV05sWTJ4cFpXNTBZMlZ5ZEMxd1lYSjBibVZ5TG0xaGJtRm5aVzFsYm5RdVlYcDFjbVV1WTI5dE1JSUJJakFOCkJna3Foa2lHOXcwQkFRRUZBQU9DQVE4QU1JSUJDZ0tDQVFFQTBSYjdJcHpxMmR4emhhbVpyS1ZDakMzeTQyYlYKUnNIY2pCUTFuSDBHZ1puUDhXeDZDSE1mWThybkVJQzRLeVRRYkJXVzhnNXlmc3NSQ0ZXbFpxYjR6SkRXS0pmTgpGSmNMUm9LNnhwTktZYVZVTkVlT25IdUxHYTM0ZlA0VjBFRjZybzdvbkRLME5zanhjY1dZVzRNVXVzc0xrQS94CkUrM2RwU1REdk1KcjJoWUpsVnFDcVR6blQvbmZaVUZzQUVEQnp5MUpOOHZiZDlIR2czc2Myd0x4dk95cFJOc0gKT1V3V2pmN2xzWWZleEVlcWkzY29EeHc2alpLVWEyVkdsUnBpTkowMjhBQitYSi9TU1FVNVBsd0JBbU9TT3ovRApGY0NKdGpPZlBqU1NKckFIQVV3SHU3RzlSV05JTFBwYU9zQ1J5eitETE5zNGpvNlEvUUg4d1lManJRSURBUUFCCm80SUNtakNDQXBZd0N3WURWUjBQQkFRREFnU3dNQjBHQTFVZEpRUVdNQlFHQ0NzR0FRVUZCd01DQmdnckJnRUYKQlFjREFUQWRCZ05WSFE0RUZnUVVlbEdkVVJrZzJoSFFOWEQ4WUc4L3drdjJVT0F3SHdZRFZSMGpCQmd3Rm9BVQplbnVNd2Mvbm9Nb2MxR3Y2KytFend3OGFvcDB3Z2F3R0ExVWRId1NCcERDQm9UQ0JucUNCbTZDQm1JWkxhSFIwCmNEb3ZMMjF6WTNKc0xtMXBZM0p2YzI5bWRDNWpiMjB2Y0d0cEwyMXpZMjl5Y0M5amNtd3ZUV2xqY205emIyWjAKSlRJd1NWUWxNakJVVEZNbE1qQkRRU1V5TURRdVkzSnNoa2xvZEhSd09pOHZZM0pzTG0xcFkzSnZjMjltZEM1agpiMjB2Y0d0cEwyMXpZMjl5Y0M5amNtd3ZUV2xqY205emIyWjBKVEl3U1ZRbE1qQlVURk1sTWpCRFFTVXlNRFF1ClkzSnNNSUdGQmdnckJnRUZCUWNCQVFSNU1IY3dVUVlJS3dZQkJRVUhNQUtHUldoMGRIQTZMeTkzZDNjdWJXbGoKY205emIyWjBMbU52YlM5d2Eya3ZiWE5qYjNKd0wwMXBZM0p2YzI5bWRDVXlNRWxVSlRJd1ZFeFRKVEl3UTBFbApNakEwTG1OeWREQWlCZ2dyQmdFRkJRY3dBWVlXYUhSMGNEb3ZMMjlqYzNBdWJYTnZZM053TG1OdmJUQStCZ2tyCkJnRUVBWUkzRlFjRU1UQXZCaWNyQmdFRUFZSTNGUWlIMm9aMWcrN1pBWUxKaFJ1QnRaNWhoZlRyWUlGZGhOTGYKUW9Mbmszb0NBV1FDQVIwd1RRWURWUjBnQkVZd1JEQkNCZ2tyQmdFRUFZSTNLZ0V3TlRBekJnZ3JCZ0VGQlFjQwpBUlluYUhSMGNEb3ZMM2QzZHk1dGFXTnliM052Wm5RdVkyOXRMM0JyYVM5dGMyTnZjbkF2WTNCek1DY0dDU3NHCkFRUUJnamNWQ2dRYU1CZ3dDZ1lJS3dZQkJRVUhBd0l3Q2dZSUt3WUJCUVVIQXdFd09RWURWUjBSQkRJd01JSXUKYzJWeWRtbGpaV05zYVdWdWRHTmxjblF0Y0dGeWRHNWxjaTV0WVc1aFoyVnRaVzUwTG1GNmRYSmxMbU52YlRBTgpCZ2txaGtpRzl3MEJBUXNGQUFPQ0FnRUFIVXIzbk1vdUI5WWdDUlRWYndUTllIS2RkWGJkSW1GUXNDYys4T1g1CjE5c0N6dFFSR05iSXEwVW1Ba01MbFVvWTIxckh4ZXdxU2hWczFhL2RwaFh5Tk1pcUdaU2QzU1BtYzZscitqUFQKNXVEREs0MUlWeXN0K2VUNlpyazFvcCtMVmdkeS9EU2lyNzVqcWZFY016bS82bU8rNnFNeWRLTWtVYmM5K3JHVwphUkpUcjRWUUdIRmEwNEIwZVZpNUd4MG9pL2RpZDNSaXg2aXJMMjFJSGEwYjN6c1hzZHpHU0R2K3hqL2Q2S0l4Ckdrd2FhYmZvU1NoQnFqaFNlQ0VyZXFlb1RpYjljdGw0MGRVdUp3THl4bjhHS2N6K3AvMEJUOEIxU3lYK01OQ2wKY0pkMjVtMjhLajY2TGUxOEVyeFlJYXZJVGVGa3Y2eGZjdkEvcHladDdPaU41QTlGQk1IUmpQK1kyZ2tvdjMrcQpISFRUZG4xNnlRajduNit3YlFHNGVleXc0YisyQkRLcUxNVFU2ZmlSQ3ZPM2FPZVBLSFVNN3R4b1FidWl6Z3NzCkNiMzl3QnJOTEZsMkJLQ1RkSCtkSU9oZVJiSkZvbmlwOGRPOUVFZWdSSG9lQW54ZUlYTFBrdXMzTzEvZjRhNkIKWHQ3RG5BUm8xSzJmeEp3VXRaU2MvR3dFSjU5NzlnRXlEa3pDZEVsLzdpWE9QZXVjTXhlM2xVM2pweUtsNERUaApjSkJqQytqNGpLWTFrK1U4b040aGdqYnJISUx6Vnd2eU15OU5KS290U3BMSjQxeHdPOHlGangxalFTT3Bxc0N1ClFhUFUvTjhSZ0hxWjBGTkFzS3dNUmZ6WmdXanRCNzRzYUVEdk5jVmNuNFhCQnFNSG0ydHo2Uzk3d3kxZGt0cTgKSE5BPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+                }
+              ]
+            }
+          }
+        }
+      },
+      "RegistryGenerateCredentials": {
+        "value": {
+          "username": "myToken",
+          "passwords": [
+            {
+              "expiry": "2020-12-31T15:59:59.0707808Z",
+              "name": "password1",
+              "value": "00000000000000000000000000000000"
+            },
+            {
+              "expiry": "2020-12-31T15:59:59.0707808Z",
+              "name": "password2",
+              "value": "00000000000000000000000000000000"
+            }
+          ]
+        }
+      },
+      "WebhookList": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/webhooks/myWebhook",
+              "name": "myWebhook",
+              "type": "Microsoft.ContainerRegistry/registries/webhooks",
+              "location": "westus",
+              "tags": {
+                "key": "value"
+              },
+              "properties": {
+                "status": "enabled",
+                "scope": "myRepository",
+                "actions": ["push"],
+                "provisioningState": "Succeeded"
+              }
+            }
+          ]
+        }
+      },
+      "WebhookGet": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/webhooks/myWebhook",
+          "name": "myWebhook",
+          "type": "Microsoft.ContainerRegistry/registries/webhooks",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "status": "enabled",
+            "scope": "myRepository",
+            "actions": ["push"],
+            "provisioningState": "Succeeded"
+          }
+        }
+      },
+      "WebhookCreate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/webhooks/myWebhook",
+          "name": "myWebhook",
+          "type": "Microsoft.ContainerRegistry/registries/webhooks",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "status": "enabled",
+            "scope": "myRepository",
+            "actions": ["push"],
+            "provisioningState": "Creating"
+          }
+        }
+      },
+      "WebhookUpdate": {
+        "value": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup/providers/Microsoft.ContainerRegistry/registries/myRegistry/webhooks/myWebhook",
+          "name": "myWebhook",
+          "type": "Microsoft.ContainerRegistry/registries/webhooks",
+          "location": "westus",
+          "tags": {
+            "key": "value"
+          },
+          "properties": {
+            "status": "enabled",
+            "scope": "myRepository",
+            "actions": ["push"],
+            "provisioningState": "Updating"
+          }
+        }
+      },
+      "WebhookPing": {
+        "value": {
+          "id": "00000000-0000-0000-0000-000000000000"
+        }
+      },
+      "WebhookListEvents": {
+        "value": {
+          "value": [
+            {
+              "id": "00000000-0000-0000-0000-000000000000",
+              "eventRequestMessage": {
+                "content": {
+                  "id": "00000000-0000-0000-0000-000000000000",
+                  "timestamp": "2017-03-01T23:14:37.0707808Z",
+                  "action": "push",
+                  "target": {
+                    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                    "size": 708,
+                    "digest": "sha256:fea8895f450959fa676bcc1df0611ea93823a735a01205fd8622846041d0c7cf",
+                    "length": 708,
+                    "repository": "hello-world",
+                    "url": "http://192.168.100.227:5000/v2/hello-world/manifests/sha256:fea8895f450959fa676bcc1df0611ea93823a735a01205fd8622846041d0c7cf",
+                    "tag": "latest"
+                  },
+                  "request": {
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "addr": "192.168.64.11:42961",
+                    "host": "192.168.100.227:5000",
+                    "method": "GET",
+                    "useragent": "curl/7.38.0"
+                  },
+                  "actor": {},
+                  "source": {
+                    "addr": "xtal.local:5000",
+                    "instanceID": "00000000-0000-0000-0000-000000000000"
+                  }
+                },
+                "headers": {
+                  "Content-Type": "application/json",
+                  "Content-Length": "719",
+                  "Authorization": "******"
+                },
+                "method": "POST",
+                "requestUri": "http://myservice.com",
+                "version": "1.1"
+              },
+              "eventResponseMessage": {
+                "headers": {
+                  "Content-Length": "0"
+                },
+                "statusCode": "200",
+                "version": "1.1"
+              }
+            }
+          ]
+        }
+      },
+      "WebhookGetCallbackConfig": {
+        "value": {
+          "serviceUri": "http://myservice.com",
+          "customHeaders": {
+            "Authorization": "******"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "RegistryNameParameter": {
+        "name": "registryName",
+        "in": "path",
+        "description": "The name of the container registry.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9]*$"
+        },
+        "examples": {
+          "CacheRuleList": {
+            "value": "myRegistry"
+          },
+          "CacheRuleGet": {
+            "value": "myRegistry"
+          },
+          "CacheRuleCreate": {
+            "value": "myRegistry"
+          },
+          "CacheRuleDelete": {
+            "value": "myRegistry"
+          },
+          "CacheRuleUpdate": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryGet": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryCreate": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryUpdate": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryDelete": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryList": {
+            "value": "myRegistry"
+          },
+          "ConnectedRegistryDeactivate": {
+            "value": "myRegistry"
+          },
+          "CredentialSetList": {
+            "value": "myRegistry"
+          },
+          "CredentialSetGet": {
+            "value": "myRegistry"
+          },
+          "CredentialSetCreate": {
+            "value": "myRegistry"
+          },
+          "CredentialSetDelete": {
+            "value": "myRegistry"
+          },
+          "CredentialSetUpdate": {
+            "value": "myRegistry"
+          },
+          "ImportImageByTag": {
+            "value": "myRegistry"
+          },
+          "ImportImageByManifestDigest": {
+            "value": "myRegistry"
+          },
+          "ImportImageFromPublicRegistry": {
+            "value": "myRegistry"
+          },
+          "PrivateEndpointConnectionList": {
+            "value": "myRegistry"
+          },
+          "PrivateEndpointConnectionGet": {
+            "value": "myRegistry"
+          },
+          "PrivateEndpointConnectionCreateOrUpdate": {
+            "value": "myRegistry"
+          },
+          "PrivateEndpointConnectionDelete": {
+            "value": "myRegistry"
+          },
+          "RegistryGet": {
+            "value": "myRegistry"
+          },
+          "RegistryCreate": {
+            "value": "myRegistry"
+          },
+          "RegistryCreateZoneRedundant": {
+            "value": "myRegistry"
+          },
+          "RegistryDelete": {
+            "value": "myRegistry"
+          },
+          "RegistryUpdate": {
+            "value": "myRegistry"
+          },
+          "RegistryListUsages": {
+            "value": "myRegistry"
+          },
+          "RegistryListPrivateLinkResources": {
+            "value": "myRegistry"
+          },
+          "RegistryGetPrivateLinkResource": {
+            "value": "myRegistry"
+          },
+          "RegistryListCredentials": {
+            "value": "myRegistry"
+          },
+          "RegistryRegenerateCredential": {
+            "value": "myRegistry"
+          },
+          "ReplicationList": {
+            "value": "myRegistry"
+          },
+          "ReplicationGet": {
+            "value": "myRegistry"
+          },
+          "ReplicationCreate": {
+            "value": "myRegistry"
+          },
+          "ReplicationCreateZoneRedundant": {
+            "value": "myRegistry"
+          },
+          "ReplicationDelete": {
+            "value": "myRegistry"
+          },
+          "ReplicationUpdate": {
+            "value": "myRegistry"
+          },
+          "ScopeMapList": {
+            "value": "myRegistry"
+          },
+          "ScopeMapGet": {
+            "value": "myRegistry"
+          },
+          "ScopeMapCreate": {
+            "value": "myRegistry"
+          },
+          "ScopeMapDelete": {
+            "value": "myRegistry"
+          },
+          "ScopeMapUpdate": {
+            "value": "myRegistry"
+          },
+          "TokenList": {
+            "value": "myRegistry"
+          },
+          "TokenGet": {
+            "value": "myRegistry"
+          },
+          "TokenCreate": {
+            "value": "myRegistry"
+          },
+          "TokenDelete": {
+            "value": "myRegistry"
+          },
+          "TokenUpdate": {
+            "value": "myRegistry"
+          },
+          "RegistryGenerateCredentials": {
+            "value": "myRegistry"
+          },
+          "WebhookList": {
+            "value": "myRegistry"
+          },
+          "WebhookGet": {
+            "value": "myRegistry"
+          },
+          "WebhookCreate": {
+            "value": "myRegistry"
+          },
+          "WebhookDelete": {
+            "value": "myRegistry"
+          },
+          "WebhookUpdate": {
+            "value": "myRegistry"
+          },
+          "WebhookPing": {
+            "value": "myRegistry"
+          },
+          "WebhookListEvents": {
+            "value": "myRegistry"
+          },
+          "WebhookGetCallbackConfig": {
+            "value": "myRegistry"
+          }
+        }
+      },
+      "WebhookNameParameter": {
+        "name": "webhookName",
+        "in": "path",
+        "description": "The name of the webhook.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9]*$"
+        },
+        "examples": {
+          "WebhookGet": {
+            "value": "myWebhook"
+          },
+          "WebhookCreate": {
+            "value": "myWebhook"
+          },
+          "WebhookDelete": {
+            "value": "myWebhook"
+          },
+          "WebhookUpdate": {
+            "value": "myWebhook"
+          },
+          "WebhookPing": {
+            "value": "myWebhook"
+          },
+          "WebhookListEvents": {
+            "value": "myWebhook"
+          },
+          "WebhookGetCallbackConfig": {
+            "value": "myWebhook"
+          }
+        }
+      },
+      "ReplicationNameParameter": {
+        "name": "replicationName",
+        "in": "path",
+        "description": "The name of the replication.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9]*$"
+        },
+        "examples": {
+          "ReplicationGet": {
+            "value": "myReplication"
+          },
+          "ReplicationCreate": {
+            "value": "myReplication"
+          },
+          "ReplicationCreateZoneRedundant": {
+            "value": "myReplication"
+          },
+          "ReplicationDelete": {
+            "value": "myReplication"
+          },
+          "ReplicationUpdate": {
+            "value": "myReplication"
+          }
+        }
+      },
+      "ScopeMapNameParameter": {
+        "name": "scopeMapName",
+        "in": "path",
+        "description": "The name of the scope map.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9-_]*$"
+        },
+        "examples": {
+          "ScopeMapGet": {
+            "value": "myScopeMap"
+          },
+          "ScopeMapCreate": {
+            "value": "myScopeMap"
+          },
+          "ScopeMapDelete": {
+            "value": "myScopeMap"
+          },
+          "ScopeMapUpdate": {
+            "value": "myScopeMap"
+          }
+        }
+      },
+      "TokenNameParameter": {
+        "name": "tokenName",
+        "in": "path",
+        "description": "The name of the token.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9-]*$"
+        },
+        "examples": {
+          "TokenGet": {
+            "value": "myToken"
+          },
+          "TokenCreate": {
+            "value": "myToken"
+          },
+          "TokenDelete": {
+            "value": "myToken"
+          },
+          "TokenUpdate": {
+            "value": "myToken"
+          }
+        }
+      },
+      "PrivateEndpointConnectionNameParameter": {
+        "name": "privateEndpointConnectionName",
+        "in": "path",
+        "description": "The name of the private endpoint connection.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "PrivateEndpointConnectionGet": {
+            "value": "myConnection"
+          },
+          "PrivateEndpointConnectionCreateOrUpdate": {
+            "value": "myConnection"
+          },
+          "PrivateEndpointConnectionDelete": {
+            "value": "myConnection"
+          }
+        }
+      },
+      "GroupNameParameter": {
+        "name": "groupName",
+        "in": "path",
+        "description": "The name of the private link resource.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "RegistryGetPrivateLinkResource": {
+            "value": "registry"
+          }
+        }
+      },
+      "ConnectedRegistryNameParameter": {
+        "in": "path",
+        "name": "connectedRegistryName",
+        "description": "The name of the connected registry.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9]*$"
+        },
+        "examples": {
+          "ConnectedRegistryGet": {
+            "value": "myConnectedRegistry"
+          },
+          "ConnectedRegistryCreate": {
+            "value": "myConnectedRegistry"
+          },
+          "ConnectedRegistryUpdate": {
+            "value": "myScopeMap"
+          },
+          "ConnectedRegistryDelete": {
+            "value": "myConnectedRegistry"
+          },
+          "ConnectedRegistryDeactivate": {
+            "value": "myConnectedRegistry"
+          }
+        }
+      },
+      "ConnectedRegistryFilterParameter": {
+        "in": "query",
+        "name": "$filter",
+        "description": "An OData filter expression that describes a subset of connectedRegistries to return. The parameters that can be filtered are parent.id (the resource id of the connectedRegistry parent), mode, and connectionState. The supported operator is eq.",
+        "required": false,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CredentialSetNameParameter": {
+        "name": "credentialSetName",
+        "in": "path",
+        "description": "The name of the credential set.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9-]*$"
+        },
+        "examples": {
+          "CredentialSetGet": {
+            "value": "myCredentialSet"
+          },
+          "CredentialSetCreate": {
+            "value": "myCredentialSet"
+          },
+          "CredentialSetDelete": {
+            "value": "myCredentialSet"
+          },
+          "CredentialSetUpdate": {
+            "value": "myCredentialSet"
+          }
+        }
+      },
+      "CacheRuleNameParameter": {
+        "name": "cacheRuleName",
+        "in": "path",
+        "description": "The name of the cache rule.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9-]*$"
+        },
+        "examples": {
+          "CacheRuleGet": {
+            "value": "myCacheRule"
+          },
+          "CacheRuleCreate": {
+            "value": "myCacheRule"
+          },
+          "CacheRuleDelete": {
+            "value": "myCacheRule"
+          },
+          "CacheRuleUpdate": {
+            "value": "myCacheRule"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "description": "The API version to use for this operation.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "CacheRuleList": {
+            "value": "2025-04-01"
+          },
+          "CacheRuleGet": {
+            "value": "2025-04-01"
+          },
+          "CacheRuleCreate": {
+            "value": "2025-04-01"
+          },
+          "CacheRuleDelete": {
+            "value": "2025-04-01"
+          },
+          "CacheRuleUpdate": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryGet": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryCreate": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryUpdate": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryDelete": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryList": {
+            "value": "2025-04-01"
+          },
+          "ConnectedRegistryDeactivate": {
+            "value": "2025-04-01"
+          },
+          "CredentialSetList": {
+            "value": "2025-04-01"
+          },
+          "CredentialSetGet": {
+            "value": "2025-04-01"
+          },
+          "CredentialSetCreate": {
+            "value": "2025-04-01"
+          },
+          "CredentialSetDelete": {
+            "value": "2025-04-01"
+          },
+          "CredentialSetUpdate": {
+            "value": "2025-04-01"
+          },
+          "ImportImageByTag": {
+            "value": "2025-04-01"
+          },
+          "ImportImageByManifestDigest": {
+            "value": "2025-04-01"
+          },
+          "ImportImageFromPublicRegistry": {
+            "value": "2025-04-01"
+          },
+          "OperationList": {
+            "value": "2025-04-01"
+          },
+          "RegistryCheckNameAvailable": {
+            "value": "2025-04-01"
+          },
+          "RegistryCheckNameNotAvailable": {
+            "value": "2025-04-01"
+          },
+          "PrivateEndpointConnectionList": {
+            "value": "2025-04-01"
+          },
+          "PrivateEndpointConnectionGet": {
+            "value": "2025-04-01"
+          },
+          "PrivateEndpointConnectionCreateOrUpdate": {
+            "value": "2025-04-01"
+          },
+          "PrivateEndpointConnectionDelete": {
+            "value": "2025-04-01"
+          },
+          "RegistryList": {
+            "value": "2025-04-01"
+          },
+          "RegistryListByResourceGroup": {
+            "value": "2025-04-01"
+          },
+          "RegistryGet": {
+            "value": "2025-04-01"
+          },
+          "RegistryCreate": {
+            "value": "2025-04-01"
+          },
+          "RegistryCreateZoneRedundant": {
+            "value": "2025-04-01"
+          },
+          "RegistryDelete": {
+            "value": "2025-04-01"
+          },
+          "RegistryUpdate": {
+            "value": "2025-04-01"
+          },
+          "RegistryListUsages": {
+            "value": "2025-04-01"
+          },
+          "RegistryListPrivateLinkResources": {
+            "value": "2025-04-01"
+          },
+          "RegistryGetPrivateLinkResource": {
+            "value": "2025-04-01"
+          },
+          "RegistryListCredentials": {
+            "value": "2025-04-01"
+          },
+          "RegistryRegenerateCredential": {
+            "value": "2025-04-01"
+          },
+          "ReplicationList": {
+            "value": "2025-04-01"
+          },
+          "ReplicationGet": {
+            "value": "2025-04-01"
+          },
+          "ReplicationCreate": {
+            "value": "2025-04-01"
+          },
+          "ReplicationCreateZoneRedundant": {
+            "value": "2025-04-01"
+          },
+          "ReplicationDelete": {
+            "value": "2025-04-01"
+          },
+          "ReplicationUpdate": {
+            "value": "2025-04-01"
+          },
+          "ScopeMapList": {
+            "value": "2025-04-01"
+          },
+          "ScopeMapGet": {
+            "value": "2025-04-01"
+          },
+          "ScopeMapCreate": {
+            "value": "2025-04-01"
+          },
+          "ScopeMapDelete": {
+            "value": "2025-04-01"
+          },
+          "ScopeMapUpdate": {
+            "value": "2025-04-01"
+          },
+          "TokenList": {
+            "value": "2025-04-01"
+          },
+          "TokenGet": {
+            "value": "2025-04-01"
+          },
+          "TokenCreate": {
+            "value": "2025-04-01"
+          },
+          "TokenDelete": {
+            "value": "2025-04-01"
+          },
+          "TokenUpdate": {
+            "value": "2025-04-01"
+          },
+          "RegistryGenerateCredentials": {
+            "value": "2025-04-01"
+          },
+          "WebhookList": {
+            "value": "2025-04-01"
+          },
+          "WebhookGet": {
+            "value": "2025-04-01"
+          },
+          "WebhookCreate": {
+            "value": "2025-04-01"
+          },
+          "WebhookDelete": {
+            "value": "2025-04-01"
+          },
+          "WebhookUpdate": {
+            "value": "2025-04-01"
+          },
+          "WebhookPing": {
+            "value": "2025-04-01"
+          },
+          "WebhookListEvents": {
+            "value": "2025-04-01"
+          },
+          "WebhookGetCallbackConfig": {
+            "value": "2025-04-01"
+          }
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "description": "The ID of the target subscription. The value must be an UUID.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "examples": {
+          "CacheRuleList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CacheRuleGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CacheRuleCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CacheRuleDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CacheRuleUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ConnectedRegistryDeactivate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CredentialSetList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CredentialSetGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CredentialSetCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CredentialSetDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "CredentialSetUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ImportImageByTag": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ImportImageByManifestDigest": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ImportImageFromPublicRegistry": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryCheckNameAvailable": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryCheckNameNotAvailable": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "PrivateEndpointConnectionList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "PrivateEndpointConnectionGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "PrivateEndpointConnectionCreateOrUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "PrivateEndpointConnectionDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryListByResourceGroup": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryCreateZoneRedundant": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryListUsages": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryListPrivateLinkResources": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryGetPrivateLinkResource": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryListCredentials": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryRegenerateCredential": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationCreateZoneRedundant": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ReplicationUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ScopeMapList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ScopeMapGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ScopeMapCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ScopeMapDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "ScopeMapUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "TokenList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "TokenGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "TokenCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "TokenDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "TokenUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "RegistryGenerateCredentials": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookList": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookGet": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookCreate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookDelete": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookUpdate": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookPing": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookListEvents": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "WebhookGetCallbackConfig": {
+            "value": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "description": "The name of the resource group. The name is case insensitive.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "CacheRuleList": {
+            "value": "myResourceGroup"
+          },
+          "CacheRuleGet": {
+            "value": "myResourceGroup"
+          },
+          "CacheRuleCreate": {
+            "value": "myResourceGroup"
+          },
+          "CacheRuleDelete": {
+            "value": "myResourceGroup"
+          },
+          "CacheRuleUpdate": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryGet": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryCreate": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryUpdate": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryDelete": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryList": {
+            "value": "myResourceGroup"
+          },
+          "ConnectedRegistryDeactivate": {
+            "value": "myResourceGroup"
+          },
+          "CredentialSetList": {
+            "value": "myResourceGroup"
+          },
+          "CredentialSetGet": {
+            "value": "myResourceGroup"
+          },
+          "CredentialSetCreate": {
+            "value": "myResourceGroup"
+          },
+          "CredentialSetDelete": {
+            "value": "myResourceGroup"
+          },
+          "CredentialSetUpdate": {
+            "value": "myResourceGroup"
+          },
+          "ImportImageByTag": {
+            "value": "myResourceGroup"
+          },
+          "ImportImageByManifestDigest": {
+            "value": "myResourceGroup"
+          },
+          "ImportImageFromPublicRegistry": {
+            "value": "myResourceGroup"
+          },
+          "PrivateEndpointConnectionList": {
+            "value": "myResourceGroup"
+          },
+          "PrivateEndpointConnectionGet": {
+            "value": "myResourceGroup"
+          },
+          "PrivateEndpointConnectionCreateOrUpdate": {
+            "value": "myResourceGroup"
+          },
+          "PrivateEndpointConnectionDelete": {
+            "value": "myResourceGroup"
+          },
+          "RegistryListByResourceGroup": {
+            "value": "myResourceGroup"
+          },
+          "RegistryGet": {
+            "value": "myResourceGroup"
+          },
+          "RegistryCreate": {
+            "value": "myResourceGroup"
+          },
+          "RegistryCreateZoneRedundant": {
+            "value": "myResourceGroup"
+          },
+          "RegistryDelete": {
+            "value": "myResourceGroup"
+          },
+          "RegistryUpdate": {
+            "value": "myResourceGroup"
+          },
+          "RegistryListUsages": {
+            "value": "myResourceGroup"
+          },
+          "RegistryListPrivateLinkResources": {
+            "value": "myResourceGroup"
+          },
+          "RegistryGetPrivateLinkResource": {
+            "value": "myResourceGroup"
+          },
+          "RegistryListCredentials": {
+            "value": "myResourceGroup"
+          },
+          "RegistryRegenerateCredential": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationList": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationGet": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationCreate": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationCreateZoneRedundant": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationDelete": {
+            "value": "myResourceGroup"
+          },
+          "ReplicationUpdate": {
+            "value": "myResourceGroup"
+          },
+          "ScopeMapList": {
+            "value": "myResourceGroup"
+          },
+          "ScopeMapGet": {
+            "value": "myResourceGroup"
+          },
+          "ScopeMapCreate": {
+            "value": "myResourceGroup"
+          },
+          "ScopeMapDelete": {
+            "value": "myResourceGroup"
+          },
+          "ScopeMapUpdate": {
+            "value": "myResourceGroup"
+          },
+          "TokenList": {
+            "value": "myResourceGroup"
+          },
+          "TokenGet": {
+            "value": "myResourceGroup"
+          },
+          "TokenCreate": {
+            "value": "myResourceGroup"
+          },
+          "TokenDelete": {
+            "value": "myResourceGroup"
+          },
+          "TokenUpdate": {
+            "value": "myResourceGroup"
+          },
+          "RegistryGenerateCredentials": {
+            "value": "myResourceGroup"
+          },
+          "WebhookList": {
+            "value": "myResourceGroup"
+          },
+          "WebhookGet": {
+            "value": "myResourceGroup"
+          },
+          "WebhookCreate": {
+            "value": "myResourceGroup"
+          },
+          "WebhookDelete": {
+            "value": "myResourceGroup"
+          },
+          "WebhookUpdate": {
+            "value": "myResourceGroup"
+          },
+          "WebhookPing": {
+            "value": "myResourceGroup"
+          },
+          "WebhookListEvents": {
+            "value": "myResourceGroup"
+          },
+          "WebhookGetCallbackConfig": {
+            "value": "myResourceGroup"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ActivationProperties": {
+        "description": "The activation properties of the connected registry.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The activation status of the connected registry.",
+            "enum": ["Active", "Inactive"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ActivationStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "AzureADAuthenticationAsArmPolicy": {
+        "description": "The policy for using ARM audience token for a container registry.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The value that indicates whether the policy is enabled or not.",
+            "default": "enabled",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "AzureADAuthenticationAsArmPolicyStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "CacheRulesListResult": {
+        "description": "The result of a request to list cache rules for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of cache rules.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheRule"
+            }
+          },
+          "nextLink": {
+            "description": "If provided, client must use NextLink URI to request next list of cache rules.",
+            "type": "string"
+          }
+        }
+      },
+      "CacheRule": {
+        "description": "An object that represents a cache rule for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/CacheRuleProperties"
+          }
+        }
+      },
+      "CacheRuleProperties": {
+        "description": "The properties of a cache rule.",
+        "type": "object",
+        "properties": {
+          "credentialSetResourceId": {
+            "description": "The ARM resource ID of the credential store which is associated with the cache rule.",
+            "type": "string"
+          },
+          "sourceRepository": {
+            "description": "Source repository pulled from upstream.",
+            "type": "string"
+          },
+          "targetRepository": {
+            "description": "Target repository specified in docker pull command.\r\nEg: docker pull myregistry.azurecr.io/{targetRepository}:{tag}",
+            "type": "string"
+          },
+          "creationDate": {
+            "description": "The creation date of the cache rule.",
+            "type": "string",
+            "readOnly": true
+          },
+          "provisioningState": {
+            "description": "Provisioning state of the resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "CacheRuleUpdateParameters": {
+        "description": "The parameters for updating a cache rule.",
+        "type": "object",
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/CacheRuleUpdateProperties"
+          }
+        }
+      },
+      "CacheRuleUpdateProperties": {
+        "description": "The parameters for updating cache rule properties.",
+        "type": "object",
+        "properties": {
+          "credentialSetResourceId": {
+            "description": "The ARM resource ID of the credential store which is associated with the Cache rule.",
+            "type": "string"
+          }
+        }
+      },
+      "ConnectedRegistry": {
+        "description": "An object that represents a connected registry for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ConnectedRegistryProperties"
+          }
+        }
+      },
+      "ConnectedRegistryListResult": {
+        "description": "The result of a request to list connected registries for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of connected registries. Since this list may be incomplete, the nextLink field should be used to request the next list of connected registries.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedRegistry"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of connected registries.",
+            "type": "string"
+          }
+        }
+      },
+      "ConnectedRegistryProperties": {
+        "description": "The properties of a connected registry.",
+        "required": ["mode", "parent"],
+        "type": "object",
+        "properties": {
+          "provisioningState": {
+            "description": "Provisioning state of the resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "mode": {
+            "description": "The mode of the connected registry resource that indicates the permissions of the registry.",
+            "enum": ["ReadWrite", "ReadOnly", "Registry", "Mirror"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ConnectedRegistryMode",
+              "modelAsString": true
+            }
+          },
+          "version": {
+            "description": "The current version of ACR runtime on the connected registry.",
+            "type": "string",
+            "readOnly": true
+          },
+          "connectionState": {
+            "description": "The current connection state of the connected registry.",
+            "enum": ["Online", "Offline", "Syncing", "Unhealthy"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ConnectionState",
+              "modelAsString": true
+            }
+          },
+          "lastActivityTime": {
+            "description": "The last activity time of the connected registry.",
+            "type": "string",
+            "readOnly": true
+          },
+          "activation": {
+            "$ref": "#/components/schemas/ActivationProperties"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/ParentProperties"
+          },
+          "clientTokenIds": {
+            "description": "The list of the ACR token resource IDs used to authenticate clients to the connected registry.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "loginServer": {
+            "$ref": "#/components/schemas/LoginServerProperties"
+          },
+          "logging": {
+            "$ref": "#/components/schemas/LoggingProperties"
+          },
+          "statusDetails": {
+            "description": "The list of current statuses of the connected registry.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusDetailProperties"
+            },
+            "readOnly": true,
+            "x-ms-identifiers": ["correlationId"]
+          },
+          "notificationsList": {
+            "description": "The list of notifications subscription information for the connected registry.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "garbageCollection": {
+            "$ref": "#/components/schemas/GarbageCollectionProperties"
+          }
+        }
+      },
+      "ConnectedRegistryUpdateParameters": {
+        "description": "The parameters for updating a connected registry.",
+        "type": "object",
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ConnectedRegistryUpdateProperties"
+          }
+        }
+      },
+      "ConnectedRegistryUpdateProperties": {
+        "description": "The parameters for updating token properties.",
+        "type": "object",
+        "properties": {
+          "syncProperties": {
+            "$ref": "#/components/schemas/SyncUpdateProperties"
+          },
+          "logging": {
+            "$ref": "#/components/schemas/LoggingProperties"
+          },
+          "clientTokenIds": {
+            "description": "The list of the ACR token resource IDs used to authenticate clients to the connected registry.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notificationsList": {
+            "description": "The list of notifications subscription information for the connected registry.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "garbageCollection": {
+            "$ref": "#/components/schemas/GarbageCollectionProperties"
+          }
+        }
+      },
+      "GarbageCollectionProperties": {
+        "description": "The garbage collection properties of the connected registry.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Indicates whether garbage collection is enabled for the connected registry.",
+            "type": "boolean"
+          },
+          "schedule": {
+            "description": "The cron expression indicating the schedule that the connected registry will run garbage collection.",
+            "type": "string"
+          }
+        }
+      },
+      "LoggingProperties": {
+        "description": "The logging properties of the connected registry.",
+        "type": "object",
+        "properties": {
+          "logLevel": {
+            "description": "The verbosity of logs persisted on the connected registry.",
+            "default": "Information",
+            "enum": ["Debug", "Information", "Warning", "Error", "None"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "LogLevel",
+              "modelAsString": true
+            }
+          },
+          "auditLogStatus": {
+            "description": "Indicates whether audit logs are enabled on the connected registry.",
+            "default": "Disabled",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "AuditLogStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "LoginServerProperties": {
+        "description": "The login server properties of the connected registry.",
+        "type": "object",
+        "properties": {
+          "host": {
+            "description": "The host of the connected registry. Can be FQDN or IP.",
+            "type": "string",
+            "readOnly": true
+          },
+          "tls": {
+            "$ref": "#/components/schemas/TlsProperties"
+          }
+        }
+      },
+      "ParentProperties": {
+        "description": "The properties of the connected registry parent.",
+        "required": ["syncProperties"],
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The resource ID of the parent to which the connected registry will be associated.",
+            "type": "string"
+          },
+          "syncProperties": {
+            "$ref": "#/components/schemas/SyncProperties"
+          }
+        }
+      },
+      "CredentialSetListResult": {
+        "description": "The result of a request to list credential sets for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of credential sets. Since this list may be incomplete, the nextLink field should be used to request the next list of credential sets.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialSet"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of credential sets.",
+            "type": "string"
+          }
+        }
+      },
+      "CredentialSet": {
+        "description": "An object that represents a credential set resource for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/IdentityProperties"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/CredentialSetProperties"
+          }
+        }
+      },
+      "IdentityProperties": {
+        "description": "Managed identity for the resource.",
+        "type": "object",
+        "properties": {
+          "principalId": {
+            "description": "The principal ID of resource identity.",
+            "type": "string",
+            "readOnly": true
+          },
+          "tenantId": {
+            "description": "The tenant ID of resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "type": {
+            "description": "The identity type.",
+            "enum": ["SystemAssigned", "UserAssigned", "SystemAssigned, UserAssigned", "None"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ResourceIdentityType",
+              "modelAsString": false
+            }
+          },
+          "userAssignedIdentities": {
+            "description": "The list of user identities associated with the resource. The user identity \r\ndictionary key references will be ARM resource ids in the form: \r\n'/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/\r\n    providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}'.",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UserIdentityProperties"
+            }
+          }
+        }
+      },
+      "CredentialSetProperties": {
+        "description": "The properties of a credential set resource.",
+        "type": "object",
+        "properties": {
+          "loginServer": {
+            "description": "The credentials are stored for this upstream or login server.",
+            "type": "string"
+          },
+          "authCredentials": {
+            "description": "List of authentication credentials stored for an upstream.\r\nUsually consists of a primary and an optional secondary credential.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthCredential"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "creationDate": {
+            "description": "The creation date of credential store resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "provisioningState": {
+            "description": "Provisioning state of the resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "UserIdentityProperties": {
+        "type": "object",
+        "properties": {
+          "principalId": {
+            "description": "The principal id of user assigned identity.",
+            "type": "string",
+            "readOnly": true
+          },
+          "clientId": {
+            "description": "The client id of user assigned identity.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "Resource": {
+        "description": "An Azure resource.",
+        "required": ["location"],
+        "properties": {
+          "id": {
+            "description": "The resource ID.",
+            "type": "string",
+            "readOnly": true
+          },
+          "name": {
+            "description": "The name of the resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "type": {
+            "description": "The type of the resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "location": {
+            "description": "The location of the resource. This cannot be changed after the resource is created.",
+            "type": "string",
+            "x-ms-mutability": ["read", "create"]
+          },
+          "tags": {
+            "description": "The tags of the resource.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/SystemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "AuthCredential": {
+        "description": "Authentication credential stored for an upstream.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The name of the credential.",
+            "enum": ["Credential1"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "CredentialName",
+              "modelAsString": true
+            }
+          },
+          "usernameSecretIdentifier": {
+            "description": "KeyVault Secret URI for accessing the username.",
+            "type": "string"
+          },
+          "passwordSecretIdentifier": {
+            "description": "KeyVault Secret URI for accessing the password.",
+            "type": "string"
+          },
+          "credentialHealth": {
+            "$ref": "#/components/schemas/CredentialHealth"
+          }
+        }
+      },
+      "ProxyResource": {
+        "description": "The resource model definition for a ARM proxy resource. It will have everything other than required location and tags.",
+        "properties": {
+          "id": {
+            "description": "The resource ID.",
+            "type": "string",
+            "readOnly": true
+          },
+          "name": {
+            "description": "The name of the resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "type": {
+            "description": "The type of the resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/SystemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "CredentialHealth": {
+        "description": "The health of the auth credential.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The health status of credential.",
+            "enum": ["Healthy", "Unhealthy"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "CredentialHealthStatus",
+              "modelAsString": true
+            }
+          },
+          "errorCode": {
+            "description": "Error code representing the health check error.",
+            "type": "string"
+          },
+          "errorMessage": {
+            "description": "Descriptive message representing the health check error.",
+            "type": "string"
+          }
+        }
+      },
+      "SystemData": {
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "type": "object",
+        "properties": {
+          "createdBy": {
+            "description": "The identity that created the resource.",
+            "type": "string"
+          },
+          "createdByType": {
+            "description": "The type of identity that created the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "description": "The timestamp of resource creation (UTC).",
+            "type": "string"
+          },
+          "lastModifiedBy": {
+            "description": "The identity that last modified the resource.",
+            "type": "string"
+          },
+          "lastModifiedByType": {
+            "description": "The type of identity that last modified the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "lastModifiedByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "description": "The timestamp of resource modification (UTC).",
+            "type": "string"
+          }
+        },
+        "readOnly": true
+      },
+      "CredentialSetUpdateParameters": {
+        "description": "The parameters for updating a credential set",
+        "type": "object",
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/CredentialSetUpdateProperties"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/IdentityProperties"
+          }
+        }
+      },
+      "CredentialSetUpdateProperties": {
+        "description": "The parameters for updating credential set properties.",
+        "type": "object",
+        "properties": {
+          "authCredentials": {
+            "description": "List of authentication credentials stored for an upstream.\r\nUsually consists of a primary and an optional secondary credential.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthCredential"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "ImportImageParameters": {
+        "required": ["source"],
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          },
+          "targetTags": {
+            "description": "List of strings of the form repo[:tag]. When tag is omitted the source will be used (or 'latest' if source tag is also omitted).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "untaggedTargetRepositories": {
+            "description": "List of strings of repository names to do a manifest only copy. No tag will be created.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "description": "When Force, any existing target tags will be overwritten. When NoForce, any existing target tags will fail the operation before any copying begins.",
+            "default": "NoForce",
+            "enum": ["NoForce", "Force"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ImportMode",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "ImportSource": {
+        "required": ["sourceImage"],
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "description": "The resource identifier of the source Azure Container Registry.",
+            "type": "string"
+          },
+          "registryUri": {
+            "description": "The address of the source registry (e.g. 'mcr.microsoft.com').",
+            "type": "string"
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/ImportSourceCredentials"
+          },
+          "sourceImage": {
+            "description": "Repository name of the source image.\r\nSpecify an image by repository ('hello-world'). This will use the 'latest' tag.\r\nSpecify an image by tag ('hello-world:latest').\r\nSpecify an image by sha256-based manifest digest ('hello-world@sha256:abc123').",
+            "type": "string"
+          }
+        }
+      },
+      "ImportSourceCredentials": {
+        "required": ["password"],
+        "type": "object",
+        "properties": {
+          "username": {
+            "description": "The username to authenticate with the source registry.",
+            "type": "string"
+          },
+          "password": {
+            "description": "The password used to authenticate with the source registry.",
+            "type": "string"
+          }
+        }
+      },
+      "OperationListResult": {
+        "description": "The result of a request to list container registry operations.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of container registry operations. Since this list may be incomplete, the nextLink field should be used to request the next list of operations.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationDefinition"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of container registry operations.",
+            "type": "string"
+          }
+        }
+      },
+      "OperationDefinition": {
+        "description": "The definition of a container registry operation.",
+        "type": "object",
+        "properties": {
+          "origin": {
+            "description": "The origin information of the container registry operation.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Operation name: {provider}/{resource}/{operation}.",
+            "type": "string"
+          },
+          "display": {
+            "$ref": "#/components/schemas/OperationDisplayDefinition"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/OperationPropertiesDefinition"
+          },
+          "isDataAction": {
+            "description": "This property indicates if the operation is an action or a data action\r\nref: https://docs.microsoft.com/en-us/azure/role-based-access-control/role-definitions#management-and-data-operations",
+            "type": "boolean"
+          }
+        }
+      },
+      "OperationDisplayDefinition": {
+        "description": "The display information for a container registry operation.",
+        "type": "object",
+        "properties": {
+          "provider": {
+            "description": "The resource provider name: Microsoft.ContainerRegistry.",
+            "type": "string"
+          },
+          "resource": {
+            "description": "The resource on which the operation is performed.",
+            "type": "string"
+          },
+          "operation": {
+            "description": "The operation that users can perform.",
+            "type": "string"
+          },
+          "description": {
+            "description": "The description for the operation.",
+            "type": "string"
+          }
+        }
+      },
+      "OperationPropertiesDefinition": {
+        "description": "The definition of Azure Monitoring properties.",
+        "type": "object",
+        "properties": {
+          "serviceSpecification": {
+            "$ref": "#/components/schemas/OperationServiceSpecificationDefinition"
+          }
+        }
+      },
+      "OperationServiceSpecificationDefinition": {
+        "description": "The definition of Azure Monitoring list.",
+        "type": "object",
+        "properties": {
+          "metricSpecifications": {
+            "description": "A list of Azure Monitoring metrics definition.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationMetricSpecificationDefinition"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "logSpecifications": {
+            "description": "A list of Azure Monitoring log definitions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationLogSpecificationDefinition"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "OperationMetricSpecificationDefinition": {
+        "description": "The definition of Azure Monitoring metric.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Metric name.",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Metric display name.",
+            "type": "string"
+          },
+          "displayDescription": {
+            "description": "Metric description.",
+            "type": "string"
+          },
+          "unit": {
+            "description": "Metric unit.",
+            "type": "string"
+          },
+          "aggregationType": {
+            "description": "Metric aggregation type.",
+            "type": "string"
+          },
+          "internalMetricName": {
+            "description": "Internal metric name.",
+            "type": "string"
+          }
+        }
+      },
+      "OperationLogSpecificationDefinition": {
+        "description": "The definition of Azure Monitoring log.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Log name.",
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Log display name.",
+            "type": "string"
+          },
+          "blobDuration": {
+            "description": "Log blob duration.",
+            "type": "string"
+          }
+        }
+      },
+      "RegistryNameCheckRequest": {
+        "description": "A request to check whether a container registry name is available.",
+        "required": ["name", "type"],
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The name of the container registry.",
+            "maxLength": 50,
+            "minLength": 5,
+            "pattern": "^[a-zA-Z0-9]*$",
+            "type": "string"
+          },
+          "type": {
+            "description": "The resource type of the container registry. This field must be set to 'Microsoft.ContainerRegistry/registries'.",
+            "enum": ["Microsoft.ContainerRegistry/registries"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ContainerRegistryResourceType",
+              "modelAsString": false
+            }
+          }
+        }
+      },
+      "RegistryNameStatus": {
+        "description": "The result of a request to check the availability of a container registry name.",
+        "type": "object",
+        "properties": {
+          "nameAvailable": {
+            "description": "The value that indicates whether the name is available.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "If any, the reason that the name is not available.",
+            "type": "string"
+          },
+          "message": {
+            "description": "If any, the error message that provides more detail for the reason that the name is not available.",
+            "type": "string"
+          }
+        }
+      },
+      "PrivateEndpointConnectionListResult": {
+        "description": "The result of a request to list private endpoint connections for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of private endpoint connections. Since this list may be incomplete, the nextLink field should be used to request the next list of private endpoint connections.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrivateEndpointConnection"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of private endpoint connections.",
+            "type": "string"
+          }
+        }
+      },
+      "PrivateEndpointConnection": {
+        "description": "An object that represents a private endpoint connection for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/PrivateEndpointConnectionProperties"
+          }
+        }
+      },
+      "PrivateEndpointConnectionProperties": {
+        "description": "The properties of a private endpoint connection.",
+        "type": "object",
+        "properties": {
+          "privateEndpoint": {
+            "$ref": "#/components/schemas/PrivateEndpoint"
+          },
+          "privateLinkServiceConnectionState": {
+            "$ref": "#/components/schemas/PrivateLinkServiceConnectionState"
+          },
+          "provisioningState": {
+            "description": "The provisioning state of private endpoint connection resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "PrivateEndpoint": {
+        "description": "The Private Endpoint resource.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "This is private endpoint resource created with Microsoft.Network resource provider.",
+            "type": "string"
+          }
+        }
+      },
+      "PrivateLinkServiceConnectionState": {
+        "description": "The state of a private link service connection.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The private link service connection status.",
+            "enum": ["Approved", "Pending", "Rejected", "Disconnected"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ConnectionStatus",
+              "modelAsString": true
+            }
+          },
+          "description": {
+            "description": "The description for connection status. For example if connection is rejected it can indicate reason for rejection.",
+            "type": "string"
+          },
+          "actionsRequired": {
+            "description": "A message indicating if changes on the service provider require any updates on the consumer.",
+            "enum": ["None", "Recreate"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ActionsRequired",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "RegistryListResult": {
+        "description": "The result of a request to list container registries.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of container registries. Since this list may be incomplete, the nextLink field should be used to request the next list of container registries.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Registry"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of container registries.",
+            "type": "string"
+          }
+        }
+      },
+      "Registry": {
+        "description": "An object that represents a container registry.",
+        "required": ["sku"],
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "properties": {
+          "sku": {
+            "$ref": "#/components/schemas/Sku"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/IdentityProperties"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/RegistryProperties"
+          }
+        }
+      },
+      "Sku": {
+        "description": "The SKU of a container registry.",
+        "required": ["name"],
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The SKU name of the container registry. Required for registry creation.",
+            "enum": ["Classic", "Basic", "Standard", "Premium"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "SkuName",
+              "modelAsString": true
+            }
+          },
+          "tier": {
+            "description": "The SKU tier based on the SKU name.",
+            "enum": ["Classic", "Basic", "Standard", "Premium"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "SkuTier",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "RegistryProperties": {
+        "description": "The properties of a container registry.",
+        "type": "object",
+        "properties": {
+          "loginServer": {
+            "description": "The URL that can be used to log into the container registry.",
+            "type": "string",
+            "readOnly": true
+          },
+          "creationDate": {
+            "description": "The creation date of the container registry in ISO8601 format.",
+            "type": "string",
+            "readOnly": true
+          },
+          "provisioningState": {
+            "description": "The provisioning state of the container registry at the time the operation was called.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "adminUserEnabled": {
+            "description": "The value that indicates whether the admin user is enabled.",
+            "default": false,
+            "type": "boolean"
+          },
+          "networkRuleSet": {
+            "$ref": "#/components/schemas/NetworkRuleSet"
+          },
+          "policies": {
+            "$ref": "#/components/schemas/Policies"
+          },
+          "encryption": {
+            "$ref": "#/components/schemas/EncryptionProperty"
+          },
+          "dataEndpointEnabled": {
+            "description": "Enable a single data endpoint per region for serving data.",
+            "type": "boolean"
+          },
+          "dataEndpointHostNames": {
+            "description": "List of host names that will serve data when dataEndpointEnabled is true.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true
+          },
+          "privateEndpointConnections": {
+            "description": "List of private endpoint connections for a container registry.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrivateEndpointConnection"
+            },
+            "readOnly": true
+          },
+          "publicNetworkAccess": {
+            "description": "Whether or not public network access is allowed for the container registry.",
+            "default": "Enabled",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PublicNetworkAccess",
+              "modelAsString": true
+            }
+          },
+          "networkRuleBypassOptions": {
+            "description": "Whether to allow trusted Azure services to access a network restricted registry.",
+            "default": "AzureServices",
+            "enum": ["AzureServices", "None"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "NetworkRuleBypassOptions",
+              "modelAsString": true
+            }
+          },
+          "zoneRedundancy": {
+            "description": "Whether or not zone redundancy is enabled for this container registry",
+            "default": "Disabled",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ZoneRedundancy",
+              "modelAsString": true
+            }
+          },
+          "anonymousPullEnabled": {
+            "description": "Enables registry-wide pull from unauthenticated clients.",
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      },
+      "Status": {
+        "description": "The status of an Azure resource at the time the operation was called.",
+        "type": "object",
+        "properties": {
+          "displayStatus": {
+            "description": "The short label for the status.",
+            "type": "string",
+            "readOnly": true
+          },
+          "message": {
+            "description": "The detailed message for the status, including alerts and error messages.",
+            "type": "string",
+            "readOnly": true
+          },
+          "timestamp": {
+            "description": "The timestamp when the status was changed to the current value.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "StatusDetailProperties": {
+        "description": "The status detail properties of the connected registry.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The component of the connected registry corresponding to the status.",
+            "type": "string",
+            "readOnly": true
+          },
+          "code": {
+            "description": "The code of the status.",
+            "type": "string",
+            "readOnly": true
+          },
+          "description": {
+            "description": "The description of the status.",
+            "type": "string",
+            "readOnly": true
+          },
+          "timestamp": {
+            "description": "The timestamp of the status.",
+            "type": "string",
+            "readOnly": true
+          },
+          "correlationId": {
+            "description": "The correlation ID of the status.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "StorageAccountProperties": {
+        "description": "The properties of a storage account for a container registry. Only applicable to Classic SKU.",
+        "required": ["id"],
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The resource ID of the storage account.",
+            "type": "string"
+          }
+        }
+      },
+      "SyncProperties": {
+        "description": "The sync properties of the connected registry with its parent.",
+        "required": ["tokenId", "messageTtl"],
+        "type": "object",
+        "properties": {
+          "tokenId": {
+            "description": "The resource ID of the ACR token used to authenticate the connected registry to its parent during sync.",
+            "type": "string"
+          },
+          "schedule": {
+            "description": "The cron expression indicating the schedule that the connected registry will sync with its parent.",
+            "type": "string"
+          },
+          "syncWindow": {
+            "format": "duration",
+            "description": "The time window during which sync is enabled for each schedule occurrence. Specify the duration using the format P[n]Y[n]M[n]DT[n]H[n]M[n]S as per ISO8601.",
+            "type": "string"
+          },
+          "messageTtl": {
+            "format": "duration",
+            "description": "The period of time for which a message is available to sync before it is expired. Specify the duration using the format P[n]Y[n]M[n]DT[n]H[n]M[n]S as per ISO8601.",
+            "type": "string"
+          },
+          "lastSyncTime": {
+            "description": "The last time a sync occurred between the connected registry and its parent.",
+            "type": "string",
+            "readOnly": true
+          },
+          "gatewayEndpoint": {
+            "description": "The gateway endpoint used by the connected registry to communicate with its parent.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "SyncUpdateProperties": {
+        "description": "The parameters for updating the sync properties of the connected registry with its parent.",
+        "type": "object",
+        "properties": {
+          "schedule": {
+            "description": "The cron expression indicating the schedule that the connected registry will sync with its parent.",
+            "type": "string"
+          },
+          "syncWindow": {
+            "format": "duration",
+            "description": "The time window during which sync is enabled for each schedule occurrence. Specify the duration using the format P[n]Y[n]M[n]DT[n]H[n]M[n]S as per ISO8601.",
+            "type": "string"
+          },
+          "messageTtl": {
+            "format": "duration",
+            "description": "The period of time for which a message is available to sync before it is expired. Specify the duration using the format P[n]Y[n]M[n]DT[n]H[n]M[n]S as per ISO8601.",
+            "type": "string"
+          }
+        }
+      },
+      "NetworkRuleSet": {
+        "description": "The network rule set for a container registry.",
+        "required": ["defaultAction"],
+        "type": "object",
+        "properties": {
+          "defaultAction": {
+            "description": "The default action of allow or deny when no other rules match.",
+            "default": "Allow",
+            "enum": ["Allow", "Deny"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "DefaultAction",
+              "modelAsString": true
+            }
+          },
+          "ipRules": {
+            "description": "The IP ACL rules.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IPRule"
+            },
+            "x-ms-identifiers": []
+          }
+        }
+      },
+      "Policies": {
+        "description": "The policies for a container registry.",
+        "type": "object",
+        "properties": {
+          "quarantinePolicy": {
+            "$ref": "#/components/schemas/QuarantinePolicy"
+          },
+          "trustPolicy": {
+            "$ref": "#/components/schemas/TrustPolicy"
+          },
+          "retentionPolicy": {
+            "$ref": "#/components/schemas/RetentionPolicy"
+          },
+          "exportPolicy": {
+            "$ref": "#/components/schemas/ExportPolicy"
+          },
+          "azureADAuthenticationAsArmPolicy": {
+            "$ref": "#/components/schemas/AzureADAuthenticationAsArmPolicy"
+          }
+        }
+      },
+      "EncryptionProperty": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Indicates whether or not the encryption is enabled for container registry.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "EncryptionStatus",
+              "modelAsString": true
+            }
+          },
+          "keyVaultProperties": {
+            "$ref": "#/components/schemas/KeyVaultProperties"
+          }
+        }
+      },
+      "PackageType": {
+        "description": "The properties of a package type.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The name of the package type.",
+            "type": "string"
+          },
+          "endpoint": {
+            "description": "The endpoint of the package type.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "IPRule": {
+        "description": "IP rule with specific IP or IP range in CIDR format.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "action": {
+            "description": "The action of IP ACL rule.",
+            "default": "Allow",
+            "enum": ["Allow"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "Action",
+              "modelAsString": true
+            }
+          },
+          "value": {
+            "description": "Specifies the IP or IP range in CIDR format. Only IPV4 address is allowed.",
+            "type": "string",
+            "x-ms-client-name": "IPAddressOrRange"
+          }
+        }
+      },
+      "QuarantinePolicy": {
+        "description": "The quarantine policy for a container registry.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The value that indicates whether the policy is enabled or not.",
+            "default": "disabled",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PolicyStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "TrustPolicy": {
+        "description": "The content trust policy for a container registry.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The type of trust policy.",
+            "default": "Notary",
+            "enum": ["Notary"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TrustPolicyType",
+              "modelAsString": true
+            }
+          },
+          "status": {
+            "description": "The value that indicates whether the policy is enabled or not.",
+            "default": "disabled",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PolicyStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "RetentionPolicy": {
+        "description": "The retention policy for a container registry.",
+        "type": "object",
+        "properties": {
+          "days": {
+            "format": "int32",
+            "description": "The number of days to retain an untagged manifest after which it gets purged.",
+            "default": 7,
+            "type": "integer"
+          },
+          "lastUpdatedTime": {
+            "description": "The timestamp when the policy was last updated.",
+            "type": "string",
+            "readOnly": true
+          },
+          "status": {
+            "description": "The value that indicates whether the policy is enabled or not.",
+            "default": "disabled",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PolicyStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "ExportPolicy": {
+        "description": "The export policy for a container registry.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The value that indicates whether the policy is enabled or not.",
+            "default": "enabled",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ExportPolicyStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "KeyVaultProperties": {
+        "type": "object",
+        "properties": {
+          "keyIdentifier": {
+            "description": "Key vault uri to access the encryption key.",
+            "type": "string"
+          },
+          "versionedKeyIdentifier": {
+            "description": "The fully qualified key identifier that includes the version of the key that is actually used for encryption.",
+            "type": "string",
+            "readOnly": true
+          },
+          "identity": {
+            "description": "The client id of the identity which will be used to access key vault.",
+            "type": "string"
+          },
+          "keyRotationEnabled": {
+            "description": "Auto key rotation status for a CMK enabled registry.",
+            "type": "boolean",
+            "readOnly": true
+          },
+          "lastKeyRotationTimestamp": {
+            "description": "Timestamp of the last successful key rotation.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "RegistryUpdateParameters": {
+        "description": "The parameters for updating a container registry.",
+        "type": "object",
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/IdentityProperties"
+          },
+          "tags": {
+            "description": "The tags for the container registry.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "sku": {
+            "$ref": "#/components/schemas/Sku"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/RegistryPropertiesUpdateParameters"
+          }
+        }
+      },
+      "RegistryPropertiesUpdateParameters": {
+        "description": "The parameters for updating the properties of a container registry.",
+        "type": "object",
+        "properties": {
+          "adminUserEnabled": {
+            "description": "The value that indicates whether the admin user is enabled.",
+            "type": "boolean"
+          },
+          "networkRuleSet": {
+            "$ref": "#/components/schemas/NetworkRuleSet"
+          },
+          "policies": {
+            "$ref": "#/components/schemas/Policies"
+          },
+          "encryption": {
+            "$ref": "#/components/schemas/EncryptionProperty"
+          },
+          "dataEndpointEnabled": {
+            "description": "Enable a single data endpoint per region for serving data.",
+            "type": "boolean"
+          },
+          "publicNetworkAccess": {
+            "description": "Whether or not public network access is allowed for the container registry.",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PublicNetworkAccess",
+              "modelAsString": true
+            }
+          },
+          "networkRuleBypassOptions": {
+            "description": "Whether to allow trusted Azure services to access a network restricted registry.",
+            "default": "AzureServices",
+            "enum": ["AzureServices", "None"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "NetworkRuleBypassOptions",
+              "modelAsString": true
+            }
+          },
+          "anonymousPullEnabled": {
+            "description": "Enables registry-wide pull from unauthenticated clients.",
+            "type": "boolean"
+          }
+        }
+      },
+      "RegistryUsageListResult": {
+        "description": "The result of a request to get container registry quota usages.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of container registry quota usages.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryUsage"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "RegistryUsage": {
+        "description": "The quota usage for a container registry.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The name of the usage.",
+            "type": "string"
+          },
+          "limit": {
+            "format": "int64",
+            "description": "The limit of the usage.",
+            "type": "integer"
+          },
+          "currentValue": {
+            "format": "int64",
+            "description": "The current value of the usage.",
+            "type": "integer"
+          },
+          "unit": {
+            "description": "The unit of measurement.",
+            "enum": ["Count", "Bytes"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "RegistryUsageUnit",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "PrivateLinkResourceListResult": {
+        "description": "The result of a request to list private link resources for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of private link resources. Since this list may be incomplete, the nextLink field should be used to request the next list of private link resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrivateLinkResource"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of private link resources.",
+            "type": "string"
+          }
+        }
+      },
+      "PrivateLinkResource": {
+        "description": "A resource that supports private link capabilities.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The resource type is private link resource.",
+            "type": "string",
+            "readOnly": true
+          },
+          "id": {
+            "description": "The resource ID.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name of the resource.",
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/PrivateLinkResourceProperties"
+          }
+        }
+      },
+      "PrivateLinkResourceProperties": {
+        "description": "The properties of a private link resource.",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "description": "The private link resource group id.",
+            "type": "string"
+          },
+          "requiredMembers": {
+            "description": "The private link resource required member names.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiredZoneNames": {
+            "description": "The private link resource Private link DNS zone name.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RegistryListCredentialsResult": {
+        "description": "The response from the ListCredentials operation.",
+        "type": "object",
+        "properties": {
+          "username": {
+            "description": "The username for a container registry.",
+            "type": "string"
+          },
+          "passwords": {
+            "description": "The list of passwords for a container registry.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryPassword"
+            },
+            "x-ms-identifiers": []
+          }
+        }
+      },
+      "RegistryPassword": {
+        "description": "The login password for the container registry.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The password name.",
+            "enum": ["password", "password2"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PasswordName",
+              "modelAsString": false
+            }
+          },
+          "value": {
+            "description": "The password value.",
+            "type": "string"
+          }
+        }
+      },
+      "RegenerateCredentialParameters": {
+        "description": "The parameters used to regenerate the login credential.",
+        "required": ["name"],
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Specifies name of the password which should be regenerated -- password or password2.",
+            "enum": ["password", "password2"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "PasswordName",
+              "modelAsString": false
+            }
+          }
+        }
+      },
+      "ReplicationListResult": {
+        "description": "The result of a request to list replications for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of replications. Since this list may be incomplete, the nextLink field should be used to request the next list of replications.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Replication"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of replications.",
+            "type": "string"
+          }
+        }
+      },
+      "Replication": {
+        "description": "An object that represents a replication for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ReplicationProperties"
+          }
+        }
+      },
+      "ReplicationProperties": {
+        "description": "The properties of a replication.",
+        "type": "object",
+        "properties": {
+          "provisioningState": {
+            "description": "The provisioning state of the replication at the time the operation was called.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "regionEndpointEnabled": {
+            "description": "Specifies whether the replication's regional endpoint is enabled. Requests will not be routed to a replication whose regional endpoint is disabled, however its data will continue to be synced with other replications.",
+            "default": true,
+            "type": "boolean"
+          },
+          "zoneRedundancy": {
+            "description": "Whether or not zone redundancy is enabled for this container registry replication",
+            "default": "Disabled",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "ZoneRedundancy",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "ReplicationUpdateParameters": {
+        "description": "The parameters for updating a replication.",
+        "type": "object",
+        "properties": {
+          "tags": {
+            "description": "The tags for the replication.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "properties": {
+            "$ref": "#/components/schemas/ReplicationUpdateParametersProperties"
+          }
+        }
+      },
+      "ReplicationUpdateParametersProperties": {
+        "type": "object",
+        "properties": {
+          "regionEndpointEnabled": {
+            "description": "Specifies whether the replication's regional endpoint is enabled. Requests will not be routed to a replication whose regional endpoint is disabled, however its data will continue to be synced with other replications.",
+            "type": "boolean"
+          }
+        }
+      },
+      "ScopeMapListResult": {
+        "description": "The result of a request to list scope maps for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of scope maps. Since this list may be incomplete, the nextLink field should be used to request the next list of scope maps.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeMap"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of scope maps.",
+            "type": "string"
+          }
+        }
+      },
+      "ScopeMap": {
+        "description": "An object that represents a scope map for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ScopeMapProperties"
+          }
+        }
+      },
+      "ScopeMapProperties": {
+        "description": "The properties of a scope map.",
+        "required": ["actions"],
+        "type": "object",
+        "properties": {
+          "description": {
+            "description": "The user friendly description of the scope map.",
+            "type": "string"
+          },
+          "type": {
+            "description": "The type of the scope map. E.g. BuildIn scope map.",
+            "type": "string",
+            "readOnly": true
+          },
+          "creationDate": {
+            "description": "The creation date of scope map.",
+            "type": "string",
+            "readOnly": true
+          },
+          "provisioningState": {
+            "description": "Provisioning state of the resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "actions": {
+            "description": "The list of scoped permissions for registry artifacts.\r\nE.g. repositories/repository-name/content/read,\r\nrepositories/repository-name/metadata/write",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ScopeMapUpdateParameters": {
+        "description": "The properties for updating the scope map.",
+        "type": "object",
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ScopeMapPropertiesUpdateParameters"
+          }
+        }
+      },
+      "ScopeMapPropertiesUpdateParameters": {
+        "description": "The update parameters for scope map properties.",
+        "type": "object",
+        "properties": {
+          "description": {
+            "description": "The user friendly description of the scope map.",
+            "type": "string"
+          },
+          "actions": {
+            "description": "The list of scope permissions for registry artifacts.\r\nE.g. repositories/repository-name/pull, \r\nrepositories/repository-name/delete",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TlsCertificateProperties": {
+        "description": "The TLS certificate properties of the connected registry login server.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The type of certificate location.",
+            "enum": ["LocalDirectory"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "CertificateType",
+              "modelAsString": true
+            }
+          },
+          "location": {
+            "description": "Indicates the location of the certificates.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "TlsProperties": {
+        "description": "The TLS properties of the connected registry login server.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Indicates whether HTTPS is enabled for the login server.",
+            "enum": ["Enabled", "Disabled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "TlsStatus",
+              "modelAsString": true
+            }
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/TlsCertificateProperties"
+          }
+        }
+      },
+      "TokenListResult": {
+        "description": "The result of a request to list tokens for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of tokens. Since this list may be incomplete, the nextLink field should be used to request the next list of tokens.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of tokens.",
+            "type": "string"
+          }
+        }
+      },
+      "Token": {
+        "description": "An object that represents a token for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProxyResource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/TokenProperties"
+          }
+        }
+      },
+      "TokenProperties": {
+        "description": "The properties of a token.",
+        "type": "object",
+        "properties": {
+          "creationDate": {
+            "description": "The creation date of scope map.",
+            "type": "string",
+            "readOnly": true
+          },
+          "provisioningState": {
+            "description": "Provisioning state of the resource.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          },
+          "scopeMapId": {
+            "description": "The resource ID of the scope map to which the token will be associated with.",
+            "type": "string"
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/TokenCredentialsProperties"
+          },
+          "status": {
+            "description": "The status of the token example enabled or disabled.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TokenStatus",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "TokenCredentialsProperties": {
+        "description": "The properties of the credentials that can be used for authenticating the token.",
+        "type": "object",
+        "properties": {
+          "certificates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenCertificate"
+            },
+            "x-ms-identifiers": ["thumbprint"]
+          },
+          "passwords": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenPassword"
+            },
+            "x-ms-identifiers": []
+          }
+        }
+      },
+      "ActiveDirectoryObject": {
+        "description": "The Active Directory Object that will be used for authenticating the token of a container registry.",
+        "type": "object",
+        "properties": {
+          "objectId": {
+            "description": "The user/group/application object ID for Active Directory Object that will be used for authenticating the token of a container registry.",
+            "type": "string"
+          },
+          "tenantId": {
+            "description": "The tenant ID of user/group/application object Active Directory Object that will be used for authenticating the token of a container registry.",
+            "type": "string"
+          }
+        }
+      },
+      "TokenCertificate": {
+        "description": "The properties of a certificate used for authenticating a token.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "enum": ["certificate1", "certificate2"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TokenCertificateName",
+              "modelAsString": true
+            }
+          },
+          "expiry": {
+            "description": "The expiry datetime of the certificate.",
+            "type": "string"
+          },
+          "thumbprint": {
+            "description": "The thumbprint of the certificate.",
+            "type": "string"
+          },
+          "encodedPemCertificate": {
+            "description": "Base 64 encoded string of the public certificate1 in PEM format that will be used for authenticating the token.",
+            "type": "string"
+          }
+        }
+      },
+      "TokenPassword": {
+        "description": "The password that will be used for authenticating the token of a container registry.",
+        "type": "object",
+        "properties": {
+          "creationTime": {
+            "description": "The creation datetime of the password.",
+            "type": "string"
+          },
+          "expiry": {
+            "description": "The expiry datetime of the password.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The password name \"password1\" or \"password2\"",
+            "enum": ["password1", "password2"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TokenPasswordName",
+              "modelAsString": true
+            }
+          },
+          "value": {
+            "description": "The password value.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "TokenUpdateParameters": {
+        "description": "The parameters for updating a token.",
+        "type": "object",
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/TokenUpdateProperties"
+          }
+        }
+      },
+      "TokenUpdateProperties": {
+        "description": "The parameters for updating token properties.",
+        "type": "object",
+        "properties": {
+          "scopeMapId": {
+            "description": "The resource ID of the scope map to which the token will be associated with.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The status of the token example enabled or disabled.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TokenStatus",
+              "modelAsString": true
+            }
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/TokenCredentialsProperties"
+          }
+        }
+      },
+      "GenerateCredentialsParameters": {
+        "description": "The parameters used to generate credentials for a specified token or user of a container registry.",
+        "type": "object",
+        "properties": {
+          "tokenId": {
+            "description": "The resource ID of the token for which credentials have to be generated.",
+            "type": "string"
+          },
+          "expiry": {
+            "description": "The expiry date of the generated credentials after which the credentials become invalid.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Specifies name of the password which should be regenerated if any -- password1 or password2.",
+            "enum": ["password1", "password2"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "TokenPasswordName",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "GenerateCredentialsResult": {
+        "description": "The response from the GenerateCredentials operation.",
+        "type": "object",
+        "properties": {
+          "username": {
+            "description": "The username for a container registry.",
+            "type": "string"
+          },
+          "passwords": {
+            "description": "The list of passwords for a container registry.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenPassword"
+            },
+            "x-ms-identifiers": []
+          }
+        }
+      },
+      "WebhookListResult": {
+        "description": "The result of a request to list webhooks for a container registry.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of webhooks. Since this list may be incomplete, the nextLink field should be used to request the next list of webhooks.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Webhook"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of webhooks.",
+            "type": "string"
+          }
+        }
+      },
+      "Webhook": {
+        "description": "An object that represents a webhook for a container registry.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/WebhookProperties"
+          }
+        }
+      },
+      "WebhookProperties": {
+        "description": "The properties of a webhook.",
+        "required": ["actions"],
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "The status of the webhook at the time the operation was called.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "WebhookStatus",
+              "modelAsString": true
+            }
+          },
+          "scope": {
+            "description": "The scope of repositories where the event can be triggered. For example, 'foo:*' means events for all tags under repository 'foo'. 'foo:bar' means events for 'foo:bar' only. 'foo' is equivalent to 'foo:latest'. Empty means all events.",
+            "type": "string"
+          },
+          "actions": {
+            "description": "The list of actions that trigger the webhook to post notifications.",
+            "type": "array",
+            "items": {
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
+              "type": "string",
+              "x-ms-enum": {
+                "name": "WebhookAction",
+                "modelAsString": true
+              }
+            }
+          },
+          "provisioningState": {
+            "description": "The provisioning state of the webhook at the time the operation was called.",
+            "enum": ["Creating", "Updating", "Deleting", "Succeeded", "Failed", "Canceled"],
+            "type": "string",
+            "readOnly": true,
+            "x-ms-enum": {
+              "name": "ProvisioningState",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "WebhookCreateParameters": {
+        "description": "The parameters for creating a webhook.",
+        "required": ["location"],
+        "type": "object",
+        "properties": {
+          "tags": {
+            "description": "The tags for the webhook.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "location": {
+            "description": "The location of the webhook. This cannot be changed after the resource is created.",
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/WebhookPropertiesCreateParameters"
+          }
+        }
+      },
+      "WebhookPropertiesCreateParameters": {
+        "description": "The parameters for creating the properties of a webhook.",
+        "required": ["serviceUri", "actions"],
+        "type": "object",
+        "properties": {
+          "serviceUri": {
+            "description": "The service URI for the webhook to post notifications.",
+            "type": "string",
+            "x-ms-secret": true
+          },
+          "customHeaders": {
+            "description": "Custom headers that will be added to the webhook notifications.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-secret": true
+          },
+          "status": {
+            "description": "The status of the webhook at the time the operation was called.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "WebhookStatus",
+              "modelAsString": true
+            }
+          },
+          "scope": {
+            "description": "The scope of repositories where the event can be triggered. For example, 'foo:*' means events for all tags under repository 'foo'. 'foo:bar' means events for 'foo:bar' only. 'foo' is equivalent to 'foo:latest'. Empty means all events.",
+            "type": "string"
+          },
+          "actions": {
+            "description": "The list of actions that trigger the webhook to post notifications.",
+            "type": "array",
+            "items": {
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
+              "type": "string",
+              "x-ms-enum": {
+                "name": "WebhookAction",
+                "modelAsString": true
+              }
+            }
+          }
+        }
+      },
+      "WebhookUpdateParameters": {
+        "description": "The parameters for updating a webhook.",
+        "type": "object",
+        "properties": {
+          "tags": {
+            "description": "The tags for the webhook.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "properties": {
+            "$ref": "#/components/schemas/WebhookPropertiesUpdateParameters"
+          }
+        }
+      },
+      "WebhookPropertiesUpdateParameters": {
+        "description": "The parameters for updating the properties of a webhook.",
+        "type": "object",
+        "properties": {
+          "serviceUri": {
+            "description": "The service URI for the webhook to post notifications.",
+            "type": "string",
+            "x-ms-secret": true
+          },
+          "customHeaders": {
+            "description": "Custom headers that will be added to the webhook notifications.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-secret": true
+          },
+          "status": {
+            "description": "The status of the webhook at the time the operation was called.",
+            "enum": ["enabled", "disabled"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "WebhookStatus",
+              "modelAsString": true
+            }
+          },
+          "scope": {
+            "description": "The scope of repositories where the event can be triggered. For example, 'foo:*' means events for all tags under repository 'foo'. 'foo:bar' means events for 'foo:bar' only. 'foo' is equivalent to 'foo:latest'. Empty means all events.",
+            "type": "string"
+          },
+          "actions": {
+            "description": "The list of actions that trigger the webhook to post notifications.",
+            "type": "array",
+            "items": {
+              "enum": ["push", "delete", "quarantine", "chart_push", "chart_delete"],
+              "type": "string",
+              "x-ms-enum": {
+                "name": "WebhookAction",
+                "modelAsString": true
+              }
+            }
+          }
+        }
+      },
+      "EventInfo": {
+        "description": "The basic information of an event.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The event ID.",
+            "type": "string"
+          }
+        }
+      },
+      "EventListResult": {
+        "description": "The result of a request to list events for a webhook.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The list of events. Since this list may be incomplete, the nextLink field should be used to request the next list of events.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "nextLink": {
+            "description": "The URI that can be used to request the next list of events.",
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "description": "The event for a webhook.",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventInfo"
+          }
+        ],
+        "properties": {
+          "eventRequestMessage": {
+            "$ref": "#/components/schemas/EventRequestMessage"
+          },
+          "eventResponseMessage": {
+            "$ref": "#/components/schemas/EventResponseMessage"
+          }
+        }
+      },
+      "EventRequestMessage": {
+        "description": "The event request message sent to the service URI.",
+        "type": "object",
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/EventContent"
+          },
+          "headers": {
+            "description": "The headers of the event request message.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "description": "The HTTP method used to send the event request message.",
+            "type": "string"
+          },
+          "requestUri": {
+            "description": "The URI used to send the event request message.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The HTTP message version.",
+            "type": "string"
+          }
+        }
+      },
+      "EventResponseMessage": {
+        "description": "The event response message received from the service URI.",
+        "type": "object",
+        "properties": {
+          "content": {
+            "description": "The content of the event response message.",
+            "type": "string"
+          },
+          "headers": {
+            "description": "The headers of the event response message.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "reasonPhrase": {
+            "description": "The reason phrase of the event response message.",
+            "type": "string"
+          },
+          "statusCode": {
+            "description": "The status code of the event response message.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The HTTP message version.",
+            "type": "string"
+          }
+        }
+      },
+      "EventContent": {
+        "description": "The content of the event request message.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The event ID.",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "The time at which the event occurred.",
+            "type": "string"
+          },
+          "action": {
+            "description": "The action that encompasses the provided event.",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "request": {
+            "$ref": "#/components/schemas/Request"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Actor"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          }
+        }
+      },
+      "Target": {
+        "description": "The target of the event.",
+        "type": "object",
+        "properties": {
+          "mediaType": {
+            "description": "The MIME type of the referenced object.",
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "description": "The number of bytes of the content. Same as Length field.",
+            "type": "integer"
+          },
+          "digest": {
+            "description": "The digest of the content, as defined by the Registry V2 HTTP API Specification.",
+            "type": "string"
+          },
+          "length": {
+            "format": "int64",
+            "description": "The number of bytes of the content. Same as Size field.",
+            "type": "integer"
+          },
+          "repository": {
+            "description": "The repository name.",
+            "type": "string"
+          },
+          "url": {
+            "description": "The direct URL to the content.",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag name.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name of the artifact.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version of the artifact.",
+            "type": "string"
+          }
+        }
+      },
+      "Request": {
+        "description": "The request that generated the event.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The ID of the request that initiated the event.",
+            "type": "string"
+          },
+          "addr": {
+            "description": "The IP or hostname and possibly port of the client connection that initiated the event. This is the RemoteAddr from the standard http request.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The externally accessible hostname of the registry instance, as specified by the http host header on incoming requests.",
+            "type": "string"
+          },
+          "method": {
+            "description": "The request method that generated the event.",
+            "type": "string"
+          },
+          "useragent": {
+            "description": "The user agent header of the request.",
+            "type": "string"
+          }
+        }
+      },
+      "Actor": {
+        "description": "The agent that initiated the event. For most situations, this could be from the authorization context of the request.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The subject or username associated with the request context that generated the event.",
+            "type": "string"
+          }
+        }
+      },
+      "Source": {
+        "description": "The registry node that generated the event. Put differently, while the actor initiates the event, the source generates it.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "description": "The IP or hostname and the port of the registry node that generated the event. Generally, this will be resolved by os.Hostname() along with the running port.",
+            "type": "string"
+          },
+          "instanceID": {
+            "description": "The running instance of an application. Changes after each restart.",
+            "type": "string"
+          }
+        }
+      },
+      "CallbackConfig": {
+        "description": "The configuration of service URI and custom headers for the webhook.",
+        "required": ["serviceUri"],
+        "type": "object",
+        "properties": {
+          "serviceUri": {
+            "description": "The service URI for the webhook to post notifications.",
+            "type": "string"
+          },
+          "customHeaders": {
+            "description": "Custom headers that will be added to the webhook notifications.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "description": "The error detail.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The error code.",
+            "readOnly": true
+          },
+          "message": {
+            "type": "string",
+            "description": "The error message.",
+            "readOnly": true
+          },
+          "target": {
+            "type": "string",
+            "description": "The error target.",
+            "readOnly": true
+          },
+          "details": {
+            "type": "array",
+            "description": "The error details.",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "readOnly": true,
+            "x-ms-identifiers": ["message", "target"]
+          },
+          "additionalInfo": {
+            "type": "array",
+            "description": "The error additional info.",
+            "items": {
+              "$ref": "#/components/schemas/ErrorAdditionalInfo"
+            },
+            "readOnly": true,
+            "x-ms-identifiers": []
+          }
+        }
+      },
+      "ErrorAdditionalInfo": {
+        "type": "object",
+        "description": "The resource management error additional info.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The additional info type.",
+            "readOnly": true
+          },
+          "info": {
+            "type": "object",
+            "description": "The additional info.",
+            "readOnly": true
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "title": "Error response",
+        "description": "Common error response for all Azure Resource Manager APIs to return error details for failed operations. (This also follows the OData error response format.).",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+name = "event-pipeline-ts"
+description = "Process events from queues, storage changes, and cron schedules."
+language = "TypeScript"

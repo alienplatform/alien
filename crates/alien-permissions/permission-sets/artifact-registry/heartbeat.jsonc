@@ -1,0 +1,73 @@
+{
+  "id": "artifact-registry/heartbeat",
+  "description": "Allows readonly monitoring and health checks for artifact-registry resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "ecr:DescribeRepositories",
+            "ecr:DescribeImages",
+            "ecr:ListImages",
+            "ecr:DescribeImageScanFindings",
+            "ecr:GetRepositoryPolicy",
+            "ecr:ListTagsForResource",
+            "ecr:DescribeRegistry"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "artifactregistry.repositories.getIamPolicy",
+            "artifactregistry.tags.get",
+            "artifactregistry.tags.list",
+            "artifactregistry.versions.get",
+            "artifactregistry.versions.list",
+            "artifactregistry.packages.get",
+            "artifactregistry.packages.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}/locations/${region}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read",
+            "Microsoft.ContainerRegistry/registries/quarantine/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "id": "artifact-registry/pull",
+  "description": "Allows pulling container images and reading repository metadata",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ecr:BatchCheckLayerAvailability",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:BatchGetImage",
+            "ecr:DescribeRepositories",
+            "ecr:DescribeImages",
+            "ecr:ListImages"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["sts:AssumeRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-pull"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-pull"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "artifactregistry.tags.get",
+            "artifactregistry.tags.list",
+            "artifactregistry.versions.get",
+            "artifactregistry.versions.list",
+            "artifactregistry.repositories.downloadArtifacts"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}/locations/${region}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": ["iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

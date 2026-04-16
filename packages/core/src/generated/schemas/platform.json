@@ -1,0 +1,1 @@
+{"type":"string","description":"Represents the target cloud platform.","enum":["aws","gcp","azure","kubernetes","local","test"],"x-readme-ref-name":"Platform"}

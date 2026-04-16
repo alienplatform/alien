@@ -1,0 +1,42 @@
+{
+  "id": "service-account/impersonate",
+  "description": "Allows impersonating a service account to act with its permissions",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["sts:AssumeRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["iam.serviceAccounts.getAccessToken"]
+        },
+        // iam.serviceAccounts.getAccessToken does NOT support IAM conditions at all.
+        // ALL conditions (name, type, broad) silently fail. The ONLY way to scope SA
+        // impersonation is via resource-level IAM (granting tokenCreator directly on the SA).
+        // Stack: scope-only. Resource: scoped to specific SA.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
+          }
+        }
+      }
+    ]
+    // Note: Azure is intentionally not included here. Azure impersonation works differently -
+    // the managed identity must be attached to the workload (Container App, VM, etc.) at provisioning time.
+    // The workload can then request tokens for any attached identity by specifying its client_id.
+    // No additional permissions are needed at runtime - the attachment itself grants the access.
+  }
+}

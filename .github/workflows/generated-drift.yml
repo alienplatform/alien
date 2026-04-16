@@ -1,0 +1,65 @@
+name: Generated Drift
+
+on:
+  pull_request:
+    paths:
+      - 'packages/core/**'
+      - 'packages/sdk/**'
+      - 'crates/alien-core/**'
+      - 'crates/alien-bindings/proto/**'
+      - 'client-sdks/platform/openapi.json'
+      - 'client-sdks/manager/openapi.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  drift:
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Speakeasy CLI
+        run: npm install -g speakeasy@latest
+
+      - name: Regenerate code
+        run: |
+          pnpm generate
+          pnpm generate:platform-api
+          pnpm generate:manager-api
+
+      - name: Assert no generated drift
+        run: git diff --exit-code

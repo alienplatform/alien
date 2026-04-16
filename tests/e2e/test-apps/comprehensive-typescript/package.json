@@ -1,0 +1,21 @@
+{
+  "name": "comprehensive-typescript",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsdown --watch --no-clean",
+    "build": "tsdown",
+    "test:ts": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@alienplatform/sdk": "workspace:*",
+    "@alienplatform/core": "workspace:*",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsdown": "^0.13.0",
+    "typescript": "^5.7.3"
+  }
+}

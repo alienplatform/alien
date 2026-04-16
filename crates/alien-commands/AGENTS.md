@@ -1,0 +1,3 @@
+- Don't call it "ARC" — use "commands" everywhere.
+- Don't put transport-specific logic in core types — use the dispatcher trait.
+- Don't bypass the `CommandRegistry` — it is the source of truth for state, not KV.

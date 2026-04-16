@@ -1,0 +1,2 @@
+- Don't put mutations in the wrong phase — dependency wiring must be last.
+- Don't query cloud APIs in mutations — they modify the stack only.

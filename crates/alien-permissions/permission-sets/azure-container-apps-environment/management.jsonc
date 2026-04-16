@@ -1,0 +1,29 @@
+{
+  "id": "azure-container-apps-environment/management",
+  "description": "Allows managing Azure Container Apps Environment configuration, certificates, storage, and monitoring",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/managedEnvironments/read",
+            "Microsoft.App/managedEnvironments/certificates/read",
+            "Microsoft.App/managedEnvironments/certificates/write",
+            "Microsoft.App/managedEnvironments/certificates/delete",
+            "Microsoft.App/managedEnvironments/storages/read",
+            "Microsoft.App/managedEnvironments/storages/write",
+            "Microsoft.App/managedEnvironments/storages/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

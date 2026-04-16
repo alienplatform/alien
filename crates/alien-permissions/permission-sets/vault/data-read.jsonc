@@ -1,0 +1,57 @@
+{
+  // Allows reading secrets from vault (runtime access for functions)
+  "id": "vault/data-read",
+  "description": "Allows reading secrets from vault (runtime access for functions)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["ssm:GetParameter"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/secrets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+            "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

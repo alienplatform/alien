@@ -1,0 +1,881 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the computed version without publishing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  prepare:
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: bump
+        run: |
+          LATEST_TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "v0.0.0")
+          CURRENT_VERSION=${LATEST_TAG#v}
+          echo "Latest tag: $LATEST_TAG"
+
+          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s%n%b")
+
+          if echo "$COMMITS" | grep -qE "(BREAKING[- ]CHANGE|^[a-z]+(\([^)]+\))?!:)"; then
+            BUMP=major
+          elif echo "$COMMITS" | grep -qE "^feat(\([^)]+\))?:"; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          case "$BUMP" in
+            major) VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+
+          echo "Bump type: $BUMP"
+          echo "New version: v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set workspace Cargo version
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          python3 - <<EOF
+          import re, os
+          v = os.environ['VERSION']
+          with open('Cargo.toml', 'r') as f:
+              content = f.read()
+          content = re.sub(r'(\[workspace\.package\]\nversion = )"[^"]+"', rf'\1"{v}"', content)
+          content = re.sub(r'(path = "[^"]+", version = )"[^"]+"', rf'\1"{v}"', content)
+          with open('Cargo.toml', 'w') as f:
+              f.write(content)
+          EOF
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+
+      - name: Set npm package versions
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
+            node -e "
+              const fs = require('fs');
+              const p = fs.readFileSync('${pkg}/package.json', 'utf8');
+              const j = JSON.parse(p);
+              j.version = process.env.VERSION;
+              fs.writeFileSync('${pkg}/package.json', JSON.stringify(j, null, 2) + '\n');
+            " VERSION="$VERSION"
+          done
+
+      - name: Commit and tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml packages/core/package.json packages/sdk/package.json packages/testing/package.json \
+            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json
+          git commit -m "chore: release v${VERSION}"
+          git tag "v${VERSION}"
+          git push
+          git push --tags
+
+  # ─── Changelog generation ──────────────────────────────────────────
+
+  generate-changelog:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG-release.md
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          retention-days: 1
+          path: CHANGELOG-release.md
+
+  # ─── Registry publishing (crates.io + npm) ──────────────────────────
+
+  publish-crates:
+    needs: [prepare]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 60
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Publish crates
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          for crate in \
+            alien-error-derive \
+            alien-macros \
+            alien-error \
+            alien-core \
+            alien-client-core \
+            alien-aws-clients \
+            alien-gcp-clients \
+            alien-azure-clients \
+            alien-k8s-clients \
+            alien-platform-api \
+            alien-manager-api \
+            alien-client-config \
+            alien-permissions \
+            alien-bindings \
+            alien-sdk \
+            alien-commands \
+            alien-commands-client; do
+            echo "Publishing $crate..."
+            depot cargo publish -p "$crate" --no-verify
+            sleep 20
+          done
+
+  publish-npm:
+    needs: [prepare]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm --filter @alienplatform/core publish --access public --no-git-checks
+          pnpm --filter @alienplatform/sdk publish --access public --no-git-checks
+          pnpm --filter @alienplatform/testing publish --access public --no-git-checks
+
+  publish-client-sdks:
+    needs: [prepare]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Build and publish platform API SDK
+        working-directory: client-sdks/platform/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install
+          npm run build
+          npm publish --access public
+
+      - name: Build and publish manager API SDK
+        working-directory: client-sdks/manager/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install
+          npm run build
+          npm publish --access public
+
+  # ─── Binary builds (4 targets, all parallel) ───────────────────────
+
+  build-binaries-linux-x86_64:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-unknown-linux-musl/release/alien
+            target/x86_64-unknown-linux-musl/release/alien-deploy
+            target/x86_64-unknown-linux-musl/release/alien-agent
+            target/x86_64-unknown-linux-musl/release/alien-runtime
+            target/x86_64-unknown-linux-musl/release/alien-manager
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}
+
+      - uses: ./.github/actions/setup-rust
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: x86_64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build x86_64 linux binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          depot cargo build --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime -p alien-manager \
+            --target x86_64-unknown-linux-musl
+
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/x86_64-unknown-linux-musl
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
+            cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
+          done
+
+      - name: Upload x86_64 linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-x86_64-unknown-linux-musl
+          retention-days: 1
+          path: staged/x86_64-unknown-linux-musl/
+
+  build-binaries-linux-aarch64:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien-deploy
+            target/aarch64-unknown-linux-musl/release/alien-agent
+            target/aarch64-unknown-linux-musl/release/alien-runtime
+            target/aarch64-unknown-linux-musl/release/alien-manager
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}
+
+      - uses: ./.github/actions/setup-rust
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          targets: aarch64-unknown-linux-musl
+          install-protoc: "true"
+
+      - name: Build aarch64 linux binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          depot cargo build --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent -p alien-runtime -p alien-manager \
+            --target aarch64-unknown-linux-musl
+
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/aarch64-unknown-linux-musl
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
+            cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
+          done
+
+      - name: Upload aarch64 linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-aarch64-unknown-linux-musl
+          retention-days: 1
+          path: staged/aarch64-unknown-linux-musl/
+
+  # ─── macOS build (aarch64 only, native) ────────────────────────────
+
+  build-binaries-darwin:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-apple-darwin/release/alien
+            target/aarch64-apple-darwin/release/alien-deploy
+            target/aarch64-apple-darwin/release/alien-agent
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+
+      - name: Configure git credentials for cargo
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Depot
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: depot/setup-action@v1
+
+      - name: Install sccache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install protoc
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: brew install protobuf
+
+      - name: Build aarch64 darwin binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          depot cargo build --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent \
+            --target aarch64-apple-darwin
+
+      - name: Stage binaries for upload
+        run: |
+          mkdir -p staged/aarch64-apple-darwin
+          for binary in alien alien-deploy alien-agent; do
+            cp "target/aarch64-apple-darwin/release/${binary}" "staged/aarch64-apple-darwin/${binary}"
+          done
+
+      - name: Upload aarch64 darwin binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-aarch64-apple-darwin
+          retention-days: 1
+          path: staged/aarch64-apple-darwin/
+
+  # ─── Windows build (x86_64, native MSVC) ──────────────────────────
+
+  build-binaries-windows:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-windows-2025-16
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Restore binaries from cache
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-pc-windows-msvc/release/alien.exe
+            target/x86_64-pc-windows-msvc/release/alien-deploy.exe
+            target/x86_64-pc-windows-msvc/release/alien-agent.exe
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+
+      - name: Configure git credentials for cargo
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # depot cargo is Linux/macOS only — use sccache directly on Windows
+      - name: Install sccache
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install build tools (protoc, nasm, cmake)
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: choco install protoc nasm cmake -y
+
+      - name: Build windows binaries
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          AWS_LC_SYS_CMAKE_BUILDER: "1"
+        run: |
+          export PATH="/c/Program Files/NASM:$PATH"
+          cargo build --release \
+            -p alien-cli -p alien-deploy-cli -p alien-agent \
+            --target x86_64-pc-windows-msvc
+
+      - name: Stage binaries for upload
+        shell: bash
+        run: |
+          mkdir -p staged/x86_64-pc-windows-msvc
+          cp target/x86_64-pc-windows-msvc/release/alien.exe staged/x86_64-pc-windows-msvc/
+          cp target/x86_64-pc-windows-msvc/release/alien-deploy.exe staged/x86_64-pc-windows-msvc/
+          cp target/x86_64-pc-windows-msvc/release/alien-agent.exe staged/x86_64-pc-windows-msvc/
+
+      - name: Upload windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-x86_64-pc-windows-msvc
+          retention-days: 1
+          path: staged/x86_64-pc-windows-msvc/
+
+  # ─── Upload binaries to S3 ──────────────────────────────────────────
+
+  upload-binaries:
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: ./artifacts
+          merge-multiple: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
+          aws-region: us-east-1
+
+      - name: Upload to S3 (versioned + latest)
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          # Artifacts are downloaded as: ./artifacts/binaries-<target>/<binary>
+          upload() {
+            local binary=$1 target=$2 os=$3 arch=$4
+            local src="./artifacts/binaries-${target}/${binary}"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
+          }
+
+          for binary in alien alien-deploy alien-agent alien-runtime alien-manager; do
+            upload "$binary" x86_64-unknown-linux-musl linux x86_64
+            upload "$binary" aarch64-unknown-linux-musl linux aarch64
+          done
+
+          for binary in alien alien-deploy alien-agent; do
+            upload "$binary" aarch64-apple-darwin darwin aarch64
+          done
+
+          upload_exe() {
+            local binary=$1 target=$2 os=$3 arch=$4
+            local src="./artifacts/binaries-${target}/${binary}.exe"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}.exe"
+            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
+          }
+
+          for binary in alien alien-deploy alien-agent; do
+            upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
+          done
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # ─── GitHub Release ────────────────────────────────────────────────
+
+  create-github-release:
+    needs: [prepare, generate-changelog, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: ./artifacts
+          merge-multiple: false
+
+      - name: Download changelog
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+          path: .
+
+      - name: Create release archives
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          mkdir -p dist
+
+          # Linux x86_64 tarball
+          tar -czf "dist/alien-v${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            -C artifacts/binaries-x86_64-unknown-linux-musl \
+            alien alien-deploy alien-agent alien-runtime alien-manager
+
+          # Linux aarch64 tarball
+          tar -czf "dist/alien-v${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
+            -C artifacts/binaries-aarch64-unknown-linux-musl \
+            alien alien-deploy alien-agent alien-runtime alien-manager
+
+          # macOS aarch64 tarball
+          tar -czf "dist/alien-v${VERSION}-aarch64-apple-darwin.tar.gz" \
+            -C artifacts/binaries-aarch64-apple-darwin \
+            alien alien-deploy alien-agent
+
+          # Windows x86_64 zip
+          (cd artifacts/binaries-x86_64-pc-windows-msvc && \
+            zip "../../dist/alien-v${VERSION}-x86_64-pc-windows-msvc.zip" \
+            alien.exe alien-deploy.exe alien-agent.exe)
+
+      - name: Generate checksums
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          cd dist
+          sha256sum alien-v${VERSION}-*.tar.gz alien-v${VERSION}-*.zip > "alien-v${VERSION}-checksums.txt"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Alien v${{ needs.prepare.outputs.version }}
+          body_path: CHANGELOG-release.md
+          files: |
+            dist/alien-v*-*.tar.gz
+            dist/alien-v*-*.zip
+            dist/alien-v*-checksums.txt
+          draft: false
+          prerelease: false
+
+  # ─── Docker images + Helm chart ─────────────────────────────────────
+
+  publish-images:
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Download linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*-unknown-linux-musl
+          path: ./linux-bins
+          merge-multiple: false
+
+      - name: Place binaries in target layout for Dockerfiles
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            mkdir -p "target/${target}/release"
+            for binary in alien-agent alien-runtime alien-manager; do
+              cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
+              chmod +x "target/${target}/release/${binary}"
+            done
+          done
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+
+      - name: Metadata (alien-base)
+        id: meta_base
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-base
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-base
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_base.outputs.tags }}
+          labels: ${{ steps.meta_base.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-builder)
+        id: meta_builder
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-builder
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-builder
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-builder
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_builder.outputs.tags }}
+          labels: ${{ steps.meta_builder.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-agent)
+        id: meta_agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-agent
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_agent.outputs.tags }}
+          labels: ${{ steps.meta_agent.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata (alien-manager)
+        id: meta_manager
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-manager
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-manager
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-manager
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_manager.outputs.tags }}
+          labels: ${{ steps.meta_manager.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s/^version:.*/version: $VERSION/" charts/alien-agent/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/alien-agent/Chart.yaml
+          helm package charts/alien-agent
+
+      - name: Push Helm chart to GHCR
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          helm push alien-agent-$VERSION.tgz oci://ghcr.io/alienplatform/charts
+
+  # ─── Homebrew tap ──────────────────────────────────────────────────
+
+  publish-homebrew-tap:
+    needs: [prepare, create-github-release]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download release checksums
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --pattern "alien-v${VERSION}-checksums.txt" \
+            --dir .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse checksums
+        id: checksums
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          FILE="alien-v${VERSION}-checksums.txt"
+          echo "linux_x64=$(grep 'x86_64-unknown-linux-musl' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "linux_arm64=$(grep 'aarch64-unknown-linux-musl' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "darwin_arm64=$(grep 'aarch64-apple-darwin' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Homebrew formula
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          REPO="${{ github.repository }}"
+          cat > alien.rb << 'FORMULA_EOF'
+          class Alien < Formula
+            desc "Alien Developer Platform CLI"
+            homepage "https://alien.dev"
+            version "VERSION_PLACEHOLDER"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-aarch64-apple-darwin.tar.gz"
+                sha256 "SHA_DARWIN_ARM64_PLACEHOLDER"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "SHA_LINUX_X64_PLACEHOLDER"
+              end
+              on_arm do
+                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "SHA_LINUX_ARM64_PLACEHOLDER"
+              end
+            end
+
+            def install
+              bin.install "alien"
+              bin.install "alien-deploy"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/alien --version")
+            end
+          end
+          FORMULA_EOF
+
+          sed -i "s|VERSION_PLACEHOLDER|${VERSION}|g" alien.rb
+          sed -i "s|REPO_PLACEHOLDER|${REPO}|g" alien.rb
+          sed -i "s|SHA_LINUX_X64_PLACEHOLDER|${{ steps.checksums.outputs.linux_x64 }}|g" alien.rb
+          sed -i "s|SHA_LINUX_ARM64_PLACEHOLDER|${{ steps.checksums.outputs.linux_arm64 }}|g" alien.rb
+          sed -i "s|SHA_DARWIN_ARM64_PLACEHOLDER|${{ steps.checksums.outputs.darwin_arm64 }}|g" alien.rb
+
+      - name: Push formula to tap
+        run: |
+          git clone "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/alienplatform/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp alien.rb tap/Formula/alien.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/alien.rb
+          git diff --staged --quiet || git commit -m "Update alien to v${{ needs.prepare.outputs.version }}"
+          git push
+
+  # ─── npm CLI wrapper ───────────────────────────────────────────────
+
+  publish-npm-cli-wrapper:
+    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: ./artifacts
+          merge-multiple: false
+
+      - name: Build and publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/build-npm-packages.sh

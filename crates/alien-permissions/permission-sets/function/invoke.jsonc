@@ -1,0 +1,66 @@
+{
+  "id": "function/invoke",
+  "description": "Allows invoking and calling functions from external sources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "run.routes.invoke",
+            "run.jobs.run",
+            "run.executions.cancel",
+            "run.jobs.runWithOverrides"
+          ]
+        },
+        // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
+        // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/containerApps/read",
+            "Microsoft.App/containerApps/revisions/read",
+            "Microsoft.App/containerApps/revisions/replicas/read",
+            "Microsoft.App/containerApps/authConfigs/read",
+            "Microsoft.App/containerApps/sourceControls/read",
+            "Microsoft.App/containerApps/revisions/activate/action",
+            "Microsoft.App/containerApps/revisions/deactivate/action",
+            "Microsoft.App/containerApps/revisions/restart/action"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "basic-function-ts",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "alien dev",
+    "build": "alien build --platform local",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@alienplatform/sdk": "^1.0.0",
+    "@alienplatform/core": "^1.0.1",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@alienplatform/testing": "^0.1.0",
+    "@types/node": "^24.0.15",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}

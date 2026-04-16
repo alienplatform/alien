@@ -1,0 +1,61 @@
+{
+  "files": {
+    "ignore": [
+      ".wrangler/*.js",
+      "**/dist/**",
+      "client-sdks/**",
+      "**/openapi.json",
+      "**/openapi/**",
+      "**/app/.well-known/**",
+      "code-samples-overlay.json",
+      ".next/**",
+      "**/api-v1.d.ts",
+      "entrypoint.js",
+      "generated/**",
+      "shim.mjs",
+      "target/**",
+      "examples/**/github-agent/packages/dashboard/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": false,
+    "ignore": [],
+    "attributePosition": "auto",
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off"
+      },
+      "nursery": {
+        "useImportRestrictions": "off"
+      }
+    }
+  },
+  "organizeImports": {
+    "enabled": true
+  },
+  "javascript": {
+    "formatter": {
+      "arrowParentheses": "asNeeded",
+      "jsxQuoteStyle": "double",
+      "quoteProperties": "asNeeded",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "json": {
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  }
+}

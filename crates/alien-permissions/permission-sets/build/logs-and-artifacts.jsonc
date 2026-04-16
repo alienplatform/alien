@@ -1,0 +1,109 @@
+{
+  "id": "build/logs-and-artifacts",
+  "description": "Allows builds to access CloudWatch logs, S3 artifacts, and build reports",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "s3:GetObject",
+            "s3:GetObjectVersion",
+            "s3:PutObject",
+            "s3:GetBucketLocation",
+            "s3:GetBucketAcl"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::codepipeline-2-*", "arn:aws:s3:::codepipeline-2-*/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::codepipeline-2-*", "arn:aws:s3:::codepipeline-2-*/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*:*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}:*"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "codebuild:CreateReportGroup",
+            "codebuild:CreateReport",
+            "codebuild:UpdateReport",
+            "codebuild:BatchPutTestCases",
+            "codebuild:BatchPutCodeCoverages"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "logging.logEntries.create",
+            "storage.objects.create",
+            "storage.objects.get",
+            "storage.buckets.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write"
+          ],
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

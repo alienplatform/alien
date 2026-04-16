@@ -1,0 +1,253 @@
+name: Cloud Tests
+
+on:
+  pull_request:
+    paths:
+      - 'crates/alien-aws-clients/**'
+      - 'crates/alien-gcp-clients/**'
+      - 'crates/alien-azure-clients/**'
+      - 'crates/alien-bindings/**'
+      - 'crates/alien-manager/**'
+      - 'crates/alien-client-core/**'
+      - 'crates/alien-client-config/**'
+      - 'crates/alien-error/**'
+      - 'crates/alien-core/**'
+      - 'infra/test/**'
+      - 'scripts/gen-env-test.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/alien-aws-clients/**'
+      - 'crates/alien-gcp-clients/**'
+      - 'crates/alien-azure-clients/**'
+      - 'crates/alien-bindings/**'
+      - 'crates/alien-manager/**'
+      - 'crates/alien-client-core/**'
+      - 'crates/alien-client-config/**'
+      - 'crates/alien-error/**'
+      - 'crates/alien-core/**'
+      - 'infra/test/**'
+      - 'scripts/gen-env-test.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  setup:
+    # Skip on fork PRs (no access to secrets)
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
+    # Prevent concurrent terraform applies on the same workspace
+    concurrency:
+      group: terraform-test-infra
+      cancel-in-progress: false
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Mask non-secret infrastructure identifiers
+        run: |
+          echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+
+      - name: Terraform init
+        working-directory: infra/test
+        run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform apply
+        working-directory: infra/test
+        run: terraform apply -auto-approve
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          TF_VAR_aws_management_access_key_id: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
+          TF_VAR_aws_management_secret_access_key: ${{ secrets.TEST_AWS_MGMT_SECRET_ACCESS_KEY }}
+          TF_VAR_aws_target_access_key_id: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+          TF_VAR_aws_target_secret_access_key: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+          TF_VAR_google_management_service_account_key: ${{ secrets.TEST_GCP_MGMT_SA_KEY }}
+          TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
+          TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
+          TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
+          TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
+          TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
+          TF_VAR_azure_management_client_secret: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
+          TF_VAR_azure_target_subscription_id: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+          TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+
+      - name: Get registry endpoints
+        id: registries
+        working-directory: infra/test
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+        run: |
+          AWS_LAMBDA_IMAGE=$(terraform output -raw aws_lambda_image_uri)
+          GCP_CLOUDRUN_IMAGE=$(terraform output -raw gcp_cloudrun_image_uri)
+          AZURE_CONTAINER_APP_IMAGE=$(terraform output -raw azure_container_app_image_uri)
+          echo "aws_lambda_image=$AWS_LAMBDA_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "gcp_cloudrun_image=$GCP_CLOUDRUN_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "azure_container_app_image=$AZURE_CONTAINER_APP_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "ecr_registry=$(echo "$AWS_LAMBDA_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+          echo "ecr_region=$(echo "$AWS_LAMBDA_IMAGE" | cut -d/ -f1 | cut -d. -f4)" >> "$GITHUB_OUTPUT"
+          echo "gcr_registry=$(echo "$GCP_CLOUDRUN_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+          echo "acr_registry=$(echo "$AZURE_CONTAINER_APP_IMAGE" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to registries
+        working-directory: infra/test
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_MGMT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_MGMT_SECRET_ACCESS_KEY }}
+          AZURE_MGMT_CLIENT_ID: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
+          AZURE_MGMT_CLIENT_SECRET: ${{ secrets.TEST_AZURE_MGMT_CLIENT_SECRET }}
+        run: |
+          aws ecr get-login-password --region "${{ steps.registries.outputs.ecr_region }}" \
+            | docker login --username AWS --password-stdin "${{ steps.registries.outputs.ecr_registry }}"
+          terraform output -raw management_gcp_service_account_key \
+            | docker login -u _json_key --password-stdin \
+                "https://${{ steps.registries.outputs.gcr_registry }}"
+          docker login "${{ steps.registries.outputs.acr_registry }}" \
+            -u "$AZURE_MGMT_CLIENT_ID" -p "$AZURE_MGMT_CLIENT_SECRET"
+
+      - name: Build and push Lambda image (AWS ECR, linux/arm64)
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: infra/test/test-images/lambda
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.registries.outputs.aws_lambda_image }}
+          provenance: false
+
+      - name: Build and push http-server image (GCP AR + Azure ACR, linux/amd64)
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: infra/test/test-images/http-server
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.registries.outputs.gcp_cloudrun_image }}
+            ${{ steps.registries.outputs.azure_container_app_image }}
+          provenance: false
+
+      - name: Set up Azure OIDC token
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SUBJECT="repo:${{ github.repository }}:pull_request"
+          else
+            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
+          fi
+          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
+          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
+
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+
+      - name: Generate .env.test
+        run: ./scripts/gen-env-test.sh
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+
+      - name: Mask all .env.test values
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Upload .env.test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-test
+          path: .env.test
+          retention-days: 1
+          include-hidden-files: true
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Upload .env.test to 1Password (for local dev)
+        run: |
+          if op document get alien-test-env --vault "$OP_VAULT_NAME" > /dev/null 2>&1; then
+            op document edit alien-test-env .env.test --vault "$OP_VAULT_NAME"
+          else
+            op document create .env.test --title alien-test-env --vault "$OP_VAULT_NAME"
+          fi
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          OP_VAULT_NAME: ${{ secrets.OP_VAULT_NAME }}
+
+  test:
+    needs: [setup]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: aws-clients
+            test_cmd: depot cargo nextest run -p alien-aws-clients
+          - name: gcp-clients
+            test_cmd: depot cargo nextest run -p alien-gcp-clients --features gcp
+          - name: azure-clients
+            test_cmd: depot cargo nextest run -p alien-azure-clients
+          - name: bindings
+            test_cmd: depot cargo nextest run -p alien-bindings
+          - name: manager-proxy
+            test_cmd: depot cargo nextest run -p alien-manager --test registry_proxy_cloud_test
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test
+
+      - name: Mask sensitive values from .env.test
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - run: ${{ matrix.test_cmd }}

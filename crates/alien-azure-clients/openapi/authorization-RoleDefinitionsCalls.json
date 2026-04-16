@@ -1,0 +1,518 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "AuthorizationManagementClient",
+    "version": "2022-04-01",
+    "description": "Role based access control provides you a way to apply granular level policy administration down to individual resources or resource groups. These operations allow you to manage role definitions. A role definition describes the set of actions that can be performed on resources."
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "x-ms-paths": {
+    "/{roleId}?disambiguation_dummy": {
+      "get": {
+        "tags": ["RoleDefinitions"],
+        "operationId": "RoleDefinitions_GetById",
+        "description": "Gets a role definition by ID.",
+        "parameters": [
+          {
+            "name": "roleId",
+            "in": "path",
+            "required": true,
+            "description": "The fully qualified role definition ID. Use the format, /subscriptions/{guid}/providers/Microsoft.Authorization/roleDefinitions/{roleDefinitionId} for subscription level role definitions, or /providers/Microsoft.Authorization/roleDefinitions/{roleDefinitionId} for tenant level role definitions.",
+            "x-ms-skip-url-encoding": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "../../../../../common-types/resource-management/v2/types.json#/components/parameters/ApiVersionParameter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK - Returns information about the role definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDefinition"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error response describing why the operation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../../../../common-types/resource-management/v2/types.json#/definitions/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_permissions_for_resource_group": {
+        "value": {
+          "value": [
+            {
+              "actions": [],
+              "notActions": [],
+              "dataActions": [],
+              "notDataActions": []
+            }
+          ],
+          "nextLink": "nextlink"
+        }
+      },
+      "List_permissions_for_resource": {
+        "value": {
+          "value": [
+            {
+              "actions": [],
+              "notActions": []
+            }
+          ]
+        }
+      },
+      "Delete_role_definition": {
+        "value": {
+          "properties": {
+            "roleName": "Role name",
+            "type": "roletype",
+            "description": "Role description",
+            "assignableScopes": ["/subscriptions/subId"],
+            "permissions": [
+              {
+                "actions": ["action"],
+                "notActions": [],
+                "dataActions": ["dataAction"],
+                "notDataActions": []
+              }
+            ]
+          },
+          "id": "/subscriptions/subID/providers/Microsoft.Authorization/roleDefinitions/roleDefinitionId",
+          "type": "Microsoft.Authorization/roleDefinitions",
+          "name": "roleDefinitionId"
+        }
+      },
+      "Get_role_definition_by_name": {
+        "value": {
+          "properties": {
+            "roleName": "Role name",
+            "type": "roletype",
+            "description": "Role description",
+            "assignableScopes": ["/subscriptions/subId"],
+            "permissions": [
+              {
+                "actions": ["action"],
+                "notActions": [],
+                "dataActions": ["dataAction"],
+                "notDataActions": []
+              }
+            ]
+          },
+          "id": "/subscriptions/subID/providers/Microsoft.Authorization/roleDefinitions/roleDefinitionId",
+          "type": "Microsoft.Authorization/roleDefinitions",
+          "name": "roleDefinitionId"
+        }
+      },
+      "Create_role_definition": {
+        "value": {
+          "properties": {
+            "roleName": "Role name",
+            "type": "roletype",
+            "description": "Role description",
+            "assignableScopes": ["/subscriptions/subId"],
+            "permissions": [
+              {
+                "actions": ["action"],
+                "notActions": [],
+                "dataActions": ["dataAction"],
+                "notDataActions": []
+              }
+            ]
+          },
+          "id": "/subscriptions/subID/providers/Microsoft.Authorization/roleDefinitions/roleDefinitionId",
+          "type": "Microsoft.Authorization/roleDefinitions",
+          "name": "roleDefinitionId"
+        }
+      },
+      "List_role_definitions_for_scope": {
+        "value": {
+          "value": [
+            {
+              "properties": {
+                "roleName": "Role name",
+                "type": "roletype",
+                "description": "Role description",
+                "assignableScopes": ["/subscriptions/subId"],
+                "permissions": [
+                  {
+                    "actions": ["action"],
+                    "notActions": [],
+                    "dataActions": ["dataAction"],
+                    "notDataActions": []
+                  }
+                ]
+              },
+              "id": "/subscriptions/subID/providers/Microsoft.Authorization/roleDefinitions/roleDefinitionId",
+              "type": "Microsoft.Authorization/roleDefinitions",
+              "name": "roleDefinitionId"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "FilterParameter": {
+        "name": "$filter",
+        "in": "query",
+        "required": false,
+        "description": "The filter to apply on the operation. Use $filter=atScope() to return all deny assignments at or above the scope. Use $filter=denyAssignmentName eq '{name}' to search deny assignments by name at specified scope. Use $filter=principalId eq '{id}' to return all deny assignments at, above and below the scope for the specified principal. Use $filter=gdprExportPrincipalId eq '{id}' to return all deny assignments at, above and below the scope for the specified principal. This filter is different from the principalId filter as it returns not only those deny assignments that contain the specified principal is the Principals list but also those deny assignments that contain the specified principal is the ExcludePrincipals list. Additionally, when gdprExportPrincipalId filter is used, only the deny assignment name and description properties are returned.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the resource group. The name is case insensitive.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List permissions for resource group": {
+            "value": "rgname"
+          },
+          "List permissions for resource": {
+            "value": "rgname"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "The API version to use for this operation.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List permissions for resource group": {
+            "value": "2022-04-01"
+          },
+          "List permissions for resource": {
+            "value": "2022-04-01"
+          },
+          "Delete role definition": {
+            "value": "2022-04-01"
+          },
+          "Get role definition by name": {
+            "value": "2022-04-01"
+          },
+          "Create role definition": {
+            "value": "2022-04-01"
+          },
+          "List role definitions for scope": {
+            "value": "2022-04-01"
+          }
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "required": true,
+        "description": "The ID of the target subscription.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List permissions for resource group": {
+            "value": "subID"
+          },
+          "List permissions for resource": {
+            "value": "subId"
+          }
+        }
+      },
+      "ResourceProviderNamespaceParameter": {
+        "name": "resourceProviderNamespace",
+        "in": "path",
+        "required": true,
+        "description": "The namespace of the resource provider.",
+        "x-ms-skip-url-encoding": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string"
+        },
+        "examples": {
+          "List permissions for resource": {
+            "value": "rpnamespace"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RoleDefinitionFilter": {
+        "properties": {
+          "roleName": {
+            "type": "string",
+            "description": "Returns role definition with the specific name."
+          },
+          "type": {
+            "type": "string",
+            "description": "Returns role definition with the specific type."
+          }
+        },
+        "type": "object",
+        "description": "Role Definitions filter"
+      },
+      "RoleDefinitionProperties": {
+        "properties": {
+          "roleName": {
+            "type": "string",
+            "description": "The role name."
+          },
+          "description": {
+            "type": "string",
+            "description": "The role definition description."
+          },
+          "type": {
+            "type": "string",
+            "description": "The role type.",
+            "x-ms-client-name": "roleType"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "x-ms-identifiers": [],
+            "description": "Role definition permissions."
+          },
+          "assignableScopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Role definition assignable scopes."
+          },
+          "createdOn": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Time it was created"
+          },
+          "updatedOn": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Time it was updated"
+          },
+          "createdBy": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Id of the user who created the assignment"
+          },
+          "updatedBy": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Id of the user who updated the assignment"
+          }
+        },
+        "type": "object",
+        "description": "Role definition properties."
+      },
+      "RoleDefinition": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role definition ID."
+          },
+          "name": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role definition name."
+          },
+          "type": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The role definition type."
+          },
+          "properties": {
+            "$ref": "#/components/schemas/RoleDefinitionProperties"
+          }
+        },
+        "type": "object",
+        "description": "Role definition."
+      },
+      "RoleDefinitionListResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleDefinition"
+            },
+            "description": "Role definition list."
+          },
+          "nextLink": {
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "type": "object",
+        "description": "Role definition list operation result."
+      },
+      "PermissionGetResult": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "x-ms-identifiers": [],
+            "description": "An array of permissions."
+          },
+          "nextLink": {
+            "type": "string",
+            "description": "The URL to use for getting the next set of results."
+          }
+        },
+        "type": "object",
+        "description": "Permissions information."
+      },
+      "Permission": {
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed actions."
+          },
+          "notActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Denied actions."
+          },
+          "dataActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed Data actions."
+          },
+          "notDataActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Denied Data actions."
+          }
+        },
+        "type": "object",
+        "description": "Role definition permissions."
+      },
+      "ErrorDetail": {
+        "description": "The error detail.",
+        "type": "object",
+        "properties": {
+          "code": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error code."
+          },
+          "message": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error message."
+          },
+          "target": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The error target."
+          },
+          "details": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "x-ms-identifiers": ["message", "target"],
+            "description": "The error details."
+          },
+          "additionalInfo": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorAdditionalInfo"
+            },
+            "x-ms-identifiers": [],
+            "description": "The error additional info."
+          }
+        }
+      },
+      "ErrorAdditionalInfo": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The additional info type."
+          },
+          "info": {
+            "readOnly": true,
+            "type": "object",
+            "description": "The additional info."
+          }
+        },
+        "description": "The resource management error additional info."
+      },
+      "ErrorResponse": {
+        "title": "Error response",
+        "description": "Common error response for all Azure Resource Manager APIs to return error details for failed operations. (This also follows the OData error response format.).",
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": "vault/heartbeat",
+  "description": "Allows readonly monitoring and health checks for vault resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["ssm:DescribeParameters"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["secretmanager.secrets.get", "secretmanager.secrets.list"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/secrets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": ["Microsoft.KeyVault/vaults/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

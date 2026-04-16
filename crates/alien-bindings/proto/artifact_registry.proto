@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package alien_bindings.artifact_registry;
+
+// Permissions for registry access
+enum ArtifactRegistryPermissions {
+    // Pull permissions (read-only)
+    PULL = 0;
+    // Push and pull permissions (read-write)
+    PUSH_PULL = 1;
+}
+
+// Types of compute services that can access artifact registries
+enum ComputeServiceType {
+    // Serverless functions
+    FUNCTION = 0;
+}
+
+// Artifact Registry service for managing container repositories
+service ArtifactRegistryService {
+    // Create a repository within the artifact registry
+    rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse);
+    
+    // Get repository details including name, URI, and creation time
+    rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse);
+    
+    // Add cross-account access permissions for a repository
+    rpc AddCrossAccountAccess(AddCrossAccountAccessRequest) returns (AddCrossAccountAccessResponse);
+    
+    // Remove cross-account access permissions for a repository
+    rpc RemoveCrossAccountAccess(RemoveCrossAccountAccessRequest) returns (RemoveCrossAccountAccessResponse);
+    
+    // Get the current cross-account access permissions for a repository
+    rpc GetCrossAccountAccess(GetCrossAccountAccessRequest) returns (GetCrossAccountAccessResponse);
+    
+    // Generate credentials for accessing a repository
+    rpc GenerateCredentials(GenerateCredentialsRequest) returns (GenerateCredentialsResponse);
+    
+    // Delete a repository and all contained images
+    rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse);
+}
+
+// Messages for CreateRepository
+message CreateRepositoryRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Name of the repository to create
+    string repo_name = 2;
+}
+
+message CreateRepositoryResponse {
+    // Repository details response
+    RepositoryResult result = 1;
+}
+
+// Messages for GetRepository
+message GetRepositoryRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to get details for
+    string repo_id = 2;
+}
+
+message GetRepositoryResponse {
+    // Repository details response
+    RepositoryResult result = 1;
+}
+
+// Messages for AddCrossAccountAccess
+message AddCrossAccountAccessRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to add access for
+    string repo_id = 2;
+    // Cross-account access configuration to add
+    CrossAccountAccess access = 3;
+}
+
+message AddCrossAccountAccessResponse {
+    // Empty response on success
+}
+
+// Messages for RemoveCrossAccountAccess
+message RemoveCrossAccountAccessRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to remove access for
+    string repo_id = 2;
+    // Cross-account access configuration to remove
+    CrossAccountAccess access = 3;
+}
+
+message RemoveCrossAccountAccessResponse {
+    // Empty response on success
+}
+
+// Messages for GetCrossAccountAccess
+message GetCrossAccountAccessRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to get access for
+    string repo_id = 2;
+}
+
+message GetCrossAccountAccessResponse {
+    // Current cross-account access permissions
+    CrossAccountPermissions permissions = 1;
+}
+
+// Messages for GenerateCredentials
+message GenerateCredentialsRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to generate credentials for
+    string repo_id = 2;
+    // Permissions to generate credentials for
+    ArtifactRegistryPermissions permissions = 3;
+    // TTL in seconds (optional)
+    optional uint32 ttl_seconds = 4;
+}
+
+message GenerateCredentialsResponse {
+    // Generated credentials
+    Credentials credentials = 1;
+}
+
+// Messages for DeleteRepository
+message DeleteRepositoryRequest {
+    // Name of the artifact registry binding to use
+    string binding_name = 1;
+    // Repository ID to delete
+    string repo_id = 2;
+}
+
+message DeleteRepositoryResponse {
+    // Empty response on success
+}
+
+// Cross-account access configuration for AWS
+message AwsCrossAccountAccess {
+    // AWS account IDs that should have access
+    repeated string account_ids = 1;
+    // Types of compute services that should have access
+    repeated ComputeServiceType allowed_service_types = 2;
+    // Specific IAM role ARNs to grant access to
+    repeated string role_arns = 3;
+    // AWS regions where target Lambda functions run (for sourceArn condition)
+    repeated string regions = 4;
+}
+
+// Cross-account access configuration for GCP
+message GcpCrossAccountAccess {
+    // GCP project numbers that should have access
+    repeated string project_numbers = 1;
+    // Types of compute services that should have access
+    repeated ComputeServiceType allowed_service_types = 2;
+    // Additional service account emails to grant access to
+    repeated string service_account_emails = 3;
+}
+
+// Platform-specific cross-account access configuration
+message CrossAccountAccess {
+    oneof access {
+        // AWS-specific configuration
+        AwsCrossAccountAccess aws = 1;
+        // GCP-specific configuration
+        GcpCrossAccountAccess gcp = 2;
+    }
+}
+
+// Current cross-account access permissions
+message CrossAccountPermissions {
+    // Platform-specific access configuration
+    CrossAccountAccess access = 1;
+    // Timestamp when permissions were last updated (ISO8601 format)
+    optional string last_updated = 2;
+}
+
+// Response from repository operations
+message RepositoryResult {
+    // Repository name
+    string name = 1;
+    // Repository URI for pushing/pulling images (optional, None if not ready yet)
+    optional string uri = 2;
+    // Optional creation timestamp in ISO8601 format
+    optional string created_at = 3;
+}
+
+// Credentials for accessing a repository
+message Credentials {
+    // Username for authentication
+    string username = 1;
+    // Password or token for authentication
+    string password = 2;
+    // Optional expiration time in ISO8601 format
+    optional string expires_at = 3;
+} 

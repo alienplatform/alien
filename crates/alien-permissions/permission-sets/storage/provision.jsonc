@@ -1,0 +1,100 @@
+{
+  "id": "storage/provision",
+  "description": "Allows creating, deleting, and performing fundamental lifecycle management on storage buckets",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "s3:CreateBucket",
+            "s3:DeleteBucket",
+            "s3:PutBucketVersioning",
+            "s3:PutLifecycleConfiguration",
+            "s3:PutBucketPolicy",
+            "s3:DeleteBucketPolicy",
+            "s3:PutBucketAcl",
+            "s3:PutEncryptionConfiguration",
+            "s3:PutBucketPublicAccessBlock",
+            "s3:TagResource",
+            "s3:UntagResource",
+            "s3:GetBucketLocation",
+            "s3:GetBucketVersioning",
+            "s3:GetLifecycleConfiguration",
+            "s3:GetBucketPolicy",
+            "s3:GetBucketAcl",
+            "s3:GetEncryptionConfiguration",
+            "s3:GetBucketPublicAccessBlock",
+            "s3:ListBucketVersions"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "storage.buckets.create",
+            "storage.buckets.delete",
+            "storage.buckets.update",
+            "storage.buckets.restore",
+            "storage.managedFolders.create",
+            "storage.managedFolders.delete",
+            "storage.hmacKeys.create",
+            "storage.hmacKeys.delete",
+            "resourcemanager.projects.get",
+            "storage.buckets.get",
+            "storage.buckets.getIamPolicy",
+            "storage.buckets.setIamPolicy",
+            "storage.managedFolders.get",
+            "storage.managedFolders.list",
+            "storage.managedFolders.getIamPolicy",
+            "storage.managedFolders.setIamPolicy",
+            "storage.bucketOperations.get",
+            "storage.bucketOperations.list",
+            "storage.bucketOperations.cancel",
+            "storage.hmacKeys.get",
+            "storage.hmacKeys.list",
+            "storage.hmacKeys.update"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/delete",
+            "Microsoft.Storage/storageAccounts/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/read"
+          ],
+          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
+      }
+    ]
+  }
+}

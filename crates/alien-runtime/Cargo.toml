@@ -1,0 +1,93 @@
+[package]
+name = "alien-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "alien-runtime"
+path = "src/main.rs"
+
+[lib]
+name = "alien_runtime"
+path = "src/lib.rs"
+
+[features]
+default = ["otlp", "aws", "gcp", "azure", "kubernetes", "local"]
+otlp = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-appender-tracing"]
+aws = ["alien-bindings/aws", "lambda_http", "lambda_runtime", "lambda-extension", "pin-project-lite", "http-body", "aws_lambda_events"]
+gcp = ["alien-bindings/gcp", "cloudevents-sdk"]  
+azure = ["alien-bindings/azure", "cloudevents-sdk"]
+kubernetes = ["alien-bindings/kubernetes"]
+local = ["alien-bindings/local"]
+
+[dependencies]
+alien-commands = { workspace = true, default-features = false, features = ["runtime"] }
+alien-bindings = { workspace = true, default-features = false, features = ["grpc"] }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive", "env"] }
+dotenvy = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = { workspace = true, features = ["full"] }
+hyper = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "stream", "rustls-tls-webpki-roots"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "net", "fs", "process", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std", "json"] }
+opentelemetry = { version = "0.30", features = ["logs"], optional = true }
+opentelemetry_sdk = { version = "0.30", features = ["logs"], optional = true }
+opentelemetry-otlp = { version = "0.30", features = ["http-proto", "logs"], optional = true }
+opentelemetry-appender-tracing = { version = "0.30", optional = true }
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+hyper-util = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+bon = { workspace = true, features = ["experimental-overwritable"] }
+config = { workspace = true }
+libc = "0.2"
+axum = { workspace = true, features = ["macros", "json", "tokio", "http1"] }
+prost-types = { workspace = true }
+lru = "0.12"
+lambda_http = { workspace = true, optional = true }
+lambda_runtime = { workspace = true, optional = true }
+lambda-extension = { workspace = true, optional = true }
+aws_lambda_events = { workspace = true, optional = true, features = ["cloudwatch_events", "s3", "sqs"] }
+pin-project-lite = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+cloudevents-sdk = { workspace = true, features = ["reqwest"], optional = true }
+port_check = { workspace = true }
+
+[dev-dependencies]
+port_check = { workspace = true }
+alien-bindings = { workspace = true, features = ["grpc", "local"] }
+alien-core = { workspace = true }
+alien-commands = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "signal"] }
+reqwest = { workspace = true, features = ["json"] }
+regex = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+snapbox = { workspace = true }
+http = { workspace = true }
+base64 = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+backon = { workspace = true }
+workspace_root = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+sha2 = { workspace = true }
+http-body = { workspace = true }
+lambda_http = { workspace = true }
+aws_lambda_events = { workspace = true }
+test-context = { workspace = true }
+async-trait = { workspace = true }

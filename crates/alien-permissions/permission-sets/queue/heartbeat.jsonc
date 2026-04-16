@@ -1,0 +1,57 @@
+{
+  "id": "queue/heartbeat",
+  "description": "Allows readonly monitoring and health checks for queue resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["sqs:GetQueueAttributes", "sqs:ListQueueTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.get",
+            "pubsub.topics.list",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.list"
+          ]
+        },
+        // Pub/Sub does not support IAM conditions for any operation. All conditions silently fail.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/authorizationRules/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
+          }
+        }
+      }
+    ]
+  }
+}

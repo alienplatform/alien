@@ -1,0 +1,26 @@
+mod aws;
+pub use aws::*;
+
+mod gcp;
+pub use gcp::*;
+
+pub(crate) mod azure;
+pub use azure::*;
+
+#[cfg(feature = "local")]
+mod local;
+#[cfg(feature = "local")]
+pub use local::*;
+
+#[cfg(feature = "test")]
+mod test;
+#[cfg(feature = "test")]
+pub use test::*;
+
+mod templates;
+pub use templates::*;
+
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+pub use fixtures::*;

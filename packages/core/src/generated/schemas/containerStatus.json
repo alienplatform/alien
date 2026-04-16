@@ -1,0 +1,1 @@
+{"type":"string","description":"Container status in Horizon.","enum":["pending","running","stopped","failing"],"x-readme-ref-name":"ContainerStatus"}

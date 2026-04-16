@@ -1,0 +1,1 @@
+{"type":"string","description":"Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.","examples":["function","storage","queue","redis","postgres"],"x-readme-ref-name":"ResourceType"}

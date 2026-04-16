@@ -1,0 +1,86 @@
+[package]
+name = "alien-cli"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+publish = false
+default-run = "alien"
+
+[lib]
+name = "alien_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "alien"
+path = "src/main.rs"
+
+[features]
+default = ["otlp", "platform"]
+otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
+platform = ["dep:oauth2", "dep:open", "dep:keyring"]
+
+[dependencies]
+alien-core = { workspace = true }
+alien-runtime = { workspace = true, optional = true }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-build = { workspace = true }
+alien-error = { workspace = true }
+alien-preflights = { workspace = true, features = ["runtime-checks"] }
+alien-cli-common = { workspace = true }
+
+# Local development dependencies (always enabled)
+alien-local = { workspace = true }
+alien-deployment = { workspace = true }
+alien-bindings = { workspace = true }
+alien-commands = { workspace = true, features = ["server"] }
+alien-manager = { workspace = true }
+alien-manager-api = { path = "../../client-sdks/manager/rust" }
+alien-commands-client = { workspace = true }
+object_store = { workspace = true, features = ["fs", "aws", "gcp", "azure", "tls-webpki-roots"] }
+clap = { workspace = true, features = ["derive", "env"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "net", "fs", "process"] }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+url = { workspace = true }
+dockdash = { workspace = true }
+which = "6.0.1"
+tempfile = { workspace = true }
+async-trait = { workspace = true }
+workspace_root = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+base64 = { workspace = true }
+dirs = { version = "5" }
+indexmap = { workspace = true }
+hostname = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+urlencoding = { workspace = true }
+futures = { workspace = true }
+console = "0.16"
+comfy-table = "7.2.2"
+
+# Platform dependencies (behind "platform" feature)
+keyring = { version = "2", optional = true }
+open = { version = "5", optional = true }
+alien-platform-api = { path = "../../client-sdks/platform/rust", default-features = false, features = ["rustls"] }
+oauth2 = { workspace = true, optional = true }
+
+# Always-on dependencies
+portpicker = { version = "0.1" }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+axum = { workspace = true, features = ["tokio", "http2", "query"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
+git-url-parse = { version = "0.4.4" }
+flate2 = "1"
+tar = "0.4"
+toml = "0.8"
+
+[dev-dependencies]
+snapbox = "0.6.0"
+predicates = "3.0.4"

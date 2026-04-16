@@ -1,0 +1,73 @@
+[package]
+name = "alien-local"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-runtime = { workspace = true }
+alien-bindings = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Database
+sled = { workspace = true }
+
+# Object storage
+object_store = { workspace = true, features = ["http"] }
+
+# Docker client
+bollard = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Time
+chrono = { workspace = true, features = ["serde"] }
+
+# Trigger service
+cron = "0.15"
+notify = "7"
+uuid = { workspace = true, features = ["v4"] }
+prost-types = "0.13"
+
+# Port allocation
+port_check = { workspace = true }
+
+# OCI image extraction
+dockdash = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true, features = ["json"] }
+
+# URL encoding
+urlencoding = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Container registry
+container-registry = { workspace = true, features = ["test-support"] }
+# Secret type used by container-registry auth
+sec = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+dockdash = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+workspace_root = { workspace = true }
+alien-build = { workspace = true }

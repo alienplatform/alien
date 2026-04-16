@@ -1,0 +1,88 @@
+{
+  "id": "container-cluster/management",
+  "description": "Allows managing ContainerCluster capacity (scaling) and inspecting machines.",
+  "platforms": {
+    "aws": [
+      // ASG update/scale — scoped to stack-prefixed ASG names
+      {
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup", "autoscaling:SetDesiredCapacity"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ]
+          }
+        }
+      },
+      // Read-only inspection — ASGs and individual instances.
+      // AWS requires Resource: "*" for all Describe actions.
+      {
+        "grant": {
+          "actions": [
+            "autoscaling:DescribeAutoScalingGroups",
+            "ec2:DescribeInstances",
+            "ec2:DescribeInstanceStatus",
+            "ec2:DescribeTags"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      // MIG scaling + instance inspection
+      {
+        "grant": {
+          "permissions": [
+            "compute.instanceGroupManagers.update",
+            "compute.instanceGroupManagers.get",
+            "compute.instanceGroupManagers.list",
+            "compute.instances.list",
+            "compute.instances.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

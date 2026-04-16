@@ -1,0 +1,73 @@
+image:
+  repository: ghcr.io/alienplatform/alien-agent
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Required: Manager URL to sync with
+syncUrl: ""
+
+# Required: Sync token (deployment group or deployment token)
+syncToken: ""
+
+# Required: 64-character hex encryption key for state database
+encryptionKey: ""
+
+# Platform (should be "kubernetes" for Helm deployments)
+platform: kubernetes
+
+# Kubernetes namespace for the managed application
+namespace: ""
+
+# Optional: Agent name override (defaults to pod hostname)
+agentName: ""
+
+# Optional: External bindings JSON
+externalBindings: ""
+
+# Optional: Public URLs JSON
+publicUrls: ""
+
+# Optional: Stack settings JSON
+stackSettings: ""
+
+# Sync interval in seconds
+syncInterval: 30
+
+# OTLP telemetry port
+otlpPort: 4318
+
+# Verbose logging
+verbose: false
+
+# Data directory inside the container
+dataDir: /var/lib/alien-agent
+
+# Persistence for state database
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []

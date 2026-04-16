@@ -1,0 +1,44 @@
+[package]
+name = "alien-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[features]
+test-utils = ["alien-core/test-utils"]
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-preflights = { workspace = true }
+dockdash = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "process"] }
+tokio-util = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls-webpki-roots"] }
+url = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+glob = { workspace = true }
+async-trait = "0.1"
+object_store = { workspace = true }
+sha2 = { workspace = true }
+tar = "0.4"
+flate2 = "1.0"
+dirs = "5.0"
+futures = "0.3"
+which = "6.0"
+
+
+[dev-dependencies]
+dockdash = { workspace = true, features = ["test-utils"] }
+alien-build = { path = ".", features = ["test-utils"] }
+workspace_root = { workspace = true }
+dotenvy = { workspace = true }
+tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }

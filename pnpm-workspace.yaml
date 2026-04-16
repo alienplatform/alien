@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+  - client-sdks/platform/typescript
+  - client-sdks/manager/typescript
+  - crates/alien-test-app
+  - tests/e2e/test-apps/*

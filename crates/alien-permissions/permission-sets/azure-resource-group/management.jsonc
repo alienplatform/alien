@@ -1,0 +1,24 @@
+{
+  "id": "azure-resource-group/management",
+  "description": "Allows managing Azure resource group configuration, metadata, and monitoring",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/read",
+            "Microsoft.Resources/subscriptions/resourceGroups/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

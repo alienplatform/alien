@@ -1,0 +1,1851 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2024-01-01",
+    "title": "StorageManagementClient",
+    "description": "The Azure Storage Management API."
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "ListBlobServices": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/{subscription-id}/resourceGroups/res4410/providers/Microsoft.Storage/storageAccounts/sto8607/blobServices/default",
+              "name": "default",
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "properties": {
+                "cors": {
+                  "corsRules": [
+                    {
+                      "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                      "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
+                      "maxAgeInSeconds": 100,
+                      "exposedHeaders": ["x-ms-meta-*"],
+                      "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
+                    },
+                    {
+                      "allowedOrigins": ["*"],
+                      "allowedMethods": ["GET"],
+                      "maxAgeInSeconds": 2,
+                      "exposedHeaders": ["*"],
+                      "allowedHeaders": ["*"]
+                    },
+                    {
+                      "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                      "allowedMethods": ["GET", "PUT"],
+                      "maxAgeInSeconds": 2000,
+                      "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                      "allowedHeaders": ["x-ms-meta-12345675754564*"]
+                    }
+                  ]
+                },
+                "defaultServiceVersion": "2017-07-29",
+                "deleteRetentionPolicy": {
+                  "enabled": true,
+                  "days": 300
+                },
+                "isVersioningEnabled": true,
+                "changeFeed": {
+                  "enabled": true,
+                  "retentionInDays": 7
+                }
+              },
+              "sku": {
+                "name": "Standard_GRS",
+                "tier": "Standard"
+              }
+            }
+          ]
+        }
+      },
+      "PutBlobServices": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res4410/providers/Microsoft.Storage/storageAccounts/sto8607/blobServices/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices",
+          "properties": {
+            "cors": {
+              "corsRules": [
+                {
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
+                  "maxAgeInSeconds": 100,
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
+                },
+                {
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
+                  "maxAgeInSeconds": 2,
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
+                },
+                {
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
+                  "maxAgeInSeconds": 2000,
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
+                }
+              ]
+            },
+            "defaultServiceVersion": "2017-07-29",
+            "deleteRetentionPolicy": {
+              "enabled": true,
+              "days": 300
+            },
+            "isVersioningEnabled": true,
+            "changeFeed": {
+              "enabled": true,
+              "retentionInDays": 7
+            }
+          },
+          "sku": {
+            "name": "Standard_GRS",
+            "tier": "Standard"
+          }
+        }
+      },
+      "BlobServicesPutLastAccessTimeBasedTracking": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res4410/providers/Microsoft.Storage/storageAccounts/sto8607/blobServices/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices",
+          "properties": {
+            "lastAccessTimeTrackingPolicy": {
+              "enable": true,
+              "name": "AccessTimeTracking",
+              "trackingGranularityInDays": 1,
+              "blobType": ["blockBlob"]
+            }
+          }
+        }
+      },
+      "BlobServicesPutAllowPermanentDelete": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res4410/providers/Microsoft.Storage/storageAccounts/sto8607/blobServices/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices",
+          "properties": {
+            "deleteRetentionPolicy": {
+              "enabled": true,
+              "days": 300,
+              "allowPermanentDelete": true
+            },
+            "isVersioningEnabled": true
+          }
+        }
+      },
+      "GetBlobServices": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res4410/providers/Microsoft.Storage/storageAccounts/sto8607/blobServices/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices",
+          "properties": {
+            "cors": {
+              "corsRules": [
+                {
+                  "allowedOrigins": ["http://www.contoso.com", "http://www.fabrikam.com"],
+                  "allowedMethods": ["GET", "HEAD", "POST", "OPTIONS", "MERGE", "PUT"],
+                  "maxAgeInSeconds": 100,
+                  "exposedHeaders": ["x-ms-meta-*"],
+                  "allowedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x-ms-meta-target*"]
+                },
+                {
+                  "allowedOrigins": ["*"],
+                  "allowedMethods": ["GET"],
+                  "maxAgeInSeconds": 2,
+                  "exposedHeaders": ["*"],
+                  "allowedHeaders": ["*"]
+                },
+                {
+                  "allowedOrigins": ["http://www.abc23.com", "https://www.fabrikam.com/*"],
+                  "allowedMethods": ["GET", "PUT"],
+                  "maxAgeInSeconds": 2000,
+                  "exposedHeaders": ["x-ms-meta-abc", "x-ms-meta-data*", "x -ms-meta-target*"],
+                  "allowedHeaders": ["x-ms-meta-12345675754564*"]
+                }
+              ]
+            },
+            "defaultServiceVersion": "2017-07-29",
+            "deleteRetentionPolicy": {
+              "enabled": true,
+              "days": 300
+            },
+            "isVersioningEnabled": true,
+            "changeFeed": {
+              "enabled": true,
+              "retentionInDays": 7
+            }
+          },
+          "sku": {
+            "name": "Standard_GRS",
+            "tier": "Standard"
+          }
+        }
+      },
+      "ListContainers": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/{subscription-id}/resourceGroups/res9290/providers/Microsoft.Storage/storageAccounts/sto1590/blobServices/default/containers/container1644",
+              "name": "container1644",
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "etag": "\"0x8D589847D51C7DE\"",
+              "properties": {
+                "publicAccess": "Container",
+                "leaseStatus": "Unlocked",
+                "leaseState": "Available",
+                "lastModifiedTime": "2018-03-14T08:20:47Z",
+                "hasImmutabilityPolicy": false,
+                "hasLegalHold": false
+              }
+            },
+            {
+              "id": "/subscriptions/{subscription-id}/resourceGroups/res9290/providers/Microsoft.Storage/storageAccounts/sto1590/blobServices/default/containers/container4052",
+              "name": "container4052",
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "etag": "\"0x8D589847DAB5AF9\"",
+              "properties": {
+                "publicAccess": "None",
+                "leaseStatus": "Unlocked",
+                "leaseState": "Available",
+                "lastModifiedTime": "2018-03-14T08:20:47Z",
+                "hasImmutabilityPolicy": false,
+                "hasLegalHold": false
+              }
+            }
+          ],
+          "nextLink": "https://sto1590endpoint/subscriptions/{subscription-id}/resourceGroups/res9290/providers/Microsoft.Storage/storageAccounts/sto1590/blobServices/default/containers?api-version=2022-09-01&$maxpagesize=2&$skipToken=/sto1590/container5103"
+        }
+      },
+      "ListDeletedContainers": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/{subscription-id}/resourceGroups/res9290/providers/Microsoft.Storage/storageAccounts/sto1590/blobServices/default/containers/container1644",
+              "name": "container1644",
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "etag": "\"0x8D589847D51C7DE\"",
+              "properties": {
+                "publicAccess": "Container",
+                "leaseStatus": "Unlocked",
+                "leaseState": "Available",
+                "lastModifiedTime": "2018-03-14T08:20:47Z",
+                "hasImmutabilityPolicy": false,
+                "hasLegalHold": false
+              }
+            },
+            {
+              "id": "/subscriptions/{subscription-id}/resourceGroups/res9290/providers/Microsoft.Storage/storageAccounts/sto1590/blobServices/default/containers/container4052",
+              "name": "container4052",
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "etag": "\"0x8D589847DAB5AF9\"",
+              "properties": {
+                "publicAccess": "None",
+                "leaseStatus": "Unlocked",
+                "leaseState": "Expired",
+                "lastModifiedTime": "2018-03-14T08:20:47Z",
+                "hasImmutabilityPolicy": false,
+                "hasLegalHold": false,
+                "version": "1234567890",
+                "deleted": true,
+                "deletedTime": "2019-12-14T08:20:47Z",
+                "remainingRetentionDays": 30
+              }
+            }
+          ]
+        }
+      },
+      "PutContainers": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res3376/providers/Microsoft.Storage/storageAccounts/sto328/blobServices/default/containers/container6185",
+          "name": "container6185",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers"
+        }
+      },
+      "PutContainerWithDefaultEncryptionScope": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res3376/providers/Microsoft.Storage/storageAccounts/sto328/blobServices/default/containers/container6185",
+          "name": "container6185",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+          "properties": {
+            "defaultEncryptionScope": "encryptionscope185",
+            "denyEncryptionScopeOverride": true
+          }
+        }
+      },
+      "PutContainerWithObjectLevelWorm": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res3376/providers/Microsoft.Storage/storageAccounts/sto328/blobServices/default/containers/container6185",
+          "name": "container6185",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+          "properties": {
+            "immutableStorageWithVersioning": {
+              "enabled": true
+            }
+          }
+        }
+      },
+      "UpdateContainers": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res3376/providers/Microsoft.Storage/storageAccounts/sto328/blobServices/default/containers/container6185",
+          "name": "container6185",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+          "properties": {
+            "metadata": {
+              "metadata": "true"
+            },
+            "publicAccess": "Container",
+            "hasImmutabilityPolicy": false,
+            "hasLegalHold": false
+          }
+        }
+      },
+      "GetContainers": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res9871/providers/Microsoft.Storage/storageAccounts/sto6217/blobServices/default/containers/container1634",
+          "name": "container1634",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+          "etag": "\"0x8D592D74CC20EBA\"",
+          "properties": {
+            "publicAccess": "None",
+            "leaseStatus": "Unlocked",
+            "leaseState": "Available",
+            "lastModifiedTime": "2018-03-26T05:06:14Z",
+            "immutabilityPolicy": {
+              "etag": "\"8d592d74cb3011a\"",
+              "properties": {
+                "immutabilityPeriodSinceCreationInDays": 100,
+                "state": "Locked"
+              },
+              "updateHistory": [
+                {
+                  "update": "put",
+                  "immutabilityPeriodSinceCreationInDays": 3,
+                  "timestamp": "2018-03-26T05:06:11.431403Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "update": "lock",
+                  "immutabilityPeriodSinceCreationInDays": 3,
+                  "timestamp": "2018-03-26T05:06:13.0907641Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "update": "extend",
+                  "immutabilityPeriodSinceCreationInDays": 100,
+                  "timestamp": "2018-03-26T05:06:14.7097716Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                }
+              ]
+            },
+            "legalHold": {
+              "hasLegalHold": true,
+              "tags": [
+                {
+                  "tag": "tag1",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "tag": "tag2",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "tag": "tag3",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                }
+              ]
+            },
+            "hasImmutabilityPolicy": true,
+            "hasLegalHold": true
+          }
+        }
+      },
+      "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res9871/providers/Microsoft.Storage/storageAccounts/sto6217/blobServices/default/containers/container1634",
+          "name": "container1634",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+          "etag": "\"0x8D592D74CC20EBA\"",
+          "properties": {
+            "publicAccess": "None",
+            "leaseStatus": "Unlocked",
+            "leaseState": "Available",
+            "lastModifiedTime": "2018-03-26T05:06:14Z",
+            "immutabilityPolicy": {
+              "etag": "\"8d592d74cb3011a\"",
+              "properties": {
+                "immutabilityPeriodSinceCreationInDays": 100,
+                "allowProtectedAppendWritesAll": true,
+                "state": "Locked"
+              },
+              "updateHistory": [
+                {
+                  "update": "put",
+                  "immutabilityPeriodSinceCreationInDays": 3,
+                  "allowProtectedAppendWritesAll": true,
+                  "timestamp": "2018-03-26T05:06:11.431403Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "update": "lock",
+                  "immutabilityPeriodSinceCreationInDays": 3,
+                  "allowProtectedAppendWritesAll": true,
+                  "timestamp": "2018-03-26T05:06:13.0907641Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "update": "extend",
+                  "immutabilityPeriodSinceCreationInDays": 100,
+                  "allowProtectedAppendWritesAll": true,
+                  "timestamp": "2018-03-26T05:06:14.7097716Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                }
+              ]
+            },
+            "legalHold": {
+              "hasLegalHold": true,
+              "protectedAppendWritesHistory": {
+                "allowProtectedAppendWritesAll": true,
+                "timestamp": "2022-09-01T01:58:44.5044483Z"
+              },
+              "tags": [
+                {
+                  "tag": "tag1",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "tag": "tag2",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                },
+                {
+                  "tag": "tag3",
+                  "timestamp": "2018-03-26T05:06:09.6964643Z",
+                  "objectIdentifier": "ce7cd28a-fc25-4bf1-8fb9-e1b9833ffd4b",
+                  "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"
+                }
+              ]
+            },
+            "hasImmutabilityPolicy": true,
+            "hasLegalHold": true
+          }
+        }
+      },
+      "SetLegalHoldContainers": {
+        "value": {
+          "hasLegalHold": true,
+          "tags": ["tag1", "tag2", "tag3"]
+        }
+      },
+      "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+        "value": {
+          "hasLegalHold": true,
+          "tags": ["tag1", "tag2", "tag3"],
+          "allowProtectedAppendWritesAll": true
+        }
+      },
+      "ClearLegalHoldContainers": {
+        "value": {
+          "hasLegalHold": false,
+          "tags": []
+        }
+      },
+      "CreateOrUpdateImmutabilityPolicy": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res1782/providers/Microsoft.Storage/storageAccounts/sto7069/blobServices/default/containers/container6397/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d59f830cb130e5\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 3,
+            "allowProtectedAppendWrites": true,
+            "state": "Unlocked"
+          }
+        }
+      },
+      "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res1782/providers/Microsoft.Storage/storageAccounts/sto7069/blobServices/default/containers/container6397/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d59f830cb130e5\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 3,
+            "allowProtectedAppendWritesAll": true,
+            "state": "Unlocked"
+          }
+        }
+      },
+      "GetImmutabilityPolicy": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res5221/providers/Microsoft.Storage/storageAccounts/sto9177/blobServices/default/containers/container3489/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d59f828e64b75c\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 5,
+            "allowProtectedAppendWrites": true,
+            "state": "Unlocked"
+          }
+        }
+      },
+      "DeleteImmutabilityPolicy": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res1581/providers/Microsoft.Storage/storageAccounts/sto9621/blobServices/default/containers/container4910/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d59f81a87b40c0\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 0,
+            "state": "Unlocked"
+          }
+        }
+      },
+      "LockImmutabilityPolicy": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res2702/providers/Microsoft.Storage/storageAccounts/sto5009/blobServices/default/containers/container1631/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d57a8a5edb084a\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 3,
+            "state": "Locked"
+          }
+        }
+      },
+      "ExtendImmutabilityPolicy": {
+        "value": {
+          "id": "/subscriptions/{subscription-id}/resourceGroups/res6238/providers/Microsoft.Storage/storageAccounts/sto232/blobServices/default/containers/container5023/immutabilityPolicies/default",
+          "name": "default",
+          "type": "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
+          "etag": "\"8d57a8b2ff50332\"",
+          "properties": {
+            "immutabilityPeriodSinceCreationInDays": 100,
+            "state": "Locked"
+          }
+        }
+      },
+      "Acquire_a_lease_on_a_container": {
+        "value": {
+          "leaseId": "8698f513-fa75-44a1-b8eb-30ba336af27d"
+        }
+      },
+      "Break_a_lease_on_a_container": {
+        "value": {
+          "leaseTimeSeconds": "0"
+        }
+      }
+    },
+    "parameters": {
+      "ContainerName": {
+        "name": "containerName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the blob container within the specified storage account. Blob container names must be between 3 and 63 characters in length and use numbers, lower-case letters and dash (-) only. Every dash (-) character must be immediately preceded and followed by a letter or number.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 63
+        },
+        "examples": {
+          "PutContainers": {
+            "value": "container6185"
+          },
+          "PutContainerWithDefaultEncryptionScope": {
+            "value": "container6185"
+          },
+          "PutContainerWithObjectLevelWorm": {
+            "value": "container6185"
+          },
+          "UpdateContainers": {
+            "value": "container6185"
+          },
+          "GetContainers": {
+            "value": "container1634"
+          },
+          "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+            "value": "container1634"
+          },
+          "DeleteContainers": {
+            "value": "container9689"
+          },
+          "SetLegalHoldContainers": {
+            "value": "container8723"
+          },
+          "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+            "value": "container8723"
+          },
+          "ClearLegalHoldContainers": {
+            "value": "container8723"
+          },
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "container6397"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "container6397"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "container3489"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "container4910"
+          },
+          "LockImmutabilityPolicy": {
+            "value": "container1631"
+          },
+          "ExtendImmutabilityPolicy": {
+            "value": "container5023"
+          },
+          "Acquire a lease on a container": {
+            "value": "container6185"
+          },
+          "Break a lease on a container": {
+            "value": "container6185"
+          },
+          "VersionLevelWormContainerMigration": {
+            "value": "container6397"
+          }
+        }
+      },
+      "ImmutabilityPolicyName": {
+        "name": "immutabilityPolicyName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the blob container immutabilityPolicy within the specified storage account. ImmutabilityPolicy Name must be 'default'",
+        "x-ms-enum": {
+          "name": "ImmutabilityPolicyName",
+          "modelAsString": false
+        },
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "enum": ["default"]
+        },
+        "examples": {
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "default"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "default"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "default"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "default"
+          }
+        }
+      },
+      "BlobServicesName": {
+        "name": "BlobServicesName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the blob Service within the specified storage account. Blob Service Name must be 'default'",
+        "x-ms-enum": {
+          "name": "BlobServicesName",
+          "modelAsString": false
+        },
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "enum": ["default"]
+        },
+        "examples": {
+          "PutBlobServices": {
+            "value": "default"
+          },
+          "BlobServicesPutLastAccessTimeBasedTracking": {
+            "value": "default"
+          },
+          "BlobServicesPutAllowPermanentDelete": {
+            "value": "default"
+          },
+          "GetBlobServices": {
+            "value": "default"
+          }
+        }
+      },
+      "ResourceGroupName": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the resource group within the user's subscription. The name is case insensitive.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90,
+          "pattern": "^[-\\w\\._\\(\\)]+$"
+        },
+        "examples": {
+          "ListBlobServices": {
+            "value": "res4410"
+          },
+          "PutBlobServices": {
+            "value": "res4410"
+          },
+          "BlobServicesPutLastAccessTimeBasedTracking": {
+            "value": "res4410"
+          },
+          "BlobServicesPutAllowPermanentDelete": {
+            "value": "res4410"
+          },
+          "GetBlobServices": {
+            "value": "res4410"
+          },
+          "ListContainers": {
+            "value": "res9290"
+          },
+          "ListDeletedContainers": {
+            "value": "res9290"
+          },
+          "PutContainers": {
+            "value": "res3376"
+          },
+          "PutContainerWithDefaultEncryptionScope": {
+            "value": "res3376"
+          },
+          "PutContainerWithObjectLevelWorm": {
+            "value": "res3376"
+          },
+          "UpdateContainers": {
+            "value": "res3376"
+          },
+          "GetContainers": {
+            "value": "res9871"
+          },
+          "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+            "value": "res9871"
+          },
+          "DeleteContainers": {
+            "value": "res4079"
+          },
+          "SetLegalHoldContainers": {
+            "value": "res4303"
+          },
+          "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+            "value": "res4303"
+          },
+          "ClearLegalHoldContainers": {
+            "value": "res4303"
+          },
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "res1782"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "res1782"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "res5221"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "res1581"
+          },
+          "LockImmutabilityPolicy": {
+            "value": "res2702"
+          },
+          "ExtendImmutabilityPolicy": {
+            "value": "res6238"
+          },
+          "Acquire a lease on a container": {
+            "value": "res3376"
+          },
+          "Break a lease on a container": {
+            "value": "res3376"
+          },
+          "VersionLevelWormContainerMigration": {
+            "value": "res1782"
+          }
+        }
+      },
+      "StorageAccountName": {
+        "name": "accountName",
+        "in": "path",
+        "required": true,
+        "description": "The name of the storage account within the specified resource group. Storage account names must be between 3 and 24 characters in length and use numbers and lower-case letters only.",
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 24,
+          "pattern": "^[a-z0-9]+$"
+        },
+        "examples": {
+          "ListBlobServices": {
+            "value": "sto8607"
+          },
+          "PutBlobServices": {
+            "value": "sto8607"
+          },
+          "BlobServicesPutLastAccessTimeBasedTracking": {
+            "value": "sto8607"
+          },
+          "BlobServicesPutAllowPermanentDelete": {
+            "value": "sto8607"
+          },
+          "GetBlobServices": {
+            "value": "sto8607"
+          },
+          "ListContainers": {
+            "value": "sto1590"
+          },
+          "ListDeletedContainers": {
+            "value": "sto1590"
+          },
+          "PutContainers": {
+            "value": "sto328"
+          },
+          "PutContainerWithDefaultEncryptionScope": {
+            "value": "sto328"
+          },
+          "PutContainerWithObjectLevelWorm": {
+            "value": "sto328"
+          },
+          "UpdateContainers": {
+            "value": "sto328"
+          },
+          "GetContainers": {
+            "value": "sto6217"
+          },
+          "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+            "value": "sto6217"
+          },
+          "DeleteContainers": {
+            "value": "sto4506"
+          },
+          "SetLegalHoldContainers": {
+            "value": "sto7280"
+          },
+          "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+            "value": "sto7280"
+          },
+          "ClearLegalHoldContainers": {
+            "value": "sto7280"
+          },
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "sto7069"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "sto7069"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "sto9177"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "sto9621"
+          },
+          "LockImmutabilityPolicy": {
+            "value": "sto5009"
+          },
+          "ExtendImmutabilityPolicy": {
+            "value": "sto232"
+          },
+          "Acquire a lease on a container": {
+            "value": "sto328"
+          },
+          "Break a lease on a container": {
+            "value": "sto328"
+          },
+          "VersionLevelWormContainerMigration": {
+            "value": "sto7069"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "required": true,
+        "description": "The API version to use for this operation.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "ListBlobServices": {
+            "value": "2024-01-01"
+          },
+          "PutBlobServices": {
+            "value": "2024-01-01"
+          },
+          "BlobServicesPutLastAccessTimeBasedTracking": {
+            "value": "2024-01-01"
+          },
+          "BlobServicesPutAllowPermanentDelete": {
+            "value": "2024-01-01"
+          },
+          "GetBlobServices": {
+            "value": "2024-01-01"
+          },
+          "ListContainers": {
+            "value": "2024-01-01"
+          },
+          "ListDeletedContainers": {
+            "value": "2024-01-01"
+          },
+          "PutContainers": {
+            "value": "2024-01-01"
+          },
+          "PutContainerWithDefaultEncryptionScope": {
+            "value": "2024-01-01"
+          },
+          "PutContainerWithObjectLevelWorm": {
+            "value": "2024-01-01"
+          },
+          "UpdateContainers": {
+            "value": "2024-01-01"
+          },
+          "GetContainers": {
+            "value": "2024-01-01"
+          },
+          "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+            "value": "2024-01-01"
+          },
+          "DeleteContainers": {
+            "value": "2024-01-01"
+          },
+          "SetLegalHoldContainers": {
+            "value": "2024-01-01"
+          },
+          "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+            "value": "2024-01-01"
+          },
+          "ClearLegalHoldContainers": {
+            "value": "2024-01-01"
+          },
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "2024-01-01"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "2024-01-01"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "2024-01-01"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "2024-01-01"
+          },
+          "LockImmutabilityPolicy": {
+            "value": "2024-01-01"
+          },
+          "ExtendImmutabilityPolicy": {
+            "value": "2024-01-01"
+          },
+          "Acquire a lease on a container": {
+            "value": "2024-01-01"
+          },
+          "Break a lease on a container": {
+            "value": "2024-01-01"
+          },
+          "VersionLevelWormContainerMigration": {
+            "value": "2024-01-01"
+          }
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "required": true,
+        "description": "The ID of the target subscription.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "ListBlobServices": {
+            "value": "{subscription-id}"
+          },
+          "PutBlobServices": {
+            "value": "{subscription-id}"
+          },
+          "BlobServicesPutLastAccessTimeBasedTracking": {
+            "value": "{subscription-id}"
+          },
+          "BlobServicesPutAllowPermanentDelete": {
+            "value": "{subscription-id}"
+          },
+          "GetBlobServices": {
+            "value": "{subscription-id}"
+          },
+          "ListContainers": {
+            "value": "{subscription-id}"
+          },
+          "ListDeletedContainers": {
+            "value": "{subscription-id}"
+          },
+          "PutContainers": {
+            "value": "{subscription-id}"
+          },
+          "PutContainerWithDefaultEncryptionScope": {
+            "value": "{subscription-id}"
+          },
+          "PutContainerWithObjectLevelWorm": {
+            "value": "{subscription-id}"
+          },
+          "UpdateContainers": {
+            "value": "{subscription-id}"
+          },
+          "GetContainers": {
+            "value": "{subscription-id}"
+          },
+          "GetBlobContainersGetWithAllowProtectedAppendWritesAll": {
+            "value": "{subscription-id}"
+          },
+          "DeleteContainers": {
+            "value": "{subscription-id}"
+          },
+          "SetLegalHoldContainers": {
+            "value": "{subscription-id}"
+          },
+          "SetLegalHoldContainersWithAllowProtectedAppendWritesAll": {
+            "value": "{subscription-id}"
+          },
+          "ClearLegalHoldContainers": {
+            "value": "{subscription-id}"
+          },
+          "CreateOrUpdateImmutabilityPolicy": {
+            "value": "{subscription-id}"
+          },
+          "CreateOrUpdateImmutabilityPolicyWithAllowProtectedAppendWritesAll": {
+            "value": "{subscription-id}"
+          },
+          "GetImmutabilityPolicy": {
+            "value": "{subscription-id}"
+          },
+          "DeleteImmutabilityPolicy": {
+            "value": "{subscription-id}"
+          },
+          "LockImmutabilityPolicy": {
+            "value": "{subscription-id}"
+          },
+          "ExtendImmutabilityPolicy": {
+            "value": "{subscription-id}"
+          },
+          "Acquire a lease on a container": {
+            "value": "{subscription-id}"
+          },
+          "Break a lease on a container": {
+            "value": "{subscription-id}"
+          },
+          "VersionLevelWormContainerMigration": {
+            "value": "{subscription-id}"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ContainerProperties": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The version of the deleted blob container."
+          },
+          "deleted": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "Indicates whether the blob container was deleted."
+          },
+          "deletedTime": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Blob container deletion time."
+          },
+          "remainingRetentionDays": {
+            "type": "integer",
+            "readOnly": true,
+            "description": "Remaining retention days for soft deleted blob container."
+          },
+          "defaultEncryptionScope": {
+            "type": "string",
+            "description": "Default the container to use specified encryption scope for all writes."
+          },
+          "denyEncryptionScopeOverride": {
+            "type": "boolean",
+            "description": "Block override of encryption scope from the container default."
+          },
+          "publicAccess": {
+            "type": "string",
+            "enum": ["Container", "Blob", "None"],
+            "x-ms-enum": {
+              "name": "PublicAccess",
+              "modelAsString": false
+            },
+            "description": "Specifies whether data in the container may be accessed publicly and the level of access."
+          },
+          "lastModifiedTime": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the date and time the container was last modified."
+          },
+          "leaseStatus": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["Locked", "Unlocked"],
+            "x-ms-enum": {
+              "name": "LeaseStatus",
+              "modelAsString": true
+            },
+            "description": "The lease status of the container."
+          },
+          "leaseState": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["Available", "Leased", "Expired", "Breaking", "Broken"],
+            "x-ms-enum": {
+              "name": "LeaseState",
+              "modelAsString": true
+            },
+            "description": "Lease state of the container."
+          },
+          "leaseDuration": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["Infinite", "Fixed"],
+            "x-ms-enum": {
+              "name": "LeaseDuration",
+              "modelAsString": true
+            },
+            "description": "Specifies whether the lease on a container is of infinite or fixed duration, only when the container is leased."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A name-value pair to associate with the container as metadata."
+          },
+          "immutabilityPolicy": {
+            "$ref": "#/components/schemas/ImmutabilityPolicyProperties"
+          },
+          "legalHold": {
+            "$ref": "#/components/schemas/LegalHoldProperties"
+          },
+          "hasLegalHold": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "The hasLegalHold public property is set to true by SRP if there are at least one existing tag. The hasLegalHold public property is set to false by SRP if all existing legal hold tags are cleared out. There can be a maximum of 1000 blob containers with hasLegalHold=true for a given account."
+          },
+          "hasImmutabilityPolicy": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "The hasImmutabilityPolicy public property is set to true by SRP if ImmutabilityPolicy has been created for this container. The hasImmutabilityPolicy public property is set to false by SRP if ImmutabilityPolicy has not been created for this container."
+          },
+          "immutableStorageWithVersioning": {
+            "$ref": "#/components/schemas/ImmutableStorageWithVersioning"
+          },
+          "enableNfsV3RootSquash": {
+            "type": "boolean",
+            "description": "Enable NFSv3 root squash on blob container."
+          },
+          "enableNfsV3AllSquash": {
+            "type": "boolean",
+            "description": "Enable NFSv3 all squash on blob container."
+          }
+        },
+        "description": "The properties of a container."
+      },
+      "BlobContainer": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ContainerProperties"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AzureEntityResource"
+          }
+        ],
+        "description": "Properties of the blob container, including Id, resource name, resource type, Etag."
+      },
+      "ImmutabilityPolicyProperty": {
+        "properties": {
+          "immutabilityPeriodSinceCreationInDays": {
+            "type": "integer",
+            "description": "The immutability period for the blobs in the container since the policy creation, in days."
+          },
+          "state": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["Locked", "Unlocked"],
+            "x-ms-enum": {
+              "name": "ImmutabilityPolicyState",
+              "modelAsString": true
+            },
+            "description": "The ImmutabilityPolicy state of a blob container, possible values include: Locked and Unlocked."
+          },
+          "allowProtectedAppendWrites": {
+            "type": "boolean",
+            "description": "This property can only be changed for unlocked time-based retention policies. When enabled, new blocks can be written to an append blob while maintaining immutability protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted. This property cannot be changed with ExtendImmutabilityPolicy API."
+          },
+          "allowProtectedAppendWritesAll": {
+            "type": "boolean",
+            "description": "This property can only be changed for unlocked time-based retention policies. When enabled, new blocks can be written to both 'Append and Bock Blobs' while maintaining immutability protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted. This property cannot be changed with ExtendImmutabilityPolicy API. The 'allowProtectedAppendWrites' and 'allowProtectedAppendWritesAll' properties are mutually exclusive."
+          }
+        },
+        "description": "The properties of an ImmutabilityPolicy of a blob container."
+      },
+      "ImmutabilityPolicyProperties": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ImmutabilityPolicyProperty"
+          },
+          "etag": {
+            "type": "string",
+            "readOnly": true,
+            "description": "ImmutabilityPolicy Etag."
+          },
+          "updateHistory": {
+            "type": "array",
+            "readOnly": true,
+            "items": {
+              "$ref": "#/components/schemas/UpdateHistoryProperty"
+            },
+            "description": "The ImmutabilityPolicy update history of the blob container."
+          }
+        },
+        "description": "The properties of an ImmutabilityPolicy of a blob container."
+      },
+      "ImmutabilityPolicy": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ImmutabilityPolicyProperty"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AzureEntityResource"
+          }
+        ],
+        "required": ["properties"],
+        "description": "The ImmutabilityPolicy property of a blob container, including Id, resource name, resource type, Etag."
+      },
+      "ImmutableStorageWithVersioning": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "This is an immutable property, when set to true it enables object level immutability at the container level."
+          },
+          "timeStamp": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the date and time the object level immutability was enabled."
+          },
+          "migrationState": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["InProgress", "Completed"],
+            "x-ms-enum": {
+              "name": "MigrationState",
+              "modelAsString": true
+            },
+            "description": "This property denotes the container level immutability to object level immutability migration state."
+          }
+        },
+        "description": "Object level immutability properties of the container."
+      },
+      "UpdateHistoryProperty": {
+        "properties": {
+          "update": {
+            "type": "string",
+            "readOnly": true,
+            "enum": ["put", "lock", "extend"],
+            "x-ms-enum": {
+              "name": "ImmutabilityPolicyUpdateType",
+              "modelAsString": true
+            },
+            "description": "The ImmutabilityPolicy update type of a blob container, possible values include: put, lock and extend."
+          },
+          "immutabilityPeriodSinceCreationInDays": {
+            "type": "integer",
+            "readOnly": true,
+            "description": "The immutability period for the blobs in the container since the policy creation, in days."
+          },
+          "timestamp": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the date and time the ImmutabilityPolicy was updated."
+          },
+          "objectIdentifier": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the Object ID of the user who updated the ImmutabilityPolicy."
+          },
+          "tenantId": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the Tenant ID that issued the token for the user who updated the ImmutabilityPolicy."
+          },
+          "upn": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the User Principal Name of the user who updated the ImmutabilityPolicy."
+          },
+          "allowProtectedAppendWrites": {
+            "type": "boolean",
+            "description": "This property can only be changed for unlocked time-based retention policies. When enabled, new blocks can be written to an append blob while maintaining immutability protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted. This property cannot be changed with ExtendImmutabilityPolicy API."
+          },
+          "allowProtectedAppendWritesAll": {
+            "type": "boolean",
+            "description": "This property can only be changed for unlocked time-based retention policies. When enabled, new blocks can be written to both 'Append and Bock Blobs' while maintaining immutability protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted. This property cannot be changed with ExtendImmutabilityPolicy API. The 'allowProtectedAppendWrites' and 'allowProtectedAppendWritesAll' properties are mutually exclusive."
+          }
+        },
+        "description": "An update history of the ImmutabilityPolicy of a blob container."
+      },
+      "LegalHoldProperties": {
+        "properties": {
+          "hasLegalHold": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "The hasLegalHold public property is set to true by SRP if there are at least one existing tag. The hasLegalHold public property is set to false by SRP if all existing legal hold tags are cleared out. There can be a maximum of 1000 blob containers with hasLegalHold=true for a given account."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagProperty"
+            },
+            "description": "The list of LegalHold tags of a blob container."
+          },
+          "protectedAppendWritesHistory": {
+            "$ref": "#/components/schemas/ProtectedAppendWritesHistory"
+          }
+        },
+        "description": "The LegalHold property of a blob container."
+      },
+      "TagProperty": {
+        "properties": {
+          "tag": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The tag value."
+          },
+          "timestamp": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the date and time the tag was added."
+          },
+          "objectIdentifier": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the Object ID of the user who added the tag."
+          },
+          "tenantId": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the Tenant ID that issued the token for the user who added the tag."
+          },
+          "upn": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the User Principal Name of the user who added the tag."
+          }
+        },
+        "description": "A tag of the LegalHold of a blob container."
+      },
+      "ProtectedAppendWritesHistory": {
+        "type": "object",
+        "properties": {
+          "allowProtectedAppendWritesAll": {
+            "type": "boolean",
+            "description": "When enabled, new blocks can be written to both 'Append and Bock Blobs' while maintaining legal hold protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted."
+          },
+          "timestamp": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the date and time the tag was added."
+          }
+        },
+        "description": "Protected append writes history setting for the blob container with Legal holds."
+      },
+      "LegalHold": {
+        "properties": {
+          "hasLegalHold": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "The hasLegalHold public property is set to true by SRP if there are at least one existing tag. The hasLegalHold public property is set to false by SRP if all existing legal hold tags are cleared out. There can be a maximum of 1000 blob containers with hasLegalHold=true for a given account."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 23,
+              "minLength": 3
+            },
+            "description": "Each tag should be 3 to 23 alphanumeric characters and is normalized to lower case at SRP."
+          },
+          "allowProtectedAppendWritesAll": {
+            "type": "boolean",
+            "description": "When enabled, new blocks can be written to both 'Append and Bock Blobs' while maintaining legal hold protection and compliance. Only new blocks can be added and any existing blocks cannot be modified or deleted."
+          }
+        },
+        "required": ["tags"],
+        "description": "The LegalHold property of a blob container."
+      },
+      "ListContainerItem": {
+        "properties": {
+          "properties": {
+            "$ref": "#/components/schemas/ContainerProperties"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AzureEntityResource"
+          }
+        ],
+        "description": "The blob container properties be listed out."
+      },
+      "ListContainerItems": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListContainerItem"
+            },
+            "description": "List of blobs containers returned.",
+            "readOnly": true
+          },
+          "nextLink": {
+            "type": "string",
+            "description": "Request URL that can be used to query next page of containers. Returned when total number of requested containers exceed maximum page size.",
+            "readOnly": true
+          }
+        },
+        "description": "Response schema. Contains list of blobs returned, and if paging is requested or required, a URL to next page of containers."
+      },
+      "BlobServiceProperties": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "cors": {
+                "$ref": "#/components/schemas/CorsRules"
+              },
+              "defaultServiceVersion": {
+                "type": "string",
+                "description": "DefaultServiceVersion indicates the default version to use for requests to the Blob service if an incoming request’s version is not specified. Possible values include version 2008-10-27 and all more recent versions."
+              },
+              "deleteRetentionPolicy": {
+                "$ref": "#/components/schemas/DeleteRetentionPolicy"
+              },
+              "isVersioningEnabled": {
+                "type": "boolean",
+                "description": "Versioning is enabled if set to true."
+              },
+              "automaticSnapshotPolicyEnabled": {
+                "type": "boolean",
+                "description": "Deprecated in favor of isVersioningEnabled property."
+              },
+              "changeFeed": {
+                "$ref": "#/components/schemas/ChangeFeed"
+              },
+              "restorePolicy": {
+                "$ref": "#/components/schemas/RestorePolicyProperties"
+              },
+              "containerDeleteRetentionPolicy": {
+                "$ref": "#/components/schemas/DeleteRetentionPolicy"
+              },
+              "lastAccessTimeTrackingPolicy": {
+                "$ref": "#/components/schemas/LastAccessTimeTrackingPolicy"
+              }
+            },
+            "x-ms-client-flatten": true,
+            "x-ms-client-name": "BlobServiceProperties",
+            "description": "The properties of a storage account’s Blob service."
+          },
+          "sku": {
+            "$ref": "#/components/schemas/Sku"
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ],
+        "description": "The properties of a storage account’s Blob service."
+      },
+      "BlobServiceItems": {
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlobServiceProperties"
+            },
+            "description": "List of blob services returned.",
+            "readOnly": true
+          }
+        }
+      },
+      "ChangeFeed": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Indicates whether change feed event logging is enabled for the Blob service."
+          },
+          "retentionInDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 146000,
+            "format": "int32",
+            "description": "Indicates the duration of changeFeed retention in days. Minimum value is 1 day and maximum value is 146000 days (400 years). A null value indicates an infinite retention of the change feed."
+          }
+        },
+        "description": "The blob service properties for change feed events."
+      },
+      "RestorePolicyProperties": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Blob restore is enabled if set to true."
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "how long this blob can be restored. It should be great than zero and less than DeleteRetentionPolicy.days."
+          },
+          "lastEnabledTime": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Deprecated in favor of minRestoreTime property."
+          },
+          "minRestoreTime": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Returns the minimum date and time that the restore can be started."
+          }
+        },
+        "required": ["enabled"],
+        "description": "The blob service properties for blob restore policy"
+      },
+      "LastAccessTimeTrackingPolicy": {
+        "properties": {
+          "enable": {
+            "type": "boolean",
+            "description": "When set to true last access time based tracking is enabled."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the policy. The valid value is AccessTimeTracking. This field is currently read only",
+            "enum": ["AccessTimeTracking"],
+            "x-ms-enum": {
+              "name": "name",
+              "modelAsString": true
+            }
+          },
+          "trackingGranularityInDays": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The field specifies blob object tracking granularity in days, typically how often the blob object should be tracked.This field is currently read only with value as 1"
+          },
+          "blobType": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "An array of predefined supported blob types. Only blockBlob is the supported value. This field is currently read only"
+          }
+        },
+        "required": ["enable"],
+        "description": "The blob service properties for Last access time based tracking policy."
+      },
+      "LeaseContainerRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["Acquire", "Renew", "Change", "Release", "Break"],
+            "x-ms-enum": {
+              "name": "LeaseContainerRequestAction",
+              "modelAsString": true
+            },
+            "description": "Specifies the lease action. Can be one of the available actions."
+          },
+          "leaseId": {
+            "type": "string",
+            "description": "Identifies the lease. Can be specified in any valid GUID string format."
+          },
+          "breakPeriod": {
+            "type": "integer",
+            "description": "Optional. For a break action, proposed duration the lease should continue before it is broken, in seconds, between 0 and 60."
+          },
+          "leaseDuration": {
+            "type": "integer",
+            "description": "Required for acquire. Specifies the duration of the lease, in seconds, or negative one (-1) for a lease that never expires."
+          },
+          "proposedLeaseId": {
+            "type": "string",
+            "description": "Optional for acquire, required for change. Proposed lease ID, in a GUID string format."
+          }
+        },
+        "required": ["action"],
+        "description": "Lease Container request schema."
+      },
+      "LeaseContainerResponse": {
+        "properties": {
+          "leaseId": {
+            "type": "string",
+            "description": "Returned unique lease ID that must be included with any request to delete the container, or to renew, change, or release the lease."
+          },
+          "leaseTimeSeconds": {
+            "type": "string",
+            "description": "Approximate time remaining in the lease period, in seconds."
+          }
+        },
+        "description": "Lease Container response schema."
+      },
+      "Resource": {
+        "title": "Resource",
+        "description": "Common fields that are returned in the response for all Azure Resource Manager resources",
+        "type": "object",
+        "properties": {
+          "id": {
+            "readOnly": true,
+            "type": "string",
+            "description": "Fully qualified resource ID for the resource. Ex - /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}"
+          },
+          "name": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The name of the resource"
+          },
+          "type": {
+            "readOnly": true,
+            "type": "string",
+            "description": "The type of the resource. E.g. \"Microsoft.Compute/virtualMachines\" or \"Microsoft.Storage/storageAccounts\""
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "CorsRule": {
+        "properties": {
+          "allowedOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required if CorsRule element is present. A list of origin domains that will be allowed via CORS, or \"*\" to allow all domains"
+          },
+          "allowedMethods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "DELETE",
+                "GET",
+                "HEAD",
+                "MERGE",
+                "POST",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "CONNECT",
+                "TRACE"
+              ],
+              "x-ms-enum": {
+                "name": "AllowedMethods",
+                "modelAsString": true
+              }
+            },
+            "description": "Required if CorsRule element is present. A list of HTTP methods that are allowed to be executed by the origin."
+          },
+          "maxAgeInSeconds": {
+            "type": "integer",
+            "description": "Required if CorsRule element is present. The number of seconds that the client/browser should cache a preflight response."
+          },
+          "exposedHeaders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required if CorsRule element is present. A list of response headers to expose to CORS clients."
+          },
+          "allowedHeaders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required if CorsRule element is present. A list of headers allowed to be part of the cross-origin request."
+          }
+        },
+        "required": [
+          "allowedOrigins",
+          "allowedMethods",
+          "maxAgeInSeconds",
+          "exposedHeaders",
+          "allowedHeaders"
+        ],
+        "description": "Specifies a CORS rule for the Blob service."
+      },
+      "CorsRules": {
+        "properties": {
+          "corsRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CorsRule"
+            },
+            "description": "The List of CORS rules. You can include up to five CorsRule elements in the request. "
+          }
+        },
+        "description": "Sets the CORS rules. You can include up to five CorsRule elements in the request. "
+      },
+      "DeleteRetentionPolicy": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Indicates whether DeleteRetentionPolicy is enabled."
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "Indicates the number of days that the deleted item should be retained. The minimum specified value can be 1 and the maximum value can be 365."
+          },
+          "allowPermanentDelete": {
+            "type": "boolean",
+            "description": "This property when set to true allows deletion of the soft deleted blob versions and snapshots. This property cannot be used blob restore policy. This property only applies to blob service and does not apply to containers or file share."
+          }
+        },
+        "description": "The service properties for soft delete."
+      },
+      "SkuName": {
+        "type": "string",
+        "description": "The SKU name. Required for account creation; optional for update. Note that in older versions, SKU name was called accountType.",
+        "enum": [
+          "Standard_LRS",
+          "Standard_GRS",
+          "Standard_RAGRS",
+          "Standard_ZRS",
+          "Premium_LRS",
+          "Premium_ZRS",
+          "Standard_GZRS",
+          "Standard_RAGZRS",
+          "StandardV2_LRS",
+          "StandardV2_GRS",
+          "StandardV2_ZRS",
+          "StandardV2_GZRS",
+          "PremiumV2_LRS",
+          "PremiumV2_ZRS"
+        ],
+        "x-ms-enum": {
+          "name": "SkuName",
+          "modelAsString": true
+        }
+      },
+      "Tier": {
+        "readOnly": true,
+        "type": "string",
+        "description": "The SKU tier. This is based on the SKU name.",
+        "enum": ["Standard", "Premium"],
+        "x-ms-enum": {
+          "name": "SkuTier",
+          "modelAsString": false
+        }
+      },
+      "Sku": {
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/SkuName"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          }
+        },
+        "required": ["name"],
+        "description": "The SKU of the storage account."
+      },
+      "AzureEntityResource": {
+        "x-ms-client-name": "AzureEntityResource",
+        "title": "Entity Resource",
+        "description": "The resource model definition for an Azure Resource Manager resource with an etag.",
+        "type": "object",
+        "properties": {
+          "etag": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Resource Etag."
+          }
+        },
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      },
+      "CloudErrorBody": {
+        "x-ms-external": true,
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "An identifier for the error. Codes are invariant and are intended to be consumed programmatically."
+          },
+          "message": {
+            "type": "string",
+            "description": "A message describing the error, intended to be suitable for display in a user interface."
+          },
+          "target": {
+            "type": "string",
+            "description": "The target of the particular error. For example, the name of the property in error."
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudErrorBody"
+            },
+            "description": "A list of additional details about the error."
+          }
+        },
+        "description": "An error response from the Storage service."
+      },
+      "CloudError": {
+        "x-ms-external": true,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/CloudErrorBody"
+          }
+        },
+        "description": "An error response from the Storage service."
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+# CreateProjectTerraformResponse
+
+Terraform provider package configuration. If null, Terraform packages will not be generated.
+
+## Example Usage
+
+```typescript
+import { CreateProjectTerraformResponse } from "@alienplatform/platform-api/models/operations";
+
+let value: CreateProjectTerraformResponse = {
+  providerName: "<value>",
+  resourceType: "<value>",
+  enabled: false,
+};
+```
+
+## Fields
+
+| Field                                                    | Type                                                     | Required                                                 | Description                                              |
+| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `providerName`                                           | *string*                                                 | :heavy_check_mark:                                       | Terraform provider name (e.g., "acme")                   |
+| `resourceType`                                           | *string*                                                 | :heavy_check_mark:                                       | Terraform resource type name (e.g., "agent")             |
+| `enabled`                                                | *boolean*                                                | :heavy_check_mark:                                       | Whether Terraform provider package generation is enabled |

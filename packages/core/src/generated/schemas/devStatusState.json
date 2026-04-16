@@ -1,0 +1,1 @@
+{"type":"string","description":"Overall dev server status","enum":["initializing","ready","error","shuttingDown"],"x-readme-ref-name":"DevStatusState"}

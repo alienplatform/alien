@@ -1,0 +1,107 @@
+{
+  "id": "function/execute",
+  "description": "Runtime permissions that functions need when executing (pulling images, accessing logs, etc.)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*:*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}:*"
+            ]
+          }
+        }
+      },
+      // TODO: Only add this if function ingress == public
+      {
+        "grant": {
+          "actions": ["lambda:GetFunctionUrlConfig"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+            "logging.logEntries.create",
+            "run.services.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${managingProjectId}"
+          },
+          "resource": {
+            "scope": "projects/${managingProjectId}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerRegistry/registries/read",
+            "Microsoft.ContainerRegistry/registries/metadata/read",
+            "Microsoft.App/containerApps/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

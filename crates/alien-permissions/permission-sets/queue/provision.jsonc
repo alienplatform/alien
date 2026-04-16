@@ -1,0 +1,78 @@
+{
+  // Allows creating and deleting queues (deployment/provisioning operations)
+  "id": "queue/provision",
+  "description": "Allows creating and deleting message queues during deployment",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "sqs:CreateQueue",
+            "sqs:DeleteQueue",
+            "sqs:GetQueueAttributes",
+            "sqs:SetQueueAttributes",
+            "sqs:ListQueues",
+            "sqs:TagQueue",
+            "sqs:UntagQueue"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.update"
+          ]
+        },
+        // Pub/Sub does not support IAM conditions (resource.name/resource.type) for any operation.
+        // All conditions silently fail. Stack: scope-only. Resource: scope-only (resource-level
+        // IAM via setTopicIamPolicy/setSubscriptionIamPolicy applied by the queue controller).
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/write",
+            "Microsoft.ServiceBus/namespaces/delete",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.ServiceBus/checkNameAvailability/action"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
+          }
+        }
+      }
+    ]
+  }
+}

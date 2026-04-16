@@ -1,0 +1,21 @@
+[package]
+name = "alien-cli-common"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+publish = false
+
+[features]
+default = []
+deployment = ["dep:alien-deployment"]
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-preflights = { workspace = true }
+alien-deployment = { workspace = true, optional = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+termcolor = "1"
+

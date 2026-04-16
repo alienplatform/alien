@@ -1,0 +1,24 @@
+{
+  "name": "@alienplatform/cli",
+  "version": "0.0.0-dev",
+  "description": "Alien Developer Platform CLI",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "license": "FSL-1.1-Apache-2.0",
+  "homepage": "https://alien.dev",
+  "bin": {
+    "alien": "bin/alien.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": ["bin", "vendor"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/alien-cli-npm"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

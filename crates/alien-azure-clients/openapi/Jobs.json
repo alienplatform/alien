@@ -1,0 +1,1949 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2025-01-01",
+    "title": "ContainerApps API Client"
+  },
+  "security": [
+    {
+      "azure_auth": ["user_impersonation"]
+    }
+  ],
+  "paths": {},
+  "servers": [
+    {
+      "url": "https://management.azure.com"
+    }
+  ],
+  "components": {
+    "examples": {
+      "List_Container_Apps_Jobs_by_subscription": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+              "name": "testcontainerappsjob0",
+              "type": "Microsoft.App/jobs",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "configuration": {
+                  "replicaTimeout": 10,
+                  "replicaRetryLimit": 10,
+                  "manualTriggerConfig": {
+                    "replicaCompletionCount": 1,
+                    "parallelism": 4
+                  },
+                  "triggerType": "Manual"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testcontainerappsjob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testinitcontainerAppsJob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob1",
+              "name": "testcontainerappsjob1",
+              "type": "Microsoft.App/jobs",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "configuration": {
+                  "replicaTimeout": 10,
+                  "replicaRetryLimit": 10,
+                  "scheduleTriggerConfig": {
+                    "replicaCompletionCount": 1,
+                    "cronExpression": "* * * * 5",
+                    "parallelism": 5
+                  },
+                  "triggerType": "Scheduled"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerappsjob1:v4",
+                      "name": "testcontainerappsjob1",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerappsjob1:v4",
+                      "name": "testinitcontainerAppsJob1",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "List_Container_Apps_Jobs_by_resource_group": {
+        "value": {
+          "value": [
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+              "name": "testcontainerappsjob0",
+              "type": "Microsoft.App/jobs",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "configuration": {
+                  "replicaTimeout": 10,
+                  "replicaRetryLimit": 10,
+                  "manualTriggerConfig": {
+                    "replicaCompletionCount": 1,
+                    "parallelism": 4
+                  },
+                  "triggerType": "Manual"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testcontainerappsjob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testinitcontainerAppsJob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob1",
+              "name": "testcontainerappsjob1",
+              "type": "Microsoft.App/jobs",
+              "location": "East US",
+              "properties": {
+                "provisioningState": "Succeeded",
+                "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+                "configuration": {
+                  "replicaTimeout": 10,
+                  "replicaRetryLimit": 10,
+                  "scheduleTriggerConfig": {
+                    "replicaCompletionCount": 1,
+                    "cronExpression": "* * * * 5",
+                    "parallelism": 4
+                  },
+                  "triggerType": "Scheduled"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerappsjob1:v4",
+                      "name": "testcontainerApp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testinitcontainerAppsJob1:v4",
+                      "name": "testinitcontainerApp0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Get_Container_Apps_Job": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+          "name": "testcontainerappsjob0",
+          "type": "Microsoft.App/jobs",
+          "location": "East US",
+          "identity": {
+            "type": "SystemAssigned,UserAssigned",
+            "principalId": "24adfa4f-dedf-8dc0-ca29-b6d1a69ab319",
+            "tenantId": "23adfa4f-eedf-1dc0-ba29-a6d1a69ab3d0",
+            "userAssignedIdentities": {
+              "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity": {
+                "principalId": "74adfa4f-dedf-8dc0-ca29-b6d1a69ab312",
+                "clientId": "14adfa4f-eedf-1dc0-ba29-a6d1a69ab3df"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "Succeeded",
+            "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "configuration": {
+              "replicaTimeout": 10,
+              "replicaRetryLimit": 10,
+              "manualTriggerConfig": {
+                "replicaCompletionCount": 1,
+                "parallelism": 4
+              },
+              "triggerType": "Manual",
+              "identitySettings": [
+                {
+                  "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity",
+                  "lifecycle": "All"
+                },
+                {
+                  "identity": "system",
+                  "lifecycle": "Init"
+                }
+              ]
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testcontainerappsjob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "volumeMounts": [
+                    {
+                      "volumeName": "azurefile",
+                      "mountPath": "/mnt/path1",
+                      "subPath": "subPath1"
+                    },
+                    {
+                      "volumeName": "nfsazurefile",
+                      "mountPath": "/mnt/path2",
+                      "subPath": "subPath2"
+                    }
+                  ]
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testinitcontainerAppsJob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "azurefile",
+                  "storageType": "AzureFile",
+                  "storageName": "storage"
+                },
+                {
+                  "name": "nfsazurefile",
+                  "storageType": "NfsAzureFile",
+                  "storageName": "nfsStorage"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Create_or_Update_Container_Apps_Job": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+          "name": "testcontainerappsjob0",
+          "type": "Microsoft.App/jobs",
+          "location": "East US",
+          "identity": {
+            "type": "SystemAssigned,UserAssigned",
+            "principalId": "24adfa4f-dedf-8dc0-ca29-b6d1a69ab319",
+            "tenantId": "23adfa4f-eedf-1dc0-ba29-a6d1a69ab3d0",
+            "userAssignedIdentities": {
+              "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity": {
+                "principalId": "74adfa4f-dedf-8dc0-ca29-b6d1a69ab312",
+                "clientId": "14adfa4f-eedf-1dc0-ba29-a6d1a69ab3df"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "InProgress",
+            "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "configuration": {
+              "replicaTimeout": 10,
+              "replicaRetryLimit": 10,
+              "manualTriggerConfig": {
+                "replicaCompletionCount": 1,
+                "parallelism": 4
+              },
+              "triggerType": "Manual",
+              "identitySettings": [
+                {
+                  "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity",
+                  "lifecycle": "All"
+                },
+                {
+                  "identity": "system",
+                  "lifecycle": "Init"
+                }
+              ]
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testcontainerappsjob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "probes": [
+                    {
+                      "type": "Liveness",
+                      "httpGet": {
+                        "path": "/health",
+                        "port": 8080,
+                        "httpHeaders": [
+                          {
+                            "name": "Custom-Header",
+                            "value": "Awesome"
+                          }
+                        ]
+                      },
+                      "initialDelaySeconds": 3,
+                      "periodSeconds": 3
+                    }
+                  ],
+                  "volumeMounts": [
+                    {
+                      "volumeName": "azurefile",
+                      "mountPath": "/mnt/path1",
+                      "subPath": "subPath1"
+                    },
+                    {
+                      "volumeName": "nfsazurefile",
+                      "mountPath": "/mnt/path2",
+                      "subPath": "subPath2"
+                    }
+                  ]
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testinitcontainerAppsJob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "azurefile",
+                  "storageType": "AzureFile",
+                  "storageName": "storage"
+                },
+                {
+                  "name": "nfsazurefile",
+                  "storageType": "NfsAzureFile",
+                  "storageName": "nfsStorage"
+                }
+              ]
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Create_or_Update_Container_Apps_Job_With_Event_Driven_Trigger": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+          "name": "testcontainerappsjob0",
+          "type": "Microsoft.App/jobs",
+          "location": "East US",
+          "identity": {
+            "type": "UserAssigned",
+            "userAssignedIdentities": {
+              "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity": {
+                "principalId": "74adfa4f-dedf-8dc0-ca29-b6d1a69ab312",
+                "clientId": "14adfa4f-eedf-1dc0-ba29-a6d1a69ab3df"
+              }
+            }
+          },
+          "properties": {
+            "provisioningState": "InProgress",
+            "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "configuration": {
+              "replicaTimeout": 10,
+              "replicaRetryLimit": 10,
+              "eventTriggerConfig": {
+                "replicaCompletionCount": 1,
+                "parallelism": 4,
+                "scale": {
+                  "minExecutions": 1,
+                  "maxExecutions": 5,
+                  "pollingInterval": 20,
+                  "rules": [
+                    {
+                      "name": "servicebuscalingrule",
+                      "type": "azure-servicebus",
+                      "metadata": {
+                        "queueName": "my-queue",
+                        "messageCount": "50"
+                      },
+                      "identity": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/myidentity"
+                    }
+                  ]
+                }
+              },
+              "triggerType": "Event"
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testcontainerappsjob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testinitcontainerAppsJob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
+                }
+              ]
+            },
+            "eventStreamEndpoint": "testEndpoint"
+          }
+        }
+      },
+      "Patch_Container_Apps_Job": {
+        "value": {
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/testcontainerappsjob0",
+          "name": "testcontainerappsjob0",
+          "type": "Microsoft.App/jobs",
+          "location": "East US",
+          "properties": {
+            "provisioningState": "Succeeded",
+            "environmentId": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/demokube",
+            "configuration": {
+              "replicaTimeout": 10,
+              "replicaRetryLimit": 10,
+              "manualTriggerConfig": {
+                "replicaCompletionCount": 1,
+                "parallelism": 4
+              },
+              "triggerType": "Manual"
+            },
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testcontainerappsjob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testinitcontainerAppsJob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Run_a_Container_Apps_Job": {
+        "value": {
+          "name": "testcontainerappsjob0-pjxhsye",
+          "id": "/subscriptions/34adfa4f-cedf-4dc0-ba29-b6d1a69ab345/resourceGroups/rg/providers/Microsoft.App/jobs/{containerAppsJobName}/executions/{jobExecutionName}"
+        }
+      },
+      "Terminate_Multiple_Container_Apps_Job": {
+        "value": {
+          "value": [
+            {
+              "name": "jobExecution-27944453",
+              "properties": {
+                "status": "Running",
+                "startTime": "2023-02-13T20:37:30+00:00",
+                "endTime": "2023-02-13T20:47:30+00:00"
+              }
+            },
+            {
+              "name": "jobExecution-27944452",
+              "properties": {
+                "status": "Running",
+                "startTime": "2023-02-13T21:37:30+00:00",
+                "endTime": "2023-02-13T21:47:30+00:00"
+              }
+            },
+            {
+              "name": "jobExecution-27944453",
+              "properties": {
+                "status": "Running",
+                "startTime": "2023-02-13T22:37:30+00:00",
+                "endTime": "2023-02-13T22:47:30+00:00"
+              }
+            }
+          ]
+        }
+      },
+      "Get_a_Container_Apps_Job_Executions": {
+        "value": {
+          "value": [
+            {
+              "name": "testcontainerAppJob-27944454",
+              "properties": {
+                "status": "Running",
+                "startTime": "2023-02-13T20:37:30+00:00",
+                "endTime": "2023-02-13T20:47:30+00:00",
+                "template": {
+                  "containers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testcontainerappsjob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      }
+                    }
+                  ],
+                  "initContainers": [
+                    {
+                      "image": "repo/testcontainerappsjob0:v4",
+                      "name": "testinitcontainerAppsJob0",
+                      "resources": {
+                        "cpu": 0.5,
+                        "memory": "1Gi"
+                      },
+                      "command": ["/bin/sh"],
+                      "args": ["-c", "while true; do echo hello; sleep 10;done"]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Get_a_single_Job_Execution": {
+        "value": {
+          "name": "jobExecution1",
+          "properties": {
+            "status": "Running",
+            "startTime": "2023-02-13T20:37:30+00:00",
+            "endTime": "2023-02-13T20:47:30+00:00",
+            "template": {
+              "containers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testcontainerappsjob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  }
+                }
+              ],
+              "initContainers": [
+                {
+                  "image": "repo/testcontainerappsjob0:v4",
+                  "name": "testinitcontainerAppsJob0",
+                  "resources": {
+                    "cpu": 0.5,
+                    "memory": "1Gi"
+                  },
+                  "command": ["/bin/sh"],
+                  "args": ["-c", "while true; do echo hello; sleep 10;done"]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "List_Container_Apps_Job_Secrets": {
+        "value": {
+          "value": [
+            {
+              "name": "secret1"
+            },
+            {
+              "name": "secret2"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "JobNameParameter": {
+        "name": "jobName",
+        "in": "path",
+        "description": "Job Name",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "pattern": "^[-\\w\\._\\(\\)]+$"
+        },
+        "examples": {
+          "Get Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Create or Update Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Create or Update Container Apps Job With Event Driven Trigger": {
+            "value": "testcontainerappsjob0"
+          },
+          "Delete Container Apps Job": {
+            "value": "testworkercontainerappsjob0"
+          },
+          "Patch Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Run a Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Terminate a Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Terminate Multiple Container Apps Job": {
+            "value": "testcontainerappsjob0"
+          },
+          "Get a Container Apps Job Executions": {
+            "value": "testcontainerappsjob0"
+          },
+          "Get a single Job Execution": {
+            "value": "testcontainerappsjob0"
+          },
+          "List Container Apps Job Secrets": {
+            "value": "testcontainerappsjob0"
+          }
+        }
+      },
+      "JobExecutionNameParameter": {
+        "name": "jobExecutionName",
+        "in": "path",
+        "description": "Job execution name.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "pattern": "^[-\\w\\._\\(\\)]+$"
+        },
+        "examples": {
+          "Terminate a Container Apps Job": {
+            "value": "jobExecution1"
+          },
+          "Get a single Job Execution": {
+            "value": "jobExecution1"
+          }
+        }
+      },
+      "SubscriptionIdParameter": {
+        "name": "subscriptionId",
+        "in": "path",
+        "description": "The ID of the target subscription.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Container Apps Jobs by subscription": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Container Apps Jobs by resource group": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Create or Update Container Apps Job With Event Driven Trigger": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Delete Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Patch Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Run a Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Terminate a Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Terminate Multiple Container Apps Job": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get a Container Apps Job Executions": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "Get a single Job Execution": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          },
+          "List Container Apps Job Secrets": {
+            "value": "34adfa4f-cedf-4dc0-ba29-b6d1a69ab345"
+          }
+        }
+      },
+      "ApiVersionParameter": {
+        "name": "api-version",
+        "in": "query",
+        "description": "The API version to use for this operation.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examples": {
+          "List Container Apps Jobs by subscription": {
+            "value": "2025-01-01"
+          },
+          "List Container Apps Jobs by resource group": {
+            "value": "2025-01-01"
+          },
+          "Get Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Create or Update Container Apps Job With Event Driven Trigger": {
+            "value": "2025-01-01"
+          },
+          "Delete Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Patch Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Run a Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Terminate a Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Terminate Multiple Container Apps Job": {
+            "value": "2025-01-01"
+          },
+          "Get a Container Apps Job Executions": {
+            "value": "2025-01-01"
+          },
+          "Get a single Job Execution": {
+            "value": "2025-01-01"
+          },
+          "List Container Apps Job Secrets": {
+            "value": "2025-01-01"
+          }
+        }
+      },
+      "ResourceGroupNameParameter": {
+        "name": "resourceGroupName",
+        "in": "path",
+        "description": "The name of the resource group. The name is case insensitive.",
+        "required": true,
+        "x-ms-parameter-location": "method",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 90
+        },
+        "examples": {
+          "List Container Apps Jobs by resource group": {
+            "value": "rg"
+          },
+          "Get Container Apps Job": {
+            "value": "rg"
+          },
+          "Create or Update Container Apps Job": {
+            "value": "rg"
+          },
+          "Create or Update Container Apps Job With Event Driven Trigger": {
+            "value": "rg"
+          },
+          "Delete Container Apps Job": {
+            "value": "rg"
+          },
+          "Patch Container Apps Job": {
+            "value": "rg"
+          },
+          "Run a Container Apps Job": {
+            "value": "rg"
+          },
+          "Terminate a Container Apps Job": {
+            "value": "rg"
+          },
+          "Terminate Multiple Container Apps Job": {
+            "value": "rg"
+          },
+          "Get a Container Apps Job Executions": {
+            "value": "rg"
+          },
+          "Get a single Job Execution": {
+            "value": "rg"
+          },
+          "List Container Apps Job Secrets": {
+            "value": "rg"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "azure_auth": {
+        "type": "oauth2",
+        "description": "Azure Active Directory OAuth2 Flow",
+        "flows": {
+          "implicit": {
+            "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+            "scopes": {
+              "user_impersonation": "impersonate your user account"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "JobConfiguration": {
+        "description": "Non versioned Container Apps Job configuration properties",
+        "type": "object",
+        "required": ["replicaTimeout", "triggerType"],
+        "properties": {
+          "secrets": {
+            "description": "Collection of secrets used by a Container Apps Job",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Secret"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "triggerType": {
+            "description": "Trigger type of the job",
+            "enum": ["Schedule", "Event", "Manual"],
+            "type": "string",
+            "default": "Manual",
+            "x-ms-enum": {
+              "name": "TriggerType",
+              "modelAsString": true
+            }
+          },
+          "replicaTimeout": {
+            "description": "Maximum number of seconds a replica is allowed to run.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "replicaRetryLimit": {
+            "format": "int32",
+            "description": "Maximum number of retries before failing the job.",
+            "type": "integer"
+          },
+          "manualTriggerConfig": {
+            "type": "object",
+            "description": "Manual trigger configuration for a single execution job. Properties replicaCompletionCount and parallelism would be set to 1 by default",
+            "properties": {
+              "replicaCompletionCount": {
+                "$ref": "#/components/schemas/ReplicaCompletionCount"
+              },
+              "parallelism": {
+                "$ref": "#/components/schemas/Parallelism"
+              }
+            }
+          },
+          "scheduleTriggerConfig": {
+            "description": "Cron formatted repeating trigger schedule (\"* * * * *\") for cronjobs. Properties completions and parallelism would be set to 1 by default",
+            "required": ["cronExpression"],
+            "type": "object",
+            "properties": {
+              "replicaCompletionCount": {
+                "$ref": "#/components/schemas/ReplicaCompletionCount"
+              },
+              "cronExpression": {
+                "description": "Cron formatted repeating schedule (\"* * * * *\") of a Cron Job.",
+                "type": "string"
+              },
+              "parallelism": {
+                "$ref": "#/components/schemas/Parallelism"
+              }
+            }
+          },
+          "eventTriggerConfig": {
+            "type": "object",
+            "description": "Trigger configuration of an event driven job.",
+            "properties": {
+              "replicaCompletionCount": {
+                "$ref": "#/components/schemas/ReplicaCompletionCount"
+              },
+              "parallelism": {
+                "$ref": "#/components/schemas/Parallelism"
+              },
+              "scale": {
+                "$ref": "#/components/schemas/JobScale"
+              }
+            }
+          },
+          "registries": {
+            "description": "Collection of private container registry credentials used by a Container apps job",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryCredentials"
+            },
+            "x-ms-identifiers": ["server"]
+          },
+          "identitySettings": {
+            "description": "Optional settings for Managed Identities that are assigned to the Container App Job. If a Managed Identity is not specified here, default settings will be used.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentitySettings"
+            },
+            "x-ms-identifiers": ["identity"]
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "description": "Container App Job",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackedResource"
+          }
+        ],
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/ManagedServiceIdentity"
+          },
+          "properties": {
+            "description": "Container Apps Job resource specific properties.",
+            "type": "object",
+            "properties": {
+              "provisioningState": {
+                "description": "Provisioning state of the Container Apps Job.",
+                "enum": ["InProgress", "Succeeded", "Failed", "Canceled", "Deleting"],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "JobProvisioningState",
+                  "modelAsString": true
+                }
+              },
+              "environmentId": {
+                "description": "Resource ID of environment.",
+                "type": "string",
+                "x-ms-mutability": ["create", "read"]
+              },
+              "workloadProfileName": {
+                "$ref": "#/components/schemas/WorkloadProfileName"
+              },
+              "configuration": {
+                "$ref": "#/components/schemas/JobConfiguration"
+              },
+              "template": {
+                "$ref": "#/components/schemas/JobTemplate"
+              },
+              "outboundIpAddresses": {
+                "description": "Outbound IP Addresses of a container apps job.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "readOnly": true
+              },
+              "eventStreamEndpoint": {
+                "description": "The endpoint of the eventstream of the container apps job.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "JobPatchProperties": {
+        "type": "object",
+        "description": "Container Apps Job resource specific properties.",
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/ManagedServiceIdentity"
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-mutability": ["read", "create", "update"],
+            "description": "Resource tags."
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "environmentId": {
+                "description": "Resource ID of environment.",
+                "type": "string",
+                "x-ms-mutability": ["create", "read", "update"]
+              },
+              "configuration": {
+                "$ref": "#/components/schemas/JobConfiguration"
+              },
+              "template": {
+                "$ref": "#/components/schemas/JobTemplate"
+              },
+              "outboundIpAddresses": {
+                "description": "Outbound IP Addresses of a container apps job.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "eventStreamEndpoint": {
+                "description": "The endpoint of the eventstream of the container apps job.",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "JobsCollection": {
+        "description": "Container Apps Jobs collection ARM resource.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "RegistryCredentials": {
+        "description": "Container App Private Registry",
+        "type": "object",
+        "properties": {
+          "server": {
+            "description": "Container Registry Server",
+            "type": "string"
+          },
+          "username": {
+            "description": "Container Registry Username",
+            "type": "string"
+          },
+          "passwordSecretRef": {
+            "description": "The name of the Secret that contains the registry login password",
+            "type": "string"
+          },
+          "identity": {
+            "description": "A Managed Identity to use to authenticate with Azure Container Registry. For user-assigned identities, use the full user-assigned identity Resource ID. For system-assigned identities, use 'system'",
+            "type": "string"
+          }
+        }
+      },
+      "JobSecretsCollection": {
+        "description": "Container Apps Job Secrets Collection ARM resource.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Secret"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "ReplicaCompletionCount": {
+        "description": "Minimum number of successful replica completions before overall job completion.",
+        "format": "int32",
+        "type": "integer"
+      },
+      "Parallelism": {
+        "description": "Number of parallel replicas of a job that can run at a given time.",
+        "format": "int32",
+        "type": "integer"
+      },
+      "PollingInterval": {
+        "description": "Interval to check each event source in seconds. Defaults to 30s",
+        "format": "int32",
+        "type": "integer"
+      },
+      "JobScaleRule": {
+        "description": "Scaling rule.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Scale Rule Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "Type of the scale rule\neg: azure-servicebus, redis etc.",
+            "type": "string"
+          },
+          "metadata": {
+            "description": "Metadata properties to describe the scale rule.",
+            "type": "object"
+          },
+          "auth": {
+            "description": "Authentication secrets for the scale rule.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScaleRuleAuth"
+            }
+          },
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          }
+        }
+      },
+      "JobScale": {
+        "description": "Scaling configurations for event driven jobs.",
+        "type": "object",
+        "properties": {
+          "pollingInterval": {
+            "$ref": "#/components/schemas/PollingInterval"
+          },
+          "minExecutions": {
+            "format": "int32",
+            "description": "Minimum number of job executions that are created for a trigger, default 0",
+            "type": "integer",
+            "default": 0
+          },
+          "maxExecutions": {
+            "format": "int32",
+            "description": "Maximum number of job executions that are created for a trigger, default 100.",
+            "type": "integer",
+            "default": 100
+          },
+          "rules": {
+            "description": "Scaling rules.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobScaleRule"
+            }
+          }
+        }
+      },
+      "JobExecutionBase": {
+        "description": "Container App's Job execution name.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Job execution name.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Job execution Id.",
+            "type": "string"
+          }
+        }
+      },
+      "JobExecution": {
+        "description": "Container Apps Job execution.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Job execution Name.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Job execution Id.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Job execution type",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Container Apps Job execution specific properties.",
+            "type": "object",
+            "properties": {
+              "status": {
+                "description": "Current running State of the job",
+                "enum": [
+                  "Running",
+                  "Processing",
+                  "Stopped",
+                  "Degraded",
+                  "Failed",
+                  "Unknown",
+                  "Succeeded"
+                ],
+                "type": "string",
+                "readOnly": true,
+                "x-ms-enum": {
+                  "name": "JobExecutionRunningState",
+                  "modelAsString": true
+                }
+              },
+              "startTime": {
+                "description": "Job execution start time.",
+                "type": "string"
+              },
+              "endTime": {
+                "description": "Job execution end time.",
+                "type": "string"
+              },
+              "template": {
+                "$ref": "#/components/schemas/JobExecutionTemplate"
+              }
+            },
+            "x-ms-client-flatten": true
+          }
+        }
+      },
+      "ContainerAppJobExecutions": {
+        "description": "Container App executions collection ARM resource.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobExecution"
+            }
+          },
+          "nextLink": {
+            "description": "Link to next page of resources.",
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": ["value"]
+      },
+      "JobExecutionNamesCollection": {
+        "description": "Container App executions names list.",
+        "required": ["value"],
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Collection of resources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobExecutionBase"
+            }
+          }
+        }
+      },
+      "JobExecutionTemplate": {
+        "description": "Job's execution template, containing container configuration for a job's execution",
+        "type": "object",
+        "properties": {
+          "containers": {
+            "description": "List of container definitions for the Container Apps Job.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobExecutionContainer"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "initContainers": {
+            "description": "List of specialized containers that run before job containers.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobExecutionContainer"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      },
+      "JobExecutionContainer": {
+        "description": "Container Apps Jobs execution container definition.",
+        "type": "object",
+        "properties": {
+          "image": {
+            "description": "Container image tag.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Custom container name.",
+            "type": "string"
+          },
+          "command": {
+            "description": "Container start command.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "description": "Container start command arguments.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "description": "Container environment variables.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVar"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ContainerResources"
+          }
+        }
+      },
+      "DefaultErrorResponse": {
+        "description": "App Service error response.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "description": "Error model.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "Standardized string to programmatically identify the error.",
+                "type": "string",
+                "readOnly": true
+              },
+              "message": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "target": {
+                "description": "Detailed error description and debugging information.",
+                "type": "string",
+                "readOnly": true
+              },
+              "details": {
+                "type": "array",
+                "description": "Details or the error",
+                "items": {
+                  "description": "Detailed errors.",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "description": "Standardized string to programmatically identify the error.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "message": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    },
+                    "target": {
+                      "description": "Detailed error description and debugging information.",
+                      "type": "string",
+                      "readOnly": true
+                    }
+                  },
+                  "readOnly": true
+                },
+                "x-ms-identifiers": ["code"]
+              },
+              "innererror": {
+                "description": "More information to debug error.",
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "readOnly": true
+          }
+        }
+      },
+      "systemData": {
+        "type": "object",
+        "description": "Metadata pertaining to creation and last modification of the resource.",
+        "properties": {
+          "createdBy": {
+            "type": "string",
+            "description": "The identity that created the resource."
+          },
+          "createdByType": {
+            "type": "string",
+            "description": "The type of identity that created the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The timestamp of resource creation (UTC)."
+          },
+          "lastModifiedBy": {
+            "type": "string",
+            "description": "The identity that last modified the resource."
+          },
+          "lastModifiedByType": {
+            "type": "string",
+            "description": "The type of identity that last modified the resource.",
+            "enum": ["User", "Application", "ManagedIdentity", "Key"],
+            "x-ms-enum": {
+              "name": "createdByType",
+              "modelAsString": true
+            }
+          },
+          "lastModifiedAt": {
+            "type": "string",
+            "description": "The timestamp of resource last modification (UTC)"
+          }
+        },
+        "readOnly": true
+      },
+      "Resource": {
+        "type": "object",
+        "title": "Resource",
+        "description": "Common fields that are returned in the response for all Azure Resource Manager resources",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "arm-id",
+            "description": "Fully qualified resource ID for the resource. E.g. \"/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/{resourceProviderNamespace}/{resourceType}/{resourceName}\"",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the resource",
+            "readOnly": true
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of the resource. E.g. \"Microsoft.Compute/virtualMachines\" or \"Microsoft.Storage/storageAccounts\"",
+            "readOnly": true
+          },
+          "systemData": {
+            "$ref": "#/components/schemas/systemData"
+          }
+        },
+        "x-ms-azure-resource": true
+      },
+      "TrackedResource": {
+        "type": "object",
+        "title": "Tracked Resource",
+        "description": "The resource model definition for an Azure Resource Manager tracked top level resource which has 'tags' and a 'location'",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "description": "Resource tags.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-ms-mutability": ["read", "create", "update"]
+          },
+          "location": {
+            "type": "string",
+            "description": "The geo-location where the resource lives",
+            "x-ms-mutability": ["read", "create"]
+          }
+        },
+        "required": ["location"],
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Resource"
+          }
+        ]
+      },
+      "ManagedServiceIdentityType": {
+        "type": "string",
+        "description": "Type of managed service identity (where both SystemAssigned and UserAssigned types are allowed).",
+        "enum": ["None", "SystemAssigned", "UserAssigned", "SystemAssigned,UserAssigned"],
+        "x-ms-enum": {
+          "name": "ManagedServiceIdentityType",
+          "modelAsString": true
+        }
+      },
+      "UserAssignedIdentity": {
+        "type": "object",
+        "description": "User assigned identity properties",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The principal ID of the assigned identity.",
+            "readOnly": true
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The client ID of the assigned identity.",
+            "readOnly": true
+          }
+        }
+      },
+      "UserAssignedIdentities": {
+        "type": "object",
+        "title": "User-Assigned Identities",
+        "description": "The set of user assigned identities associated with the resource. The userAssignedIdentities dictionary keys will be ARM resource ids in the form: '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}. The dictionary values can be empty objects ({}) in requests.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/UserAssignedIdentity"
+        }
+      },
+      "ManagedServiceIdentity": {
+        "type": "object",
+        "description": "Managed service identity (system assigned and/or user assigned identities)",
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The service principal ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The tenant ID of the system assigned identity. This property will only be provided for a system assigned identity.",
+            "readOnly": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/ManagedServiceIdentityType"
+          },
+          "userAssignedIdentities": {
+            "$ref": "#/components/schemas/UserAssignedIdentities"
+          }
+        },
+        "required": ["type"]
+      },
+      "WorkloadProfileName": {
+        "description": "Workload profile name for container apps to execute on.",
+        "type": "string"
+      },
+      "Secret": {
+        "description": "Secret definition.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Secret Name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Secret Value.",
+            "type": "string",
+            "x-ms-mutability": ["create", "update"],
+            "x-ms-secret": true
+          },
+          "identity": {
+            "description": "Resource ID of a managed identity to authenticate with Azure Key Vault, or System to use a system-assigned identity.",
+            "type": "string"
+          },
+          "keyVaultUrl": {
+            "description": "Azure Key Vault URL pointing to the secret referenced by the container app.",
+            "type": "string"
+          }
+        }
+      },
+      "ScaleRuleAuth": {
+        "description": "Auth Secrets for Scale Rule",
+        "type": "object",
+        "properties": {
+          "secretRef": {
+            "description": "Name of the secret from which to pull the auth params.",
+            "type": "string"
+          },
+          "triggerParameter": {
+            "description": "Trigger Parameter that uses the secret",
+            "type": "string"
+          }
+        }
+      },
+      "IdentitySettings": {
+        "description": "Optional settings for a Managed Identity that is assigned to the Container App.",
+        "type": "object",
+        "required": ["identity"],
+        "properties": {
+          "identity": {
+            "description": "The resource ID of a user-assigned managed identity that is assigned to the Container App, or 'system' for system-assigned identity.",
+            "type": "string"
+          },
+          "lifecycle": {
+            "description": "Use to select the lifecycle stages of a Container App during which the Managed Identity should be available.",
+            "enum": ["Init", "Main", "None", "All"],
+            "type": "string",
+            "default": "All",
+            "x-ms-enum": {
+              "name": "IdentitySettingsLifeCycle",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "EnvironmentVar": {
+        "description": "Container App container environment variable.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Environment variable name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Non-secret environment variable value.",
+            "type": "string"
+          },
+          "secretRef": {
+            "description": "Name of the Container App secret from which to pull the environment variable value.",
+            "type": "string"
+          }
+        }
+      },
+      "ContainerResources": {
+        "description": "Container App container resource requirements.",
+        "type": "object",
+        "properties": {
+          "cpu": {
+            "format": "double",
+            "description": "Required CPU in cores, e.g. 0.5",
+            "type": "number"
+          },
+          "memory": {
+            "description": "Required memory, e.g. \"250Mb\"",
+            "type": "string"
+          },
+          "ephemeralStorage": {
+            "description": "Ephemeral Storage, e.g. \"1Gi\"",
+            "type": "string",
+            "readOnly": true
+          }
+        }
+      },
+      "VolumeMount": {
+        "description": "Volume mount for the Container App.",
+        "type": "object",
+        "properties": {
+          "volumeName": {
+            "description": "This must match the Name of a Volume.",
+            "type": "string"
+          },
+          "mountPath": {
+            "description": "Path within the container at which the volume should be mounted.Must not contain ':'.",
+            "type": "string"
+          },
+          "subPath": {
+            "description": "Path within the volume from which the container's volume should be mounted. Defaults to \"\" (volume's root).",
+            "type": "string"
+          }
+        }
+      },
+      "BaseContainer": {
+        "description": "Container App base container definition.",
+        "type": "object",
+        "properties": {
+          "image": {
+            "description": "Container image tag.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Custom container name.",
+            "type": "string"
+          },
+          "command": {
+            "description": "Container start command.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "description": "Container start command arguments.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "description": "Container environment variables.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVar"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ContainerResources"
+          },
+          "volumeMounts": {
+            "description": "Container volume mounts.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VolumeMount"
+            },
+            "x-ms-identifiers": ["volumeName"]
+          }
+        }
+      },
+      "InitContainer": {
+        "description": "Container App init container definition",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseContainer"
+          }
+        ]
+      },
+      "ContainerAppProbe": {
+        "description": "Probe describes a health check to be performed against a container to determine whether it is alive or ready to receive traffic.",
+        "type": "object",
+        "properties": {
+          "failureThreshold": {
+            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Defaults to 3. Minimum value is 1. Maximum value is 10.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "httpGet": {
+            "description": "HTTPGet specifies the http request to perform.",
+            "type": "object",
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "description": "Host name to connect to, defaults to the pod IP. You probably want to set \"Host\" in httpHeaders instead.",
+                "type": "string"
+              },
+              "httpHeaders": {
+                "description": "Custom headers to set in the request. HTTP allows repeated headers.",
+                "type": "array",
+                "items": {
+                  "description": "HTTPHeader describes a custom header to be used in HTTP probes",
+                  "type": "object",
+                  "required": ["name", "value"],
+                  "properties": {
+                    "name": {
+                      "description": "The header field name",
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "The header field value",
+                      "type": "string"
+                    }
+                  }
+                },
+                "x-ms-identifiers": ["name"]
+              },
+              "path": {
+                "description": "Path to access on the HTTP server.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Name or number of the port to access on the container. Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "scheme": {
+                "description": "Scheme to use for connecting to the host. Defaults to HTTP.",
+                "enum": ["HTTP", "HTTPS"],
+                "type": "string",
+                "x-ms-enum": {
+                  "name": "Scheme",
+                  "modelAsString": true
+                }
+              }
+            }
+          },
+          "initialDelaySeconds": {
+            "description": "Number of seconds after the container has started before liveness probes are initiated. Minimum value is 1. Maximum value is 60.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "periodSeconds": {
+            "description": "How often (in seconds) to perform the probe. Default to 10 seconds. Minimum value is 1. Maximum value is 240.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "successThreshold": {
+            "description": "Minimum consecutive successes for the probe to be considered successful after having failed. Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1. Maximum value is 10.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "tcpSocket": {
+            "description": "TCPSocket specifies an action involving a TCP port. TCP hooks not yet supported.",
+            "type": "object",
+            "required": ["port"],
+            "properties": {
+              "host": {
+                "description": "Optional: Host name to connect to, defaults to the pod IP.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Number or name of the port to access on the container. Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.",
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "terminationGracePeriodSeconds": {
+            "description": "Optional duration in seconds the pod needs to terminate gracefully upon probe failure. The grace period is the duration in seconds after the processes running in the pod are sent a termination signal and the time when the processes are forcibly halted with a kill signal. Set this value longer than the expected cleanup time for your process. If this value is nil, the pod's terminationGracePeriodSeconds will be used. Otherwise, this value overrides the value provided by the pod spec. Value must be non-negative integer. The value zero indicates stop immediately via the kill signal (no opportunity to shut down). This is an alpha field and requires enabling ProbeTerminationGracePeriod feature gate. Maximum value is 3600 seconds (1 hour)",
+            "type": "integer",
+            "format": "int64"
+          },
+          "timeoutSeconds": {
+            "description": "Number of seconds after which the probe times out. Defaults to 1 second. Minimum value is 1. Maximum value is 240.",
+            "type": "integer",
+            "format": "int32"
+          },
+          "type": {
+            "description": "The type of probe.",
+            "enum": ["Liveness", "Readiness", "Startup"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "Type",
+              "modelAsString": true
+            }
+          }
+        }
+      },
+      "Container": {
+        "description": "Container App container definition",
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseContainer"
+          }
+        ],
+        "properties": {
+          "probes": {
+            "description": "List of probes for the container.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerAppProbe"
+            },
+            "x-ms-identifiers": ["type"]
+          }
+        }
+      },
+      "SecretVolumeItem": {
+        "description": "Secret to be added to volume.",
+        "type": "object",
+        "properties": {
+          "secretRef": {
+            "description": "Name of the Container App secret from which to pull the secret value.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to project secret to. If no path is provided, path defaults to name of secret listed in secretRef.",
+            "type": "string"
+          }
+        }
+      },
+      "Volume": {
+        "description": "Volume definitions for the Container App.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Volume name.",
+            "type": "string"
+          },
+          "storageType": {
+            "description": "Storage type for the volume. If not provided, use EmptyDir.",
+            "enum": ["AzureFile", "EmptyDir", "Secret", "NfsAzureFile"],
+            "type": "string",
+            "x-ms-enum": {
+              "name": "StorageType",
+              "modelAsString": true
+            }
+          },
+          "storageName": {
+            "description": "Name of storage resource. No need to provide for EmptyDir and Secret.",
+            "type": "string"
+          },
+          "secrets": {
+            "description": "List of secrets to be added in volume. If no secrets are provided, all secrets in collection will be added to volume.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretVolumeItem"
+            },
+            "x-ms-identifiers": ["secretRef"]
+          },
+          "mountOptions": {
+            "description": "Mount options used while mounting the Azure file share or NFS Azure file share. Must be a comma-separated string.",
+            "type": "string"
+          }
+        }
+      },
+      "JobTemplate": {
+        "description": "Container Apps Job versioned application definition. Defines the desired state of an immutable revision. Any changes to this section Will result in a new revision being created",
+        "type": "object",
+        "properties": {
+          "initContainers": {
+            "description": "List of specialized containers that run before app containers.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InitContainer"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "containers": {
+            "description": "List of container definitions for the Container App.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Container"
+            },
+            "x-ms-identifiers": ["name"]
+          },
+          "volumes": {
+            "description": "List of volume definitions for the Container App.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Volume"
+            },
+            "x-ms-identifiers": ["name"]
+          }
+        }
+      }
+    }
+  }
+}

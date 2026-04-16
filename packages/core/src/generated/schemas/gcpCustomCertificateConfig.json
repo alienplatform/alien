@@ -1,0 +1,1 @@
+{"type":"object","required":["certificateName"],"properties":{"certificateName":{"type":"string"}},"x-readme-ref-name":"GcpCustomCertificateConfig"}

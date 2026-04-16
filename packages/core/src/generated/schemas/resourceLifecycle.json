@@ -1,0 +1,1 @@
+{"type":"string","description":"Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.","enum":["frozen","live"],"x-readme-ref-name":"ResourceLifecycle"}

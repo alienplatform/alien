@@ -1,0 +1,7 @@
+packages:
+  - basic-function-ts
+  - basic-function-rs
+  - remote-worker-ts
+  - data-connector-ts
+  - event-pipeline-ts
+  - webhook-api-ts

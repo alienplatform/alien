@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package alien_bindings.build;
+
+// Build service for managing build operations
+service BuildService {
+    // Start a new build with the given configuration
+    rpc StartBuild(StartBuildRequest) returns (StartBuildResponse);
+    
+    // Get the status of a specific build execution
+    rpc GetBuildStatus(GetBuildStatusRequest) returns (GetBuildStatusResponse);
+    
+    // Stop or cancel a running build
+    rpc StopBuild(StopBuildRequest) returns (StopBuildResponse);
+}
+
+// Messages for StartBuild
+message StartBuildRequest {
+    // Name of the build binding to use
+    string binding_name = 1;
+    // Build configuration
+    BuildConfig config = 2;
+}
+
+message StartBuildResponse {
+    // Build execution information
+    BuildExecution execution = 1;
+}
+
+// Messages for GetBuildStatus
+message GetBuildStatusRequest {
+    // Name of the build binding to use
+    string binding_name = 1;
+    // Build execution ID
+    string build_id = 2;
+}
+
+message GetBuildStatusResponse {
+    // Build execution information
+    BuildExecution execution = 1;
+}
+
+// Messages for StopBuild
+message StopBuildRequest {
+    // Name of the build binding to use
+    string binding_name = 1;
+    // Build execution ID
+    string build_id = 2;
+}
+
+message StopBuildResponse {
+    // Empty response on success
+}
+
+// Build configuration
+message BuildConfig {
+    // Build script to execute
+    string script = 1;
+    // Environment variables for the build
+    map<string, string> environment = 2;
+    // Compute type for the build
+    ComputeType compute_type = 3;
+    // Timeout in seconds (optional)
+    optional int32 timeout_seconds = 4;
+    // Monitoring configuration (optional)
+    optional MonitoringConfig monitoring = 5;
+}
+
+// Monitoring configuration
+message MonitoringConfig {
+    // The monitoring endpoint URL
+    string endpoint = 1;
+    // Optional HTTP headers to include in requests
+    map<string, string> headers = 2;
+    // Optional URI path for logs (defaults to "/v1/logs")
+    string logs_uri = 3;
+    // Whether to enable TLS/HTTPS (defaults to true)
+    bool tls_enabled = 4;
+    // Whether to verify TLS certificates (defaults to true)
+    bool tls_verify = 5;
+}
+
+// Build execution information
+message BuildExecution {
+    // Unique build execution ID
+    string id = 1;
+    // Current status of the build
+    BuildStatus status = 2;
+    // Start time in RFC3339 format (optional)
+    optional string start_time = 3;
+    // End time in RFC3339 format (optional)
+    optional string end_time = 4;
+}
+
+// Build status enumeration
+enum BuildStatus {
+    BUILD_STATUS_UNSPECIFIED = 0;
+    BUILD_STATUS_QUEUED = 1;
+    BUILD_STATUS_RUNNING = 2;
+    BUILD_STATUS_SUCCEEDED = 3;
+    BUILD_STATUS_FAILED = 4;
+    BUILD_STATUS_CANCELLED = 5;
+    BUILD_STATUS_TIMED_OUT = 6;
+}
+
+// Compute type enumeration
+enum ComputeType {
+    COMPUTE_TYPE_UNSPECIFIED = 0;
+    COMPUTE_TYPE_SMALL = 1;
+    COMPUTE_TYPE_MEDIUM = 2;
+    COMPUTE_TYPE_LARGE = 3;
+    COMPUTE_TYPE_XLARGE = 4;
+} 

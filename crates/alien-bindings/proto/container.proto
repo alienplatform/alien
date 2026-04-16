@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package alien_bindings.container;
+
+// Container service for container-to-container communication
+service ContainerService {
+    // Get the internal URL for container-to-container communication
+    rpc GetInternalUrl(GetInternalUrlRequest) returns (GetInternalUrlResponse);
+
+    // Get the public URL of the container, if available
+    rpc GetPublicUrl(GetPublicUrlRequest) returns (GetPublicUrlResponse);
+
+    // Get the container name
+    rpc GetContainerName(GetContainerNameRequest) returns (GetContainerNameResponse);
+}
+
+// Messages for GetInternalUrl
+message GetInternalUrlRequest {
+    // Name of the Container binding to use
+    string binding_name = 1;
+}
+
+message GetInternalUrlResponse {
+    // The internal URL for container-to-container communication
+    string url = 1;
+}
+
+// Messages for GetPublicUrl
+message GetPublicUrlRequest {
+    // Name of the Container binding to use
+    string binding_name = 1;
+}
+
+message GetPublicUrlResponse {
+    // The public URL if available
+    optional string url = 1;
+}
+
+// Messages for GetContainerName
+message GetContainerNameRequest {
+    // Name of the Container binding to use
+    string binding_name = 1;
+}
+
+message GetContainerNameResponse {
+    // The container name
+    string name = 1;
+}
+

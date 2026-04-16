@@ -1,0 +1,17 @@
+[package]
+name = "alien-commands-client"
+version.workspace = true
+edition = "2021"
+description = "Rust client SDK for invoking commands on Alien deployments"
+license-file.workspace = true
+
+[dependencies]
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { workspace = true, features = ["time", "fs"] }
+thiserror = { workspace = true }
+tracing = "0.1"
+alien-core = { workspace = true }

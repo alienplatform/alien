@@ -1,0 +1,1 @@
+{"type":"object","description":"GCP management configuration extracted from stack settings","required":["serviceAccountEmail"],"properties":{"serviceAccountEmail":{"type":"string","description":"Service account email for management roles"}},"x-readme-ref-name":"GcpManagementConfig"}

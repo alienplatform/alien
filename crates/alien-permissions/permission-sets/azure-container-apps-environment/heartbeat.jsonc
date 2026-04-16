@@ -1,0 +1,25 @@
+{
+  "id": "azure-container-apps-environment/heartbeat",
+  "description": "Allows readonly monitoring and health checks for azure-container-apps-environment resources",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.App/managedEnvironments/read",
+            "Microsoft.App/managedEnvironments/certificates/read",
+            "Microsoft.App/managedEnvironments/storages/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${stackPrefix}-*"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

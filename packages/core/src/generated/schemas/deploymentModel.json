@@ -1,0 +1,1 @@
+{"type":"string","description":"Deployment model: how updates are delivered to the remote environment.","enum":["push","pull"],"x-readme-ref-name":"DeploymentModel"}

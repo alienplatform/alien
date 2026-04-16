@@ -1,0 +1,22 @@
+[package]
+name = "alien-sdk"
+version.workspace = true
+edition = "2021"
+description = "Alien SDK for Rust — cloud-agnostic bindings for storage, KV, queues, vault, and more"
+license-file.workspace = true
+
+[features]
+default = ["grpc", "all-platforms"]
+all-platforms = ["alien-bindings/all-platforms"]
+aws = ["alien-bindings/aws"]
+gcp = ["alien-bindings/gcp"]
+azure = ["alien-bindings/azure"]
+kubernetes = ["alien-bindings/kubernetes"]
+local = ["alien-bindings/local"]
+test = ["alien-bindings/test"]
+grpc = ["alien-bindings/grpc"]
+openapi = ["alien-bindings/openapi"]
+platform-sdk = ["alien-bindings/platform-sdk"]
+
+[dependencies]
+alien-bindings = { workspace = true }

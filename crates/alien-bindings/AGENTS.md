@@ -1,0 +1,3 @@
+- Don't expose gRPC/proto types to users — transform to public types from `alien-core`.
+- Don't add platform-specific logic in traits — put it in `providers/`.
+- See `src/grpc/AGENTS.md` for adding gRPC services, `tests/AGENTS.md` for integration tests.
