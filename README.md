@@ -20,13 +20,22 @@ Alien gives you a different option. Deploy into their cloud and keep full contro
 
 ## Quickstart
 
-The best way to get started is to follow the [Quickstart](https://alien.dev/docs/quickstart) guide. You'll build an AI worker, test it locally, and deploy it — no cloud account needed to start.
+Install the CLI:
 
 ```bash
-npx @alienplatform/cli init
-cd my-worker
-pnpm dev
+curl -fsSL https://alien.dev/install | sh
 ```
+
+Create a project and start developing:
+
+```bash
+alien init
+cd my-project && pnpm dev
+```
+
+Follow the [Quickstart](https://www.alien.dev/docs/quickstart) guide to build an AI worker, test it locally, and deploy it — no cloud account needed to start.
+
+Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 
 ## Features
 

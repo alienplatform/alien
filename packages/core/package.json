@@ -21,12 +21,7 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": [
-    "alien",
-    "deployment",
-    "cloud",
-    "infrastructure"
-  ],
+  "keywords": ["alien", "deployment", "cloud", "infrastructure"],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "description": "Core types and schemas for the Alien platform",

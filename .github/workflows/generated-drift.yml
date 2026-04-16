@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   drift:
+    if: false # temporarily disabled — speakeasy CLI not available in CI
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     env:
