@@ -16,6 +16,17 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     steps:
+      - name: Validate PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! echo "$TITLE" | grep -qE '^(feat|fix|refactor|chore|docs|test|ci|perf)(\(.+\))?!?: .+'; then
+            echo "::error::PR title must follow Conventional Commits: <type>: <description>"
+            echo "  Valid types: feat, fix, refactor, chore, docs, test, ci, perf"
+            echo "  Example: feat: add Azure container deployment support"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
