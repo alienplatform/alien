@@ -1,0 +1,75 @@
+name: CI (Fork)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - name: Validate PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! echo "$TITLE" | grep -qE '^(feat|fix|refactor|chore|docs|test|ci|perf)(\(.+\))?!?: .+'; then
+            echo "::error::PR title must follow Conventional Commits: <type>: <description>"
+            echo "  Valid types: feat, fix, refactor, chore, docs, test, ci, perf"
+            echo "  Example: feat: add Azure container deployment support"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm format-and-lint
+
+      - name: TypeScript typecheck
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm test:ts
+
+      - name: Rust tests (non-cloud)
+        run: |
+          cargo nextest run --workspace \
+            --exclude alien-aws-clients \
+            --exclude alien-gcp-clients \
+            --exclude alien-azure-clients \
+            --exclude alien-k8s-clients \
+            --exclude alien-bindings \
+            --exclude byocdb \
+            --exclude endpoint-agent \
+            --exclude alien-test-server \
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'

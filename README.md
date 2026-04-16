@@ -1,10 +1,10 @@
 # Alien
 
-![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)
+[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
 [![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
 
-*"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise prospect, **ever**.
+*"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise customer, **ever**.
 
 Alien provides infrastructure for deploying into your customers' cloud accounts and keeping it fully managed. AWS, GCP, or Azure.
 
@@ -18,7 +18,7 @@ The usual answer is sending a Docker image or a Helm chart. But while self-hosti
 
 Alien gives you a different option. Deploy into their cloud and keep full control — push updates, collect non-sensitive logs and metrics, roll back. The customer doesn't operate anything. Their data never leaves.
 
-## Getting started
+## Quickstart
 
 The best way to get started is to follow the [Quickstart](https://alien.dev/docs/quickstart) guide. You'll build an AI worker, test it locally, and deploy it — no cloud account needed to start.
 
@@ -27,6 +27,17 @@ npx @alienplatform/cli init
 cd my-worker
 pnpm dev
 ```
+
+## Features
+
+- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/function/toolchains)** — First-class support for both. Python and arbitrary containers coming soon.
+- **[Real-time Heartbeat](https://alien.dev/docs/how-alien-works)** — Know the instant a deployment goes down. Continuous health checks with sub-second alerting.
+- **[Auto Updates](https://alien.dev/docs/releases)** — Push a release and every deployment picks it up automatically. No coordination, no manual steps.
+- **[Local-first Development](https://alien.dev/docs/local-development)** — Build and test on your machine. No cloud account necessary. Local equivalents for every cloud resource.
+- **[Cloud-agnostic Infrastructure](https://alien.dev/docs/infrastructure)** — Ship to AWS, GCP, and Azure customers without maintaining separate integrations. Alien maps a single API to each cloud's native services at deploy time.
+- **[Remote Commands](https://alien.dev/docs/commands)** — Invoke code on remote deployments from your control plane. Zero inbound networking. Zero open ports. No VPC peering.
+- **[Observability](https://alien.dev/docs/how-alien-works)** — Logs, metrics, and traces from every deployment. Full visibility without touching customer infrastructure.
+- **[Least-privilege Permissions](https://alien.dev/docs/permissions)** — Alien derives the exact IAM permissions required to deploy and manage your app. Nothing more.
 
 ## What you can build
 
