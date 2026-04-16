@@ -1,10 +1,10 @@
 # Alien
 
-![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)
+[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
 [![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
 
-*"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise prospect, **ever**.
+*"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise customer, **ever**.
 
 Alien provides infrastructure for deploying into your customers' cloud accounts and keeping it fully managed. AWS, GCP, or Azure.
 

@@ -2,6 +2,9 @@
   "files": {
     "ignore": [
       ".wrangler/*.js",
+      ".turbo/**",
+      "**/.alien/**",
+      "**/alien-data/**",
       "**/dist/**",
       "client-sdks/**",
       "**/openapi.json",

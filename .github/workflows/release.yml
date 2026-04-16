@@ -73,7 +73,7 @@ jobs:
       - name: Set npm package versions
         if: ${{ !inputs.dry_run }}
         run: |
-          VERSION="${{ steps.bump.outputs.version }}"
+          export VERSION="${{ steps.bump.outputs.version }}"
           for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
             node -e "
               const fs = require('fs');
@@ -81,7 +81,7 @@ jobs:
               const j = JSON.parse(p);
               j.version = process.env.VERSION;
               fs.writeFileSync('${pkg}/package.json', JSON.stringify(j, null, 2) + '\n');
-            " VERSION="$VERSION"
+            "
           done
 
       - name: Commit and tag
