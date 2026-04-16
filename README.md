@@ -1,4 +1,4 @@
-# <img src=".github/assets/logo.svg" height="24"> Alien
+# <img src=".github/assets/logo.svg" height="28"> Alien
 
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
