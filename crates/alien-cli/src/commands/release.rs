@@ -172,13 +172,17 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
 
+    // In dev mode, default platforms to ["local"] and skip experimental gating
+    let is_dev = ctx.is_dev();
+
     // Determine target platforms:
     // 1. Explicit --platforms flag takes priority
-    // 2. Otherwise, use already-built platforms
-    // 3. If nothing built, ask the manager which platforms are configured
+    // 2. In dev mode without explicit platforms, default to ["local"]
+    // 3. Otherwise, use already-built platforms
+    // 4. If nothing built, ask the manager which platforms are configured
     let target_platforms = if let Some(ref platforms) = args.platforms {
-        // Validate explicit platforms against experimental gating
-        if !args.experimental {
+        // Validate explicit platforms against experimental gating (skip in dev mode)
+        if !args.experimental && !is_dev {
             for p in platforms {
                 if let Ok(platform) = Platform::from_str(p) {
                     if platform.is_experimental() {
@@ -194,6 +198,9 @@ async fn load_release_config(
             }
         }
         platforms.clone()
+    } else if is_dev {
+        // Dev mode defaults to local platform
+        vec!["local".to_string()]
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
         if !discovered.is_empty() {
@@ -239,6 +246,9 @@ async fn load_release_config(
     // Re-discover platforms after potential auto-build
     let platforms = if let Some(ref platforms) = args.platforms {
         platforms.clone()
+    } else if is_dev {
+        // Dev mode: we already defaulted to ["local"] above, keep it
+        target_platforms.clone()
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
         if discovered.is_empty() {

@@ -77,9 +77,9 @@ jobs:
           for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
             node -e "
               const fs = require('fs');
-              const pkg = JSON.parse(fs.readFileSync('${pkg}/package.json', 'utf8'));
-              pkg.version = '${VERSION}';
-              fs.writeFileSync('${pkg}/package.json', JSON.stringify(pkg, null, 2) + '\n');
+              const path = '${pkg}/package.json';
+              const content = fs.readFileSync(path, 'utf8');
+              fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
             "
           done
 

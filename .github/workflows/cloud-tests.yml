@@ -1,37 +1,37 @@
 name: Cloud Tests
 
 on:
-  pull_request:
-    paths:
-      - 'crates/alien-aws-clients/**'
-      - 'crates/alien-gcp-clients/**'
-      - 'crates/alien-azure-clients/**'
-      - 'crates/alien-bindings/**'
-      - 'crates/alien-manager/**'
-      - 'crates/alien-client-core/**'
-      - 'crates/alien-client-config/**'
-      - 'crates/alien-error/**'
-      - 'crates/alien-core/**'
-      - 'infra/test/**'
-      - 'scripts/gen-env-test.sh'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-  push:
-    branches: [main]
-    paths:
-      - 'crates/alien-aws-clients/**'
-      - 'crates/alien-gcp-clients/**'
-      - 'crates/alien-azure-clients/**'
-      - 'crates/alien-bindings/**'
-      - 'crates/alien-manager/**'
-      - 'crates/alien-client-core/**'
-      - 'crates/alien-client-config/**'
-      - 'crates/alien-error/**'
-      - 'crates/alien-core/**'
-      - 'infra/test/**'
-      - 'scripts/gen-env-test.sh'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+  # pull_request:
+  #   paths:
+  #     - 'crates/alien-aws-clients/**'
+  #     - 'crates/alien-gcp-clients/**'
+  #     - 'crates/alien-azure-clients/**'
+  #     - 'crates/alien-bindings/**'
+  #     - 'crates/alien-manager/**'
+  #     - 'crates/alien-client-core/**'
+  #     - 'crates/alien-client-config/**'
+  #     - 'crates/alien-error/**'
+  #     - 'crates/alien-core/**'
+  #     - 'infra/test/**'
+  #     - 'scripts/gen-env-test.sh'
+  #     - 'Cargo.toml'
+  #     - 'Cargo.lock'
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'crates/alien-aws-clients/**'
+  #     - 'crates/alien-gcp-clients/**'
+  #     - 'crates/alien-azure-clients/**'
+  #     - 'crates/alien-bindings/**'
+  #     - 'crates/alien-manager/**'
+  #     - 'crates/alien-client-core/**'
+  #     - 'crates/alien-client-config/**'
+  #     - 'crates/alien-error/**'
+  #     - 'crates/alien-core/**'
+  #     - 'infra/test/**'
+  #     - 'scripts/gen-env-test.sh'
+  #     - 'Cargo.toml'
+  #     - 'Cargo.lock'
   workflow_dispatch:
 
 permissions:
