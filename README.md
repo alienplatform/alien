@@ -1,16 +1,8 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo-light.svg">
-    <img alt="Alien" src=".github/assets/logo-light.svg" width="200">
-  </picture>
-</p>
+# <img src=".github/assets/logo.svg" height="24"> Alien
 
-<p align="center">
-  <a href="https://x.com/alien"><img src="https://img.shields.io/twitter/follow/alien" alt="X (formerly Twitter) Follow"></a>
-  <a href="https://github.com/alienplatform/alien/releases"><img src="https://img.shields.io/github/v/release/alienplatform/alien" alt="GitHub Release"></a>
-  <a href="https://alien.dev/discord"><img src="https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white" alt="Discord"></a>
-</p>
+[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
+[![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
+[![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
 
 *"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise customer, **ever**.
 

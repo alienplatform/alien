@@ -75,7 +75,12 @@ jobs:
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
-            sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${pkg}/package.json"
+            node -e "
+              const fs = require('fs');
+              const pkg = JSON.parse(fs.readFileSync('${pkg}/package.json', 'utf8'));
+              pkg.version = '${VERSION}';
+              fs.writeFileSync('${pkg}/package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
           done
 
       - name: Commit and tag

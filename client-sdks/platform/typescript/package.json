@@ -1,5 +1,6 @@
 {
   "name": "@alienplatform/platform-api",
+  "version": "0.0.0",
   "license": "FSL-1.1-Apache-2.0",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
