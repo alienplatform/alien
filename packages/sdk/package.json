@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/sdk",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "type": "module",
   "exports": {
     ".": {
@@ -22,7 +22,13 @@
     "format-and-lint:fix": "biome check . --write"
   },
   "sideEffects": false,
-  "keywords": ["alien", "sdk", "bindings", "commands", "grpc"],
+  "keywords": [
+    "alien",
+    "sdk",
+    "bindings",
+    "commands",
+    "grpc"
+  ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",
