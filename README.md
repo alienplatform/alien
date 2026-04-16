@@ -1,4 +1,4 @@
-# <img src=".github/assets/logo.svg" height="28"> Alien
+# Alien
 
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
@@ -7,8 +7,6 @@
 *"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise customer, **ever**.
 
 Alien provides infrastructure for deploying into your customers' cloud accounts and keeping it fully managed. AWS, GCP, or Azure.
-
----
 
 Your code needs to run inside the customer's environment when:
 
