@@ -53,3 +53,5 @@ rustc-ice-*.txt
 # Editor config
 .cursor/
 .codex/
+
+.pnpm-store
