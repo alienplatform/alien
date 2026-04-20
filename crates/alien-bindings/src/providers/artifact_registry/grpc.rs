@@ -335,6 +335,10 @@ impl ArtifactRegistry for GrpcArtifactRegistry {
         })?;
 
         Ok(ArtifactRegistryCredentials {
+            auth_method: match credentials.auth_method {
+                1 => crate::traits::RegistryAuthMethod::Bearer,
+                _ => crate::traits::RegistryAuthMethod::Basic,
+            },
             username: credentials.username,
             password: credentials.password,
             expires_at: credentials.expires_at,

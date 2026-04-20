@@ -1,7 +1,7 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
         CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
     },
 };
@@ -459,58 +459,22 @@ impl ArtifactRegistry for AcrArtifactRegistry {
             "ACR access token generated"
         );
 
-        // Return the access token with empty username to signal Bearer auth.
-        // The proxy checks: if username is empty, use Bearer instead of Basic.
+        // ACR OAuth2 access tokens expire in ~5 minutes
+        let expires_at = Some(
+            (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339(),
+        );
+
         Ok(ArtifactRegistryCredentials {
+            auth_method: RegistryAuthMethod::Bearer,
             username: String::new(),
             password: access_token,
-            expires_at: None,
+            expires_at,
         })
     }
 
-    async fn cleanup_credentials(&self, repo_id: &str) -> Result<()> {
-        // Same namespaced parsing as generate_credentials
-        let (naming_key, repo_name) = if let Some((_prefix, repo)) = repo_id.split_once("--") {
-            (repo_id, repo)
-        } else {
-            (repo_id, repo_id)
-        };
-
-        let scope_map_name = self.make_azure_resource_name(naming_key, "pull-scope");
-        let token_name = self.make_azure_resource_name(naming_key, "pull-token");
-
-        info!(
-            repo_name = %repo_name,
-            scope_map = %scope_map_name,
-            token = %token_name,
-            registry_name = %self.registry_name,
-            "Cleaning up Azure ACR credentials: deleting token and scope map"
-        );
-
-        // Delete token first (it references the scope map)
-        if let Err(e) = self
-            .acr_client
-            .delete_token(&self.resource_group_name, &self.registry_name, &token_name)
-            .await
-        {
-            warn!(token = %token_name, error = %e, "Failed to delete ACR token (may not exist)");
-        }
-
-        // Delete scope map
-        if let Err(e) = self
-            .acr_client
-            .delete_scope_map(
-                &self.resource_group_name,
-                &self.registry_name,
-                &scope_map_name,
-            )
-            .await
-        {
-            warn!(scope_map = %scope_map_name, error = %e, "Failed to delete ACR scope map (may not exist)");
-        }
-
-        Ok(())
-    }
+    // No-op: generate_credentials() uses the stateless AAD → refresh → access token
+    // OAuth2 flow. No persistent resources (scope maps, tokens) are created, so
+    // there is nothing to clean up.
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
         let repo_name = repo_id;
@@ -537,29 +501,6 @@ impl ArtifactRegistry for AcrArtifactRegistry {
                     repo_name = %repo_name,
                     "Azure Container Registry repository scope map deleted successfully"
                 );
-
-                // Also clean up credentials-related resources (from generate_credentials)
-                let pull_scope_name = self.make_azure_resource_name(repo_name, "pull-scope");
-                let pull_token_name = self.make_azure_resource_name(repo_name, "pull-token");
-
-                // Delete token first (it references the scope map)
-                let _ = self
-                    .acr_client
-                    .delete_token(
-                        &self.resource_group_name,
-                        &self.registry_name,
-                        &pull_token_name,
-                    )
-                    .await;
-
-                let _ = self
-                    .acr_client
-                    .delete_scope_map(
-                        &self.resource_group_name,
-                        &self.registry_name,
-                        &pull_scope_name,
-                    )
-                    .await;
 
                 Ok(())
             }

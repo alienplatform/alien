@@ -1,7 +1,7 @@
 use crate::{
     error::{ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
         CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
     },
 };
@@ -240,8 +240,15 @@ impl ArtifactRegistry for LocalArtifactRegistry {
             "Local Docker repository created successfully"
         );
 
+        // Return the full routable name (prefix + repo) so the manager proxy can match it.
+        let routable_name = if repo_name.is_empty() {
+            self.upstream_repository_prefix()
+        } else {
+            format!("{}/{}", self.upstream_repository_prefix(), repo_name)
+        };
+
         Ok(RepositoryResponse {
-            name: repo_name.to_string(),
+            name: routable_name,
             uri: Some(repository_uri),
             created_at: None,
         })
@@ -282,8 +289,14 @@ impl ArtifactRegistry for LocalArtifactRegistry {
                     "Local repository exists"
                 );
 
+                let routable_name = if repo_id.is_empty() {
+                    self.upstream_repository_prefix()
+                } else {
+                    format!("{}/{}", self.upstream_repository_prefix(), repo_id)
+                };
+
                 Ok(RepositoryResponse {
-                    name: repo_id.to_string(),
+                    name: routable_name,
                     uri: Some(repository_uri),
                     created_at: None,
                 })
@@ -406,122 +419,11 @@ impl ArtifactRegistry for LocalArtifactRegistry {
         // Local registry runs on localhost without auth.
         // Return empty credentials — callers should use anonymous access.
         Ok(ArtifactRegistryCredentials {
+            auth_method: RegistryAuthMethod::Basic,
             username: String::new(),
             password: String::new(),
             expires_at: None,
         })
-    }
-
-    async fn get_manifest(&self, repo_name: &str, reference: &str) -> Result<(Vec<u8>, String)> {
-        // Fetch raw manifest bytes via HTTP to preserve exact byte content.
-        // Re-serializing through oci-client would change whitespace and break
-        // digest verification by OCI clients.
-        let url = format!(
-            "http://{}/v2/{}/manifests/{}",
-            self.registry_endpoint, repo_name, reference
-        );
-
-        let http_client = reqwest::Client::new();
-        let resp = http_client
-            .get(&url)
-            .header("accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: format!("Failed to fetch manifest for {}:{}", repo_name, reference),
-            })?;
-
-        if !resp.status().is_success() {
-            return Err(AlienError::new(ErrorData::Other {
-                message: format!(
-                    "Upstream registry returned {} for manifest {}:{}",
-                    resp.status(),
-                    repo_name,
-                    reference
-                ),
-            }));
-        }
-
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("application/vnd.oci.image.manifest.v1+json")
-            .to_string();
-
-        let body = resp
-            .bytes()
-            .await
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to read manifest body".to_string(),
-            })?;
-
-        Ok((body.to_vec(), content_type))
-    }
-
-    async fn head_manifest(
-        &self,
-        repo_name: &str,
-        reference: &str,
-    ) -> Result<Option<(String, String)>> {
-        // HEAD request via HTTP to get the digest without pulling the full manifest.
-        let url = format!(
-            "http://{}/v2/{}/manifests/{}",
-            self.registry_endpoint, repo_name, reference
-        );
-
-        let http_client = reqwest::Client::new();
-        match http_client
-            .head(&url)
-            .header("accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                let content_type = resp
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("application/vnd.oci.image.manifest.v1+json")
-                    .to_string();
-                let digest = resp
-                    .headers()
-                    .get("docker-content-digest")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_string();
-                if digest.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some((content_type, digest)))
-                }
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn head_blob(&self, repo_name: &str, digest: &str) -> Result<Option<u64>> {
-        // HEAD request to the OCI blob endpoint
-        let url = format!(
-            "http://{}/v2/{}/blobs/{}",
-            self.registry_endpoint, repo_name, digest
-        );
-
-        let http_client = reqwest::Client::new();
-        match http_client.head(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                let content_length = resp
-                    .headers()
-                    .get("content-length")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0);
-                Ok(Some(content_length))
-            }
-            _ => Ok(None),
-        }
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {

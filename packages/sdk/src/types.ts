@@ -206,9 +206,18 @@ export interface RepositoryInfo {
 }
 
 /**
+ * How the registry expects credentials to be presented.
+ * - "basic": HTTP Basic auth (ECR, GAR, Local)
+ * - "bearer": HTTP Bearer token (ACR)
+ */
+export type RegistryAuthMethod = "basic" | "bearer"
+
+/**
  * Credentials for repository access.
  */
 export interface ArtifactRegistryCredentials {
+  /** How to present these credentials to the registry */
+  authMethod: RegistryAuthMethod
   /** Username for authentication */
   username: string
   /** Password/token for authentication */

@@ -223,6 +223,7 @@ export class ArtifactRegistry {
 
   private fromProtoCredentials(proto: Credentials): ArtifactRegistryCredentials {
     return {
+      authMethod: proto.authMethod === 1 ? "bearer" : "basic",
       username: proto.username,
       password: proto.password,
       expiresAt: proto.expiresAt ? new Date(proto.expiresAt) : undefined,

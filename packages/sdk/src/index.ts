@@ -99,6 +99,7 @@ export type {
   ArtifactRegistryPermissions,
   RepositoryInfo,
   ArtifactRegistryCredentials,
+  RegistryAuthMethod,
   ComputeServiceType,
   AwsCrossAccountAccess,
   GcpCrossAccountAccess,
