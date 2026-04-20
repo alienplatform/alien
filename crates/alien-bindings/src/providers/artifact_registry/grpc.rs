@@ -334,9 +334,10 @@ impl ArtifactRegistry for GrpcArtifactRegistry {
             })
         })?;
 
+        use crate::grpc::artifact_registry_service::alien_bindings::artifact_registry::AuthMethod as ProtoAuthMethod;
         Ok(ArtifactRegistryCredentials {
-            auth_method: match credentials.auth_method {
-                1 => crate::traits::RegistryAuthMethod::Bearer,
+            auth_method: match ProtoAuthMethod::try_from(credentials.auth_method) {
+                Ok(ProtoAuthMethod::Bearer) => crate::traits::RegistryAuthMethod::Bearer,
                 _ => crate::traits::RegistryAuthMethod::Basic,
             },
             username: credentials.username,
