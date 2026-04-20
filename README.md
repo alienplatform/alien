@@ -43,14 +43,6 @@ Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 - **[Observability](https://alien.dev/docs/how-alien-works)** — Logs, metrics, and traces from every deployment. Full visibility without touching customer infrastructure.
 - **[Least-privilege Permissions](https://alien.dev/docs/permissions)** — Alien derives the exact IAM permissions required to deploy and manage your app.
 
-## What you can build
-
-- **AI Worker** — Agent harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
-- **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
-- **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. Only results leave.
-- **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.
-- **Cloud Actions** — API inside their network. Restart services, rotate credentials, react to infrastructure changes. ([example](examples/webhook-api-ts))
-
 ## How deployment works
 
 ### Push model
@@ -111,16 +103,6 @@ docker run ghcr.io/alienplatform/alien-agent \
 
 Both models give you the same capabilities: updates, telemetry, remote commands. See [Deployment Models](https://alien.dev/docs/deploying/deployment-models).
 
-## Releases
-
-Push a release and every environment updates automatically.
-
-```bash
-alien release
-```
-
-Builds your code, pushes artifacts, and creates a release. Every active deployment picks up the new version.
-
 ## One codebase, every cloud
 
 Ship to AWS, GCP, and Azure customers without maintaining separate integrations. Alien maps your stack to each cloud's native services at deploy time.
@@ -160,6 +142,25 @@ At deploy time, each resource maps to the cloud's native service:
 The same applies to queues, vaults, and KV stores. One codebase, all clouds. Drop to native SDKs whenever you need to.
 
 Each resource documents its [guarantees, limits, and platform-specific behavior](https://alien.dev/docs/infrastructure) so you know exactly what to expect across clouds.
+
+## Releases
+
+Push a release and every environment updates automatically.
+
+```bash
+alien release
+```
+
+Builds your code, pushes artifacts, and creates a release. Every active deployment picks up the new version.
+
+## What you can build
+
+- **AI Worker** — Agent harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
+- **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
+- **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. 
+- **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.
+- **Cloud Actions** — API inside their network. Restart services, rotate credentials, react to infrastructure changes. ([example](examples/webhook-api-ts))
+
 
 ## Remote commands
 
