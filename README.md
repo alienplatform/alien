@@ -1,5 +1,9 @@
 # Alien
 
+[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
+[![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
+[![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
+
 Alien provides infrastructure to deploy and operate software inside your users' environments, while retaining centralized control over updates, monitoring, and lifecycle management.
 
 ## Why Alien?
