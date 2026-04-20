@@ -309,10 +309,16 @@ impl ArtifactRegistryService for ArtifactRegistryGrpcServer {
             .await
             .map_err(alien_error_to_status)?;
 
+        use crate::traits::RegistryAuthMethod;
+        use alien_bindings::artifact_registry::AuthMethod as ProtoAuthMethod;
         let proto_credentials = ProtoCredentials {
             username: credentials.username,
             password: credentials.password,
             expires_at: credentials.expires_at,
+            auth_method: match credentials.auth_method {
+                RegistryAuthMethod::Basic => ProtoAuthMethod::Basic as i32,
+                RegistryAuthMethod::Bearer => ProtoAuthMethod::Bearer as i32,
+            },
         };
 
         Ok(Response::new(GenerateCredentialsResponse {

@@ -144,31 +144,7 @@ pub async fn reconcile_registry_access(
         // Passing the prefix here would double it (e.g. "alien-quickstart-alien-quickstart").
         let repo_id = "";
 
-        // Azure ACR: clean up scope map + token.
-        if matches!(environment_info, EnvironmentInfo::Azure(_)) {
-            if let Some(repo_name) = extract_acr_image_repo(state.stack_state.as_ref()) {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
-                deployment_id.hash(&mut hasher);
-                let prefix = format!("d{:x}", hasher.finish());
-                let namespaced_repo = format!("{}--{}", prefix, repo_name);
-
-                if let Err(e) = artifact_registry
-                    .cleanup_credentials(&namespaced_repo)
-                    .await
-                {
-                    warn!(
-                        deployment_id = %deployment_id,
-                        namespaced_repo = %namespaced_repo,
-                        error = %e,
-                        "Failed to clean up Azure ACR credentials"
-                    );
-                }
-            }
-        }
-
-        // AWS/GCP: revoke IAM-based cross-account access.
+        // Revoke cross-account access (AWS/GCP only; Azure/Local are no-ops).
         revoke_registry_access(
             artifact_registry.as_ref(),
             &repo_id,
@@ -244,38 +220,6 @@ fn needs_registry_access(status: &DeploymentStatus) -> bool {
             | DeploymentStatus::Updating
             | DeploymentStatus::UpdateFailed
     )
-}
-
-/// Extract the ACR image repo name from the stack state's function resources.
-///
-/// Downcasts function configs to `Function` to read the image URI,
-/// then extracts the repo path from ACR URIs like
-/// `registry.azurecr.io/http-server:tag` → `http-server`.
-fn extract_acr_image_repo(stack_state: Option<&StackState>) -> Option<String> {
-    use alien_core::{Function, FunctionCode};
-
-    let stack_state = stack_state?;
-    for (_id, resource) in &stack_state.resources {
-        let image_uri = if let Some(func) = resource.config.downcast_ref::<Function>() {
-            match &func.code {
-                FunctionCode::Image { image } => Some(image.as_str()),
-                FunctionCode::Source { .. } => None,
-            }
-        } else {
-            None
-        };
-
-        if let Some(image) = image_uri {
-            if image.contains(".azurecr.io/") {
-                let after_host = image.split(".azurecr.io/").nth(1)?;
-                let repo_path = after_host.split(':').next()?;
-                if !repo_path.is_empty() {
-                    return Some(repo_path.to_string());
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Extract RSM access configuration from stack state to include in cross-account access.

@@ -1,12 +1,11 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
         CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
     },
 };
-use alien_azure_clients::long_running_operation::{LongRunningOperationClient, OperationResult};
-use alien_azure_clients::models::containerregistry::ScopeMapProperties;
+use alien_azure_clients::long_running_operation::LongRunningOperationClient;
 use alien_azure_clients::{
     containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
     AzureClientConfig, AzureTokenCache,
@@ -157,133 +156,25 @@ impl ArtifactRegistry for AcrArtifactRegistry {
     }
 
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
-        info!(
-            repo_name = %repo_name,
-            registry_name = %self.registry_name,
-            "Creating Azure Container Registry repository (via scope map)"
-        );
-
-        // In ACR, repositories are created implicitly on first push
-        // However, we can create a scope map to control access to the repository
-        let scope_map_name = self.make_azure_resource_name(repo_name, "scope");
-        let actions = vec![
-            format!("repositories/{}/content/read", repo_name),
-            format!("repositories/{}/content/write", repo_name),
-        ];
-
-        let scope_map_properties = ScopeMapProperties {
-            description: Some(format!("Scope map for repository {}", repo_name)),
-            actions,
-            creation_date: None,
-            provisioning_state: None,
-            type_: None,
-        };
-
-        match self
-            .acr_client
-            .create_scope_map(
-                &self.resource_group_name,
-                &self.registry_name,
-                &scope_map_name,
-                &scope_map_properties,
-            )
-            .await
-        {
-            Ok(operation_result) => {
-                match operation_result {
-                    OperationResult::Completed(_) => {
-                        info!(
-                            repo_name = %repo_name,
-                            "Azure Container Registry repository scope map created successfully"
-                        );
-
-                        // Construct the repository URI for Azure Container Registry
-                        let repository_uri = format!("{}/{}", self.registry_endpoint, repo_name);
-
-                        Ok(RepositoryResponse {
-                            name: repo_name.to_string(),
-                            uri: Some(repository_uri),
-                            created_at: None, // ACR doesn't provide creation time in this response
-                        })
-                    }
-                    OperationResult::LongRunning(_) => {
-                        info!(
-                            repo_name = %repo_name,
-                            "Azure Container Registry repository scope map creation is in progress"
-                        );
-
-                        Ok(RepositoryResponse {
-                            name: repo_name.to_string(),
-                            uri: None, // Will be available once creation completes
-                            created_at: None,
-                        })
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(
-                    repo_name = %repo_name,
-                    error = %e,
-                    "Failed to create Azure Container Registry repository scope map"
-                );
-
-                Err(map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to create Azure Container Registry repository '{}'",
-                        repo_name
-                    ),
-                    Some(repo_name.to_string()),
-                ))
-            }
-        }
-    }
-
-    async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        let repo_name = repo_id;
-        let scope_map_name = self.make_azure_resource_name(repo_name, "scope");
-
-        info!(
-            repo_name = %repo_name,
-            registry_name = %self.registry_name,
-            "Getting Azure Container Registry repository details"
-        );
-
-        let scope_map = self
-            .acr_client
-            .get_scope_map(
-                &self.resource_group_name,
-                &self.registry_name,
-                &scope_map_name,
-            )
-            .await
-            .map_err(|_e| {
-                warn!(
-                    repo_name = %repo_name,
-                    "Azure Container Registry repository not found"
-                );
-
-                AlienError::new(ErrorData::ResourceNotFound {
-                    resource_id: repo_name.to_string(),
-                })
-            })?;
-
-        // Construct the repository URI for Azure Container Registry
+        // ACR repositories are created implicitly on first push.
+        // The ACR resource itself is provisioned by alien-infra.
         let repository_uri = format!("{}/{}", self.registry_endpoint, repo_name);
-
-        // Azure scope maps don't directly provide creation time
-        let created_at = scope_map.properties.and_then(|props| props.creation_date);
-
-        info!(
-            repo_name = %repo_name,
-            repo_uri = %repository_uri,
-            "Azure Container Registry repository details retrieved"
-        );
 
         Ok(RepositoryResponse {
             name: repo_name.to_string(),
             uri: Some(repository_uri),
-            created_at,
+            created_at: None,
+        })
+    }
+
+    async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
+        // ACR repositories are implicit — return the routable name and URI.
+        let repository_uri = format!("{}/{}", self.registry_endpoint, repo_id);
+
+        Ok(RepositoryResponse {
+            name: repo_id.to_string(),
+            uri: Some(repository_uri),
+            created_at: None,
         })
     }
 
@@ -459,126 +350,25 @@ impl ArtifactRegistry for AcrArtifactRegistry {
             "ACR access token generated"
         );
 
-        // Return the access token with empty username to signal Bearer auth.
-        // The proxy checks: if username is empty, use Bearer instead of Basic.
+        // ACR OAuth2 access tokens expire in ~5 minutes
+        let expires_at = Some(
+            (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339(),
+        );
+
         Ok(ArtifactRegistryCredentials {
+            auth_method: RegistryAuthMethod::Bearer,
             username: String::new(),
             password: access_token,
-            expires_at: None,
+            expires_at,
         })
     }
 
-    async fn cleanup_credentials(&self, repo_id: &str) -> Result<()> {
-        // Same namespaced parsing as generate_credentials
-        let (naming_key, repo_name) = if let Some((_prefix, repo)) = repo_id.split_once("--") {
-            (repo_id, repo)
-        } else {
-            (repo_id, repo_id)
-        };
+    // No-op: generate_credentials() uses the stateless AAD → refresh → access token
+    // OAuth2 flow. No persistent resources (scope maps, tokens) are created, so
+    // there is nothing to clean up.
 
-        let scope_map_name = self.make_azure_resource_name(naming_key, "pull-scope");
-        let token_name = self.make_azure_resource_name(naming_key, "pull-token");
-
-        info!(
-            repo_name = %repo_name,
-            scope_map = %scope_map_name,
-            token = %token_name,
-            registry_name = %self.registry_name,
-            "Cleaning up Azure ACR credentials: deleting token and scope map"
-        );
-
-        // Delete token first (it references the scope map)
-        if let Err(e) = self
-            .acr_client
-            .delete_token(&self.resource_group_name, &self.registry_name, &token_name)
-            .await
-        {
-            warn!(token = %token_name, error = %e, "Failed to delete ACR token (may not exist)");
-        }
-
-        // Delete scope map
-        if let Err(e) = self
-            .acr_client
-            .delete_scope_map(
-                &self.resource_group_name,
-                &self.registry_name,
-                &scope_map_name,
-            )
-            .await
-        {
-            warn!(scope_map = %scope_map_name, error = %e, "Failed to delete ACR scope map (may not exist)");
-        }
-
+    async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
+        // ACR repositories are implicit (created on push). Nothing to delete.
         Ok(())
-    }
-
-    async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        let repo_name = repo_id;
-        let scope_map_name = self.make_azure_resource_name(repo_name, "scope");
-
-        info!(
-            repo_name = %repo_name,
-            registry_name = %self.registry_name,
-            "Deleting Azure Container Registry repository scope map"
-        );
-
-        // Delete the scope map associated with the repository
-        match self
-            .acr_client
-            .delete_scope_map(
-                &self.resource_group_name,
-                &self.registry_name,
-                &scope_map_name,
-            )
-            .await
-        {
-            Ok(_) => {
-                info!(
-                    repo_name = %repo_name,
-                    "Azure Container Registry repository scope map deleted successfully"
-                );
-
-                // Also clean up credentials-related resources (from generate_credentials)
-                let pull_scope_name = self.make_azure_resource_name(repo_name, "pull-scope");
-                let pull_token_name = self.make_azure_resource_name(repo_name, "pull-token");
-
-                // Delete token first (it references the scope map)
-                let _ = self
-                    .acr_client
-                    .delete_token(
-                        &self.resource_group_name,
-                        &self.registry_name,
-                        &pull_token_name,
-                    )
-                    .await;
-
-                let _ = self
-                    .acr_client
-                    .delete_scope_map(
-                        &self.resource_group_name,
-                        &self.registry_name,
-                        &pull_scope_name,
-                    )
-                    .await;
-
-                Ok(())
-            }
-            Err(e) => {
-                warn!(
-                    repo_name = %repo_name,
-                    error = %e,
-                    "Failed to delete Azure Container Registry repository scope map"
-                );
-
-                Err(map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to delete Azure Container Registry repository '{}'",
-                        repo_name
-                    ),
-                    Some(repo_name.to_string()),
-                ))
-            }
-        }
     }
 }

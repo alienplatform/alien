@@ -6,7 +6,7 @@ pub use alien_core::{BindingsMode, Platform};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
-    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
+    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, RegistryAuthMethod,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
     Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RepositoryResponse,
     ServiceAccount, ServiceAccountInfo, Storage, Vault,

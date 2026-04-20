@@ -1,22 +1,16 @@
 # Alien
 
-[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/alien)](https://x.com/alien)
-[![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
-[![Discord](https://img.shields.io/discord/1490401456124199224?label=Discord&logo=discord&logoColor=white)](https://alien.dev/discord)
+Alien provides infrastructure to deploy and operate software inside your users' environments, while retaining centralized control over updates, monitoring, and lifecycle management.
 
-*"My data is sensitive. Can you deploy into my cloud?"* — Every enterprise customer, **ever**.
+## Why Alien?
 
-Alien provides infrastructure for deploying into your customers' cloud accounts and keeping it fully managed. AWS, GCP, or Azure.
+Self-hosting works - *until someone starts paying for your software*.
 
-Your code needs to run inside the customer's environment when:
+Customers run it in their own environment, but they don't actually know how to operate it. They might change something small like Postgres version, environment variables, IAM, firewall rules, and things start failing. From their perspective, your product is broken. And even if the root cause is on their side, it doesn't matter... the customer is always right, you're still the one expected to fix it.
 
-- Sensitive data can't leave their environment
-- You need to access internal services that aren't reachable from the internet (databases behind a VPC, GitHub Enterprise, etc)
-- Their security or compliance team requires it
+But you can't. You don't have access to their environment. You don't have real visibility. You can't run anything yourself. So you're stuck debugging a system you don't control, through screenshots and copy-pasted logs on a Zoom call. You end up responsible for something you don't control.
 
-The usual answer is sending a Docker image or a Helm chart. But while self-hosting is great, many enterprises want you to manage everything for them. And when something breaks, you're on a 2am Zoom call debugging blind because you have no direct access. No auto-updates, no logs, every customer on a different version.
-
-Alien gives you a different option. Deploy into their cloud and keep full control — push updates, collect non-sensitive logs and metrics, roll back. The customer doesn't operate anything. Their data never leaves.
+Alien provides a better model: **managed self-hosting**.
 
 ## Quickstart
 
@@ -39,6 +33,7 @@ Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 
 ## Features
 
+- **[AWS, GCP, and Azure support](https://www.alien.dev/docs/how-alien-works)** - Deploy to all major clouds. 
 - **[TypeScript & Rust](https://alien.dev/docs/infrastructure/function/toolchains)** — First-class support for both. Python and arbitrary containers coming soon.
 - **[Real-time Heartbeat](https://alien.dev/docs/how-alien-works)** — Know the instant a deployment goes down. 
 - **[Auto Updates & Rollbacks](https://alien.dev/docs/releases)** — Push a release and every remote environment picks it up automatically. 
@@ -47,14 +42,6 @@ Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 - **[Remote Commands](https://alien.dev/docs/commands)** — Invoke code on remote deployments from your control plane. Zero inbound networking. Zero open ports. No VPC peering.
 - **[Observability](https://alien.dev/docs/how-alien-works)** — Logs, metrics, and traces from every deployment. Full visibility without touching customer infrastructure.
 - **[Least-privilege Permissions](https://alien.dev/docs/permissions)** — Alien derives the exact IAM permissions required to deploy and manage your app.
-
-## What you can build
-
-- **AI Worker** — Agent harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
-- **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
-- **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. Only results leave.
-- **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.
-- **Cloud Actions** — API inside their network. Restart services, rotate credentials, react to infrastructure changes. ([example](examples/webhook-api-ts))
 
 ## How deployment works
 
@@ -116,16 +103,6 @@ docker run ghcr.io/alienplatform/alien-agent \
 
 Both models give you the same capabilities: updates, telemetry, remote commands. See [Deployment Models](https://alien.dev/docs/deploying/deployment-models).
 
-## Releases
-
-Push a release and every environment updates automatically.
-
-```bash
-alien release
-```
-
-Builds your code, pushes artifacts, and creates a release. Every active deployment picks up the new version.
-
 ## One codebase, every cloud
 
 Ship to AWS, GCP, and Azure customers without maintaining separate integrations. Alien maps your stack to each cloud's native services at deploy time.
@@ -165,6 +142,25 @@ At deploy time, each resource maps to the cloud's native service:
 The same applies to queues, vaults, and KV stores. One codebase, all clouds. Drop to native SDKs whenever you need to.
 
 Each resource documents its [guarantees, limits, and platform-specific behavior](https://alien.dev/docs/infrastructure) so you know exactly what to expect across clouds.
+
+## Releases
+
+Push a release and every environment updates automatically.
+
+```bash
+alien release
+```
+
+Builds your code, pushes artifacts, and creates a release. Every active deployment picks up the new version.
+
+## What you can build
+
+- **AI Worker** — Agent harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
+- **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
+- **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. 
+- **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.
+- **Cloud Actions** — API inside their network. Restart services, rotate credentials, react to infrastructure changes. ([example](examples/webhook-api-ts))
+
 
 ## Remote commands
 

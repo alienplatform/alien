@@ -582,12 +582,16 @@ async fn forward_request(
     }
 
     // Inject upstream auth.
-    // Empty username = Bearer auth (ACR access tokens).
-    // Non-empty username = Basic auth (ECR, GAR, local).
-    if creds.username.is_empty() && !creds.password.is_empty() {
-        req = req.bearer_auth(&creds.password);
-    } else if !creds.username.is_empty() || !creds.password.is_empty() {
-        req = req.basic_auth(&creds.username, Some(&creds.password));
+    use alien_bindings::traits::RegistryAuthMethod;
+    match creds.auth_method {
+        RegistryAuthMethod::Bearer => {
+            req = req.bearer_auth(&creds.password);
+        }
+        RegistryAuthMethod::Basic => {
+            if !creds.username.is_empty() || !creds.password.is_empty() {
+                req = req.basic_auth(&creds.username, Some(&creds.password));
+            }
+        }
     }
 
     // Stream body to upstream (push operations).

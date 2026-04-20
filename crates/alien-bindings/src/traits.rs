@@ -163,12 +163,25 @@ pub enum ArtifactRegistryPermissions {
     PushPull,
 }
 
+/// How the registry expects credentials to be presented.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub enum RegistryAuthMethod {
+    /// HTTP Basic auth (username:password). Used by ECR, GAR, Local.
+    Basic,
+    /// HTTP Bearer token. Used by ACR (Azure).
+    Bearer,
+}
+
 /// Credentials for accessing a repository.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ArtifactRegistryCredentials {
-    /// Username for authentication.
+    /// How to present these credentials to the registry.
+    pub auth_method: RegistryAuthMethod,
+    /// Username for authentication (empty for Bearer auth).
     pub username: String,
     /// Password or token for authentication.
     pub password: String,
@@ -312,83 +325,8 @@ pub trait ArtifactRegistry: Binding {
         ttl_seconds: Option<u32>,
     ) -> Result<ArtifactRegistryCredentials>;
 
-    /// Cleans up resources created by `generate_credentials` (scope maps, tokens).
-    /// On Azure: deletes the scope map and token for the given repo ID.
-    /// Default: no-op (other providers use short-lived or IAM-based credentials).
-    async fn cleanup_credentials(&self, _repo_id: &str) -> Result<()> {
-        Ok(())
-    }
-
     /// Deletes a repository and all contained images.
     async fn delete_repository(&self, repo_id: &str) -> Result<()>;
-
-    /// Generates a pre-signed download URL for a blob (layer) in the registry.
-    ///
-    /// Used by the registry proxy to return 307 redirects instead of streaming
-    /// blob bytes through the manager. Returns `None` if the provider doesn't
-    /// support pre-signed URLs (the proxy will stream the blob directly instead).
-    ///
-    /// - ECR: Calls `GetDownloadUrlForLayer` (returns pre-signed S3 URL).
-    /// - GAR: Returns `None` (GAR uses OCI distribution API with bearer auth).
-    /// - ACR: Returns `None` (ACR uses OCI distribution API with bearer auth).
-    /// - Local: Returns `None` (local registry is co-located, streaming is fine).
-    async fn generate_blob_download_url(
-        &self,
-        _repo_name: &str,
-        _digest: &str,
-        _ttl_seconds: u32,
-    ) -> Result<Option<String>> {
-        Ok(None)
-    }
-
-    /// Fetches a manifest from the upstream registry by reference (tag or digest).
-    ///
-    /// Used by the registry proxy to serve manifest requests. Returns the
-    /// manifest bytes and the content type (e.g., `application/vnd.oci.image.manifest.v1+json`).
-    ///
-    /// Default implementation returns `OperationNotSupported`. Providers that
-    /// support the registry proxy should implement this.
-    async fn get_manifest(&self, _repo_name: &str, _reference: &str) -> Result<(Vec<u8>, String)> {
-        Err(alien_error::AlienError::new(
-            crate::error::ErrorData::OperationNotSupported {
-                operation: "get_manifest".to_string(),
-                reason: "This artifact registry provider does not support manifest fetching"
-                    .to_string(),
-            },
-        ))
-    }
-
-    /// Checks if a manifest exists in the upstream registry.
-    ///
-    /// Returns the content type and digest if the manifest exists.
-    /// Default implementation returns `OperationNotSupported`.
-    async fn head_manifest(
-        &self,
-        _repo_name: &str,
-        _reference: &str,
-    ) -> Result<Option<(String, String)>> {
-        Err(alien_error::AlienError::new(
-            crate::error::ErrorData::OperationNotSupported {
-                operation: "head_manifest".to_string(),
-                reason: "This artifact registry provider does not support manifest checking"
-                    .to_string(),
-            },
-        ))
-    }
-
-    /// Checks if a blob exists in the upstream registry.
-    ///
-    /// Returns the content length if the blob exists.
-    /// Default implementation returns `OperationNotSupported`.
-    async fn head_blob(&self, _repo_name: &str, _digest: &str) -> Result<Option<u64>> {
-        Err(alien_error::AlienError::new(
-            crate::error::ErrorData::OperationNotSupported {
-                operation: "head_blob".to_string(),
-                reason: "This artifact registry provider does not support blob checking"
-                    .to_string(),
-            },
-        ))
-    }
 }
 
 /// A trait for vault bindings that provide secure secret management.

@@ -1,7 +1,7 @@
 use crate::{
     error::{map_cloud_client_error, Error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, RegistryAuthMethod,
         AwsCrossAccountAccess, Binding, ComputeServiceType, CrossAccountAccess,
         CrossAccountPermissions, RepositoryResponse,
     },
@@ -9,7 +9,7 @@ use crate::{
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DescribeRepositoriesRequest, EcrApi, EcrClient,
-        GetAuthorizationTokenRequest, GetDownloadUrlForLayerRequest, GetRepositoryPolicyRequest,
+        GetAuthorizationTokenRequest, GetRepositoryPolicyRequest,
         SetRepositoryPolicyRequest,
     },
     sts::{AssumeRoleRequest, StsApi, StsClient},
@@ -105,6 +105,7 @@ impl EcrArtifactRegistry {
 
     /// Constructs the full repository name for ECR using the repository prefix.
     /// If `repo_name` is empty, returns just the prefix (shared-repo pattern).
+    /// Uses `-` separator to match IAM policy wildcards (e.g., `alien-artifacts-prj_xxx`).
     fn make_full_repo_name(&self, repo_name: &str) -> String {
         if repo_name.is_empty() {
             self.repository_prefix.clone()
@@ -337,7 +338,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         };
 
         Ok(RepositoryResponse {
-            name: repo_name.to_string(),
+            name: full_repo_name,
             uri: Some(repository.repository_uri.clone()),
             created_at,
         })
@@ -867,6 +868,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 );
 
                 Ok(ArtifactRegistryCredentials {
+                    auth_method: RegistryAuthMethod::Basic,
                     username: username.to_string(),
                     password: password.to_string(),
                     expires_at,
@@ -950,34 +952,4 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         Ok(())
     }
 
-    async fn generate_blob_download_url(
-        &self,
-        repo_name: &str,
-        digest: &str,
-        _ttl_seconds: u32,
-    ) -> Result<Option<String>> {
-        let full_repo_name = self.make_full_repo_name(repo_name);
-
-        let request = GetDownloadUrlForLayerRequest::builder()
-            .repository_name(full_repo_name.clone())
-            .layer_digest(digest.to_string())
-            .build();
-
-        let response = self
-            .ecr_client
-            .get_download_url_for_layer(request)
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to get download URL for layer '{}' in repository '{}'",
-                        digest, full_repo_name
-                    ),
-                    Some(repo_name.to_string()),
-                )
-            })?;
-
-        Ok(Some(response.download_url))
-    }
 }

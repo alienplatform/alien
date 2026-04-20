@@ -186,6 +186,12 @@ message RepositoryResult {
     optional string created_at = 3;
 }
 
+// How the registry expects credentials to be presented
+enum AuthMethod {
+    AUTH_METHOD_BASIC = 0;
+    AUTH_METHOD_BEARER = 1;
+}
+
 // Credentials for accessing a repository
 message Credentials {
     // Username for authentication
@@ -194,4 +200,6 @@ message Credentials {
     string password = 2;
     // Optional expiration time in ISO8601 format
     optional string expires_at = 3;
-} 
+    // How to present these credentials to the registry
+    AuthMethod auth_method = 4;
+}

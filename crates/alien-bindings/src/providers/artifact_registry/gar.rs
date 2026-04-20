@@ -1,7 +1,7 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
         ComputeServiceType, CrossAccountAccess, CrossAccountPermissions, GcpCrossAccountAccess,
         RepositoryResponse,
     },
@@ -107,22 +107,15 @@ impl GarArtifactRegistry {
         })
     }
 
-    /// Converts a repository name to a full repository ID for GCP operations
-    fn make_repo_id(&self, repo_name: &str) -> String {
-        format!(
-            "projects/{}/locations/{}/repositories/{}",
-            self.project_id, self.location, repo_name
-        )
-    }
-
-    /// Extracts repository name from a repository ID.
-    /// If `repo_id` is empty, returns the binding's configured `repository_name`.
+    /// Extracts a name segment from a repo ID or routable name.
+    /// If `repo_id` is empty, returns the binding's configured `repository_name`
+    /// (the GAR repository resource, used for IAM operations).
     fn extract_repo_name(&self, repo_id: &str) -> Result<String> {
         if repo_id.is_empty() {
             return Ok(self.repository_name.clone());
         }
-        if let Some(repo_name) = repo_id.split('/').last() {
-            Ok(repo_name.to_string())
+        if let Some(name) = repo_id.split('/').last() {
+            Ok(name.to_string())
         } else {
             Err(AlienError::new(ErrorData::BindingConfigInvalid {
                 binding_name: self.binding_name.clone(),
@@ -228,95 +221,32 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
-        info!(
-            repo_name = %repo_name,
-            project_id = %self.project_id,
-            location = %self.location,
-            "Creating GCP Artifact Registry repository"
-        );
-
-        let repository = Repository::builder()
-            .format(RepositoryFormat::Docker)
-            .build();
-
-        let _operation = self
-            .client
-            .create_repository(
-                self.project_id.clone(),
-                self.location.clone(),
-                repo_name.to_string(),
-                repository,
-            )
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to create GCP Artifact Registry repository '{}'",
-                        repo_name
-                    ),
-                    Some(repo_name.to_string()),
-                )
-            })?;
-
-        info!(
-            repo_name = %repo_name,
-            "GCP Artifact Registry repository creation started"
-        );
-
-        // GCP repository creation is async, so URI is None until ready
+        // In GAR, the binding's GAR repository (e.g., "alien-artifacts") IS the registry.
+        // Image paths within it (e.g., "prj_abc123") are created automatically on first push.
+        // No GAR API call needed — the GAR repository is created by alien-infra at provisioning time.
+        // Underscores are valid in image paths (OCI distribution spec allows [a-z0-9._-/]).
+        let routable_name = format!("{}/{}", self.upstream_repository_prefix(), repo_name);
         Ok(RepositoryResponse {
-            name: repo_name.to_string(),
-            uri: None,        // Will be available once repository is ready
-            created_at: None, // Creation time not available until completion
+            name: routable_name,
+            uri: None,
+            created_at: None,
         })
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        let repo_name = self.extract_repo_name(repo_id)?;
-
-        info!(
-            repo_name = %repo_name,
-            project_id = %self.project_id,
-            location = %self.location,
-            "Getting GCP Artifact Registry repository details"
-        );
-
-        let repository = self
-            .client
-            .get_repository(
-                self.project_id.clone(),
-                self.location.clone(),
-                repo_name.clone(),
-            )
-            .await
-            .map_err(|_e| {
-                warn!(
-                    repo_name = %repo_name,
-                    "GCP Artifact Registry repository not found"
-                );
-
-                AlienError::new(ErrorData::ResourceNotFound {
-                    resource_id: repo_name.clone(),
-                })
-            })?;
-
-        // Construct the repository URI for GCP Artifact Registry
+        // Image paths within a GAR repository are implicit — no GAR API call needed.
+        // Just return the routable name, same as create_repository.
+        let image_path = self.extract_repo_name(repo_id)?;
+        let routable_name = format!("{}/{}", self.upstream_repository_prefix(), image_path);
         let repository_uri = format!(
             "{}-docker.pkg.dev/{}/{}",
-            self.location, self.project_id, repo_name
-        );
-
-        info!(
-            repo_name = %repo_name,
-            repo_uri = %repository_uri,
-            "GCP Artifact Registry repository details retrieved"
+            self.location, self.project_id, image_path
         );
 
         Ok(RepositoryResponse {
-            name: repo_name,
+            name: routable_name,
             uri: Some(repository_uri),
-            created_at: repository.create_time,
+            created_at: None,
         })
     }
 
@@ -668,6 +598,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
 
         // For GCP Artifact Registry, the username is 'oauth2accesstoken' and password is the OAuth token
         Ok(ArtifactRegistryCredentials {
+            auth_method: RegistryAuthMethod::Basic,
             username: "oauth2accesstoken".to_string(),
             password: access_token,
             expires_at,
