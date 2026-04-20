@@ -75,6 +75,40 @@ export function computeServiceTypeToJSON(object: ComputeServiceType): string {
   }
 }
 
+/** How the registry expects credentials to be presented */
+export enum AuthMethod {
+  AUTH_METHOD_BASIC = 0,
+  AUTH_METHOD_BEARER = 1,
+  UNRECOGNIZED = -1,
+}
+
+export function authMethodFromJSON(object: any): AuthMethod {
+  switch (object) {
+    case 0:
+    case "AUTH_METHOD_BASIC":
+      return AuthMethod.AUTH_METHOD_BASIC;
+    case 1:
+    case "AUTH_METHOD_BEARER":
+      return AuthMethod.AUTH_METHOD_BEARER;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AuthMethod.UNRECOGNIZED;
+  }
+}
+
+export function authMethodToJSON(object: AuthMethod): string {
+  switch (object) {
+    case AuthMethod.AUTH_METHOD_BASIC:
+      return "AUTH_METHOD_BASIC";
+    case AuthMethod.AUTH_METHOD_BEARER:
+      return "AUTH_METHOD_BEARER";
+    case AuthMethod.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 /** Messages for CreateRepository */
 export interface CreateRepositoryRequest {
   /** Name of the artifact registry binding to use */
@@ -232,7 +266,11 @@ export interface Credentials {
   /** Password or token for authentication */
   password: string;
   /** Optional expiration time in ISO8601 format */
-  expiresAt?: string | undefined;
+  expiresAt?:
+    | string
+    | undefined;
+  /** How to present these credentials to the registry */
+  authMethod: AuthMethod;
 }
 
 function createBaseCreateRepositoryRequest(): CreateRepositoryRequest {
@@ -1691,7 +1729,7 @@ export const RepositoryResult: MessageFns<RepositoryResult> = {
 };
 
 function createBaseCredentials(): Credentials {
-  return { username: "", password: "", expiresAt: undefined };
+  return { username: "", password: "", expiresAt: undefined, authMethod: 0 };
 }
 
 export const Credentials: MessageFns<Credentials> = {
@@ -1704,6 +1742,9 @@ export const Credentials: MessageFns<Credentials> = {
     }
     if (message.expiresAt !== undefined) {
       writer.uint32(26).string(message.expiresAt);
+    }
+    if (message.authMethod !== 0) {
+      writer.uint32(32).int32(message.authMethod);
     }
     return writer;
   },
@@ -1739,6 +1780,14 @@ export const Credentials: MessageFns<Credentials> = {
           message.expiresAt = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.authMethod = reader.int32() as any;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1753,6 +1802,7 @@ export const Credentials: MessageFns<Credentials> = {
       username: isSet(object.username) ? globalThis.String(object.username) : "",
       password: isSet(object.password) ? globalThis.String(object.password) : "",
       expiresAt: isSet(object.expiresAt) ? globalThis.String(object.expiresAt) : undefined,
+      authMethod: isSet(object.authMethod) ? authMethodFromJSON(object.authMethod) : 0,
     };
   },
 
@@ -1767,6 +1817,9 @@ export const Credentials: MessageFns<Credentials> = {
     if (message.expiresAt !== undefined) {
       obj.expiresAt = message.expiresAt;
     }
+    if (message.authMethod !== 0) {
+      obj.authMethod = authMethodToJSON(message.authMethod);
+    }
     return obj;
   },
 
@@ -1778,6 +1831,7 @@ export const Credentials: MessageFns<Credentials> = {
     message.username = object.username ?? "";
     message.password = object.password ?? "";
     message.expiresAt = object.expiresAt ?? undefined;
+    message.authMethod = object.authMethod ?? 0;
     return message;
   },
 };
