@@ -244,8 +244,9 @@ async fn setup() -> TestSetup {
 
     let release = release_store
         .create_release(CreateReleaseParams {
-            stack,
-            platform: Some(Platform::Local),
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Local, stack)]),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: None,
@@ -739,8 +740,9 @@ async fn test_proxy_push_then_pull() {
     let new_release = s
         .release_store
         .create_release(CreateReleaseParams {
-            stack: proxy_stack,
-            platform: Some(Platform::Local),
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Local, proxy_stack)]),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: None,

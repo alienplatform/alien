@@ -7,11 +7,11 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ```typescript
 import { EventLifecycleEnum } from "@alienplatform/platform-api/models";
 
-let value: EventLifecycleEnum = "live";
+let value: EventLifecycleEnum = "frozen";
 ```
 
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

@@ -3,7 +3,7 @@
  */
 
 import { AlienCore } from "../core.js";
-import { encodeFormQuery, encodeSimple } from "../lib/encodings.js";
+import { encodeFormQuery } from "../lib/encodings.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -27,18 +27,18 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Resolve manager for a deployment group
+ * Resolve manager for a project and platform
  *
  * @remarks
- * Returns the manager URL for a given deployment group and platform. Used by external callers (alien-deploy-cli, alien-terraform) to discover the manager before communicating with it directly.
+ * Returns the manager URL for a given project and platform. The project can be provided as a query parameter, or derived from the token's scope (project-scoped, deployment-group-scoped, or deployment-scoped tokens carry an implicit project). This is the single entry point for all CLI tools to discover which manager to talk to.
  */
-export function deploymentGroupsGetDeploymentGroupManager(
+export function resolveResolve(
   client: AlienCore,
-  request: operations.GetDeploymentGroupManagerRequest,
+  request: operations.ResolveRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.DeploymentGroupManagerResponse,
+    models.ResolveResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -59,12 +59,12 @@ export function deploymentGroupsGetDeploymentGroupManager(
 
 async function $do(
   client: AlienCore,
-  request: operations.GetDeploymentGroupManagerRequest,
+  request: operations.ResolveRequest,
   options?: RequestOptions,
 ): Promise<
   [
     Result<
-      models.DeploymentGroupManagerResponse,
+      models.ResolveResponse,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -80,8 +80,7 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) =>
-      operations.GetDeploymentGroupManagerRequest$outboundSchema.parse(value),
+    (value) => operations.ResolveRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
@@ -90,17 +89,11 @@ async function $do(
   const payload = parsed.value;
   const body = null;
 
-  const pathParams = {
-    id: encodeSimple("id", payload.id, {
-      explode: false,
-      charEncoding: "percent",
-    }),
-  };
-
-  const path = pathToFunc("/v1/deployment-groups/{id}/manager")(pathParams);
+  const path = pathToFunc("/v1/resolve")();
 
   const query = encodeFormQuery({
     "platform": payload.platform,
+    "project": payload.project,
     "workspace": payload.workspace,
   });
 
@@ -115,7 +108,7 @@ async function $do(
   const context = {
     options: client._options,
     baseURL: options?.serverURL ?? client._baseURL ?? "",
-    operationID: "getDeploymentGroupManager",
+    operationID: "resolve",
     oAuth2Scopes: null,
 
     resolvedSecurity: requestSecurity,
@@ -145,7 +138,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["400", "404", "4XX", "503", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -159,7 +152,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    models.DeploymentGroupManagerResponse,
+    models.ResolveResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -170,9 +163,9 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.DeploymentGroupManagerResponse$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
-    M.jsonErr(500, errors.APIError$inboundSchema),
+    M.json(200, models.ResolveResponse$inboundSchema),
+    M.jsonErr([400, 404], errors.APIError$inboundSchema),
+    M.jsonErr(503, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

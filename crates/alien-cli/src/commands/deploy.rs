@@ -275,6 +275,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
                         network: sdk_network,
                         domains: None,
+                        external_bindings: None,
                     };
 
                     let create_response = sdk_client

@@ -4,7 +4,7 @@
     "title": "Alien Manager API",
     "description": "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
     "license": {
-      "name": "MIT"
+      "name": ""
     },
     "version": "1.0.0"
   },
@@ -328,7 +328,7 @@
     "/v1/commands/{command_id}/response": {
       "put": {
         "tags": [
-          "deployments"
+          "commands"
         ],
         "summary": "Submit response from deployment",
         "operationId": "submit_response",
@@ -1647,6 +1647,11 @@
             "$ref": "#/components/schemas/GitMetadata",
             "nullable": true
           },
+          "project": {
+            "type": "string",
+            "description": "Project ID or name (required in platform/multi-tenant mode).",
+            "nullable": true
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }
@@ -2793,10 +2798,6 @@
     {
       "name": "leases",
       "description": "Lease management for polling deployments"
-    },
-    {
-      "name": "deployments",
-      "description": "Deployment response submission"
     }
   ]
 }

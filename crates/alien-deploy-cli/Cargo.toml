@@ -24,7 +24,6 @@ alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test"] }
 alien-local = { workspace = true }
 alien-agent = { path = "../alien-agent" }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
-alien-platform-api = { path = "../../client-sdks/platform/rust" }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
@@ -45,6 +44,7 @@ chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 hostname = { workspace = true }
+urlencoding = { workspace = true }
 dirs = "6"
 service-manager = "0.10"
 which = "7"

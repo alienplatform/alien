@@ -191,7 +191,6 @@ run();
 * [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
-* [getDeploymentGroupManager](docs/sdks/deploymentgroups/README.md#getdeploymentgroupmanager) - Resolve manager for a deployment group
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
@@ -254,7 +253,6 @@ run();
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying agents in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
-* [getBuildConfig](docs/sdks/projects/README.md#getbuildconfig) - Get build configuration for a specific platform. Returns manager URL and repository info for GitHub Actions to use directly.
 
 ### [Releases](docs/sdks/releases/README.md)
 
@@ -263,6 +261,10 @@ run();
 * [listBranches](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 * [listAuthors](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 * [get](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
+
+### [Resolve](docs/sdks/resolve/README.md)
+
+* [resolve](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 
 ### [Sync](docs/sdks/sync/README.md)
 
@@ -336,7 +338,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
-- [`deploymentGroupsGetDeploymentGroupManager`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupmanager) - Resolve manager for a deployment group
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
@@ -380,7 +381,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no agents.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
-- [`projectsGetBuildConfig`](docs/sdks/projects/README.md#getbuildconfig) - Get build configuration for a specific platform. Returns manager URL and repository info for GitHub Actions to use directly.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying agents in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
@@ -389,6 +389,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.
 - [`releasesListAuthors`](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
+- [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.

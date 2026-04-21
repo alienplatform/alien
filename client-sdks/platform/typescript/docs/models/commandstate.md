@@ -1,6 +1,6 @@
 # CommandState
 
-Command states in the ARC protocol lifecycle
+Command states in the Commands protocol lifecycle
 
 ## Example Usage
 

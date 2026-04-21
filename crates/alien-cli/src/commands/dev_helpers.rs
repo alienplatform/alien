@@ -433,6 +433,7 @@ pub async fn build_and_post_release_simple(
         .body(CreateReleaseRequest {
             stack: stack_by_platform,
             git_metadata: None,
+            project: None, // dev mode — single project
         })
         .send()
         .await

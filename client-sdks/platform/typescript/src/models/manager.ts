@@ -99,6 +99,28 @@ export type ManagerManagementConfigUnion =
   | any;
 
 /**
+ * Runtime metrics (self-reported via heartbeat)
+ */
+export type ManagerMetrics = {
+  /**
+   * Number of active deployments
+   */
+  activeDeployments?: number | undefined;
+  /**
+   * Number of pending deployments
+   */
+  pendingDeployments?: number | undefined;
+  /**
+   * Memory usage in megabytes
+   */
+  memoryUsageMb?: number | undefined;
+  /**
+   * CPU usage percentage
+   */
+  cpuUsagePercent?: number | undefined;
+};
+
+/**
  * Manager schema
  */
 export type Manager = {
@@ -142,6 +164,10 @@ export type Manager = {
    * Manager version (self-reported via heartbeat)
    */
   version?: string | null | undefined;
+  /**
+   * Runtime metrics (self-reported via heartbeat)
+   */
+  metrics?: ManagerMetrics | null | undefined;
   /**
    * Timestamp of the last received heartbeat from the manager
    */
@@ -283,6 +309,25 @@ export function managerManagementConfigUnionFromJSON(
 }
 
 /** @internal */
+export const ManagerMetrics$inboundSchema: z.ZodType<ManagerMetrics, unknown> =
+  z.object({
+    activeDeployments: z.number().optional(),
+    pendingDeployments: z.number().optional(),
+    memoryUsageMb: z.number().optional(),
+    cpuUsagePercent: z.number().optional(),
+  });
+
+export function managerMetricsFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerMetrics, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerMetrics$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerMetrics' from JSON`,
+  );
+}
+
+/** @internal */
 export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   id: z.string(),
   name: z.string(),
@@ -301,6 +346,7 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   workspaceId: z.string(),
   status: ManagerStatus$inboundSchema,
   version: z.nullable(z.string()).optional(),
+  metrics: z.nullable(z.lazy(() => ManagerMetrics$inboundSchema)).optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
