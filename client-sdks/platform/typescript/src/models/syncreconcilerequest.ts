@@ -3660,6 +3660,10 @@ export type SyncReconcileRequestError = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -11656,6 +11660,7 @@ export function syncReconcileRequestStateToJSON(
 export type SyncReconcileRequestError$Outbound = {
   code: string;
   context?: any | null | undefined;
+  hint?: string | null | undefined;
   httpStatusCode?: number | null | undefined;
   internal: boolean;
   message: string;
@@ -11670,6 +11675,7 @@ export const SyncReconcileRequestError$outboundSchema: z.ZodType<
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),

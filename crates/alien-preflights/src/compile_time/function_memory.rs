@@ -28,6 +28,14 @@ fn is_valid_azure_memory(memory_mb: u32) -> bool {
     AZURE_VALID_COMBOS.iter().any(|(_, mem)| *mem == memory_mb)
 }
 
+/// Returns the nearest valid Azure memory value (rounded up), or None if above max.
+fn nearest_valid_azure_memory(memory_mb: u32) -> Option<u32> {
+    AZURE_VALID_COMBOS
+        .iter()
+        .find(|(_, mem)| *mem >= memory_mb)
+        .map(|(_, mem)| *mem)
+}
+
 pub struct FunctionMemoryCheck;
 
 #[async_trait::async_trait]
@@ -75,17 +83,21 @@ impl CompileTimeCheck for FunctionMemoryCheck {
                 Platform::Azure => {
                     // Azure Container Apps: fixed CPU/memory pairs
                     if !is_valid_azure_memory(memory_mb) {
-                        let valid_values: Vec<String> = AZURE_VALID_COMBOS
-                            .iter()
-                            .map(|(cpu, mem)| format!("{} MB ({} vCPU)", mem, cpu))
-                            .collect();
-                        result.add_error(format!(
-                            "Function '{}': memory_mb {} is not a valid Azure Container Apps value. \
-                             Valid combinations: {}",
-                            id,
-                            memory_mb,
-                            valid_values.join(", ")
-                        ));
+                        if let Some(adjusted) = nearest_valid_azure_memory(memory_mb) {
+                            // Can be auto-adjusted at deploy time — warn, don't error
+                            result.add_warning(format!(
+                                "Function '{}': memory_mb {} is not a valid Azure Container Apps value. \
+                                 It will be automatically adjusted to {} MB at deploy time",
+                                id, memory_mb, adjusted
+                            ));
+                        } else {
+                            // Above max — can't auto-adjust
+                            let max_mem = AZURE_VALID_COMBOS.last().unwrap().1;
+                            result.add_error(format!(
+                                "Function '{}': memory_mb {} exceeds the Azure Container Apps maximum of {} MB",
+                                id, memory_mb, max_mem
+                            ));
+                        }
                     }
                 }
                 // Local, Kubernetes, Test — no constraints
@@ -181,11 +193,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_azure_invalid_memory() {
+    async fn test_azure_adjustable_memory_warns() {
         let check = FunctionMemoryCheck;
         let stack = make_stack_with_function(256);
         let result = check.check(&stack, Platform::Azure).await.unwrap();
+        assert!(result.success, "adjustable values should warn, not error");
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("automatically adjusted to 512"));
+    }
+
+    #[tokio::test]
+    async fn test_azure_above_max_errors() {
+        let check = FunctionMemoryCheck;
+        let stack = make_stack_with_function(5000);
+        let result = check.check(&stack, Platform::Azure).await.unwrap();
         assert!(!result.success);
+        assert!(result.errors[0].contains("exceeds"));
     }
 
     #[tokio::test]
@@ -204,5 +227,14 @@ mod tests {
         assert!(!is_valid_azure_memory(256));
         assert!(!is_valid_azure_memory(768));
         assert!(!is_valid_azure_memory(5000));
+    }
+
+    #[test]
+    fn test_nearest_valid_azure_memory() {
+        assert_eq!(nearest_valid_azure_memory(256), Some(512));
+        assert_eq!(nearest_valid_azure_memory(512), Some(512));
+        assert_eq!(nearest_valid_azure_memory(600), Some(1024));
+        assert_eq!(nearest_valid_azure_memory(4096), Some(4096));
+        assert_eq!(nearest_valid_azure_memory(5000), None);
     }
 }

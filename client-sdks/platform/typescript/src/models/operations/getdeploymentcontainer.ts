@@ -94,7 +94,7 @@ export type Http = {
   topEndpoints?: Array<TopEndpoint> | undefined;
 };
 
-export type Metrics = {
+export type GetDeploymentContainerMetrics = {
   status: string;
   cpuUsage?: number | undefined;
   cpuUsagePercent?: number | undefined;
@@ -113,7 +113,7 @@ export type ReplicasInfo = {
   status: string;
   healthy: boolean;
   consecutiveFailures: number;
-  metrics?: Metrics | undefined;
+  metrics?: GetDeploymentContainerMetrics | undefined;
   additionalProperties?: { [k: string]: any | null } | undefined;
 };
 
@@ -336,30 +336,32 @@ export function httpFromJSON(
 }
 
 /** @internal */
-export const Metrics$inboundSchema: z.ZodType<Metrics, unknown> =
-  collectExtraKeys$(
-    z.object({
-      status: z.string(),
-      cpuUsage: z.number().optional(),
-      cpuUsagePercent: z.number().optional(),
-      memoryUsedBytes: z.number().optional(),
-      memoryUsagePercent: z.number().optional(),
-      healthy: z.boolean().optional(),
-      lastUpdated: z.iso.datetime({ offset: true }).transform(v => new Date(v))
-        .optional(),
-      http: z.lazy(() => Http$inboundSchema).optional(),
-    }).catchall(z.any()),
-    "additionalProperties",
-    true,
-  );
+export const GetDeploymentContainerMetrics$inboundSchema: z.ZodType<
+  GetDeploymentContainerMetrics,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    status: z.string(),
+    cpuUsage: z.number().optional(),
+    cpuUsagePercent: z.number().optional(),
+    memoryUsedBytes: z.number().optional(),
+    memoryUsagePercent: z.number().optional(),
+    healthy: z.boolean().optional(),
+    lastUpdated: z.iso.datetime({ offset: true }).transform(v => new Date(v))
+      .optional(),
+    http: z.lazy(() => Http$inboundSchema).optional(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
 
-export function metricsFromJSON(
+export function getDeploymentContainerMetricsFromJSON(
   jsonString: string,
-): SafeParseResult<Metrics, SDKValidationError> {
+): SafeParseResult<GetDeploymentContainerMetrics, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Metrics$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Metrics' from JSON`,
+    (x) => GetDeploymentContainerMetrics$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetDeploymentContainerMetrics' from JSON`,
   );
 }
 
@@ -373,7 +375,8 @@ export const ReplicasInfo$inboundSchema: z.ZodType<ReplicasInfo, unknown> =
       status: z.string(),
       healthy: z.boolean(),
       consecutiveFailures: z.int(),
-      metrics: z.lazy(() => Metrics$inboundSchema).optional(),
+      metrics: z.lazy(() => GetDeploymentContainerMetrics$inboundSchema)
+        .optional(),
     }).catchall(z.any()),
     "additionalProperties",
     true,

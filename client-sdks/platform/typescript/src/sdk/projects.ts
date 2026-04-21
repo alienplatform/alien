@@ -7,7 +7,6 @@ import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.
 import { projectsDelete } from "../funcs/projectsDelete.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
-import { projectsGetBuildConfig } from "../funcs/projectsGetBuildConfig.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
 import { projectsUpdate } from "../funcs/projectsUpdate.js";
@@ -123,20 +122,6 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<any> {
     return unwrapAsync(projectsGetActiveRelease(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Get build configuration for a specific platform. Returns manager URL and repository info for GitHub Actions to use directly.
-   */
-  async getBuildConfig(
-    request: operations.GetProjectBuildConfigRequest,
-    options?: RequestOptions,
-  ): Promise<operations.GetProjectBuildConfigResponse> {
-    return unwrapAsync(projectsGetBuildConfig(
       this,
       request,
       options,

@@ -1,9 +1,9 @@
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.3.5",
-  "license": "FSL-1.1-Apache-2.0",
+  "version": "1.0.75",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git",
@@ -55,7 +55,9 @@
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "peerDependencies": {},
+  "peerDependencies": {
+    
+  },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "eslint": "^9.19.0",

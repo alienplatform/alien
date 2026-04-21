@@ -801,6 +801,7 @@ async fn create_deployment_task(
         updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
         network: sdk_network,
         domains: None,
+        external_bindings: None,
     };
 
     let request = NewDeploymentRequest {

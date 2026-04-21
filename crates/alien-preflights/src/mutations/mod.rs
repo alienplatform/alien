@@ -2,6 +2,7 @@
 //! These mutations run at deployment time but do NOT query cloud state.
 
 pub mod azure_container_apps_environment;
+pub mod azure_memory_adjustment;
 pub mod azure_resource_group;
 pub mod azure_service_activation;
 pub mod azure_service_bus_namespace;
@@ -17,6 +18,7 @@ pub mod service_account;
 pub mod service_account_dependencies;
 
 pub use azure_container_apps_environment::AzureContainerAppsEnvironmentMutation;
+pub use azure_memory_adjustment::AzureMemoryAdjustmentMutation;
 pub use azure_resource_group::AzureResourceGroupMutation;
 pub use azure_service_activation::AzureServiceActivationMutation;
 pub use azure_service_bus_namespace::AzureServiceBusNamespaceMutation;

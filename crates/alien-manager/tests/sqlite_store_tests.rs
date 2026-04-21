@@ -3,6 +3,7 @@
 //! Each test gets a fresh in-memory SQLite database with migrations run,
 //! exercising store operations through the trait interfaces.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use alien_core::{Platform, StackSettings};
@@ -223,8 +224,9 @@ async fn set_desired_release() {
     // set_deployment_desired_release works on any deployment
     let release = release_store
         .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("test-stack".to_string()).build(),
-            platform: None,
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Local, alien_core::Stack::new("test-stack".to_string()).build())]),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: None,
@@ -594,8 +596,9 @@ async fn create_and_get_release() {
 
     let release = store
         .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("my-stack".to_string()).build(),
-            platform: Some(Platform::Aws),
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Aws, alien_core::Stack::new("my-stack".to_string()).build())]),
             git_commit_sha: Some("abc123".to_string()),
             git_commit_ref: Some("refs/heads/main".to_string()),
             git_commit_message: Some("Initial commit".to_string()),
@@ -604,8 +607,7 @@ async fn create_and_get_release() {
         .unwrap();
 
     assert!(release.id.starts_with("rel_"));
-    assert_eq!(release.stack.id, "my-stack");
-    assert_eq!(release.platform, Some(Platform::Aws));
+    assert_eq!(release.stacks.get(&Platform::Aws).unwrap().id, "my-stack");
     assert_eq!(release.git_commit_sha.as_deref(), Some("abc123"));
     assert_eq!(release.git_commit_ref.as_deref(), Some("refs/heads/main"));
     assert_eq!(
@@ -616,8 +618,7 @@ async fn create_and_get_release() {
     // Get by ID
     let fetched = store.get_release(&release.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, release.id);
-    assert_eq!(fetched.stack.id, "my-stack");
-    assert_eq!(fetched.platform, Some(Platform::Aws));
+    assert_eq!(fetched.stacks.get(&Platform::Aws).unwrap().id, "my-stack");
 }
 
 #[tokio::test]
@@ -630,8 +631,9 @@ async fn latest_release() {
 
     let _rel1 = store
         .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("stack-v1".to_string()).build(),
-            platform: None,
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Local, alien_core::Stack::new("stack-v1".to_string()).build())]),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: Some("first".to_string()),
@@ -644,8 +646,9 @@ async fn latest_release() {
 
     let rel2 = store
         .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("stack-v2".to_string()).build(),
-            platform: None,
+            project: None,
+            caller_token: None,
+            stacks: HashMap::from([(Platform::Local, alien_core::Stack::new("stack-v2".to_string()).build())]),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: Some("second".to_string()),
@@ -656,7 +659,7 @@ async fn latest_release() {
     // Latest should be the second one
     let latest = store.get_latest_release().await.unwrap().unwrap();
     assert_eq!(latest.id, rel2.id);
-    assert_eq!(latest.stack.id, "stack-v2");
+    assert_eq!(latest.stacks.get(&Platform::Local).unwrap().id, "stack-v2");
 }
 
 #[tokio::test]

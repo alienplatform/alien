@@ -7,7 +7,7 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export type DeploymentGroupManagerResponse = {
+export type ResolveResponse = {
   /**
    * Manager ID
    */
@@ -16,23 +16,28 @@ export type DeploymentGroupManagerResponse = {
    * Manager URL
    */
   managerUrl: string;
+  /**
+   * Resolved project ID
+   */
+  projectId: string;
 };
 
 /** @internal */
-export const DeploymentGroupManagerResponse$inboundSchema: z.ZodType<
-  DeploymentGroupManagerResponse,
+export const ResolveResponse$inboundSchema: z.ZodType<
+  ResolveResponse,
   unknown
 > = z.object({
   managerId: z.string(),
   managerUrl: z.string(),
+  projectId: z.string(),
 });
 
-export function deploymentGroupManagerResponseFromJSON(
+export function resolveResponseFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentGroupManagerResponse, SDKValidationError> {
+): SafeParseResult<ResolveResponse, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DeploymentGroupManagerResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentGroupManagerResponse' from JSON`,
+    (x) => ResolveResponse$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponse' from JSON`,
   );
 }

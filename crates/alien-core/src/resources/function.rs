@@ -162,8 +162,13 @@ pub struct Function {
     pub code: FunctionCode,
 
     /// Memory allocated to the function in megabytes (MB).
-    /// Constraints: 128‑32768 MB (platform-specific limits may apply)
     /// Default: 256
+    ///
+    /// Platform-specific constraints:
+    /// - **AWS Lambda**: 128–10240 MB in 1 MB increments
+    /// - **GCP Cloud Run**: 128–32768 MB
+    /// - **Azure Container Apps**: fixed CPU/memory pairs — 512, 1024, 1536, 2048, 2560,
+    ///   3072, 3584, 4096 MB. Values below 512 are automatically rounded up at deploy time.
     #[builder(default = default_memory_mb())]
     #[serde(default = "default_memory_mb")]
     #[cfg_attr(feature = "openapi", schema(default = default_memory_mb))]

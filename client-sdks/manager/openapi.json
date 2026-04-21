@@ -1713,6 +1713,13 @@
               }
             ]
           },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project ID or name (required in platform/multi-tenant mode)."
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }

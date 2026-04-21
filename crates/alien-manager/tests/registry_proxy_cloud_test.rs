@@ -378,8 +378,9 @@ impl CloudProxyTest {
         let stack = test_stack("test-fn", &image_name);
         let release = release_store
             .create_release(CreateReleaseParams {
-                stack: stack.clone(),
-                platform: None,
+                project: None,
+                caller_token: None,
+                stacks: HashMap::from([(Platform::Local, stack.clone())]),
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,

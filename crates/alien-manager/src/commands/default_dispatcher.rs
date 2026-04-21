@@ -47,9 +47,22 @@ impl DefaultCommandDispatcher {
         }
     }
 
-    /// Find the function with `commands_enabled=true` in the release stack
-    fn find_commands_function(&self, release: &crate::traits::ReleaseRecord) -> CmdResult<String> {
-        for (resource_id, entry) in release.stack.resources() {
+    /// Find the function with `commands_enabled=true` in the release stack for the given platform.
+    fn find_commands_function(
+        &self,
+        release: &crate::traits::ReleaseRecord,
+        platform: &Platform,
+    ) -> CmdResult<String> {
+        let stack = release.stacks.get(platform).ok_or_else(|| {
+            AlienError::new(CmdErrorData::Other {
+                message: format!(
+                    "Release {} does not contain a stack for platform {}",
+                    release.id, platform
+                ),
+            })
+        })?;
+
+        for (resource_id, entry) in stack.resources() {
             if let Some(function) = entry.config.downcast_ref::<Function>() {
                 if function.commands_enabled {
                     return Ok(resource_id.clone());
@@ -123,7 +136,7 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             })?;
 
         // 4. Find function with commands_enabled and get its push target from stack state
-        let function_id = self.find_commands_function(&release)?;
+        let function_id = self.find_commands_function(&release, &deployment.platform)?;
 
         let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(CmdErrorData::Other {

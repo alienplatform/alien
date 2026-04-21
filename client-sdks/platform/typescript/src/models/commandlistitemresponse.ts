@@ -17,7 +17,7 @@ import {
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
- * Command states in the ARC protocol lifecycle
+ * Command states in the Commands protocol lifecycle
  */
 export const CommandListItemResponseState = {
   PendingUpload: "PENDING_UPLOAD",
@@ -28,7 +28,7 @@ export const CommandListItemResponseState = {
   Expired: "EXPIRED",
 } as const;
 /**
- * Command states in the ARC protocol lifecycle
+ * Command states in the Commands protocol lifecycle
  */
 export type CommandListItemResponseState = ClosedEnum<
   typeof CommandListItemResponseState
@@ -70,7 +70,7 @@ export type CommandListItemResponse = {
    */
   name: string;
   /**
-   * Command states in the ARC protocol lifecycle
+   * Command states in the Commands protocol lifecycle
    */
   state: CommandListItemResponseState;
   /**

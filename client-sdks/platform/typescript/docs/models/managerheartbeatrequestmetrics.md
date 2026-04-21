@@ -1,13 +1,13 @@
-# Metrics
+# ManagerHeartbeatRequestMetrics
 
 Optional runtime metrics
 
 ## Example Usage
 
 ```typescript
-import { Metrics } from "@alienplatform/platform-api/models";
+import { ManagerHeartbeatRequestMetrics } from "@alienplatform/platform-api/models";
 
-let value: Metrics = {};
+let value: ManagerHeartbeatRequestMetrics = {};
 ```
 
 ## Fields

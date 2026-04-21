@@ -16,6 +16,7 @@ import { Managers } from "./managers.js";
 import { Packages } from "./packages.js";
 import { Projects } from "./projects.js";
 import { Releases } from "./releases.js";
+import { Resolve } from "./resolve.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
 import { Workspaces } from "./workspaces.js";
@@ -99,5 +100,10 @@ export class Alien extends ClientSDK {
   private _containers?: Containers;
   get containers(): Containers {
     return (this._containers ??= new Containers(this._options));
+  }
+
+  private _resolve?: Resolve;
+  get resolve(): Resolve {
+    return (this._resolve ??= new Resolve(this._options));
   }
 }

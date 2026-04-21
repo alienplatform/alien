@@ -9,7 +9,7 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
- * Command states in the ARC protocol lifecycle
+ * Command states in the Commands protocol lifecycle
  */
 export const CommandState = {
   PendingUpload: "PENDING_UPLOAD",
@@ -20,7 +20,7 @@ export const CommandState = {
   Expired: "EXPIRED",
 } as const;
 /**
- * Command states in the ARC protocol lifecycle
+ * Command states in the Commands protocol lifecycle
  */
 export type CommandState = ClosedEnum<typeof CommandState>;
 
@@ -58,7 +58,7 @@ export type Command = {
    */
   name: string;
   /**
-   * Command states in the ARC protocol lifecycle
+   * Command states in the Commands protocol lifecycle
    */
   state: CommandState;
   /**

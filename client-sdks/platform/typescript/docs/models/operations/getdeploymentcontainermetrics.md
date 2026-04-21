@@ -1,11 +1,11 @@
-# Metrics
+# GetDeploymentContainerMetrics
 
 ## Example Usage
 
 ```typescript
-import { Metrics } from "@alienplatform/platform-api/models/operations";
+import { GetDeploymentContainerMetrics } from "@alienplatform/platform-api/models/operations";
 
-let value: Metrics = {
+let value: GetDeploymentContainerMetrics = {
   status: "<value>",
 };
 ```

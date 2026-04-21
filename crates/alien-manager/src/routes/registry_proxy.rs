@@ -767,7 +767,11 @@ async fn validate_pull_access(
                 )
             })?;
 
-        let repos = extract_repo_names(&release.stack);
+        let repos = release
+            .stacks
+            .values()
+            .flat_map(|stack| extract_repo_names(stack))
+            .collect::<Vec<_>>();
 
         // Cache the result.
         state

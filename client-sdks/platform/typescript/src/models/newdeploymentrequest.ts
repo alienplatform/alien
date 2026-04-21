@@ -236,6 +236,16 @@ export type NewDeploymentRequestDomainsUnion =
   | any;
 
 /**
+ * External bindings for pre-existing infrastructure.
+ *
+ * @remarks
+ * Allows using existing resources (MinIO, Redis, shared Container Apps
+ * Environment, etc.) instead of having Alien provision them.
+ * Required for Kubernetes platform, optional for cloud platforms.
+ */
+export type NewDeploymentRequestExternalBindings = {};
+
+/**
  * How heartbeat health checks are handled.
  */
 export const NewDeploymentRequestHeartbeats = {
@@ -401,6 +411,15 @@ export type NewDeploymentRequestStackSettings = {
    */
   deploymentModel?: NewDeploymentRequestDeploymentModel | undefined;
   domains?: NewDeploymentRequestDomains | any | null | undefined;
+  /**
+   * External bindings for pre-existing infrastructure.
+   *
+   * @remarks
+   * Allows using existing resources (MinIO, Redis, shared Container Apps
+   * Environment, etc.) instead of having Alien provision them.
+   * Required for Kubernetes platform, optional for cloud platforms.
+   */
+  externalBindings?: NewDeploymentRequestExternalBindings | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
@@ -926,6 +945,25 @@ export function newDeploymentRequestDomainsUnionToJSON(
 }
 
 /** @internal */
+export type NewDeploymentRequestExternalBindings$Outbound = {};
+
+/** @internal */
+export const NewDeploymentRequestExternalBindings$outboundSchema: z.ZodType<
+  NewDeploymentRequestExternalBindings$Outbound,
+  NewDeploymentRequestExternalBindings
+> = z.object({});
+
+export function newDeploymentRequestExternalBindingsToJSON(
+  newDeploymentRequestExternalBindings: NewDeploymentRequestExternalBindings,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestExternalBindings$outboundSchema.parse(
+      newDeploymentRequestExternalBindings,
+    ),
+  );
+}
+
+/** @internal */
 export const NewDeploymentRequestHeartbeats$outboundSchema: z.ZodEnum<
   typeof NewDeploymentRequestHeartbeats
 > = z.enum(NewDeploymentRequestHeartbeats);
@@ -1163,6 +1201,10 @@ export const NewDeploymentRequestUpdates$outboundSchema: z.ZodEnum<
 export type NewDeploymentRequestStackSettings$Outbound = {
   deploymentModel?: string | undefined;
   domains?: NewDeploymentRequestDomains$Outbound | any | null | undefined;
+  externalBindings?:
+    | NewDeploymentRequestExternalBindings$Outbound
+    | null
+    | undefined;
   heartbeats?: string | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws$Outbound
@@ -1189,6 +1231,9 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestDomains$outboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  externalBindings: z.nullable(
+    z.lazy(() => NewDeploymentRequestExternalBindings$outboundSchema),
   ).optional(),
   heartbeats: NewDeploymentRequestHeartbeats$outboundSchema.optional(),
   network: z.nullable(

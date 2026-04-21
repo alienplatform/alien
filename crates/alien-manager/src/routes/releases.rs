@@ -9,6 +9,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use alien_core::{Platform, Stack};
 
 use crate::error::ErrorData;
@@ -45,6 +47,8 @@ pub struct CreateReleaseRequest {
     pub stack: StackByPlatform,
     #[serde(default)]
     pub git_metadata: Option<GitMetadata>,
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,34 +94,27 @@ pub fn router() -> Router<AppState> {
 
 // --- Helpers ---
 
-fn record_to_response(
-    r: &ReleaseRecord,
-    original_stack: Option<&StackByPlatform>,
-) -> ReleaseResponse {
-    // If we have the original StackByPlatform, use it. Otherwise reconstruct
-    // from the stored platform + stack.
-    let stack = if let Some(sbp) = original_stack {
-        sbp.clone()
-    } else {
-        let stack_value = serde_json::to_value(&r.stack).unwrap_or_default();
-        let mut sbp = StackByPlatform {
-            aws: None,
-            gcp: None,
-            azure: None,
-            kubernetes: None,
-            local: None,
-            test: None,
-        };
-        match r.platform {
-            Some(Platform::Aws) => sbp.aws = Some(stack_value),
-            Some(Platform::Gcp) => sbp.gcp = Some(stack_value),
-            Some(Platform::Azure) => sbp.azure = Some(stack_value),
-            Some(Platform::Kubernetes) => sbp.kubernetes = Some(stack_value),
-            Some(Platform::Local) | None => sbp.local = Some(stack_value),
-            Some(Platform::Test) => sbp.test = Some(stack_value),
-        }
-        sbp
+fn record_to_response(r: &ReleaseRecord) -> ReleaseResponse {
+    let mut sbp = StackByPlatform {
+        aws: None,
+        gcp: None,
+        azure: None,
+        kubernetes: None,
+        local: None,
+        test: None,
     };
+
+    for (platform, stack) in &r.stacks {
+        let v = serde_json::to_value(stack).unwrap_or_default();
+        match platform {
+            Platform::Aws => sbp.aws = Some(v),
+            Platform::Gcp => sbp.gcp = Some(v),
+            Platform::Azure => sbp.azure = Some(v),
+            Platform::Kubernetes => sbp.kubernetes = Some(v),
+            Platform::Local => sbp.local = Some(v),
+            Platform::Test => sbp.test = Some(v),
+        }
+    }
 
     let git_metadata = if r.git_commit_sha.is_some()
         || r.git_commit_ref.is_some()
@@ -134,17 +131,16 @@ fn record_to_response(
 
     ReleaseResponse {
         id: r.id.clone(),
-        stack,
+        stack: sbp,
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
     }
 }
 
-/// Pick the first non-null platform stack from the request and parse it as a Stack.
-/// Returns both the parsed Stack and the platform it came from.
-fn parse_stack_from_request(
+/// Parse all non-null platform stacks from the request.
+fn parse_stacks_from_request(
     stack: &StackByPlatform,
-) -> std::result::Result<(Stack, Platform), alien_error::AlienError<ErrorData>> {
+) -> std::result::Result<HashMap<Platform, Stack>, alien_error::AlienError<ErrorData>> {
     let platforms: [(Platform, &Option<serde_json::Value>); 6] = [
         (Platform::Aws, &stack.aws),
         (Platform::Gcp, &stack.gcp),
@@ -154,15 +150,20 @@ fn parse_stack_from_request(
         (Platform::Test, &stack.test),
     ];
 
+    let mut stacks = HashMap::new();
     for (platform, value) in &platforms {
         if let Some(v) = value {
             let parsed: Stack = serde_json::from_value(v.clone())
-                .map_err(|e| ErrorData::bad_request(format!("Invalid stack format: {}", e)))?;
-            return Ok((parsed, *platform));
+                .map_err(|e| ErrorData::bad_request(format!("Invalid stack format for {}: {}", platform, e)))?;
+            stacks.insert(*platform, parsed);
         }
     }
 
-    Err(ErrorData::bad_request("No platform stack provided"))
+    if stacks.is_empty() {
+        return Err(ErrorData::bad_request("No platform stack provided"));
+    }
+
+    Ok(stacks)
 }
 
 // --- Handlers ---
@@ -184,17 +185,22 @@ async fn create_release(
     headers: HeaderMap,
     Json(req): Json<CreateReleaseRequest>,
 ) -> Response {
+    tracing::info!(project = ?req.project, "Received create release request");
+
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
-        Err(e) => return e.into_response(),
+        Err(e) => {
+            tracing::error!("Auth failed for create release: {}", e);
+            return e.into_response();
+        }
     };
 
     if let Err(e) = auth::require_admin(&subject) {
         return e.into_response();
     }
 
-    // Parse stack from request
-    let (stack, platform) = match parse_stack_from_request(&req.stack) {
+    // Parse all platform stacks from request
+    let stacks = match parse_stacks_from_request(&req.stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -208,11 +214,19 @@ async fn create_release(
         None => (None, None, None),
     };
 
+    // Extract bearer token for forwarding (platform mode token passthrough)
+    let caller_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
     let release = match state
         .release_store
         .create_release(CreateReleaseParams {
-            stack,
-            platform: Some(platform),
+            project: req.project,
+            caller_token,
+            stacks,
             git_commit_sha: git_sha,
             git_commit_ref: git_ref,
             git_commit_message: git_msg,
@@ -220,7 +234,10 @@ async fn create_release(
         .await
     {
         Ok(r) => r,
-        Err(e) => return e.into_response(),
+        Err(e) => {
+            tracing::error!("Release store create_release failed: {}", e);
+            return e.into_response();
+        }
     };
 
     // Set desired_release_id on eligible deployments
@@ -234,7 +251,7 @@ async fn create_release(
 
     (
         StatusCode::CREATED,
-        Json(record_to_response(&release, Some(&req.stack))),
+        Json(record_to_response(&release)),
     )
         .into_response()
 }
@@ -265,7 +282,7 @@ async fn get_release(
     };
 
     match state.release_store.get_release(&id).await {
-        Ok(Some(r)) => Json(record_to_response(&r, None)).into_response(),
+        Ok(Some(r)) => Json(record_to_response(&r)).into_response(),
         Ok(None) => ErrorData::not_found_release(&id).into_response(),
         Err(e) => e.into_response(),
     }
@@ -290,7 +307,7 @@ async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -
     };
 
     match state.release_store.get_latest_release().await {
-        Ok(Some(r)) => Json(record_to_response(&r, None)).into_response(),
+        Ok(Some(r)) => Json(record_to_response(&r)).into_response(),
         Ok(None) => ErrorData::not_found_release("latest").into_response(),
         Err(e) => e.into_response(),
     }

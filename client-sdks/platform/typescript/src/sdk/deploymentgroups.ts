@@ -6,7 +6,6 @@ import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroups
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
-import { deploymentGroupsGetDeploymentGroupManager } from "../funcs/deploymentGroupsGetDeploymentGroupManager.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
 import { deploymentGroupsUpdateDeploymentGroup } from "../funcs/deploymentGroupsUpdateDeploymentGroup.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -96,23 +95,6 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateDeploymentGroupTokenResponse> {
     return unwrapAsync(deploymentGroupsCreateDeploymentGroupToken(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Resolve manager for a deployment group
-   *
-   * @remarks
-   * Returns the manager URL for a given deployment group and platform. Used by external callers (alien-deploy-cli, alien-terraform) to discover the manager before communicating with it directly.
-   */
-  async getDeploymentGroupManager(
-    request: operations.GetDeploymentGroupManagerRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentGroupManagerResponse> {
-    return unwrapAsync(deploymentGroupsGetDeploymentGroupManager(
       this,
       request,
       options,

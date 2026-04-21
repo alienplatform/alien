@@ -4,6 +4,7 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_query::{Expr, Order, Query, SqliteQueryBuilder};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -32,17 +33,30 @@ impl SqliteReleaseStore {
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {
         let p = RowParser::new(row);
+        let stack_str = p.string(1, "stack")?;
         let platform_str = p.optional_string(2, "platform")?;
-        let platform = platform_str
-            .as_deref()
-            .map(alien_core::Platform::from_str)
-            .transpose()
-            .ok()
-            .flatten();
+
+        // Try parsing as multi-platform HashMap first (new format).
+        // Fall back to single Stack + platform column (legacy format).
+        let stacks: HashMap<alien_core::Platform, alien_core::Stack> =
+            if let Ok(map) = serde_json::from_str(&stack_str) {
+                map
+            } else {
+                let stack: alien_core::Stack = serde_json::from_str(&stack_str)
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to parse release stack".to_string(),
+                    })?;
+                let platform = platform_str
+                    .as_deref()
+                    .and_then(|s| alien_core::Platform::from_str(s).ok())
+                    .unwrap_or(alien_core::Platform::Local);
+                HashMap::from([(platform, stack)])
+            };
+
         Ok(ReleaseRecord {
             id: p.string(0, "id")?,
-            stack: p.json(1, "stack")?,
-            platform,
+            stacks,
             git_commit_sha: p.optional_string(3, "git_commit_sha")?,
             git_commit_ref: p.optional_string(4, "git_commit_ref")?,
             git_commit_message: p.optional_string(5, "git_commit_message")?,
@@ -60,13 +74,19 @@ impl ReleaseStore for SqliteReleaseStore {
         let id = alien_core::new_id(alien_core::IdType::Release);
         let now = Utc::now();
 
-        let stack_json = serde_json::to_string(&params.stack)
+        // Store as JSON map: { "aws": {...}, "gcp": {...}, ... }
+        let stacks_json = serde_json::to_string(&params.stacks)
             .into_alien_error()
             .context(GenericError {
-                message: "Failed to serialize stack".to_string(),
+                message: "Failed to serialize stacks".to_string(),
             })?;
 
-        let platform_str: Option<String> = params.platform.map(|p| p.as_str().to_string());
+        // Platform column: store first platform for backward compat
+        let platform_str: Option<String> = params
+            .stacks
+            .keys()
+            .next()
+            .map(|p| p.as_str().to_string());
 
         let sql = Query::insert()
             .into_table(Releases::Table)
@@ -81,7 +101,7 @@ impl ReleaseStore for SqliteReleaseStore {
             ])
             .values_panic([
                 id.clone().into(),
-                stack_json.into(),
+                stacks_json.into(),
                 platform_str.into(),
                 params.git_commit_sha.clone().into(),
                 params.git_commit_ref.clone().into(),
@@ -94,8 +114,7 @@ impl ReleaseStore for SqliteReleaseStore {
 
         Ok(ReleaseRecord {
             id,
-            stack: params.stack,
-            platform: params.platform,
+            stacks: params.stacks,
             git_commit_sha: params.git_commit_sha,
             git_commit_ref: params.git_commit_ref,
             git_commit_message: params.git_commit_message,

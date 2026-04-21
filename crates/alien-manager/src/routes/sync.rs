@@ -469,8 +469,8 @@ async fn agent_sync(
         .await;
 
         release.and_then(|r| {
-            // No stack rewriting — release stores proxy URIs as-is.
-            let stack = r.stack;
+            // Extract the stack for this deployment's platform.
+            let stack = r.stacks.get(&deployment.platform)?.clone();
 
             let env_vars: Vec<EnvironmentVariable> = deployment
                 .user_environment_variables

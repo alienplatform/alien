@@ -289,7 +289,8 @@ impl ExecutionMode {
     ///
     /// - Standalone: uses the known server_url
     /// - Dev: uses localhost:{port}
-    /// - Platform: calls build-config API to discover the project's manager URL
+    /// - Platform: calls /v1/resolve to discover the project's manager URL,
+    ///   then calls the manager directly to create/get the artifact registry repo.
     pub async fn resolve_manager(&self, project: &str, platform: &str) -> Result<ManagerContext> {
         match self {
             Self::Standalone {
@@ -320,7 +321,7 @@ impl ExecutionMode {
                     client,
                     http_client,
                     auth_token: Some(api_key.clone()),
-                    repository_name: None, // Resolved per-platform via /v1/build-config
+                    repository_name: None, // Resolved at push time via manager's /v1/build-config
                     repository_uri: Some(server_url.clone()),
                 })
             }
@@ -340,96 +341,81 @@ impl ExecutionMode {
             }
             #[cfg(feature = "platform")]
             Self::Platform { .. } => {
-                use alien_platform_api::types::{
-                    GetProjectBuildConfigPlatform, GetProjectBuildConfigWorkspace,
-                    ProjectIdOrNamePathParam,
-                };
-                use alien_platform_api::SdkResultExt;
-
                 let http = self.auth_http().await?;
-                let platform_client = http.sdk_client();
                 let workspace = self.resolve_workspace_with_bootstrap(true).await?;
 
-                let workspace_param = GetProjectBuildConfigWorkspace::try_from(workspace.as_str())
-                    .map_err(|e| {
-                        AlienError::new(ErrorData::ValidationError {
-                            field: "workspace".to_string(),
-                            message: format!("Invalid workspace: {}", e),
-                        })
-                    })?;
+                // Call GET /v1/resolve?platform=X&project=Y&workspace=Z
+                let resolve_url = format!(
+                    "{}/v1/resolve?platform={}&project={}&workspace={}",
+                    http.base_url,
+                    urlencoding::encode(platform),
+                    urlencoding::encode(project),
+                    urlencoding::encode(&workspace),
+                );
 
-                let project_param = ProjectIdOrNamePathParam::try_from(project).map_err(|e| {
-                    AlienError::new(ErrorData::ValidationError {
-                        field: "project".to_string(),
-                        message: format!("Invalid project: {}", e),
-                    })
-                })?;
-
-                let platform_param =
-                    GetProjectBuildConfigPlatform::try_from(platform).map_err(|e| {
-                        AlienError::new(ErrorData::ValidationError {
-                            field: "platform".to_string(),
-                            message: format!("Invalid platform: {}", e),
-                        })
-                    })?;
-
-                // Retry logic: manager might be starting up
+                // Retry logic: manager might be starting up (503)
                 let max_duration = std::time::Duration::from_secs(60);
                 let start_time = std::time::Instant::now();
                 let mut attempt: u32 = 0;
 
-                let build_config = loop {
+                let resolved: ResolveResponse = loop {
                     attempt += 1;
 
-                    let result = platform_client
-                        .get_project_build_config()
-                        .id_or_name(&project_param)
-                        .platform(&platform_param)
-                        .workspace(&workspace_param)
+                    let resp = http
+                        .client
+                        .get(&resolve_url)
                         .send()
                         .await
-                        .into_sdk_error();
+                        .into_alien_error()
+                        .context(ErrorData::ApiRequestFailed {
+                            message: "Failed to call /v1/resolve endpoint".to_string(),
+                            url: Some(resolve_url.clone()),
+                        })?;
 
-                    match result {
-                        Ok(response) => break response.into_inner(),
-                        Err(sdk_err) => {
-                            let is_retryable = sdk_err.http_status_code == Some(503);
+                    let status = resp.status();
 
-                            if is_retryable && start_time.elapsed() < max_duration {
-                                let backoff_secs =
-                                    std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
-                                if attempt == 1 {
-                                    info!("Manager not ready yet, waiting for startup...");
-                                } else {
-                                    info!("Still waiting for manager (attempt {})...", attempt);
-                                }
-                                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                                continue;
-                            }
+                    if status.is_success() {
+                        break resp.json::<ResolveResponse>().await.into_alien_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to parse /v1/resolve response".to_string(),
+                                url: Some(resolve_url.clone()),
+                            },
+                        )?;
+                    }
 
-                            if is_retryable {
-                                let mut err = AlienError::new(ErrorData::ApiRequestFailed {
-                                    message: format!(
-                                        "Manager for {} platform did not become ready within {} seconds",
-                                        platform,
-                                        max_duration.as_secs()
-                                    ),
-                                    url: None,
-                                });
-                                err.source = Some(Box::new(sdk_err));
-                                return Err(err);
-                            } else {
-                                let mut err = AlienError::new(ErrorData::ApiRequestFailed {
-                                    message: format!(
-                                        "Failed to get build configuration for {} platform",
-                                        platform
-                                    ),
-                                    url: None,
-                                });
-                                err.source = Some(Box::new(sdk_err));
-                                return Err(err);
-                            }
+                    let is_retryable = status.as_u16() == 503;
+
+                    if is_retryable && start_time.elapsed() < max_duration {
+                        let backoff_secs =
+                            std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
+                        if attempt == 1 {
+                            info!("Manager not ready yet, waiting for startup...");
+                        } else {
+                            info!("Still waiting for manager (attempt {})...", attempt);
                         }
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        continue;
+                    }
+
+                    let body = resp.text().await.unwrap_or_default();
+
+                    if is_retryable {
+                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                            message: format!(
+                                "Manager for {} platform did not become ready within {} seconds",
+                                platform,
+                                max_duration.as_secs()
+                            ),
+                            url: Some(resolve_url),
+                        }));
+                    } else {
+                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                            message: format!(
+                                "Failed to resolve manager for {} platform (HTTP {}): {}",
+                                platform, status, body
+                            ),
+                            url: Some(resolve_url),
+                        }));
                     }
                 };
 
@@ -437,24 +423,35 @@ impl ExecutionMode {
                     info!("Manager ready after {} attempt(s)", attempt);
                 }
 
-                info!("Manager: {}", build_config.manager_url);
-                info!("Repository: {}", build_config.repository_name);
+                info!("Manager: {}", resolved.manager_url);
+
+                // Now call the manager directly to create/get the artifact registry repo.
+                // The repo logical name is the project ID.
+                let repo_name = create_or_get_artifact_repo(
+                    &http.client,
+                    &resolved.manager_url,
+                    &resolved.project_id,
+                    platform,
+                )
+                .await?;
+
+                info!("Repository: {}", repo_name);
 
                 // Create manager SDK client reusing the authenticated reqwest client
                 let authenticated_client = http.client.clone();
                 let auth_token = http.bearer_token.clone();
                 let manager_client = ServerSdkClient::new_with_client(
-                    &build_config.manager_url,
+                    &resolved.manager_url,
                     authenticated_client.clone(),
                 );
 
                 Ok(ManagerContext {
-                    manager_url: build_config.manager_url,
+                    manager_url: resolved.manager_url,
                     client: manager_client,
                     http_client: authenticated_client,
                     auth_token,
-                    repository_name: Some(build_config.repository_name),
-                    repository_uri: build_config.repository_uri,
+                    repository_name: Some(repo_name),
+                    repository_uri: None,
                 })
             }
         }
@@ -550,4 +547,120 @@ async fn check_server_health(port: u16) -> bool {
     let client = reqwest::Client::new();
     let url = format!("http://localhost:{}/health", port);
     client.get(&url).send().await.is_ok()
+}
+
+/// Response from GET /v1/resolve
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveResponse {
+    manager_url: String,
+    project_id: String,
+}
+
+/// Create or get an artifact registry repository on the manager.
+///
+/// Tries GET first (repo may already exist), then POST to create if 404.
+#[cfg(feature = "platform")]
+async fn create_or_get_artifact_repo(
+    client: &reqwest::Client,
+    manager_url: &str,
+    project_id: &str,
+    platform: &str,
+) -> crate::error::Result<String> {
+    use alien_error::{Context, IntoAlienError};
+
+    // Step 1: Try GET for existing repo
+    let get_url = format!(
+        "{}/v1/artifact-registry/repositories/{}?platform={}",
+        manager_url, project_id, platform
+    );
+
+    let get_resp = client
+        .get(&get_url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to reach artifact registry on manager at {}", manager_url),
+            url: Some(get_url.clone()),
+        })?;
+
+    if get_resp.status().is_success() {
+        let body: serde_json::Value = get_resp.json().await.into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to parse artifact repository response".to_string(),
+                url: Some(get_url.clone()),
+            },
+        )?;
+
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
+        }
+    }
+
+    // Step 2: Repo doesn't exist — create it
+    let create_url = format!(
+        "{}/v1/artifact-registry/repositories?platform={}",
+        manager_url, platform
+    );
+
+    let create_resp = client
+        .post(&create_url)
+        .json(&serde_json::json!({ "name": project_id }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to create artifact repository on manager at {}", manager_url),
+            url: Some(create_url.clone()),
+        })?;
+
+    let create_status = create_resp.status();
+
+    if create_status.is_success() {
+        let body: serde_json::Value = create_resp.json().await.into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to parse artifact repository response".to_string(),
+                url: Some(create_url.clone()),
+            },
+        )?;
+
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
+        }
+    }
+
+    // Create returned non-success (409 = already exists, or other error).
+    // Try GET again — the repo may have been created concurrently.
+    let get_resp2 = client
+        .get(&get_url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to get artifact repository from manager at {}", manager_url),
+            url: Some(get_url.clone()),
+        })?;
+
+    if get_resp2.status().is_success() {
+        let body: serde_json::Value = get_resp2.json().await.into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to parse artifact repository response".to_string(),
+                url: Some(get_url.clone()),
+            },
+        )?;
+
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
+        }
+    }
+
+    // Both create and get failed — report the create error
+    Err(AlienError::new(ErrorData::ApiRequestFailed {
+        message: format!(
+            "Failed to create artifact repository '{}' for platform '{}' on manager (HTTP {})",
+            project_id, platform, create_status
+        ),
+        url: Some(create_url),
+    }))
 }
