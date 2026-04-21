@@ -274,13 +274,20 @@ async fn get_command_payload(
         Err(e) => return e.into_response(),
     };
 
-    let deployment_id = match get_command_owner(&state, &command_id).await {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-
-    if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
-        return e;
+    // Verify the caller has access to this command's deployment.
+    // If the command isn't in the local registry (e.g. when command metadata is
+    // managed externally), fall back to requiring Admin auth.
+    match get_command_owner(&state, &command_id).await {
+        Ok(deployment_id) => {
+            if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
+                return e;
+            }
+        }
+        Err(_) => {
+            if let Err(e) = auth::require_admin(&subject) {
+                return e.into_response();
+            }
+        }
     }
 
     let params = match state.command_server.get_params(&command_id).await {
