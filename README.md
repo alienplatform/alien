@@ -10,9 +10,9 @@ Alien provides infrastructure to deploy and operate software inside your users' 
 
 Self-hosting works - *until someone starts paying for your software*.
 
-Customers run it in their own environment, but they don’t actually know how to operate it. They might change something small like Postgres version, environment variables, IAM, firewall rules, and things start failing. From their perspective, your product is broken. And even if the root cause is on their side, it doesn’t matter... the customer is always right, you’re still the one expected to fix it.
+Customers run it in their own environment, but they don't actually know how to operate it. They might change something small like Postgres version, environment variables, IAM, firewall rules, and things start failing. From their perspective, your product is broken. And even if the root cause is on their side, it doesn't matter... the customer is always right, you're still the one expected to fix it.
 
-But you can’t. You don’t have access to their environment. You don’t have real visibility. You can’t run anything yourself. So you’re stuck debugging a system you don’t control, through screenshots and copy-pasted logs on a Zoom call. You end up responsible for something you don’t control.
+But you can't. You don't have access to their environment. You don't have real visibility. You can't run anything yourself. So you're stuck debugging a system you don't control, through screenshots and copy-pasted logs on a Zoom call. You end up responsible for something you don't control.
 
 Alien provides a better model: **managed self-hosting**.
 
