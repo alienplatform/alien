@@ -26,7 +26,18 @@ pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<AuthS
     }
 }
 
-/// Require that the caller has admin privileges.
+/// Require that the caller has full access (admin or workspace-wide).
+/// Use this for operations that any workspace owner should be able to do.
+pub fn require_full_access(subject: &AuthSubject) -> Result<()> {
+    if !subject.has_full_access() {
+        return Err(ErrorData::forbidden("Full access required"));
+    }
+    Ok(())
+}
+
+/// Require strict Admin token (OSS operator only).
+/// Use this for manager-level operations like token management that
+/// workspace users should NOT have access to in platform mode.
 pub fn require_admin(subject: &AuthSubject) -> Result<()> {
     if !subject.is_admin() {
         return Err(ErrorData::forbidden("Admin access required"));
@@ -34,7 +45,7 @@ pub fn require_admin(subject: &AuthSubject) -> Result<()> {
     Ok(())
 }
 
-/// Require admin or deployment group token that owns the specified group.
+/// Require full access or deployment group token that owns the specified group.
 pub fn require_admin_or_group(subject: &AuthSubject, group_id: &str) -> Result<()> {
     if !subject.can_access_group(group_id) {
         return Err(ErrorData::forbidden(
@@ -44,9 +55,9 @@ pub fn require_admin_or_group(subject: &AuthSubject, group_id: &str) -> Result<(
     Ok(())
 }
 
-/// Require that the caller is admin or a deployment group token (any group).
+/// Require that the caller is admin/workspace-wide or a deployment group token.
 pub fn require_admin_or_any_group(subject: &AuthSubject) -> Result<()> {
-    if !subject.is_admin() && !subject.is_deployment_group() {
+    if !subject.has_full_access() && !subject.is_deployment_group() {
         return Err(ErrorData::forbidden(
             "Access denied: requires admin or deployment group token",
         ));

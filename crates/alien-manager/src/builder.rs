@@ -697,6 +697,8 @@ async fn finalize(
     if let Some(extra) = extra_routes {
         router = router.merge(extra.with_state(app_state));
     }
+    // Apply CORS after all routes are merged so it covers platform and extra routes too.
+    let router = router.layer(crate::routes::cors_layer(&config));
 
     info!(
         port = config.port,

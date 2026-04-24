@@ -180,7 +180,7 @@ async fn acquire(
 
     // Admin tokens can acquire any deployment. Deployment tokens can acquire
     // their own deployment (used by alien-deploy up for push-model initial setup).
-    if !subject.is_admin()
+    if !subject.has_full_access()
         && !req.deployment_ids.as_ref().map_or(false, |ids| {
             ids.iter().all(|id| subject.can_access_deployment(id))
         })
@@ -206,12 +206,21 @@ async fn acquire(
         Err(e) => return e.into_response(),
     };
 
-    let deployments = acquired
+    let deployments: Vec<AcquiredDeploymentResponse> = match acquired
         .into_iter()
-        .map(|a| AcquiredDeploymentResponse {
-            deployment: serde_json::to_value(&a.deployment).unwrap_or_default(),
+        .map(|a| {
+            serde_json::to_value(&a.deployment)
+                .map(|deployment| AcquiredDeploymentResponse { deployment })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to serialize deployment: {e}");
+            return ErrorData::internal("Failed to serialize deployment")
+                .into_response()
+        }
+    };
 
     Json(AcquireResponse { deployments }).into_response()
 }
@@ -239,7 +248,7 @@ async fn reconcile(
     };
 
     // Allow admin tokens (push mode) or deployment tokens (pull mode)
-    if !subject.is_admin() && !subject.can_access_deployment(&req.deployment_id) {
+    if !subject.has_full_access() && !subject.can_access_deployment(&req.deployment_id) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -249,7 +258,8 @@ async fn reconcile(
     let deployment_state: DeploymentState = match serde_json::from_value(req.state.clone()) {
         Ok(s) => s,
         Err(e) => {
-            return ErrorData::bad_request(&format!("Invalid deployment state: {e}"))
+            tracing::warn!("Failed to deserialize deployment state: {e}");
+            return ErrorData::bad_request("Invalid deployment state")
                 .into_response()
         }
     };
@@ -291,7 +301,14 @@ async fn reconcile(
     )
     .await;
 
-    let current = serde_json::to_value(&final_state).unwrap_or(req.state);
+    let current = match serde_json::to_value(&final_state) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to serialize reconciled state: {e}");
+            return ErrorData::internal("Failed to serialize reconciled state")
+                .into_response()
+        }
+    };
 
     Json(ReconcileResponse {
         success: true,
@@ -323,7 +340,7 @@ async fn release(
         Err(e) => return e.into_response(),
     };
 
-    if !subject.is_admin() && !subject.can_access_deployment(&req.deployment_id) {
+    if !subject.has_full_access() && !subject.can_access_deployment(&req.deployment_id) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -360,7 +377,7 @@ async fn agent_sync(
     };
 
     // Must be a deployment token matching this deployment
-    if !subject.can_access_deployment(&req.deployment_id) && !subject.is_admin() {
+    if !subject.can_access_deployment(&req.deployment_id) && !subject.has_full_access() {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -511,7 +528,19 @@ async fn agent_sync(
     };
 
     Json(AgentSyncResponse {
-        target: target.map(|t| serde_json::to_value(&t).unwrap_or_default()),
+        target: match target
+            .map(|t| serde_json::to_value(&t))
+            .transpose()
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Failed to serialize target deployment: {e}");
+                return ErrorData::internal(
+                    "Failed to serialize target deployment",
+                )
+                .into_response()
+            }
+        },
         commands_url: Some(state.config.commands_base_url()),
     })
     .into_response()
@@ -543,7 +572,15 @@ async fn initialize(
     match subject.scope.token_type {
         TokenType::Deployment => {
             // Already has a deployment - return its ID
-            let deployment_id = subject.scope.deployment_id.unwrap_or_default();
+            let deployment_id = match subject.scope.deployment_id {
+                Some(id) => id,
+                None => {
+                    return ErrorData::unauthorized(
+                        "Deployment token missing deployment_id in scope",
+                    )
+                    .into_response()
+                }
+            };
             Json(InitializeResponse {
                 deployment_id,
                 token: None,
@@ -553,7 +590,15 @@ async fn initialize(
         TokenType::DeploymentGroup => {
             // Create a new deployment, or return existing one if name matches.
             // Cloud platforms are push-model in this flow; Local/Kubernetes stay pull-model.
-            let dg_id = subject.scope.deployment_group_id.unwrap_or_default();
+            let dg_id = match subject.scope.deployment_group_id {
+                Some(id) => id,
+                None => {
+                    return ErrorData::unauthorized(
+                        "Deployment group token missing deployment_group_id in scope",
+                    )
+                    .into_response()
+                }
+            };
 
             let name = req
                 .name

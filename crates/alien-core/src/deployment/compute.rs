@@ -52,6 +52,11 @@ pub struct HorizonConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizond_binary_hash: Option<String>,
 
+    /// AMI / image ID for the Flatcar OS image used by EC2 instances.
+    /// The Flatcar image has horizond baked in, so no user-data script is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flatcar_image_id: Option<String>,
+
     /// Cluster configurations (one per ContainerCluster resource)
     /// Key: ContainerCluster resource ID from stack
     /// Value: Cluster ID and management token for that cluster

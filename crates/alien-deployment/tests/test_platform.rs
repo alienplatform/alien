@@ -115,6 +115,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
+            supported_platforms: None,
     }
 }
 
@@ -502,6 +503,7 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
+            supported_platforms: None,
     };
 
     let config = create_test_config("hash_v1", true);
@@ -619,6 +621,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
+            supported_platforms: None,
     };
 
     let release_v2 = ReleaseInfo {
@@ -760,6 +763,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
+            supported_platforms: None,
     }
 }
 
@@ -821,6 +825,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
+            supported_platforms: None,
     }
 }
 

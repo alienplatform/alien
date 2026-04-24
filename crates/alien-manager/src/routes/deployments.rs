@@ -478,7 +478,7 @@ async fn get_deployment(
     };
 
     // Check access
-    if !subject.is_admin()
+    if !subject.has_full_access()
         && !subject.can_access_group(&deployment.deployment_group_id)
         && !subject.can_access_deployment(&deployment.id)
     {
@@ -519,7 +519,7 @@ async fn get_deployment_info(
     };
 
     // Check access
-    if !subject.is_admin()
+    if !subject.has_full_access()
         && !subject.can_access_group(&deployment.deployment_group_id)
         && !subject.can_access_deployment(&deployment.id)
     {
@@ -590,7 +590,7 @@ async fn delete_deployment(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 

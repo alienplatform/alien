@@ -669,19 +669,14 @@ async fn forward_request(
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-/// Validate that the caller has push permissions (admin/developer only).
+/// Validate that the caller has push permissions (admin or deployment group).
 fn require_push_auth(subject: &AuthSubject) -> Result<(), Response> {
     match subject.scope.token_type {
-        TokenType::Admin => Ok(()),
-        TokenType::DeploymentGroup => Err(oci_error(
-            StatusCode::FORBIDDEN,
-            "DENIED",
-            "Deployment group tokens cannot push images. Use an admin API key or OAuth token.",
-        )),
+        TokenType::Admin | TokenType::DeploymentGroup => Ok(()),
         TokenType::Deployment => Err(oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
-            "Deployment tokens cannot push images. Use an admin API key or OAuth token.",
+            "Deployment tokens cannot push images.",
         )),
     }
 }

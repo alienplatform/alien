@@ -309,6 +309,7 @@ pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Re
                     monitoring_metrics_endpoint: monitoring_metrics_endpoint.clone(),
                     monitoring_auth_hash: monitoring_auth_hash.clone(),
                     monitoring_metrics_auth_hash: monitoring_metrics_auth_hash.clone(),
+                    flatcar_image_id: horizon_config.flatcar_image_id.clone(),
                 });
                 debug!(
                     cluster_id = %cluster_id,
@@ -759,6 +760,7 @@ mod tests {
                 profiles,
                 management: alien_core::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         }
     }
 

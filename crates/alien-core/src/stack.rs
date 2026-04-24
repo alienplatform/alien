@@ -1,5 +1,5 @@
 use crate::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
-use crate::{Resource, ResourceLifecycle, ResourceRef};
+use crate::{Platform, Resource, ResourceLifecycle, ResourceRef};
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,10 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default)]
     pub permissions: PermissionsConfig,
+    /// Which platforms this stack supports. When None, all platforms are supported.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_platforms: Option<Vec<Platform>>,
 }
 
 impl Stack {
@@ -73,6 +77,20 @@ impl Stack {
     /// Returns the management permissions configuration for the stack.
     pub fn management(&self) -> &ManagementPermissions {
         &self.permissions.management
+    }
+
+    /// Returns the supported platforms, or None if all platforms are supported.
+    pub fn supported_platforms(&self) -> Option<&[Platform]> {
+        self.supported_platforms.as_deref()
+    }
+
+    /// Returns true if the given platform is supported by this stack.
+    /// When supported_platforms is None, all platforms are supported.
+    pub fn supports_platform(&self, platform: &Platform) -> bool {
+        match &self.supported_platforms {
+            Some(platforms) => platforms.contains(platform),
+            None => true,
+        }
     }
 }
 
@@ -149,6 +167,12 @@ impl StackBuilder {
     /// ```
     pub fn permission(mut self, name: impl Into<String>, profile: PermissionProfile) -> Self {
         self.permissions.profiles.insert(name.into(), profile);
+        self
+    }
+
+    /// Sets the supported platforms for this stack.
+    pub fn platforms(mut self, platforms: Vec<Platform>) -> Self {
+        self.supported_platforms = Some(platforms);
         self
     }
 

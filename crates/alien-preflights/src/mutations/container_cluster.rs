@@ -587,6 +587,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -662,6 +663,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -715,6 +717,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -796,6 +799,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -865,6 +869,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -945,6 +950,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -1003,6 +1009,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {
@@ -1062,6 +1069,7 @@ mod tests {
                 id: "test-stack".to_string(),
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
             };
 
             let stack_state = StackState {
@@ -1166,6 +1174,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
         let stack_state = StackState {
             platform: Platform::Aws,
@@ -1284,6 +1293,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let stack_state = StackState {

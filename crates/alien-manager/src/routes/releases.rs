@@ -195,7 +195,7 @@ async fn create_release(
         }
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 

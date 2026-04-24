@@ -177,11 +177,18 @@ async fn load_release_config(
     // In dev mode, default platforms to ["local"] and skip experimental gating
     let is_dev = ctx.is_dev();
 
+    // Load stack config (needed for supported_platforms validation and auto-build)
+    let stack = crate::config::load_configuration(current_dir.clone())
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load configuration".to_string(),
+        })?;
+
     // Determine target platforms:
-    // 1. Explicit --platforms flag takes priority
+    // 1. Explicit --platforms flag takes priority (validated against stack.supported_platforms)
     // 2. In dev mode without explicit platforms, default to ["local"]
-    // 3. Otherwise, use already-built platforms
-    // 4. If nothing built, ask the manager which platforms are configured
+    // 3. stack.supported_platforms if declared
+    // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
         // Validate explicit platforms against experimental gating (skip in dev mode)
         if !args.experimental && !is_dev {
@@ -199,10 +206,15 @@ async fn load_release_config(
                 }
             }
         }
+        // Validate against stack's supported platforms
+        validate_platforms_against_stack(platforms, &stack)?;
         platforms.clone()
     } else if is_dev {
         // Dev mode defaults to local platform
         vec!["local".to_string()]
+    } else if let Some(supported) = stack.supported_platforms() {
+        // Use declared supported platforms from alien.ts
+        supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
         if !discovered.is_empty() {
@@ -210,7 +222,7 @@ async fn load_release_config(
         } else {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "platforms".to_string(),
-                message: "No platforms found. Run `alien build --platform <aws|gcp|azure>` first, or specify --platforms explicitly.".to_string(),
+                message: "No platforms found. Declare .platforms() in alien.ts, run `alien build --platform <aws|gcp|azure>` first, or specify --platforms explicitly.".to_string(),
             }));
         }
     };
@@ -218,11 +230,6 @@ async fn load_release_config(
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
-        let stack = crate::config::load_configuration(current_dir.clone())
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to load configuration".to_string(),
-            })?;
         for platform_str in &target_platforms {
             auto_build_for_platform(
                 platform_str,
@@ -238,7 +245,9 @@ async fn load_release_config(
     let platforms = if let Some(ref platforms) = args.platforms {
         platforms.clone()
     } else if is_dev {
-        // Dev mode: we already defaulted to ["local"] above, keep it
+        target_platforms.clone()
+    } else if stack.supported_platforms().is_some() {
+        // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
@@ -915,6 +924,33 @@ fn format_platform_summary(platforms: &[String]) -> String {
         .map(|platform| display_platform_name(platform).to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Validate that all requested platforms are supported by the stack.
+/// Returns Ok(()) if stack has no supported_platforms (all allowed) or all platforms are in the list.
+fn validate_platforms_against_stack(platforms: &[String], stack: &Stack) -> Result<()> {
+    let supported = match stack.supported_platforms() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    for p in platforms {
+        if let Ok(platform) = Platform::from_str(p) {
+            if !supported.contains(&platform) {
+                let supported_list: Vec<&str> = supported.iter().map(|p| p.as_str()).collect();
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "platforms".to_string(),
+                    message: format!(
+                        "Platform '{}' is not supported by this stack. Declared platforms: [{}]",
+                        p,
+                        supported_list.join(", ")
+                    ),
+                }));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Validate that all compute resources in the stack have remote image URIs (not local paths).

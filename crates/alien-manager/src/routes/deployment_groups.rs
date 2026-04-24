@@ -110,7 +110,7 @@ async fn create_deployment_group(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 
@@ -215,7 +215,7 @@ async fn create_deployment_group_token(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 

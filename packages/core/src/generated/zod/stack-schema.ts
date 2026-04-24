@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { PlatformSchema } from "./platform-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { ResourceEntrySchema } from "./resource-entry-schema.js";
 
@@ -16,8 +17,9 @@ get "permissions"(){
                 return PermissionsConfigSchema.describe("Combined permissions configuration that contains both profiles and management").optional()
               },
 "resources": z.object({
-    
-    }).catchall(z.lazy(() => ResourceEntrySchema)).describe("Map of resource IDs to their configurations and lifecycle settings")
+
+    }).catchall(z.lazy(() => ResourceEntrySchema)).describe("Map of resource IDs to their configurations and lifecycle settings"),
+"supportedPlatforms": z.array(PlatformSchema).optional().describe("Which platforms this stack supports. When omitted, all platforms are supported."),
     }).describe("A bag of resources, unaware of any cloud.")
 
 export type Stack = z.infer<typeof StackSchema>

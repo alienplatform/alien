@@ -241,6 +241,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -302,6 +303,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Extend(extend_profile),
             },
+            supported_platforms: None,
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -362,6 +364,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Override(override_profile.clone()),
             },
+            supported_platforms: None,
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -431,6 +434,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Create stack state with Pull model (Operator deploys locally)
@@ -499,6 +503,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Create stack state with Push model (Manager deploys remotely)
@@ -563,6 +568,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let stack_state = StackState::new(Platform::Aws);
@@ -675,6 +681,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Disable heartbeat
@@ -737,6 +744,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Disable telemetry
@@ -800,6 +808,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Require approval for telemetry - permissions should still be created

@@ -914,6 +914,7 @@ impl SingleControllerExecutorBuilder {
                 profiles: permissions,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         // Set resource prefix in stack state

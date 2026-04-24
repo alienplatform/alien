@@ -56,6 +56,7 @@ impl TokenDbValidator {
                     deployment_group_id: record.deployment_group_id,
                     deployment_id: record.deployment_id,
                 },
+                workspace_id: None,
             })),
             None => {
                 let mut err = AlienError::new(GenericError {
@@ -105,6 +106,7 @@ impl AuthValidator for TokenDbValidator {
                     deployment_group_id: record.deployment_group_id,
                     deployment_id: record.deployment_id,
                 },
+                workspace_id: None,
             })),
             None => {
                 let mut err = AlienError::new(GenericError {

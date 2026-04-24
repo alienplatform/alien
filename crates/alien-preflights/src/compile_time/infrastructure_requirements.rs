@@ -161,6 +161,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig::default(),
+            supported_platforms: None,
         }
     }
 

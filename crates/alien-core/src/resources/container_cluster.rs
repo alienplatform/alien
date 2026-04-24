@@ -114,6 +114,10 @@ pub struct TemplateInputs {
     /// Only set when metrics uses a separate auth header from logs (e.g. Axiom with distinct datasets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring_metrics_auth_hash: Option<String>,
+    /// AMI / image ID for the Flatcar OS image used by EC2 instances.
+    /// Set by the platform when stamping template inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flatcar_image_id: Option<String>,
 }
 
 /// ContainerCluster resource for running long-running container workloads.

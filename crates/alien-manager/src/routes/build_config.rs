@@ -40,7 +40,7 @@ async fn get_build_config(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 

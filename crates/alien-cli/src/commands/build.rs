@@ -148,14 +148,32 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
     for platform_str in &args.platforms {
         let platform_str = platform_str.to_ascii_lowercase();
 
-        // Check for experimental platforms
         if let Ok(platform) = alien_core::Platform::from_str(&platform_str) {
+            // Check for experimental platforms
             if platform.is_experimental() && !args.experimental {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "platform".to_string(),
                     message: format!(
                         "Platform '{}' is experimental and not yet production-ready. Pass --experimental to use it anyway.",
                         platform_str
+                    ),
+                }));
+            }
+
+            // Validate against stack's supported platforms
+            if !stack.supports_platform(&platform) {
+                let supported_list: Vec<&str> = stack
+                    .supported_platforms()
+                    .unwrap()
+                    .iter()
+                    .map(|p| p.as_str())
+                    .collect();
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "platform".to_string(),
+                    message: format!(
+                        "Platform '{}' is not supported by this stack. Declared platforms: [{}]",
+                        platform_str,
+                        supported_list.join(", ")
                     ),
                 }));
             }

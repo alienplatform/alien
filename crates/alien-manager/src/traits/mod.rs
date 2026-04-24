@@ -14,5 +14,5 @@ pub use deployment_store::{
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;
-pub use telemetry_backend::{TelemetryBackend, TelemetrySignal};
+pub use telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 pub use token_store::{CreateTokenParams, TokenRecord, TokenStore};

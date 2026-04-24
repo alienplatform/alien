@@ -130,7 +130,7 @@ async fn set_secret(
     Json(body): Json<SetSecretRequest>,
 ) -> Result<Json<serde_json::Value>> {
     let subject = auth::require_auth(&state, &headers).await?;
-    if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+    if !subject.has_full_access() && !subject.can_access_deployment(&deployment_id) {
         return Err(ErrorData::forbidden(
             "Access denied: requires admin or matching deployment token",
         ));
@@ -157,7 +157,7 @@ async fn get_secret(
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
 ) -> Result<Json<GetSecretResponse>> {
     let subject = auth::require_auth(&state, &headers).await?;
-    if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+    if !subject.has_full_access() && !subject.can_access_deployment(&deployment_id) {
         return Err(ErrorData::forbidden(
             "Access denied: requires admin or matching deployment token",
         ));

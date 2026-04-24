@@ -145,6 +145,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let check = ValidResourceDependenciesCheck;
@@ -190,6 +191,7 @@ mod tests {
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
         };
 
         let check = ValidResourceDependenciesCheck;

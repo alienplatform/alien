@@ -55,7 +55,7 @@ async fn require_command_access(
     subject: &crate::traits::AuthSubject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    if subject.is_admin() {
+    if subject.has_full_access() {
         return Ok(());
     }
     if subject.can_access_deployment(deployment_id) {
@@ -113,7 +113,7 @@ async fn create_command(
     };
 
     // Admin or DG that owns the deployment's group
-    if !subject.is_admin() {
+    if !subject.has_full_access() {
         let group_id = match get_deployment_group_id(&state, &request.deployment_id).await {
             Ok(g) => g,
             Err(e) => return e,
@@ -177,7 +177,7 @@ async fn upload_complete(
     };
 
     // Same auth as create: Admin or DG for the deployment's group
-    if !subject.is_admin() {
+    if !subject.has_full_access() {
         let group_id = match get_deployment_group_id(&state, &deployment_id).await {
             Ok(g) => g,
             Err(e) => return e,
@@ -230,7 +230,7 @@ async fn submit_response(
             Err(e) => return e,
         };
 
-        if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+        if !subject.has_full_access() && !subject.can_access_deployment(&deployment_id) {
             return ErrorData::forbidden(
                 "Access denied: only the target deployment can submit responses",
             )
@@ -284,7 +284,7 @@ async fn get_command_payload(
             }
         }
         Err(_) => {
-            if let Err(e) = auth::require_admin(&subject) {
+            if let Err(e) = auth::require_full_access(&subject) {
                 return e.into_response();
             }
         }
@@ -328,7 +328,7 @@ async fn store_command_payload(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
+    if let Err(e) = auth::require_full_access(&subject) {
         return e.into_response();
     }
 
@@ -364,7 +364,7 @@ async fn acquire_leases(
         Err(e) => return e.into_response(),
     };
 
-    if !subject.is_admin() && !subject.can_access_deployment(&lease_request.deployment_id) {
+    if !subject.has_full_access() && !subject.can_access_deployment(&lease_request.deployment_id) {
         return ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
             .into_response();
     }

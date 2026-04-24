@@ -13,7 +13,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::error::ErrorData;
-use crate::traits::TelemetrySignal;
+use crate::traits::{TelemetryCaller, TelemetrySignal};
 
 use super::{auth, AppState};
 
@@ -61,12 +61,20 @@ async fn ingest(
         Err(e) => return e.into_response(),
     };
 
-    let deployment_id = match &subject.scope.deployment_id {
-        Some(id) => id.clone(),
+    let caller = match &subject.scope.deployment_id {
+        Some(id) => TelemetryCaller {
+            deployment_id: id.clone(),
+            project_id: subject.scope.deployment_group_id.clone(),
+            workspace_id: subject.workspace_id.clone(),
+        },
         None => {
             // Allow admin tokens to ingest with a generic scope
-            if subject.is_admin() {
-                "admin".to_string()
+            if subject.has_full_access() {
+                TelemetryCaller {
+                    deployment_id: "admin".to_string(),
+                    project_id: None,
+                    workspace_id: subject.workspace_id.clone(),
+                }
             } else {
                 return ErrorData::forbidden("Telemetry ingestion requires a deployment token")
                     .into_response();
@@ -76,7 +84,7 @@ async fn ingest(
 
     match state
         .telemetry_backend
-        .ingest(signal, &deployment_id, body)
+        .ingest(signal, &caller, body)
         .await
     {
         Ok(()) => Json(TelemetryResponse { accepted: true }).into_response(),

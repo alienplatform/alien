@@ -23,6 +23,7 @@ impl AuthValidator for PermissiveAuthValidator {
                 deployment_group_id: None,
                 deployment_id: None,
             },
+            workspace_id: None,
         }))
     }
 }
