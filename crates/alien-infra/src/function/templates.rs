@@ -1,13 +1,10 @@
 use async_trait::async_trait;
-use tracing::{debug, warn};
+use tracing::info;
 
 use crate::error::{ErrorData, Result};
 use crate::{AwsFunctionController, AwsFunctionState, ResourceController};
-use alien_aws_clients::lambda::{LambdaApi, LambdaClient};
-use alien_aws_clients::AwsCredentialProvider;
-use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Function, Ingress, Resource, ResourceDefinition};
-use alien_error::{AlienError, Context, ContextError};
+use alien_core::{Function, FunctionTrigger, Ingress, Resource, ResourceDefinition};
+use alien_error::AlienError;
 
 /// CloudFormation importer for AWS Function resources
 #[derive(Debug, Clone, Default)]
@@ -23,7 +20,6 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
         context: &crate::cloudformation::traits::CloudFormationImportContext,
     ) -> Result<Box<dyn ResourceController>> {
         use crate::cloudformation::utils::sanitize_to_pascal_case;
-        use tracing::info;
 
         let function = resource.downcast_ref::<Function>().ok_or_else(|| {
             AlienError::new(ErrorData::ControllerResourceTypeMismatch {
@@ -46,83 +42,55 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
 
         let function_name = physical_id.as_str();
 
-        // Create our custom Lambda client using the AWS config from context
-        let credentials = AwsCredentialProvider::from_config(context.aws_config.clone())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        let client = LambdaClient::new(reqwest::Client::new(), credentials);
+        // Extract the ARN from the function name using the account ID and region from context
+        let region = &context.aws_config.region;
+        let account_id = &context.aws_config.account_id;
+        let arn = Some(format!(
+            "arn:aws:lambda:{}:{}:function:{}",
+            region, account_id, function_name
+        ));
 
         info!(name=%function_name, "Importing Lambda function state from CloudFormation");
-        let function_result = client
-            .get_function_configuration(function_name, None)
-            .await
-            .context(ErrorData::InfrastructureImportFailed {
-                message: format!(
-                    "Failed to get function configuration for '{}'",
-                    function_name
-                ),
-                import_source: Some("CloudFormation".to_string()),
-                resource_id: Some(function.id.clone()),
-            })?;
 
-        let arn = function_result.function_arn.clone();
-
-        // Try to get the function URL configuration if needed
+        // Import API Gateway V2 state for public ingress functions
+        let mut api_id = None;
         let mut url = None;
+        let mut stage_name = None;
+
         if function.ingress == Ingress::Public {
-            match client.get_function_url_config(function_name, None).await {
-                Ok(url_config) => {
-                    url = Some(url_config.function_url);
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    // URL config doesn't exist, which is expected for some functions
-                    debug!(name=%function_name, "Function URL configuration not found");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::InfrastructureImportFailed {
-                        message: format!(
-                            "Failed to get function URL configuration for '{}'",
-                            function_name
-                        ),
-                        import_source: Some("CloudFormation".to_string()),
-                        resource_id: Some(function.id.clone()),
-                    }));
+            let api_logical_id = format!("{}Api", logical_id);
+            if let Some(api_physical_id) = context.cfn_resources.get(&api_logical_id) {
+                api_id = Some(api_physical_id.clone());
+                url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com",
+                    api_physical_id, region
+                ));
+                stage_name = Some("$default".to_string());
+            }
+        }
+
+        // Import event source mappings from CloudFormation
+        let mut event_source_mappings = Vec::new();
+        for (trigger_index, trigger) in function.triggers.iter().enumerate() {
+            if let FunctionTrigger::Queue { .. } = trigger {
+                let esm_logical_id = format!("{}QueueTrigger{}", logical_id, trigger_index);
+                if let Some(esm_physical_id) = context.cfn_resources.get(&esm_logical_id) {
+                    event_source_mappings.push(esm_physical_id.clone());
                 }
             }
         }
 
-        // For functions with HTTP ingress, also check for the permission statement
-        if function.ingress == Ingress::Public && url.is_some() {
-            match client.get_policy(function_name, None).await {
-                Ok(_policy) => {
-                    // Policy exists, which is good
+        // Import EventBridge rule names from CloudFormation
+        let mut eventbridge_rule_names = Vec::new();
+        let mut schedule_index = 0usize;
+        for trigger in &function.triggers {
+            if let FunctionTrigger::Schedule { .. } = trigger {
+                let rule_logical_id =
+                    format!("{}ScheduleTrigger{}", logical_id, schedule_index);
+                if let Some(rule_physical_id) = context.cfn_resources.get(&rule_logical_id) {
+                    eventbridge_rule_names.push(rule_physical_id.clone());
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(name=%function_name, "Function URL exists but no permission policy found");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::InfrastructureImportFailed {
-                        message: format!(
-                            "Failed to get Lambda policy for function '{}'",
-                            function_name
-                        ),
-                        import_source: Some("CloudFormation".to_string()),
-                        resource_id: Some(function.id.clone()),
-                    }));
-                }
+                schedule_index += 1;
             }
         }
 
@@ -131,21 +99,21 @@ impl crate::cloudformation::traits::CloudFormationResourceImporter
             function_name: Some(function_name.to_string()),
             arn,
             url,
-            event_source_mappings: Vec::new(), // Event source mappings are not imported from CloudFormation
+            event_source_mappings,
             fqdn: None,
             certificate_id: None,
             certificate_arn: None,
-            api_id: None,
+            api_id,
             integration_id: None,
             route_id: None,
-            stage_name: None,
+            stage_name,
             api_mapping_id: None,
             domain_name: None,
             load_balancer: None,
             certificate_issued_at: None,
             uses_custom_domain: false,
             s3_permission_statement_ids: Vec::new(),
-            eventbridge_rule_names: Vec::new(),
+            eventbridge_rule_names,
             eventbridge_permission_statement_ids: Vec::new(),
             _internal_stay_count: None,
         }))

@@ -17,7 +17,7 @@ export const AgentStatusSchema = z.object({
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
-"id": z.string().describe("Agent ID (e.g., ag_xyz123)"),
+"id": z.string().describe("Deployment ID (e.g., dep_xyz123)"),
 "name": z.string().describe("Agent name (from --agent-name flag)"),
 "resources": z.object({
     

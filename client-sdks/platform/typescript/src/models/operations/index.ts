@@ -24,7 +24,7 @@ export * from "./deletedomain.js";
 export * from "./deletemanager.js";
 export * from "./deleteproject.js";
 export * from "./deleteworkspace.js";
-export * from "./generatedeepstoretoken.js";
+export * from "./generatemanagertoken.js";
 export * from "./getapikey.js";
 export * from "./getcommand.js";
 export * from "./getcontainerattention.js";

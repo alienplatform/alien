@@ -8,7 +8,7 @@ Request to release deployment lock
 import { SyncReleaseRequest } from "@alienplatform/platform-api/models";
 
 let value: SyncReleaseRequest = {
-  deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   session: "<value>",
 };
 ```
@@ -17,5 +17,5 @@ let value: SyncReleaseRequest = {
 
 | Field                         | Type                          | Required                      | Description                   | Example                       |
 | ----------------------------- | ----------------------------- | ----------------------------- | ----------------------------- | ----------------------------- |
-| `deploymentId`                | *string*                      | :heavy_check_mark:            | Deployment ID to release      | ag_pnj2da55wi5sxbdcav9t273je  |
+| `deploymentId`                | *string*                      | :heavy_check_mark:            | Deployment ID to release      | dep_0c29fq4a2yjb7kx3smwdgxlc  |
 | `session`                     | *string*                      | :heavy_check_mark:            | Session identifier to release |                               |

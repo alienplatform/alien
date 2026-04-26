@@ -4,6 +4,17 @@
 //! to running deployments, and forwards telemetry. Single binary, SQLite-backed,
 //! no external dependencies.
 //!
+//! ## Single-Tenant Design
+//!
+//! OSS alien-manager is designed for **single-tenant** operation: one instance
+//! manages one project. There is no workspace isolation or tenant boundary at
+//! this layer. API keys (admin, deployment-group, deployment) assume a trusted
+//! operator with full access to the project.
+//!
+//! Multi-tenancy, workspace isolation, and fine-grained RBAC are provided by
+//! the platform layer (`alien-managerx`), which embeds alien-manager as a
+//! library and replaces its providers with multi-tenant implementations.
+//!
 //! ## Provider Architecture
 //!
 //! alien-manager uses trait-based providers for its core subsystems. Each has a

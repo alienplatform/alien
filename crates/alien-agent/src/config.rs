@@ -117,7 +117,7 @@ mod tests {
             .platform(Platform::Aws)
             .maybe_sync(Some(SyncConfig {
                 url: "https://manager.example.com".parse().unwrap(),
-                token: "ax_agent_xyz".to_string(),
+                token: "ax_dep_xyz".to_string(),
             }))
             .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
             .build();
@@ -136,7 +136,7 @@ mod tests {
             .platform(Platform::Kubernetes)
             .maybe_sync(Some(SyncConfig {
                 url: "https://manager.example.com".parse().unwrap(),
-                token: "ax_agent_abc".to_string(),
+                token: "ax_dep_abc".to_string(),
             }))
             .encryption_key("key")
             .data_dir("/var/agent")

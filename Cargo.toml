@@ -30,6 +30,8 @@ members = [
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
   "examples/basic-function-rs",
+  "examples/endpoint-agent",
+  "examples/byoc-database",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
 ]

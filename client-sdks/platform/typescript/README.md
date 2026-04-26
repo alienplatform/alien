@@ -231,7 +231,7 @@ run();
 * [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 * [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 * [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
-* [generateDeepstoreToken](docs/sdks/managers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+* [generateManagerToken](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 * [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 * [googleCloudConnect](docs/sdks/managers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
@@ -362,7 +362,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
 - [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
 - [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
-- [`managersGenerateDeepstoreToken`](docs/sdks/managers/README.md#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+- [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 - [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 - [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 - [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.

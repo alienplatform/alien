@@ -335,7 +335,7 @@ mod tests {
                     Utc::now() + chrono::Duration::hours(1),
                 ),
             },
-            deployment_id: "ag_123".to_string(),
+            deployment_id: "dep_123".to_string(),
         }
     }
 
@@ -470,7 +470,7 @@ mod tests {
                     Utc::now() + chrono::Duration::hours(1),
                 ),
             },
-            deployment_id: "ag_123".to_string(),
+            deployment_id: "dep_123".to_string(),
         };
 
         let decoded = decode_params(&envelope).await.unwrap();

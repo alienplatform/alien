@@ -428,7 +428,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.get({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -454,7 +454,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsGet(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -505,7 +505,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.delete({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -531,7 +531,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsDelete(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -582,7 +582,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.getInfo({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -608,7 +608,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsGetInfo(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -758,7 +758,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.redeploy({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -784,7 +784,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsRedeploy(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -835,7 +835,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.pinRelease({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
     pinReleaseRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
@@ -864,7 +864,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsPinRelease(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
     pinReleaseRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
@@ -918,7 +918,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.retry({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -944,7 +944,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsRetry(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -995,7 +995,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.updateEnvironmentVariables({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -1021,7 +1021,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsUpdateEnvironmentVariables(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {
@@ -1072,7 +1072,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.deployments.createToken({
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
 
@@ -1098,7 +1098,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await deploymentsCreateToken(alien, {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     workspace: "my-workspace",
   });
   if (res.ok) {

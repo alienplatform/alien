@@ -16,6 +16,7 @@ import {
 
 export type CreateReleaseRequest = {
   gitMetadata?: GitMetadata | null | undefined;
+  project?: string | null | undefined;
   /**
    * The release API accepts stacks keyed by platform.
    *
@@ -28,6 +29,7 @@ export type CreateReleaseRequest = {
 /** @internal */
 export type CreateReleaseRequest$Outbound = {
   gitMetadata?: GitMetadata$Outbound | null | undefined;
+  project?: string | null | undefined;
   stack: StackByPlatform$Outbound;
 };
 
@@ -37,6 +39,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   CreateReleaseRequest
 > = z.object({
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
+  project: z.nullable(z.string()).optional(),
   stack: StackByPlatform$outboundSchema,
 });
 

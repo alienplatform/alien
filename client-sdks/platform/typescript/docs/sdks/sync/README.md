@@ -29,7 +29,7 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       session: "<value>",
       deploymentIds: [
-        "ag_pnj2da55wi5sxbdcav9t273je",
+        "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
     },
   });
@@ -61,7 +61,7 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       session: "<value>",
       deploymentIds: [
-        "ag_pnj2da55wi5sxbdcav9t273je",
+        "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
     },
   });
@@ -115,7 +115,7 @@ async function run() {
   const result = await alien.sync.reconcile({
     workspace: "my-workspace",
     syncReconcileRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       state: {
         platform: "aws",
         status: "provisioning-failed",
@@ -147,7 +147,7 @@ async function run() {
   const res = await syncReconcile(alien, {
     workspace: "my-workspace",
     syncReconcileRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       state: {
         platform: "aws",
         status: "provisioning-failed",
@@ -204,7 +204,7 @@ async function run() {
   const result = await alien.sync.release({
     workspace: "my-workspace",
     syncReleaseRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       session: "<value>",
     },
   });
@@ -233,7 +233,7 @@ async function run() {
   const res = await syncRelease(alien, {
     workspace: "my-workspace",
     syncReleaseRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       session: "<value>",
     },
   });

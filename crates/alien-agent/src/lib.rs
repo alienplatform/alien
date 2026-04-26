@@ -12,7 +12,7 @@
 //!     .platform(alien_core::Platform::Aws)
 //!     .maybe_sync(Some(SyncConfig {
 //!         url: "https://manager.example.com".parse().unwrap(),
-//!         token: "ax_agent_xxx".to_string(),
+//!         token: "ax_dep_xxx".to_string(),
 //!     }))
 //!     .encryption_key("your_64_char_hex_encryption_key_here_for_aegis256_cipher")
 //!     .build();

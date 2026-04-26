@@ -105,11 +105,12 @@ async function run() {
     createAPIKeyRequest: {
       description: "pfft plus harangue request mooch starch lazily",
       scope: {
-        type: "project",
+        type: "deployment-group",
+        deploymentGroupId: "<id>",
         projectId: "<id>",
-        role: "project.developer",
+        role: "deployment-group.deployer",
       },
-      expiresAt: new Date("2023-11-01T10:45:22.205Z"),
+      expiresAt: new Date("2024-10-31T10:45:22.205Z"),
     },
   });
 
@@ -139,11 +140,12 @@ async function run() {
     createAPIKeyRequest: {
       description: "pfft plus harangue request mooch starch lazily",
       scope: {
-        type: "project",
+        type: "deployment-group",
+        deploymentGroupId: "<id>",
         projectId: "<id>",
-        role: "project.developer",
+        role: "deployment-group.deployer",
       },
-      expiresAt: new Date("2023-11-01T10:45:22.205Z"),
+      expiresAt: new Date("2024-10-31T10:45:22.205Z"),
     },
   });
   if (res.ok) {

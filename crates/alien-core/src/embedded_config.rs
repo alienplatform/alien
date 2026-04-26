@@ -193,7 +193,7 @@ mod tests {
         let config = AgentConfig {
             manager_url: Some("https://manager.example.com".into()),
             token: Some("tok_agent123".into()),
-            deployment_id: Some("ag_abc".into()),
+            deployment_id: Some("dep_abc".into()),
             sync_interval_secs: 60,
             name: Some("acme-agent".into()),
             display_name: Some("Acme Agent".into()),

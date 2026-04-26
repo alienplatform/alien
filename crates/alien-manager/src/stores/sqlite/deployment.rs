@@ -636,10 +636,18 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             query
                 .and_where(Expr::col(Deployments::Id).eq(&data.deployment_id as &str))
+                .and_where(Expr::col(Deployments::LockedBy).eq(&data.session as &str))
                 .to_string(SqliteQueryBuilder)
         };
 
-        self.db.execute(&sql).await?;
+        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
+        if rows_affected == 0 {
+            return Err(AlienError::new(ErrorData::DeploymentLocked {
+                deployment_id: data.deployment_id.clone(),
+                locked_by: None,
+            })
+            .into_generic());
+        }
 
         // Fetch and return the updated deployment
         self.get_deployment(&data.deployment_id)

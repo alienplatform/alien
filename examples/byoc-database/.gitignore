@@ -1,0 +1,14 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
+# Alien
+.alien/
+
+# Logs
+*.log

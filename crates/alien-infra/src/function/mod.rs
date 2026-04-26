@@ -25,7 +25,8 @@ pub use test::*;
 mod templates;
 pub use templates::*;
 
-pub mod crontab_to_eventbridge;
+/// Re-export from alien-core (single source of truth).
+pub use alien_core::crontab_to_eventbridge;
 
 mod readiness_probe;
 pub use readiness_probe::*;

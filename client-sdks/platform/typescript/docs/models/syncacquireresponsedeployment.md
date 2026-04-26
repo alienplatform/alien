@@ -6,7 +6,7 @@
 import { SyncAcquireResponseDeployment } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseDeployment = {
-  deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   projectId: "<id>",
   current: {
     platform: "aws",
@@ -26,7 +26,7 @@ let value: SyncAcquireResponseDeployment = {
 
 | Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  | Example                                                                      |
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `deploymentId`                                                               | *string*                                                                     | :heavy_check_mark:                                                           | ID of the acquired deployment                                                | ag_pnj2da55wi5sxbdcav9t273je                                                 |
+| `deploymentId`                                                               | *string*                                                                     | :heavy_check_mark:                                                           | ID of the acquired deployment                                                | dep_0c29fq4a2yjb7kx3smwdgxlc                                                 |
 | `projectId`                                                                  | *string*                                                                     | :heavy_check_mark:                                                           | Project ID the agent belongs to                                              |                                                                              |
 | `current`                                                                    | [models.SyncAcquireResponseCurrent](../models/syncacquireresponsecurrent.md) | :heavy_check_mark:                                                           | Current deployment state (includes releases)                                 |                                                                              |
 | `config`                                                                     | [models.SyncAcquireResponseConfig](../models/syncacquireresponseconfig.md)   | :heavy_check_mark:                                                           | Deployment configuration                                                     |                                                                              |

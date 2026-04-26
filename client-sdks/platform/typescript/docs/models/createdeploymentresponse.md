@@ -7,7 +7,7 @@ import { CreateDeploymentResponse } from "@alienplatform/platform-api/models";
 
 let value: CreateDeploymentResponse = {
   deployment: {
-    id: "ag_pnj2da55wi5sxbdcav9t273je",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     name: "acme-prod",
     status: "running",
     projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",

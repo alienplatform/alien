@@ -56,6 +56,10 @@ impl CompileTimeCheck for HorizonRequiredCheck {
         is_cloud_platform(platform) && missing_platform_api_key()
     }
 
+    fn is_deployment_prerequisite(&self) -> bool {
+        true
+    }
+
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut container_resources = Vec::new();
 
@@ -105,6 +109,10 @@ impl CompileTimeCheck for DnsTlsRequiredCheck {
 
     fn should_run(&self, _stack: &Stack, platform: Platform) -> bool {
         is_cloud_platform(platform) && missing_platform_api_key()
+    }
+
+    fn is_deployment_prerequisite(&self) -> bool {
+        true
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {

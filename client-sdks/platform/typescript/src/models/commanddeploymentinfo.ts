@@ -183,6 +183,10 @@ export type CommandDeploymentInfo = {
     | null
     | undefined;
   /**
+   * Manager ID for obtaining access tokens
+   */
+  managerId?: string | null | undefined;
+  /**
    * URL of the manager for direct payload access
    */
   managerUrl?: string | null | undefined;
@@ -406,6 +410,7 @@ export const CommandDeploymentInfo$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  managerId: z.nullable(z.string()).optional(),
   managerUrl: z.nullable(z.string()).optional(),
   managerName: z.nullable(z.string()).optional(),
   managerIsSystem: z.nullable(z.boolean()).optional(),

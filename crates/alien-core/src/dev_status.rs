@@ -53,7 +53,7 @@ pub enum DevStatusState {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatus {
-    /// Agent ID (e.g., ag_xyz123)
+    /// Deployment ID (e.g., dep_xyz123)
     pub id: String,
     /// Agent name (from --agent-name flag)
     pub name: String,

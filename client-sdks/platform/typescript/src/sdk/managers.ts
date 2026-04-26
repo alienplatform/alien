@@ -4,7 +4,7 @@
 
 import { managersCreate } from "../funcs/managersCreate.js";
 import { managersDelete } from "../funcs/managersDelete.js";
-import { managersGenerateDeepstoreToken } from "../funcs/managersGenerateDeepstoreToken.js";
+import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerToken.js";
 import { managersGet } from "../funcs/managersGet.js";
 import { managersGetDeployment } from "../funcs/managersGetDeployment.js";
 import { managersGetManagementConfig } from "../funcs/managersGetManagementConfig.js";
@@ -133,13 +133,13 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+   * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
    */
-  async generateDeepstoreToken(
-    request: operations.GenerateDeepstoreTokenRequest,
+  async generateManagerToken(
+    request: operations.GenerateManagerTokenRequest,
     options?: RequestOptions,
-  ): Promise<models.GenerateDeepstoreTokenResponse> {
-    return unwrapAsync(managersGenerateDeepstoreToken(
+  ): Promise<models.GenerateManagerTokenResponse> {
+    return unwrapAsync(managersGenerateManagerToken(
       this,
       request,
       options,

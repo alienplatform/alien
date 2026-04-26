@@ -1,13 +1,13 @@
 {
   "name": "@alienplatform/manager-api",
-  "version": "1.3.5",
+  "version": "1.1.1",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
   "repository": {
+    "url": "https://github.com/alienplatform/alien.git",
     "directory": "client-sdks/manager/typescript",
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git"
+    "type": "git"
   },
   "type": "module",
   "main": "./esm/index.js",
@@ -55,7 +55,9 @@
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "peerDependencies": {},
+  "peerDependencies": {
+    
+  },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "eslint": "^9.19.0",

@@ -1,13 +1,13 @@
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.0.75",
+  "version": "1.0.78",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
   "repository": {
-    "type": "git",
     "url": "https://github.com/alienplatform/alien.git",
-    "directory": "client-sdks/platform/typescript"
+    "directory": "client-sdks/platform/typescript",
+    "type": "git"
   },
   "type": "module",
   "main": "./esm/index.js",

@@ -18,6 +18,7 @@ const processor = new alien.Function("processor")
   .build()
 
 export default new alien.Stack("event-pipeline")
+  .platforms(["aws", "gcp", "azure"])
   .add(inbox, "frozen")
   .add(data, "frozen")
   .add(events, "frozen")

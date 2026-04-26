@@ -690,9 +690,9 @@ mod tests {
         let cache = Mutex::new(HashMap::new());
 
         let provider_a =
-            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_test").unwrap();
         let provider_b =
-            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_test").unwrap();
 
         assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
 
