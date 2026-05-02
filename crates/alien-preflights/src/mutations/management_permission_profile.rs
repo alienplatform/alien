@@ -631,6 +631,7 @@ mod tests {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let result_stack_gcp = mutation

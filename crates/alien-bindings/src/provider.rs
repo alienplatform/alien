@@ -163,15 +163,36 @@ impl BindingsProvider {
     #[cfg(feature = "platform-sdk")]
     pub async fn for_remote_deployment(
         deployment_id: &str,
-        _token: &str,
+        token: &str,
         api_base_url: Option<&str>,
     ) -> Result<Self> {
         let base_url = api_base_url.unwrap_or("https://api.alien.dev");
 
-        // Create SDK client
-        let sdk_client = alien_platform_api::Client::new(base_url);
+        // Build an authenticated SDK client so deployment/manager lookups are
+        // scoped to the caller's permissions.
+        let auth_value = format!("Bearer {}", token);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&auth_value)
+                .into_alien_error()
+                .context(ErrorData::RemoteAccessFailed {
+                    operation: "build Platform API client with token".to_string(),
+                })?,
+        );
 
-        // 1. Get deployment info
+        let authed_http_client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .into_alien_error()
+            .context(ErrorData::RemoteAccessFailed {
+                operation: "build Platform API HTTP client".to_string(),
+            })?;
+
+        let sdk_client =
+            alien_platform_api::Client::new_with_client(base_url, authed_http_client);
+
+        // 1. Get deployment info (caller-scoped)
         let deployment_response = sdk_client
             .get_deployment()
             .id(deployment_id)
@@ -183,7 +204,7 @@ impl BindingsProvider {
             })?
             .into_inner();
 
-        // 2. Get manager URL
+        // 2. Get manager URL (caller-scoped)
         let manager_id = deployment_response.manager_id.ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
                 operation: "fetch manager from Platform API".to_string(),
@@ -201,7 +222,9 @@ impl BindingsProvider {
             })?
             .into_inner();
 
-        // 3. Convert SDK stack state to alien-core StackState
+        // 3. Convert SDK stack state to alien-core StackState (used locally to extract
+        // binding configuration; the manager re-fetches the canonical stack state itself
+        // when resolving credentials).
         let stack_state = deployment_response.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
                 operation: "Deployment has no stack state (not deployed yet)".to_string(),
@@ -210,7 +233,9 @@ impl BindingsProvider {
 
         let alien_stack_state = conversions::convert_stack_state(stack_state)?;
 
-        // 4. Resolve client config from manager
+        // 4. Resolve client config from manager. We send only the deploymentId; the
+        // manager fetches stackState/platform from Platform API using our forwarded
+        // bearer token so an attacker cannot direct it at an arbitrary cloud identity.
         let manager_url = manager_response.url.ok_or_else(|| {
             AlienError::new(ErrorData::RemoteAccessFailed {
                 operation: "fetch manager URL from Platform API".to_string(),
@@ -220,9 +245,9 @@ impl BindingsProvider {
         let http_client = reqwest::Client::new();
         let client_config = http_client
             .post(format!("{}/v1/deployment/resolve-credentials", manager_url))
+            .bearer_auth(token)
             .json(&serde_json::json!({
-                "platform": deployment_response.platform,
-                "stackState": stack_state,
+                "deploymentId": deployment_id,
             }))
             .send()
             .await

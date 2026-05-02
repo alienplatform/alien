@@ -54,7 +54,7 @@ export type ConfigTerraform = {
 };
 
 /**
- * Branding configuration for the agent binary (white-labeling)
+ * Branding configuration for the agent binary
  */
 export type ConfigAgentImage = {
   /**
@@ -91,7 +91,7 @@ export type ConfigCloudformation = {
 };
 
 /**
- * Branding configuration for the deploy CLI binary (white-labeling)
+ * Branding configuration for the deploy CLI binary
  */
 export type ConfigCli = {
   /**

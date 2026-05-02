@@ -122,9 +122,10 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             })
         })?;
 
+        let system = crate::auth::Subject::system();
         let release = self
             .release_store
-            .get_release(release_id)
+            .get_release(&system, release_id)
             .await
             .context(CmdErrorData::Other {
                 message: format!("Failed to get release {}", release_id),

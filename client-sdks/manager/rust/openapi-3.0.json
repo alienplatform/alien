@@ -1640,21 +1640,23 @@
       "CreateReleaseRequest": {
         "type": "object",
         "required": [
-          "stack"
+          "stack",
+          "projectId"
         ],
         "properties": {
           "gitMetadata": {
             "$ref": "#/components/schemas/GitMetadata",
             "nullable": true
           },
-          "project": {
+          "projectId": {
             "type": "string",
-            "nullable": true
+            "description": "Project this release belongs to. Required. The standalone server uses the canonical value `\"default\"`."
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateTokenResponse": {
         "type": "object",
@@ -2497,6 +2499,8 @@
         "type": "object",
         "required": [
           "id",
+          "workspaceId",
+          "projectId",
           "stack",
           "createdAt"
         ],
@@ -2511,8 +2515,14 @@
           "id": {
             "type": "string"
           },
+          "projectId": {
+            "type": "string"
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
+          },
+          "workspaceId": {
+            "type": "string"
           }
         }
       },

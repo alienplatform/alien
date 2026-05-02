@@ -13,6 +13,7 @@ use axum::{
 use serde::Serialize;
 
 use super::{auth, AppState};
+use crate::error::ErrorData;
 
 #[derive(Debug, Serialize)]
 pub struct PlatformsResponse {
@@ -31,9 +32,10 @@ async fn get_platforms(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    if let Err(e) = auth::require_full_access(&subject) {
-        return e.into_response();
+    // Same gate as build-config: any caller that can create a release in the
+    // project can read the platform routing table.
+    if !state.authz.can_create_release(&subject, "default") {
+        return ErrorData::forbidden("Platforms list requires write access").into_response();
     }
 
     let platforms = state

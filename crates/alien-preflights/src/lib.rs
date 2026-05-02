@@ -1,3 +1,4 @@
+pub mod azure;
 pub mod compatibility;
 pub mod compile_time;
 pub mod error;

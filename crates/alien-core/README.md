@@ -13,7 +13,7 @@ Core types shared across all Alien crates. Defines the vocabulary of the platfor
 - `permissions` — Permission definitions
 - `events/` / `app_events/` — Platform events (storage, queue, cron) and application-level events
 - `sync` — Sync protocol types for pull-model deployments
-- `embedded_config` — Embedded configuration for white-labeled binaries
+- `embedded_config` — Embedded configuration for pre-configured / rebranded binaries
 - `image_rewrite` — OCI image URI rewriting for registry proxy
 - `presigned` — Presigned URL types
 - `dev_status` — `DevStatus` type for `alien dev` machine interface

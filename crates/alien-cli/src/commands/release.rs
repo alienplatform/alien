@@ -490,7 +490,7 @@ async fn create_manager_release(
         .body(ManagerCreateReleaseRequest {
             stack,
             git_metadata,
-            project: Some(project_id.to_string()),
+            project_id: project_id.to_string(),
         })
         .send()
         .await

@@ -25,7 +25,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 19] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 21] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -45,6 +45,8 @@ impl SqliteDeploymentStore {
         Deployments::CreatedAt,
         Deployments::UpdatedAt,
         Deployments::Error,
+        Deployments::WorkspaceId,
+        Deployments::ProjectId,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -79,6 +81,12 @@ impl SqliteDeploymentStore {
             created_at: p.datetime(16, "created_at")?,
             updated_at: p.optional_datetime(17, "updated_at")?,
             error: p.optional_json(18, "error")?,
+            workspace_id: p
+                .optional_string(19, "workspace_id")?
+                .unwrap_or_else(|| "default".to_string()),
+            project_id: p
+                .optional_string(20, "project_id")?
+                .unwrap_or_else(|| "default".to_string()),
         })
     }
 
@@ -90,6 +98,12 @@ impl SqliteDeploymentStore {
             max_deployments: p.i64(2, "max_deployments")?,
             deployment_count: p.i64(3, "deployment_count")?,
             created_at: p.datetime(4, "created_at")?,
+            workspace_id: p
+                .optional_string(5, "workspace_id")?
+                .unwrap_or_else(|| "default".to_string()),
+            project_id: p
+                .optional_string(6, "project_id")?
+                .unwrap_or_else(|| "default".to_string()),
         })
     }
 }
@@ -176,6 +190,8 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         Ok(DeploymentRecord {
             id,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
@@ -697,6 +713,8 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         Ok(DeploymentGroupRecord {
             id,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
             name: params.name,
             max_deployments: params.max_deployments,
             deployment_count: 0,
@@ -733,6 +751,8 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         Ok(DeploymentGroupRecord {
             id: id.to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
             name: params.name,
             max_deployments: params.max_deployments,
             deployment_count: 0,
@@ -766,6 +786,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             .expr_as(
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::CreatedAt)),
                 sea_query::Alias::new("created_at"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::WorkspaceId)),
+                sea_query::Alias::new("workspace_id"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
+                sea_query::Alias::new("project_id"),
             )
             .from(DeploymentGroups::Table)
             .join(
@@ -834,6 +862,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             .expr_as(
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::CreatedAt)),
                 sea_query::Alias::new("created_at"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::WorkspaceId)),
+                sea_query::Alias::new("workspace_id"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
+                sea_query::Alias::new("project_id"),
             )
             .from(DeploymentGroups::Table)
             .join(

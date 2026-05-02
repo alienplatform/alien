@@ -11,9 +11,9 @@
 //! this layer. API keys (admin, deployment-group, deployment) assume a trusted
 //! operator with full access to the project.
 //!
-//! Multi-tenancy, workspace isolation, and fine-grained RBAC are provided by
-//! the platform layer (`alien-managerx`), which embeds alien-manager as a
-//! library and replaces its providers with multi-tenant implementations.
+//! Each provider below is a trait, so embedders that need different policy
+//! (storage, telemetry, authn/authz, etc.) inject their own implementation via
+//! the builder.
 //!
 //! ## Provider Architecture
 //!
@@ -32,10 +32,12 @@
 //! server.start(addr).await?;
 //! ```
 
+pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod error;
 pub(crate) mod ids;
+pub mod registry;
 pub mod standalone_config;
 pub mod traits;
 

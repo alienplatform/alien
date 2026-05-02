@@ -61,7 +61,7 @@ pub fn setup_tracing(verbose: bool) {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<()> {
-    // Load embedded config if present (for white-labeled or pre-configured binaries)
+    // Load embedded config if present (for pre-configured / rebranded binaries)
     let embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
 
     setup_tracing(cli.verbose);

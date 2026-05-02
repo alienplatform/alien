@@ -1,4 +1,4 @@
-//! Whoami endpoint - returns identity from auth subject.
+//! Whoami endpoint — returns identity from the unified auth Subject.
 
 use axum::{
     extract::State,
@@ -10,7 +10,7 @@ use axum::{
 use serde::Serialize;
 
 use super::{auth, AppState};
-use crate::traits::TokenType;
+use crate::auth::{Scope, SubjectKind};
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -18,6 +18,8 @@ use crate::traits::TokenType;
 pub struct WhoamiResponse {
     pub kind: String,
     pub id: String,
+    pub workspace_id: String,
+    pub role: String,
     pub scope: ScopeInfo,
 }
 
@@ -26,6 +28,8 @@ pub struct WhoamiResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ScopeInfo {
     pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_group_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,43 +57,45 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Err(e) => return e.into_response(),
     };
 
-    let (kind, id, scope_type, dg_id, dp_id) = match subject.scope.token_type {
-        TokenType::Admin => (
-            "serviceAccount",
-            subject.token_id.clone(),
-            "admin",
-            None,
-            None,
-        ),
-        TokenType::DeploymentGroup => (
-            "serviceAccount",
-            subject
-                .scope
-                .deployment_group_id
-                .clone()
-                .unwrap_or_else(|| subject.token_id.clone()),
-            "deployment-group",
-            subject.scope.deployment_group_id.clone(),
+    let (kind, id) = match &subject.kind {
+        SubjectKind::User { id, .. } => ("user", id.clone()),
+        SubjectKind::ServiceAccount { id } => ("serviceAccount", id.clone()),
+    };
+
+    let (scope_type, project_id, dg_id, dp_id) = match &subject.scope {
+        Scope::Workspace => ("workspace", None, None, None),
+        Scope::Project { project_id } => ("project", Some(project_id.clone()), None, None),
+        Scope::DeploymentGroup {
+            project_id,
+            deployment_group_id,
+        } => (
+            "deploymentGroup",
+            Some(project_id.clone()),
+            Some(deployment_group_id.clone()),
             None,
         ),
-        TokenType::Deployment => (
-            "serviceAccount",
-            subject
-                .scope
-                .deployment_id
-                .clone()
-                .unwrap_or_else(|| subject.token_id.clone()),
+        Scope::Deployment {
+            project_id,
+            deployment_id,
+        } => (
             "deployment",
+            Some(project_id.clone()),
             None,
-            subject.scope.deployment_id.clone(),
+            Some(deployment_id.clone()),
         ),
     };
 
     Json(WhoamiResponse {
         kind: kind.to_string(),
-        id: id.to_string(),
+        id,
+        workspace_id: subject.workspace_id.clone(),
+        role: serde_json::to_value(&subject.role)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default(),
         scope: ScopeInfo {
             r#type: scope_type.to_string(),
+            project_id,
             deployment_group_id: dg_id,
             deployment_id: dp_id,
         },

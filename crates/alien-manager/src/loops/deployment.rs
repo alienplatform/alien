@@ -237,9 +237,10 @@ impl DeploymentLoop {
             })
         })?;
 
+        let system = crate::auth::Subject::system();
         let release = self
             .release_store
-            .get_release(desired_release_id)
+            .get_release(&system, desired_release_id)
             .await?
             .ok_or_else(|| {
                 AlienError::new(GenericError {

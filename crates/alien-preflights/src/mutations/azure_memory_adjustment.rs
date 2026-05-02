@@ -4,22 +4,12 @@
 //! This mutation rounds up any invalid memory value to the nearest valid combo,
 //! so users don't need to know platform-specific constraints.
 
+use crate::azure;
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{DeploymentConfig, Function, Platform, Stack, StackState};
 use async_trait::async_trait;
 use tracing::{info, warn};
-
-/// Valid Azure Container Apps memory values (MB component of CPU/memory pairs).
-const AZURE_VALID_MEMORY: [u32; 8] = [512, 1024, 1536, 2048, 2560, 3072, 3584, 4096];
-
-/// Returns the nearest valid Azure memory value (rounded up), or None if above max.
-fn nearest_valid(memory_mb: u32) -> Option<u32> {
-    AZURE_VALID_MEMORY
-        .iter()
-        .find(|&&mem| mem >= memory_mb)
-        .copied()
-}
 
 pub struct AzureMemoryAdjustmentMutation;
 
@@ -44,7 +34,7 @@ impl StackMutation for AzureMemoryAdjustmentMutation {
             entry
                 .config
                 .downcast_ref::<Function>()
-                .is_some_and(|f| !AZURE_VALID_MEMORY.contains(&f.memory_mb))
+                .is_some_and(|f| !azure::is_valid_memory(f.memory_mb))
         })
     }
 
@@ -59,12 +49,12 @@ impl StackMutation for AzureMemoryAdjustmentMutation {
                 continue;
             };
 
-            if AZURE_VALID_MEMORY.contains(&func.memory_mb) {
+            if azure::is_valid_memory(func.memory_mb) {
                 continue;
             }
 
             let original = func.memory_mb;
-            match nearest_valid(original) {
+            match azure::nearest_valid_memory(original) {
                 Some(adjusted) => {
                     warn!(
                         function = %id,

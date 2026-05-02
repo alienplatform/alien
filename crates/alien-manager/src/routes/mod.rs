@@ -32,6 +32,7 @@ use axum::{
 use http::{header, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::auth::Authz;
 use crate::traits::*;
 
 /// Shared state for all route handlers.
@@ -41,6 +42,11 @@ pub struct AppState {
     pub release_store: Arc<dyn ReleaseStore>,
     pub token_store: Arc<dyn TokenStore>,
     pub auth_validator: Arc<dyn AuthValidator>,
+    /// Authorization policy. Default: [`crate::providers::OssAuthz`].
+    /// Handlers receive a unified [`crate::auth::Subject`] from
+    /// `auth_validator` and call `authz.can_*(&subject, &entity)` for every
+    /// authorization decision.
+    pub authz: Arc<dyn Authz>,
     pub telemetry_backend: Arc<dyn TelemetryBackend>,
     pub credential_resolver: Arc<dyn CredentialResolver>,
     pub command_server: Arc<CommandServer>,

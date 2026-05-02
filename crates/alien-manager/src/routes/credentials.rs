@@ -58,13 +58,8 @@ async fn resolve_credentials(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    // Admin or deployment group token (own group)
-    if let Err(e) = auth::require_admin_or_any_group(&subject) {
-        return e.into_response();
-    }
-
-    // Get the deployment
+    // Get the deployment, then authorize on the loaded entity (Pattern 2 of
+    // authorization-guidelines.md).
     let deployment = match state
         .deployment_store
         .get_deployment(&req.deployment_id)
@@ -75,11 +70,9 @@ async fn resolve_credentials(
         Err(e) => return e.into_response(),
     };
 
-    // If deployment group token, verify it can access this deployment's group
-    if subject.is_deployment_group() {
-        if let Err(e) = auth::require_admin_or_group(&subject, &deployment.deployment_group_id) {
-            return e.into_response();
-        }
+    if !state.authz.can_act_on_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot resolve credentials for this deployment")
+            .into_response();
     }
 
     // Resolve credentials

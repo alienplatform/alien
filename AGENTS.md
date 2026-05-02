@@ -1,3 +1,26 @@
+# ⚠️ This is an open-source repository
+
+Everything you commit here is **public on GitHub**. Treat the repo as a public artifact at all times — feature flags don't hide source, "internal" naming doesn't hide source, and removing files later doesn't unpublish git history.
+
+**Hard rules for any contribution to this repo:**
+
+- Do not commit code, comments, docs, tests, or commit messages that reference internal-only systems, proprietary services, customers/prospects, or private sister repositories. If you work at Alien and your task involves both public (this repo) and private context, keep the private context entirely out of any file in this repo — including TODOs and code comments.
+- Do not add a feature, type, or API field that only makes sense inside a closed-source caller. If something is closed-source-only, it belongs in the caller, not here.
+- Do not import private crates or packages. All `[dependencies]` in `Cargo.toml` and all imports in source must resolve from public sources (crates.io, this repo, or other open-source repos).
+- Do not paste internal Slack discussions, internal architecture deep-dives, customer deployment topologies, or any other proprietary context into comments or docs.
+- When in doubt, **default to NOT adding it** to this repo. Public→private is irreversible (git history keeps the leak). Private→public is always reversible later.
+
+**Examples of what NOT to write in this repo:**
+
+- ❌ `// TODO: handle the case where our SaaS API returns 409`
+- ❌ Adding a `cloud_provider: Option<InternalSaaSClient>` field to a public struct
+- ❌ A doc that mentions specific customer deployment shapes or internal infra
+- ❌ Importing any non-public crate from any `alien-*` crate
+
+If you're an external contributor: thanks for contributing! The rules above are the bar for accepting PRs. If you're not sure whether something fits, open a discussion before submitting.
+
+---
+
 # Guidelines
 
 **Always follow the coding guidelines in `AGENTS.md`** — it covers error handling, testing, imports, and all Rust conventions for this project.

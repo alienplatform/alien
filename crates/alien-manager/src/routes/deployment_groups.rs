@@ -109,9 +109,10 @@ async fn create_deployment_group(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    if let Err(e) = auth::require_full_access(&subject) {
-        return e.into_response();
+    // Single-project: the only valid project_id is "default". The configured
+    // `Authz` impl decides whether the subject can create here.
+    if !state.authz.can_create_deployment_group(&subject, "default") {
+        return ErrorData::forbidden("Cannot create deployment group").into_response();
     }
 
     let dg = match state
@@ -141,7 +142,7 @@ async fn create_deployment_group(
     )
 ))]
 async fn list_deployment_groups(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _subject = match auth::require_auth(&state, &headers).await {
+    let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -151,8 +152,17 @@ async fn list_deployment_groups(State(state): State<AppState>, headers: HeaderMa
         Err(e) => return e.into_response(),
     };
 
+    // Pattern 1 (List Endpoints): per `authorization-guidelines.md`, scope-
+    // filter the result then run `Authz.can_read_*` per item to produce the
+    // visible subset.
+    let items: Vec<DeploymentGroupResponse> = groups
+        .iter()
+        .filter(|dg| state.authz.can_read_deployment_group(&subject, dg))
+        .map(record_to_response)
+        .collect();
+
     Json(ListDeploymentGroupsResponse {
-        items: groups.iter().map(record_to_response).collect(),
+        items,
         next_cursor: None,
     })
     .into_response()
@@ -178,16 +188,22 @@ async fn get_deployment_group(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let _subject = match auth::require_auth(&state, &headers).await {
+    let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    match state.deployment_store.get_deployment_group(&id).await {
-        Ok(Some(dg)) => Json(record_to_response(&dg)).into_response(),
-        Ok(None) => ErrorData::not_found_group(&id).into_response(),
-        Err(e) => e.into_response(),
+    let dg = match state.deployment_store.get_deployment_group(&id).await {
+        Ok(Some(dg)) => dg,
+        Ok(None) => return ErrorData::not_found_group(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    if !state.authz.can_read_deployment_group(&subject, &dg) {
+        return ErrorData::forbidden("Cannot read deployment group").into_response();
     }
+
+    Json(record_to_response(&dg)).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -215,15 +231,14 @@ async fn create_deployment_group_token(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_full_access(&subject) {
-        return e.into_response();
-    }
-
-    // Verify group exists
-    match state.deployment_store.get_deployment_group(&id).await {
-        Ok(Some(_)) => {}
+    // Verify group exists, then authorize on the loaded entity.
+    let dg = match state.deployment_store.get_deployment_group(&id).await {
+        Ok(Some(dg)) => dg,
         Ok(None) => return ErrorData::not_found_group(&id).into_response(),
         Err(e) => return e.into_response(),
+    };    if !state.authz.can_update_deployment_group(&subject, &dg) {
+        return ErrorData::forbidden("Cannot mint tokens for this deployment group")
+            .into_response();
     }
 
     // Generate deployment group token

@@ -1,4 +1,5 @@
-use crate::traits::auth_validator::{AuthSubject, AuthValidator, TokenScope, TokenType};
+use crate::auth::{Role, Scope, Subject, SubjectKind};
+use crate::traits::auth_validator::AuthValidator;
 use alien_error::AlienError;
 use async_trait::async_trait;
 
@@ -14,16 +15,26 @@ impl PermissiveAuthValidator {
 impl AuthValidator for PermissiveAuthValidator {
     async fn validate(
         &self,
-        _headers: &http::HeaderMap,
-    ) -> Result<Option<AuthSubject>, AlienError> {
-        Ok(Some(AuthSubject {
-            token_id: "dev".to_string(),
-            scope: TokenScope {
-                token_type: TokenType::Admin,
-                deployment_group_id: None,
-                deployment_id: None,
+        headers: &http::HeaderMap,
+    ) -> Result<Option<Subject>, AlienError> {
+        // Capture the bearer if one is present so token passthrough still
+        // works in dev mode. The contract is symmetric across all
+        // `AuthValidator` impls.
+        let bearer = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("")
+            .to_string();
+
+        Ok(Some(Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "dev".to_string(),
             },
-            workspace_id: None,
+            workspace_id: "default".to_string(),
+            scope: Scope::Workspace,
+            role: Role::WorkspaceAdmin,
+            bearer_token: bearer,
         }))
     }
 }

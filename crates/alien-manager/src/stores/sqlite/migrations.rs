@@ -31,6 +31,11 @@ pub(crate) enum Deployments {
     CreatedAt,
     UpdatedAt,
     Error,
+    /// Workspace this deployment belongs to. Always `"default"` in this
+    /// store. Required by the unified Authz policy.
+    WorkspaceId,
+    /// Project this deployment belongs to. Always `"default"` in this store.
+    ProjectId,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -43,6 +48,8 @@ pub(crate) enum Releases {
     GitCommitRef,
     GitCommitMessage,
     CreatedAt,
+    WorkspaceId,
+    ProjectId,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -53,6 +60,8 @@ pub(crate) enum DeploymentGroups {
     MaxDeployments,
     DeploymentCount,
     CreatedAt,
+    WorkspaceId,
+    ProjectId,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -125,6 +134,18 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             )
             .col(ColumnDef::new(Deployments::UpdatedAt).text())
             .col(ColumnDef::new(Deployments::Error).text())
+            .col(
+                ColumnDef::new(Deployments::WorkspaceId)
+                    .text()
+                    .not_null()
+                    .default("default"),
+            )
+            .col(
+                ColumnDef::new(Deployments::ProjectId)
+                    .text()
+                    .not_null()
+                    .default("default"),
+            )
             .build(SqliteQueryBuilder),
         // releases
         Table::create()
@@ -141,6 +162,18 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
                     .text()
                     .not_null()
                     .default(Expr::current_timestamp()),
+            )
+            .col(
+                ColumnDef::new(Releases::WorkspaceId)
+                    .text()
+                    .not_null()
+                    .default("default"),
+            )
+            .col(
+                ColumnDef::new(Releases::ProjectId)
+                    .text()
+                    .not_null()
+                    .default("default"),
             )
             .build(SqliteQueryBuilder),
         // deployment_groups
@@ -166,6 +199,18 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
                     .text()
                     .not_null()
                     .default(Expr::current_timestamp()),
+            )
+            .col(
+                ColumnDef::new(DeploymentGroups::WorkspaceId)
+                    .text()
+                    .not_null()
+                    .default("default"),
+            )
+            .col(
+                ColumnDef::new(DeploymentGroups::ProjectId)
+                    .text()
+                    .not_null()
+                    .default("default"),
             )
             .build(SqliteQueryBuilder),
         // tokens
@@ -240,6 +285,45 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
     }
     for sql in index_statements {
         conn.execute(&sql, ())
+            .await
+            .into_alien_error()
+            .map_err(|e| db_error(&format!("Index creation failed: {}", e.message)))?;
+    }
+
+    // Backfill workspace_id / project_id columns on existing OSS databases.
+    // SQLite doesn't support `ADD COLUMN IF NOT EXISTS`, and there's no
+    // central schema-version table, so we run the ALTER and tolerate the
+    // "duplicate column" failure on already-migrated DBs.
+    let alter_statements: &[&str] = &[
+        "ALTER TABLE deployments ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE deployments ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+    ];
+    for sql in alter_statements {
+        if let Err(e) = conn.execute(sql, ()).await {
+            let msg = format!("{}", e);
+            // SQLite reports "duplicate column name: <col>" when the column
+            // is already present from a prior migration run; that's the
+            // expected idempotent path.
+            if !msg.contains("duplicate column name") {
+                return Err(db_error(&format!(
+                    "Schema upgrade failed running `{}`: {}",
+                    sql, msg
+                )));
+            }
+        }
+    }
+
+    let post_index_statements: &[&str] = &[
+        "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(workspace_id, project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_deployment_groups_project ON deployment_groups(workspace_id, project_id)",
+    ];
+    for sql in post_index_statements {
+        conn.execute(sql, ())
             .await
             .into_alien_error()
             .map_err(|e| db_error(&format!("Index creation failed: {}", e.message)))?;

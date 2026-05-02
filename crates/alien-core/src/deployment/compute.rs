@@ -40,7 +40,7 @@ pub struct HorizonConfig {
     /// final download URL used in VM startup scripts.
     ///
     /// Production example: "https://releases.alien.dev/horizond/v0.3.0"
-    /// Dev example (ngrok): "https://abc123.ngrok.io"
+    /// Dev example (ngrok): "https://abc123.ngrok.dev"
     pub horizond_download_base_url: String,
 
     /// ETag of the horizond binary fetched from the releases server -- used as a

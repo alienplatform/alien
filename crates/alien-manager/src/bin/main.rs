@@ -1,7 +1,6 @@
 //! Standalone alien-manager binary.
 //!
 //! Configuration is driven by TOML (`alien-manager.toml`) with CLI overrides.
-//! For Platform mode, use the `alien-managerx` binary instead.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

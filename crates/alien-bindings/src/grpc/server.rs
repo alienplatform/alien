@@ -82,6 +82,22 @@ pub async fn run_grpc_server(
 
     info!("Configuring gRPC server for {}", addr);
 
+    // The bindings gRPC server is unauthenticated by design — it's intra-machine
+    // IPC between alien-runtime and the application code it manages, and they
+    // share a trust boundary. Binding to a non-loopback address erases that
+    // assumption (think `0.0.0.0` from a misconfigured ALIEN_BINDINGS_ADDRESS,
+    // `--network=host` Docker, or shared-pod sidecar). Make the misconfiguration
+    // loud at startup rather than silently exposing Vault/Storage/KV.
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            address = %addr,
+            "alien-runtime gRPC server is binding to a NON-LOOPBACK address. \
+            This exposes the bindings server (Vault, Storage, KV, Control) to anyone who can \
+            reach this network interface. The server has no authentication. Set \
+            ALIEN_BINDINGS_ADDRESS=127.0.0.1:51351 unless you have a specific reason to expose it."
+        );
+    }
+
     let wait_until_server = Arc::new(WaitUntilGrpcServer::new(provider.clone()));
     let wait_until_server_handle = wait_until_server.clone();
 

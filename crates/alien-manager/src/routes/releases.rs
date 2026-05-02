@@ -42,13 +42,14 @@ pub struct StackByPlatform {
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateReleaseRequest {
     pub stack: StackByPlatform,
     #[serde(default)]
     pub git_metadata: Option<GitMetadata>,
-    #[serde(default)]
-    pub project: Option<String>,
+    /// Project this release belongs to. Required. The standalone server
+    /// uses the canonical value `"default"`.
+    pub project_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +66,8 @@ pub struct GitMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseResponse {
     pub id: String,
+    pub workspace_id: String,
+    pub project_id: String,
     pub stack: StackByPlatform,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
@@ -94,7 +97,9 @@ pub fn router() -> Router<AppState> {
 
 // --- Helpers ---
 
-fn record_to_response(r: &ReleaseRecord) -> ReleaseResponse {
+fn record_to_response(
+    r: &ReleaseRecord,
+) -> std::result::Result<ReleaseResponse, alien_error::AlienError<ErrorData>> {
     let mut sbp = StackByPlatform {
         aws: None,
         gcp: None,
@@ -105,7 +110,12 @@ fn record_to_response(r: &ReleaseRecord) -> ReleaseResponse {
     };
 
     for (platform, stack) in &r.stacks {
-        let v = serde_json::to_value(stack).unwrap_or_default();
+        let v = serde_json::to_value(stack).map_err(|e| {
+            ErrorData::internal(format!(
+                "Failed to serialize stack for platform {}: {}",
+                platform, e
+            ))
+        })?;
         match platform {
             Platform::Aws => sbp.aws = Some(v),
             Platform::Gcp => sbp.gcp = Some(v),
@@ -129,12 +139,14 @@ fn record_to_response(r: &ReleaseRecord) -> ReleaseResponse {
         None
     };
 
-    ReleaseResponse {
+    Ok(ReleaseResponse {
         id: r.id.clone(),
+        workspace_id: r.workspace_id.clone(),
+        project_id: r.project_id.clone(),
         stack: sbp,
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
-    }
+    })
 }
 
 /// Parse all non-null platform stacks from the request.
@@ -185,7 +197,7 @@ async fn create_release(
     headers: HeaderMap,
     Json(req): Json<CreateReleaseRequest>,
 ) -> Response {
-    tracing::info!(project = ?req.project, "Received create release request");
+    tracing::info!(project_id = %req.project_id, "Received create release request");
 
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -195,8 +207,8 @@ async fn create_release(
         }
     };
 
-    if let Err(e) = auth::require_full_access(&subject) {
-        return e.into_response();
+    if !state.authz.can_create_release(&subject, &req.project_id) {
+        return ErrorData::forbidden("Cannot create release in this project").into_response();
     }
 
     // Parse all platform stacks from request
@@ -214,23 +226,18 @@ async fn create_release(
         None => (None, None, None),
     };
 
-    // Extract bearer token for forwarding (platform mode token passthrough)
-    let caller_token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
-
     let release = match state
         .release_store
-        .create_release(CreateReleaseParams {
-            project: req.project,
-            caller_token,
-            stacks,
-            git_commit_sha: git_sha,
-            git_commit_ref: git_ref,
-            git_commit_message: git_msg,
-        })
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: req.project_id,
+                stacks,
+                git_commit_sha: git_sha,
+                git_commit_ref: git_ref,
+                git_commit_message: git_msg,
+            },
+        )
         .await
     {
         Ok(r) => r,
@@ -249,11 +256,12 @@ async fn create_release(
         tracing::warn!(error = %e, "Failed to set desired release on deployments");
     }
 
-    (
-        StatusCode::CREATED,
-        Json(record_to_response(&release)),
-    )
-        .into_response()
+    let response = match record_to_response(&release) {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -276,14 +284,23 @@ async fn get_release(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let _subject = match auth::require_auth(&state, &headers).await {
+    let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    match state.release_store.get_release(&id).await {
-        Ok(Some(r)) => Json(record_to_response(&r)).into_response(),
-        Ok(None) => ErrorData::not_found_release(&id).into_response(),
+    let release = match state.release_store.get_release(&subject, &id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return ErrorData::not_found_release(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    if !state.authz.can_read_release(&subject, &release) {
+        return ErrorData::forbidden("Cannot read release").into_response();
+    }
+
+    match record_to_response(&release) {
+        Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -301,14 +318,23 @@ async fn get_release(
     )
 ))]
 async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _subject = match auth::require_auth(&state, &headers).await {
+    let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    match state.release_store.get_latest_release().await {
-        Ok(Some(r)) => Json(record_to_response(&r)).into_response(),
-        Ok(None) => ErrorData::not_found_release("latest").into_response(),
+    let release = match state.release_store.get_latest_release(&subject).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return ErrorData::not_found_release("latest").into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    if !state.authz.can_read_release(&subject, &release) {
+        return ErrorData::forbidden("Cannot read release").into_response();
+    }
+
+    match record_to_response(&release) {
+        Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
 }

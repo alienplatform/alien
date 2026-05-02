@@ -13,6 +13,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{auth, AppState};
+use crate::error::ErrorData;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,9 +40,10 @@ async fn get_build_config(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    if let Err(e) = auth::require_full_access(&subject) {
-        return e.into_response();
+    // build-config exposes per-platform registry prefixes — gated by the
+    // create-release authz check.
+    if !state.authz.can_create_release(&subject, "default") {
+        return ErrorData::forbidden("Build config requires write access").into_response();
     }
 
     let platform = query.platform.as_deref();

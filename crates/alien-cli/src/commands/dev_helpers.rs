@@ -433,7 +433,9 @@ pub async fn build_and_post_release_simple(
         .body(CreateReleaseRequest {
             stack: stack_by_platform,
             git_metadata: None,
-            project: None, // dev mode — single project
+            // dev mode is single-project; "default" is the canonical
+            // sentinel and is required by the wire schema.
+            project_id: "default".to_string(),
         })
         .send()
         .await

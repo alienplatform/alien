@@ -1,5 +1,6 @@
+use crate::auth::{Role, Scope, Subject, SubjectKind};
 use crate::ids::sha256_hash;
-use crate::traits::auth_validator::{AuthSubject, AuthValidator, TokenScope};
+use crate::traits::auth_validator::{AuthValidator, TokenType};
 use crate::traits::token_store::TokenStore;
 use alien_error::{AlienError, GenericError};
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ impl TokenDbValidator {
     async fn validate_basic_auth(
         &self,
         basic_encoded: &str,
-    ) -> Result<Option<AuthSubject>, AlienError> {
+    ) -> Result<Option<Subject>, AlienError> {
         use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
 
         let decoded = BASE64.decode(basic_encoded.trim()).map_err(|_| {
@@ -49,15 +50,7 @@ impl TokenDbValidator {
         let hash = sha256_hash(token);
 
         match self.token_store.validate_token(&hash).await? {
-            Some(record) => Ok(Some(AuthSubject {
-                token_id: record.id,
-                scope: TokenScope {
-                    token_type: record.token_type,
-                    deployment_group_id: record.deployment_group_id,
-                    deployment_id: record.deployment_id,
-                },
-                workspace_id: None,
-            })),
+            Some(record) => Ok(Some(record_to_subject(&record, token.to_string()))),
             None => {
                 let mut err = AlienError::new(GenericError {
                     message: "Invalid token".to_string(),
@@ -72,13 +65,13 @@ impl TokenDbValidator {
 
 #[async_trait]
 impl AuthValidator for TokenDbValidator {
-    async fn validate(&self, headers: &http::HeaderMap) -> Result<Option<AuthSubject>, AlienError> {
+    async fn validate(&self, headers: &http::HeaderMap) -> Result<Option<Subject>, AlienError> {
         let auth_header = headers.get("authorization").and_then(|v| v.to_str().ok());
 
         let token = match auth_header {
             Some(header) => {
                 if let Some(t) = header.strip_prefix("Bearer ") {
-                    t
+                    t.to_string()
                 } else if let Some(basic) = header.strip_prefix("Basic ") {
                     // Support Basic auth for OCI registry proxy compatibility.
                     // Docker/containerd/kubelet use Basic auth when pulling images.
@@ -96,18 +89,10 @@ impl AuthValidator for TokenDbValidator {
             None => return Ok(None),
         };
 
-        let hash = sha256_hash(token);
+        let hash = sha256_hash(&token);
 
         match self.token_store.validate_token(&hash).await? {
-            Some(record) => Ok(Some(AuthSubject {
-                token_id: record.id,
-                scope: TokenScope {
-                    token_type: record.token_type,
-                    deployment_group_id: record.deployment_group_id,
-                    deployment_id: record.deployment_id,
-                },
-                workspace_id: None,
-            })),
+            Some(record) => Ok(Some(record_to_subject(&record, token))),
             None => {
                 let mut err = AlienError::new(GenericError {
                     message: "Invalid token".to_string(),
@@ -117,5 +102,46 @@ impl AuthValidator for TokenDbValidator {
                 Err(err)
             }
         }
+    }
+}
+
+/// Build a unified [`Subject`] from an OSS token record. OSS is single-tenant
+/// — `workspace_id` is always `"default"` and the project_id on every scope
+/// variant is `"default"`.
+fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: String) -> Subject {
+    let (scope, role) = match (&record.token_type, record.deployment_group_id.as_deref(), record.deployment_id.as_deref()) {
+        (TokenType::Admin, _, _) => (Scope::Workspace, Role::WorkspaceAdmin),
+        (TokenType::DeploymentGroup, Some(group_id), _) => (
+            Scope::DeploymentGroup {
+                project_id: "default".to_string(),
+                deployment_group_id: group_id.to_string(),
+            },
+            Role::DeploymentGroupDeployer,
+        ),
+        (TokenType::DeploymentGroup, None, _) => {
+            // OSS DG tokens always carry a group_id; defensive fallback.
+            (Scope::Workspace, Role::WorkspaceMember)
+        }
+        (TokenType::Deployment, _, Some(deployment_id)) => (
+            Scope::Deployment {
+                project_id: "default".to_string(),
+                deployment_id: deployment_id.to_string(),
+            },
+            Role::DeploymentManager,
+        ),
+        (TokenType::Deployment, _, None) => {
+            // Unscoped deployment token shouldn't exist; fail closed.
+            (Scope::Workspace, Role::DeploymentViewer)
+        }
+    };
+
+    Subject {
+        kind: SubjectKind::ServiceAccount {
+            id: record.id.clone(),
+        },
+        workspace_id: "default".to_string(),
+        scope,
+        role,
+        bearer_token: bearer,
     }
 }
