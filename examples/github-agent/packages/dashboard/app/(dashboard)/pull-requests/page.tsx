@@ -163,13 +163,27 @@ export default function PullRequestsPage() {
         throw new Error("Agent info not available")
       }
 
-      const agentUrl = agentInfo.resources?.agent?.publicUrl
-      if (!agentUrl) {
+      const rawAgentUrl = agentInfo.resources?.agent?.publicUrl
+      if (!rawAgentUrl) {
         throw new Error("Agent is not running or doesn't have a public URL")
       }
 
+      // The publicUrl flows from deployment state which the agent itself
+      // writes via sync/reconcile. Validate it before using it in a fetch
+      // so a malicious value can't redirect the browser to an arbitrary host.
+      let agentOrigin: string
+      try {
+        const parsed = new URL(rawAgentUrl)
+        if (parsed.protocol !== "https:") {
+          throw new Error(`Agent URL must use https:// (got ${parsed.protocol})`)
+        }
+        agentOrigin = parsed.origin
+      } catch {
+        throw new Error("Agent URL is not a valid https:// URL")
+      }
+
       const response = await fetch(
-        `${agentUrl}/prs?integrationId=${encodeURIComponent(integrationId)}`,
+        `${agentOrigin}/prs?integrationId=${encodeURIComponent(integrationId)}`,
       )
 
       if (!response.ok) {

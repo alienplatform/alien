@@ -38,25 +38,24 @@ impl SqliteReleaseStore {
         let stack_str = p.string(1, "stack")?;
         let platform_str = p.optional_string(2, "platform")?;
 
-        // Try parsing as multi-platform HashMap first (new format).
-        // Fall back to single Stack + platform column (legacy format).
-        let stacks: HashMap<alien_core::Platform, alien_core::Stack> =
-            if let Ok(map) = serde_json::from_str(&stack_str) {
-                map
-            } else {
+        // The `platform` column is the authoritative format discriminator:
+        // NULL → new format (stack JSON is `HashMap<Platform, Stack>`),
+        // non-NULL → legacy format (stack JSON is a single `Stack`).
+        // Try-parse-first would silently misread a legacy `Stack` whose
+        // top-level field names happen to coincide with `Platform` variant
+        // names.
+        let stacks: HashMap<alien_core::Platform, alien_core::Stack> = match platform_str {
+            None => serde_json::from_str(&stack_str).into_alien_error().context(
+                GenericError {
+                    message: "Failed to parse release stacks (multi-platform)".to_string(),
+                },
+            )?,
+            Some(platform_str) => {
                 let stack: alien_core::Stack = serde_json::from_str(&stack_str)
                     .into_alien_error()
                     .context(GenericError {
-                        message: "Failed to parse release stack".to_string(),
+                        message: "Failed to parse release stack (legacy)".to_string(),
                     })?;
-                let platform_str = platform_str.ok_or_else(|| {
-                    AlienError::new(GenericError {
-                        message:
-                            "Legacy release record has NULL platform column; \
-                             cannot reconstruct multi-platform stacks"
-                                .to_string(),
-                    })
-                })?;
                 let platform = alien_core::Platform::from_str(&platform_str).map_err(|e| {
                     AlienError::new(GenericError {
                         message: format!(
@@ -66,7 +65,8 @@ impl SqliteReleaseStore {
                     })
                 })?;
                 HashMap::from([(platform, stack)])
-            };
+            }
+        };
 
         Ok(ReleaseRecord {
             id: p.string(0, "id")?,

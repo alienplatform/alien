@@ -105,11 +105,22 @@ export async function POST(request: Request) {
     return Response.json({ error: "Integration already exists" }, { status: 400 })
   }
 
+  // The "demo" placeholder is only valid when DEMO_MODE is explicitly enabled.
+  // Without that gate, a missing token would silently create an unauthenticated
+  // integration that the agent treats as functional.
+  const isDemoMode = process.env.DEMO_MODE === "true"
+  if (!token && !isDemoMode) {
+    return Response.json(
+      { error: "GitHub token is required (set DEMO_MODE=true to use the demo placeholder)." },
+      { status: 400 },
+    )
+  }
+
   // Send credentials to agent's vault
   const config: IntegrationConfig = {
     owner,
     repo,
-    token: token || "demo", // Use "demo" for demo mode
+    token: token || "demo",
     baseUrl: baseUrl || undefined,
   }
 

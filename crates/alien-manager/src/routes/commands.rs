@@ -274,16 +274,22 @@ async fn get_command_payload(
     // Verify the caller has access to this command's deployment via Authz.
     // If the command isn't in the local registry (e.g. when command metadata
     // is managed externally), fall back to requiring workspace-write
-    // authority.
-    match get_command_owner(&state, &command_id).await {
-        Ok(deployment_id) => {
+    // authority. A *registry lookup error* must NOT trigger that fallback —
+    // a transient store error for a deployment-owned command would otherwise
+    // expose its payload to any workspace-admin/member token.
+    match state
+        .command_server
+        .get_command_deployment_id(&command_id)
+        .await
+    {
+        Ok(Some(deployment_id)) => {
             if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
                 return e;
             }
         }
-        Err(_) => {
-            // No deployment context — only workspace-wide writers may inspect
-            // payloads with no canonical owner.
+        Ok(None) => {
+            // No canonical owner in the local registry — only workspace-wide
+            // writers may inspect such payloads.
             if !matches!(subject.scope, crate::auth::Scope::Workspace)
                 || !matches!(
                     subject.role,
@@ -293,6 +299,7 @@ async fn get_command_payload(
                 return ErrorData::forbidden("Workspace-write access required").into_response();
             }
         }
+        Err(e) => return e.into_response(),
     }
 
     let params = match state.command_server.get_params(&command_id).await {

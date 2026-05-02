@@ -3,6 +3,8 @@
 //! [`super::super::traits::AuthValidator`] in use and the
 //! [`super::authz::Authz`] impl that interprets them.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// The unified authenticated principal. Every
@@ -12,7 +14,10 @@ use serde::{Deserialize, Serialize};
 /// [`Self::scope`] always carries `project_id = "default"` where applicable.
 /// Embedders that resolve other values do so by supplying their own
 /// validator.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is implemented by hand to redact [`Self::bearer_token`]; do not
+/// derive it.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subject {
     pub kind: SubjectKind,
@@ -33,6 +38,18 @@ pub struct Subject {
     /// to an upstream authentication service (token passthrough). The
     /// default validator ignores it.
     pub bearer_token: String,
+}
+
+impl fmt::Debug for Subject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Subject")
+            .field("kind", &self.kind)
+            .field("workspace_id", &self.workspace_id)
+            .field("scope", &self.scope)
+            .field("role", &self.role)
+            .field("bearer_token", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Whether the caller is a human user (dashboard) or a non-human service

@@ -197,8 +197,6 @@ async fn create_release(
     headers: HeaderMap,
     Json(req): Json<CreateReleaseRequest>,
 ) -> Response {
-    tracing::info!(project_id = %req.project_id, "Received create release request");
-
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => {
@@ -210,6 +208,8 @@ async fn create_release(
     if !state.authz.can_create_release(&subject, &req.project_id) {
         return ErrorData::forbidden("Cannot create release in this project").into_response();
     }
+
+    tracing::info!(project_id = %req.project_id, "Received create release request");
 
     // Parse all platform stacks from request
     let stacks = match parse_stacks_from_request(&req.stack) {
