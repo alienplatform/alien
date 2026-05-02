@@ -1,6 +1,6 @@
 import {
-  type Platform,
   type PermissionsConfig,
+  type Platform,
   type ResourceEntry,
   type ResourceLifecycle,
   type Stack as StackConfig,
