@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{Platform, StackSettings};
+use alien_core::{DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -348,6 +348,56 @@ async fn stale_lock_broken() {
         acquired[0].deployment.locked_by.as_deref(),
         Some("new-session")
     );
+}
+
+#[tokio::test]
+async fn reconcile_succeeds_under_other_session_lock() {
+    // Pull-mode `agent_sync` reconciles state without holding the manager
+    // session's lock — the manager grants reconcile authority via the route
+    // layer, not via the WHERE clause. This test guards against
+    // re-introducing a `LockedBy = session` predicate on `reconcile`.
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    // Session A holds the lock.
+    let acquired = store
+        .acquire("session-A", &DeploymentFilter::default(), 10)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+
+    // Session B (e.g. `"agent-sync"`) reconciles new state without acquiring.
+    let state = DeploymentState {
+        status: DeploymentStatus::Running,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    store
+        .reconcile(ReconcileData {
+            deployment_id: dep.id.clone(),
+            session: "agent-sync".to_string(),
+            state,
+            update_heartbeat: false,
+            error: None,
+        })
+        .await
+        .expect("reconcile must succeed even when another session holds the lock");
+
+    // The UPDATE applied — status is the new value.
+    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    assert_eq!(fetched.status, "running");
+    // The lock is unaffected — still held by session-A.
+    assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
 }
 
 #[tokio::test]

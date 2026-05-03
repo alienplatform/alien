@@ -282,14 +282,28 @@ pub trait ArtifactRegistry: Binding {
 
     /// Returns the OCI repository path prefix used for upstream operations.
     ///
-    /// When the proxy forwards push/pull requests to the upstream registry,
-    /// this prefix is prepended to the image name portion of the OCI path.
+    /// This identifier serves two related roles, both pointing at the same
+    /// upstream location:
+    ///
+    /// 1. **Proxy routing.** When the push proxy forwards push/pull requests
+    ///    to the upstream registry, this prefix is prepended to the image
+    ///    name portion of the OCI path.
+    /// 2. **Shared deployment-image repository name.** `alien release` pushes
+    ///    every function image as `{prefix}:{logical}-{hash}` into one shared
+    ///    repository whose routable name is exactly this prefix. Pass it as
+    ///    `repo_id` when calling `add_cross_account_access` /
+    ///    `remove_cross_account_access` for the deployment cross-account
+    ///    flow.
     ///
     /// Examples:
-    /// - ECR: `"alien-e2e"` (flat repo prefix)
-    /// - GAR: `"my-project/alien-e2e"` (project/repo structure)
-    /// - ACR: `""` (images pushed to root)
-    /// - Local: `"artifacts"` or similar
+    /// - ECR: `"alien-e2e"` — flat repo prefix; also the routable repo name
+    ///   for the shared deployment-image repository
+    /// - GAR: `"my-project/alien-e2e"` — project/repo structure
+    /// - ACR: `""` — images pushed to root; cross-account not supported
+    /// - Local: `"artifacts"` or similar — cross-account not supported
+    ///
+    /// An empty return value indicates the platform has no shared
+    /// deployment-image repo at the binding level.
     ///
     /// Default returns empty string.
     fn upstream_repository_prefix(&self) -> String {

@@ -911,3 +911,47 @@ async fn test_stay_exhaustion_full_retry_cycle() -> Result<()> {
 
     Ok(())
 }
+
+/// A retryable error must propagate the exponential-backoff delay all the way
+/// to `StepResult.suggested_delay_ms`. Guards against re-introducing a path
+/// where `step_suggested_delay = None` is treated as `Duration::ZERO` and
+/// collapses the just-set retry delay back to zero.
+#[tokio::test]
+async fn retry_delay_is_honoured_on_retryable_error() -> Result<()> {
+    // One retryable failure is enough to exercise the error path; the
+    // executor sets `min_delay = 2^0 = 1s` for the first retry.
+    let fail_func = retryable_function("retry-delay-func", 1);
+
+    let stack = Stack::new("retry-delay-stack".to_owned())
+        .add(fail_func, ResourceLifecycle::Live)
+        .build();
+
+    let executor = new_executor(&stack)?;
+    let state = new_test_state();
+
+    // Drive the executor until the resource has actually failed at least
+    // once. The first step typically transitions Pending → CreateStart and
+    // returns `suggested_delay_ms = None`; the failure surfaces on the
+    // following `step` call.
+    let mut state = state;
+    let mut observed_retry_delay: Option<u64> = None;
+    for _ in 0..10 {
+        let step_result = executor.step(state).await?;
+        state = step_result.next_state;
+        let resource_state = state.resources.get("retry-delay-func").unwrap();
+        if resource_state.retry_attempt > 0 {
+            observed_retry_delay = step_result.suggested_delay_ms;
+            break;
+        }
+    }
+
+    let delay_ms = observed_retry_delay
+        .expect("retry path must produce a non-None suggested_delay_ms");
+    assert!(
+        delay_ms >= 1000,
+        "first retry should announce ≥ 1s (got {} ms)",
+        delay_ms
+    );
+
+    Ok(())
+}

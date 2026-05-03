@@ -650,20 +650,17 @@ impl DeploymentStore for SqliteDeploymentStore {
                 query.value(Deployments::DesiredReleaseId, Option::<String>::None);
             }
 
+            // Match by `Id` only. Authz at the route layer (`can_sync_deployment`)
+            // gates who may call `reconcile`; race protection between competing
+            // legitimate writers lives at the `acquire` lock. A `LockedBy = session`
+            // WHERE clause adds no additional security guarantee here, and breaks
+            // pull-mode `agent_sync` which writes state without holding the lock.
             query
                 .and_where(Expr::col(Deployments::Id).eq(&data.deployment_id as &str))
-                .and_where(Expr::col(Deployments::LockedBy).eq(&data.session as &str))
                 .to_string(SqliteQueryBuilder)
         };
 
-        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
-        if rows_affected == 0 {
-            return Err(AlienError::new(ErrorData::DeploymentLocked {
-                deployment_id: data.deployment_id.clone(),
-                locked_by: None,
-            })
-            .into_generic());
-        }
+        self.db.execute(&sql).await?;
 
         // Fetch and return the updated deployment
         self.get_deployment(&data.deployment_id)

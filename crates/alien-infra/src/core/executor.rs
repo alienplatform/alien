@@ -1350,8 +1350,16 @@ impl StackExecutor {
             // to avoid collapsing polling delays from other resources to zero. A Ready
             // handler returning None is a bug — it means "call me again immediately"
             // which is never correct for a heartbeat check.
-            let effective_delay = step_suggested_delay.unwrap_or(Duration::ZERO);
-            min_delay = Some(min_delay.map_or(effective_delay, |d| d.min(effective_delay)));
+            //
+            // Skip on the error path: the retryable branch above already merged the
+            // exponential backoff into `min_delay`, and the tuple's third field is
+            // forced to `None` for that branch as a no-op marker. Running the
+            // None-as-ZERO merge here would collapse the just-set retry delay back to
+            // zero.
+            if next_error.is_none() {
+                let effective_delay = step_suggested_delay.unwrap_or(Duration::ZERO);
+                min_delay = Some(min_delay.map_or(effective_delay, |d| d.min(effective_delay)));
+            }
 
             // Use the appropriate controller based on whether we failed
             let final_controller =

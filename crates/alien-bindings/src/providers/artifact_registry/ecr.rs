@@ -448,19 +448,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        // `repo_id` is the routable name from `create_repository` — already
-        // `{prefix}-{logical}`. Don't re-prefix.
-        //
-        // Empty `repo_id` is a sentinel used by `alien_manager::registry_access`
-        // for "registry-prefix-level" cross-account ops (see comments at
-        // `registry_access.rs:145,191`). Map it to the bare prefix to preserve
-        // pre-3f0824a behavior — AWS responds with NotFound (warn-and-continue
-        // upstream), which is the documented tolerated path.
-        let full_repo_name = if repo_id.is_empty() {
-            self.repository_prefix.clone()
-        } else {
-            repo_id.to_string()
-        };
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         let aws_access = match access {
             CrossAccountAccess::Aws(aws_access) => aws_access,
@@ -586,19 +580,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        // `repo_id` is the routable name from `create_repository` — already
-        // `{prefix}-{logical}`. Don't re-prefix.
-        //
-        // Empty `repo_id` is a sentinel used by `alien_manager::registry_access`
-        // for "registry-prefix-level" cross-account ops (see comments at
-        // `registry_access.rs:145,191`). Map it to the bare prefix to preserve
-        // pre-3f0824a behavior — AWS responds with NotFound (warn-and-continue
-        // upstream), which is the documented tolerated path.
-        let full_repo_name = if repo_id.is_empty() {
-            self.repository_prefix.clone()
-        } else {
-            repo_id.to_string()
-        };
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         let aws_access = match access {
             CrossAccountAccess::Aws(aws_access) => aws_access,
@@ -653,19 +641,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
-        // `repo_id` is the routable name from `create_repository` — already
-        // `{prefix}-{logical}`. Don't re-prefix.
-        //
-        // Empty `repo_id` is a sentinel used by `alien_manager::registry_access`
-        // for "registry-prefix-level" cross-account ops (see comments at
-        // `registry_access.rs:145,191`). Map it to the bare prefix to preserve
-        // pre-3f0824a behavior — AWS responds with NotFound (warn-and-continue
-        // upstream), which is the documented tolerated path.
-        let full_repo_name = if repo_id.is_empty() {
-            self.repository_prefix.clone()
-        } else {
-            repo_id.to_string()
-        };
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         info!(
             repo_id = %repo_id,
@@ -930,19 +912,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        // `repo_id` is the routable name from `create_repository` — already
-        // `{prefix}-{logical}`. Don't re-prefix.
-        //
-        // Empty `repo_id` is a sentinel used by `alien_manager::registry_access`
-        // for "registry-prefix-level" cross-account ops (see comments at
-        // `registry_access.rs:145,191`). Map it to the bare prefix to preserve
-        // pre-3f0824a behavior — AWS responds with NotFound (warn-and-continue
-        // upstream), which is the documented tolerated path.
-        let full_repo_name = if repo_id.is_empty() {
-            self.repository_prefix.clone()
-        } else {
-            repo_id.to_string()
-        };
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         info!(
             repo_id = %repo_id,
