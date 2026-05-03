@@ -22,6 +22,7 @@ use alien_core::{
     DeploymentModel, DeploymentState, DeploymentStatus, Function, FunctionCode, Ingress, Platform,
     ReadinessProbe, ReleaseInfo, Stack, StackSettings,
 };
+use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -37,6 +38,19 @@ use tracing::info;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Workspace-admin caller used to drive store operations in tests.
+fn test_subject() -> Subject {
+    Subject {
+        kind: SubjectKind::ServiceAccount {
+            id: "test".to_string(),
+        },
+        workspace_id: "default".to_string(),
+        scope: Scope::Workspace,
+        role: Role::WorkspaceAdmin,
+        bearer_token: String::new(),
+    }
+}
 
 fn load_test_env() {
     let root = workspace_root::get_workspace_root();
@@ -377,9 +391,8 @@ impl CloudProxyTest {
 
         let stack = test_stack("test-fn", &image_name);
         let release = release_store
-            .create_release(CreateReleaseParams {
-                project: None,
-                caller_token: None,
+            .create_release(&test_subject(), CreateReleaseParams {
+                project_id: "default".to_string(),
                 stacks: HashMap::from([(Platform::Local, stack.clone())]),
                 git_commit_sha: None,
                 git_commit_ref: None,

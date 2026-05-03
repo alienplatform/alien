@@ -22,6 +22,7 @@ use futures_util::StreamExt;
 use alien_core::{
     Function, FunctionCode, Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack,
 };
+use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -40,6 +41,19 @@ use sha2::{Digest, Sha256};
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+/// Workspace-admin caller used to drive store operations in tests.
+fn test_subject() -> Subject {
+    Subject {
+        kind: SubjectKind::ServiceAccount {
+            id: "test".to_string(),
+        },
+        workspace_id: "default".to_string(),
+        scope: Scope::Workspace,
+        role: Role::WorkspaceAdmin,
+        bearer_token: String::new(),
+    }
+}
 
 /// Build a typed Stack with a single Function resource pointing at the given image.
 fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
@@ -243,9 +257,8 @@ async fn setup() -> TestSetup {
     let stack = test_stack("test-stack", "test-fn", &image_uri);
 
     let release = release_store
-        .create_release(CreateReleaseParams {
-            project: None,
-            caller_token: None,
+        .create_release(&test_subject(), CreateReleaseParams {
+            project_id: "default".to_string(),
             stacks: HashMap::from([(Platform::Local, stack)]),
             git_commit_sha: None,
             git_commit_ref: None,
@@ -739,9 +752,8 @@ async fn test_proxy_push_then_pull() {
 
     let new_release = s
         .release_store
-        .create_release(CreateReleaseParams {
-            project: None,
-            caller_token: None,
+        .create_release(&test_subject(), CreateReleaseParams {
+            project_id: "default".to_string(),
             stacks: HashMap::from([(Platform::Local, proxy_stack)]),
             git_commit_sha: None,
             git_commit_ref: None,
