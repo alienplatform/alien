@@ -42,6 +42,9 @@ jobs:
   setup:
     # Skip on fork PRs (no access to secrets)
     if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
+    # Make GitHub OIDC tokens emit `sub: repo:OWNER/REPO:environment:e2e-tests`
+    # so the single Terraform-managed Azure FIC matches every branch/event.
+    environment: e2e-tests
     # Prevent concurrent terraform applies on the same workspace
     concurrency:
       group: terraform-test-infra
@@ -146,11 +149,11 @@ jobs:
 
       - name: Set up Azure OIDC token
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            SUBJECT="repo:${{ github.repository }}:pull_request"
-          else
-            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
-          fi
+          # All cloud-test jobs declare `environment: e2e-tests`, so the
+          # OIDC `sub` becomes `repo:OWNER/REPO:environment:e2e-tests`
+          # regardless of branch/event. One Terraform-managed FIC covers
+          # all triggers.
+          SUBJECT="repo:${{ github.repository }}:environment:e2e-tests"
           echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
           echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
 
@@ -199,6 +202,8 @@ jobs:
 
   test:
     needs: [setup]
+    # See `setup` job for why this environment is declared.
+    environment: e2e-tests
     strategy:
       fail-fast: false
       matrix:

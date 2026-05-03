@@ -144,7 +144,24 @@ pub trait ServiceAccount: Binding {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct RepositoryResponse {
-    /// Repository name.
+    /// The **routable name** of the repository — the full, platform-specific
+    /// path used for subsequent calls (`get_repository`, `delete_repository`,
+    /// `generate_credentials`, `*_cross_account_access`).
+    ///
+    /// Per-platform format (matches
+    /// `alien.dev/content/docs/infrastructure/artifact-registry/behavior.mdx`):
+    ///
+    /// | Platform | Format |
+    /// |---|---|
+    /// | AWS (ECR) | `{registry_prefix}-{logical}` (e.g. `alien-artifacts-my-app`) |
+    /// | GCP (GAR) | `{project_id}/{gar_repo}/{logical}` |
+    /// | Azure (ACR) | `{logical}` (used directly) |
+    /// | Local | `{binding_name}/{logical}` |
+    ///
+    /// **Round-trip invariant:** callers MUST be able to pass this value back
+    /// to any other method on the trait without further transformation.
+    /// Implementations MUST NOT re-apply prefixing in receivers — assume
+    /// `repo_id` arguments are already routable.
     pub name: String,
     /// Repository URI for pushing/pulling images. None if repository is not ready yet.
     pub uri: Option<String>,
@@ -280,18 +297,30 @@ pub trait ArtifactRegistry: Binding {
     }
 
     /// Creates a repository within the artifact registry.
-    /// Returns the repository details. URI will be None if repository is still being created.
+    ///
+    /// `repo_name` is the **logical** identifier the caller chose (e.g.
+    /// `"my-app"`). The implementation transforms it to the routable
+    /// platform-specific form before calling any backend API; what's
+    /// returned in [`RepositoryResponse::name`] is the routable form.
+    ///
+    /// On platforms where image paths are implicit (GAR, ACR, Local),
+    /// this may not call any backend API — but it still returns a valid
+    /// routable name.
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse>;
 
-    /// Gets repository details including name, URI, and creation time.
+    /// Gets repository details. `repo_id` is the routable name returned by
+    /// [`Self::create_repository`]; implementations MUST NOT re-apply
+    /// prefixing.
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse>;
 
     /// Adds cross-account access permissions for a repository.
     /// This adds the specified permissions to any existing cross-account permissions.
     ///
-    /// For AWS: Grants access to specified account IDs with configurable principals and compute service types.
-    /// For GCP: Grants access to serverless robots and service accounts based on compute service types.
-    /// For Azure: Not supported - returns OperationNotSupported error.
+    /// `repo_id` is the routable name from [`Self::create_repository`].
+    ///
+    /// For AWS: grants access to specified account IDs with configurable principals and compute service types (ECR repository policy).
+    /// For GCP: grants access to serverless robots and service accounts on the parent GAR registry (image-path-level IAM is not supported).
+    /// For Azure: not supported — returns `OperationNotSupported`.
     async fn add_cross_account_access(
         &self,
         repo_id: &str,
@@ -299,11 +328,12 @@ pub trait ArtifactRegistry: Binding {
     ) -> Result<()>;
 
     /// Removes cross-account access permissions for a repository.
-    /// This removes the specified permissions from existing cross-account permissions.
     ///
-    /// For AWS: Removes access for specified account IDs and compute service types.
-    /// For GCP: Removes access for specified project numbers and service accounts.
-    /// For Azure: Not supported - returns OperationNotSupported error.
+    /// `repo_id` is the routable name from [`Self::create_repository`].
+    ///
+    /// For AWS: removes access from the ECR repository policy.
+    /// For GCP: removes IAM bindings on the parent GAR registry.
+    /// For Azure: not supported — returns `OperationNotSupported`.
     async fn remove_cross_account_access(
         &self,
         repo_id: &str,
@@ -311,13 +341,19 @@ pub trait ArtifactRegistry: Binding {
     ) -> Result<()>;
 
     /// Gets the current cross-account access permissions for a repository.
-    /// For Azure: Not supported - returns OperationNotSupported error.
+    ///
+    /// `repo_id` is the routable name from [`Self::create_repository`].
+    /// For Azure: not supported — returns `OperationNotSupported`.
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions>;
 
-    /// Generates credentials for accessing a repository with specified permissions.
-    /// On AWS: assumes the relevant role and calls get_authorization_token.
-    /// On GCP: impersonates the relevant service account and gets an oauth token.
-    /// On Azure: uses the built-in token mechanism.
+    /// Generates credentials for accessing a repository with the specified
+    /// permissions.
+    ///
+    /// `repo_id` is the routable name from [`Self::create_repository`].
+    ///
+    /// Most platforms produce registry-scoped (not repo-scoped) credentials,
+    /// so `repo_id` typically only affects logging — not the credentials
+    /// themselves.
     async fn generate_credentials(
         &self,
         repo_id: &str,
@@ -326,6 +362,11 @@ pub trait ArtifactRegistry: Binding {
     ) -> Result<ArtifactRegistryCredentials>;
 
     /// Deletes a repository and all contained images.
+    ///
+    /// `repo_id` is the routable name from [`Self::create_repository`].
+    /// Implementations MUST NOT delete the *parent* registry (which is owned
+    /// by `alien-infra`); on platforms with implicit image paths (GAR, ACR,
+    /// Local) this is a no-op.
     async fn delete_repository(&self, repo_id: &str) -> Result<()>;
 }
 

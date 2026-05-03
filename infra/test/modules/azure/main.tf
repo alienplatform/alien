@@ -148,23 +148,21 @@ resource "azuread_application_password" "manager" {
 # (alien-terraform-bootstrap) authenticate using GitHub OIDC tokens in CI.
 # Required for ACR scope map creation and other management-side operations.
 # The FIC must be on the app that AZURE_MANAGEMENT_CLIENT_ID points to.
+#
+# We use a single environment-scoped FIC: when a workflow job declares
+# `environment: e2e-tests`, GitHub emits OIDC tokens whose `sub` is
+# `repo:OWNER/REPO:environment:e2e-tests` regardless of branch or event
+# (push to main, pull_request, workflow_dispatch on a feature branch all
+# match). This avoids per-branch FIC churn or hardcoding branch names.
 data "azuread_application" "terraform_bootstrap" {
   client_id = var.management_client_id
 }
 
-resource "azuread_application_federated_identity_credential" "github_main" {
+resource "azuread_application_federated_identity_credential" "github_environment" {
   application_id = data.azuread_application.terraform_bootstrap.id
-  display_name   = "github-actions-main"
+  display_name   = "github-actions-e2e-tests"
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:alienplatform/alien:ref:refs/heads/main"
-  audiences      = ["api://AzureADTokenExchange"]
-}
-
-resource "azuread_application_federated_identity_credential" "github_pr" {
-  application_id = data.azuread_application.terraform_bootstrap.id
-  display_name   = "github-actions-pr"
-  issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:alienplatform/alien:pull_request"
+  subject        = "repo:alienplatform/alien:environment:e2e-tests"
   audiences      = ["api://AzureADTokenExchange"]
 }
 

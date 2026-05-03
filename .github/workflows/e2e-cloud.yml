@@ -523,11 +523,11 @@ jobs:
 
       - name: Set up Azure OIDC token
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            SUBJECT="repo:${{ github.repository }}:pull_request"
-          else
-            SUBJECT="repo:${{ github.repository }}:ref:${{ github.ref }}"
-          fi
+          # All e2e jobs declare `environment: e2e-tests`, so GitHub emits
+          # OIDC tokens with `sub: repo:OWNER/REPO:environment:e2e-tests`
+          # regardless of branch or event. One Terraform-managed FIC covers
+          # main pushes, PRs, and workflow_dispatch on feature branches.
+          SUBJECT="repo:${{ github.repository }}:environment:e2e-tests"
           echo "Setting AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT"
           echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
           echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
@@ -569,6 +569,11 @@ jobs:
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_push == 'true'
+    # The Azure FIC matches `sub: repo:OWNER/REPO:environment:e2e-tests`,
+    # which GitHub emits when a job declares an environment. This makes the
+    # OIDC subject branch-independent (works for main, PR, and feature-branch
+    # workflow_dispatch alike).
+    environment: e2e-tests
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.push_matrix) }}
@@ -668,6 +673,8 @@ jobs:
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_pull == 'true'
+    # See `push-test` for why this environment is declared.
+    environment: e2e-tests
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.pull_matrix) }}
@@ -755,6 +762,8 @@ jobs:
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_local == 'true'
+    # See `push-test` for why this environment is declared.
+    environment: e2e-tests
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.local_matrix) }}

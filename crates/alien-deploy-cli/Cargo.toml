@@ -49,6 +49,7 @@ dirs = "6"
 service-manager = "0.10"
 which = "7"
 getrandom = "0.2"
+tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

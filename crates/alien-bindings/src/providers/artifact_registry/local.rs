@@ -93,22 +93,43 @@ impl LocalArtifactRegistry {
         })
     }
 
-    /// Creates an OCI Reference for a repository in this registry
-    fn create_reference(&self, repo_id: &str) -> Result<Reference> {
+    /// Creates an OCI Reference from a logical repository name (e.g. `"my-app"`).
+    /// The reference points at `{registry}/{binding_name}/{logical}:latest`.
+    fn create_reference(&self, logical: &str) -> Result<Reference> {
         // registry_endpoint is like "localhost:5000"
         // The container-registry crate requires a two-level path: /v2/:repository/:image/...
-        // We use the binding name as :repository and repo_id as :image to match the conceptual
-        // model: "artifacts registry contains alien-prj_xxx repository"
+        // We use the binding name as :repository and the logical name as :image to match
+        // the conceptual model: "artifacts registry contains alien-prj_xxx repository".
         // This also enables namespace separation for multiple ArtifactRegistry resources.
         let ref_string = format!(
             "{}/{}/{}:latest",
-            self.registry_endpoint, self.binding_name, repo_id
+            self.registry_endpoint, self.binding_name, logical
         );
         Reference::try_from(ref_string.as_str())
             .into_alien_error()
             .context(ErrorData::Other {
                 message: format!("Invalid repository reference: {}", ref_string),
             })
+    }
+
+    /// Build the routable name (`{binding_name}/{logical}`) returned to
+    /// callers. Per `traits::RepositoryResponse::name`, this is the value
+    /// that round-trips through `get_repository`/`delete_repository`.
+    fn routable_name(&self, logical: &str) -> String {
+        if logical.is_empty() {
+            self.binding_name.clone()
+        } else {
+            format!("{}/{}", self.binding_name, logical)
+        }
+    }
+
+    /// Recover the logical name from a routable name passed back by a
+    /// caller. Tolerates either form: a routable name like
+    /// `"{binding_name}/{logical}"` is stripped, anything else is treated
+    /// as already-logical.
+    fn logical_from_routable<'a>(&self, repo_id: &'a str) -> &'a str {
+        let prefix = format!("{}/", self.binding_name);
+        repo_id.strip_prefix(prefix.as_str()).unwrap_or(repo_id)
     }
 }
 
@@ -240,15 +261,13 @@ impl ArtifactRegistry for LocalArtifactRegistry {
             "Local Docker repository created successfully"
         );
 
-        // Return the full routable name (prefix + repo) so the manager proxy can match it.
-        let routable_name = if repo_name.is_empty() {
-            self.upstream_repository_prefix()
-        } else {
-            format!("{}/{}", self.upstream_repository_prefix(), repo_name)
-        };
-
+        // Return the routable name (`{binding_name}/{logical}`) — matches
+        // both the on-disk OCI path and the docs at
+        // `alien.dev/content/docs/infrastructure/artifact-registry/behavior.mdx`.
+        // The manager proxy routes via `upstream_repository_prefix()`, which
+        // is a separate concern from this binding-level identifier.
         Ok(RepositoryResponse {
-            name: routable_name,
+            name: self.routable_name(repo_name),
             uri: Some(repository_uri),
             created_at: None,
         })
@@ -261,9 +280,14 @@ impl ArtifactRegistry for LocalArtifactRegistry {
             "Checking local repository existence via OCI API"
         );
 
+        // Per the trait contract, `repo_id` is the routable name returned by
+        // `create_repository` (`{binding_name}/{logical}`). Recover the
+        // logical segment so we can build the OCI reference.
+        let logical = self.logical_from_routable(repo_id);
+
         // Use oci-client to check if repository exists by trying to fetch a manifest
         let client = self.create_oci_client();
-        let reference = self.create_reference(repo_id)?;
+        let reference = self.create_reference(logical)?;
 
         // Store auth credentials for this registry
         let auth = RegistryAuth::Anonymous;
@@ -275,11 +299,11 @@ impl ArtifactRegistry for LocalArtifactRegistry {
         // This hits /v2/<repository>/<image>/manifests/<reference> endpoint
         match client.pull_manifest(&reference, &auth).await {
             Ok(_) => {
-                // Repository exists and has at least one manifest
-                // URI format matches create_repository: registry/binding-name/repository
+                // Repository exists and has at least one manifest.
+                // URI format matches create_repository: registry/binding-name/logical.
                 let repository_uri = format!(
                     "{}/{}/{}",
-                    self.registry_endpoint, self.binding_name, repo_id
+                    self.registry_endpoint, self.binding_name, logical
                 );
 
                 debug!(
@@ -289,14 +313,8 @@ impl ArtifactRegistry for LocalArtifactRegistry {
                     "Local repository exists"
                 );
 
-                let routable_name = if repo_id.is_empty() {
-                    self.upstream_repository_prefix()
-                } else {
-                    format!("{}/{}", self.upstream_repository_prefix(), repo_id)
-                };
-
                 Ok(RepositoryResponse {
-                    name: routable_name,
+                    name: self.routable_name(logical),
                     uri: Some(repository_uri),
                     created_at: None,
                 })

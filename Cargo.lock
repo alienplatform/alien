@@ -501,6 +501,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-manager",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -577,6 +577,8 @@ async fn run_agent_foreground(
     encryption_key: &str,
     data_dir_override: Option<&str>,
 ) -> Result<()> {
+    use std::io::Write;
+
     output::info("Running agent in foreground (Ctrl+C to stop)...");
 
     let data_dir = if let Some(dir) = data_dir_override {
@@ -588,15 +590,59 @@ async fn run_agent_foreground(
             .join("agent-data")
     };
 
+    // The agent rejects `--sync-token`/`--encryption-key` because argv is
+    // visible in `ps` / `/proc/<pid>/cmdline`. Write each secret to its own
+    // tempfile (0o600 on Unix) and pass the path via `--*-file`. The
+    // `NamedTempFile`s must outlive the child process — drop deletes them.
+    let mut sync_token_file = tempfile::NamedTempFile::new().into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to create temp file for sync token".to_string(),
+        },
+    )?;
+    sync_token_file
+        .write_all(token.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write sync token".to_string(),
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            sync_token_file.path(),
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+
+    let mut encryption_key_file = tempfile::NamedTempFile::new().into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to create temp file for encryption key".to_string(),
+        },
+    )?;
+    encryption_key_file
+        .write_all(encryption_key.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write encryption key".to_string(),
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            encryption_key_file.path(),
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+
     let status = tokio::process::Command::new(binary_path)
         .arg("--platform")
         .arg(platform)
         .arg("--sync-url")
         .arg(manager_url)
-        .arg("--sync-token")
-        .arg(token)
-        .arg("--encryption-key")
-        .arg(encryption_key)
+        .arg("--sync-token-file")
+        .arg(sync_token_file.path())
+        .arg("--encryption-key-file")
+        .arg(encryption_key_file.path())
         .arg("--data-dir")
         .arg(&data_dir)
         .stdout(std::process::Stdio::inherit())
@@ -607,6 +653,10 @@ async fn run_agent_foreground(
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to run agent: {}", binary_path.display()),
         })?;
+
+    // Tempfiles drop here, after the child exits.
+    drop(sync_token_file);
+    drop(encryption_key_file);
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
