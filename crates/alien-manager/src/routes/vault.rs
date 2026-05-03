@@ -129,10 +129,17 @@ async fn set_secret(
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
     Json(body): Json<SetSecretRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let subject = auth::require_auth(&state, &headers).await?;
-    if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+    let subject = auth::require_auth(&state, &headers).await?;    let deployment = state
+        .deployment_store
+        .get_deployment(&deployment_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to load deployment".to_string(),
+        })?
+        .ok_or_else(|| ErrorData::not_found_deployment(&deployment_id))?;
+    if !state.authz.can_update_deployment(&subject, &deployment) {
         return Err(ErrorData::forbidden(
-            "Access denied: requires admin or matching deployment token",
+            "Access denied: cannot mutate vault for this deployment",
         ));
     }
 
@@ -156,10 +163,17 @@ async fn get_secret(
     headers: HeaderMap,
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
 ) -> Result<Json<GetSecretResponse>> {
-    let subject = auth::require_auth(&state, &headers).await?;
-    if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+    let subject = auth::require_auth(&state, &headers).await?;    let deployment = state
+        .deployment_store
+        .get_deployment(&deployment_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to load deployment".to_string(),
+        })?
+        .ok_or_else(|| ErrorData::not_found_deployment(&deployment_id))?;
+    if !state.authz.can_read_deployment(&subject, &deployment) {
         return Err(ErrorData::forbidden(
-            "Access denied: requires admin or matching deployment token",
+            "Access denied: cannot read vault for this deployment",
         ));
     }
 

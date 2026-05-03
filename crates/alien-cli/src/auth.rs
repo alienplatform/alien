@@ -286,23 +286,17 @@ mod oauth_flow {
 
     /* ── internals ─────────────────────────────────────────────────────────── */
 
+    /// Derive the dashboard success URL from the API base URL.
     fn derive_dashboard_success_url(api_base: &str) -> Option<String> {
-        let url = match url::Url::parse(api_base) {
-            Ok(u) => u,
-            Err(_) => return None,
-        };
-
+        let url = url::Url::parse(api_base).ok()?;
         let host = url.host_str()?;
-        let scheme = url.scheme();
+        let dashboard_host = host.strip_prefix("api.").unwrap_or(host);
 
-        let dashboard_base = if host == "localhost" || host == "127.0.0.1" {
-            format!("{}://localhost:3000", scheme)
-        } else {
-            let dashboard_host = host.strip_prefix("api.").unwrap_or(host);
-            format!("{}://{}", scheme, dashboard_host)
-        };
+        let mut dashboard_url = url.clone();
+        dashboard_url.set_host(Some(dashboard_host)).ok()?;
+        dashboard_url.set_path("/oauth/consent/success");
 
-        Some(format!("{}/oauth/consent/success", dashboard_base))
+        Some(dashboard_url.to_string().trim_end_matches('/').to_string())
     }
 
     async fn bind_oauth_callback_port() -> Result<(u16, tokio::net::TcpListener)> {

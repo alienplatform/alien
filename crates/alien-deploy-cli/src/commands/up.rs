@@ -23,8 +23,6 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
-use alien_platform_api::Client as PlatformClient;
-use alien_platform_api::SdkResultExt;
 use alien_cli_common::network::{self, NetworkArgs};
 use clap::Parser;
 use std::str::FromStr;
@@ -323,95 +321,76 @@ fn resolve_deployment_info(
     })
 }
 
-/// Discover the manager URL via the platform API using a DG token.
+/// Discover the manager URL via the platform API.
 ///
-/// Calls `whoami` to get the deployment group ID and workspace, then resolves
-/// the manager for the deployment group and platform.
+/// Calls GET /v1/resolve?platform=X to resolve the manager.
+/// The token's scope (DG, project, etc.) provides the project context
+/// to the server — no need to call whoami first.
 async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Result<String> {
-    use alien_platform_api::types::{Subject, SubjectScope};
+    let http_client = {
+        use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 
-    let platform_client = create_platform_client(token, base_url)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Invalid token format".to_string(),
+                })?,
+        );
+        headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
 
-    // Get DG ID and workspace from token via whoami
-    let subject = platform_client
-        .whoami()
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to validate token via platform API".to_string(),
-        })?
-        .into_inner();
-
-    let (dg_id, workspace) = match subject {
-        Subject::ServiceAccountSubject(sa) => match sa.scope {
-            SubjectScope::DeploymentGroup {
-                deployment_group_id,
-                ..
-            } => (deployment_group_id, sa.workspace_id),
-            _ => {
-                return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: "Token is not a deployment group token. Set ALIEN_MANAGER_URL for non-DG tokens.".to_string(),
-                }));
-            }
-        },
-        _ => {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message:
-                    "Token is not a service account token. Set ALIEN_MANAGER_URL for user tokens."
-                        .to_string(),
-            }));
-        }
-    };
-
-    // Resolve manager URL for this DG + platform
-    let platform_param: alien_platform_api::types::GetDeploymentGroupManagerPlatform =
-        platform.parse().map_err(|_| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!("Invalid platform: {platform}"),
-            })
-        })?;
-
-    let manager_response = platform_client
-        .get_deployment_group_manager()
-        .id(&dg_id)
-        .workspace(&workspace)
-        .platform(platform_param)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to resolve manager for deployment group. Ensure a healthy manager is available for this platform.".to_string(),
-        })?
-        .into_inner();
-
-    Ok(manager_response.manager_url)
-}
-
-fn create_platform_client(token: &str, base_url: &str) -> Result<PlatformClient> {
-    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token))
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: "Invalid token format".to_string(),
-            })?,
-    );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
+                message: "Failed to build HTTP client".to_string(),
+            })?
+    };
 
-    let http_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
+    let url = format!(
+        "{}/v1/resolve?platform={}",
+        base_url,
+        urlencoding::encode(platform),
+    );
+
+    let resp = http_client
+        .get(&url)
+        .send()
+        .await
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Failed to create HTTP client".to_string(),
+            message: "Failed to call /v1/resolve on platform API".to_string(),
         })?;
 
-    Ok(PlatformClient::new_with_client(base_url, http_client))
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to resolve manager via platform API (HTTP {}): {}",
+                status, body
+            ),
+        }));
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ResolveResponse {
+        manager_url: String,
+    }
+
+    let resolved: ResolveResponse = resp
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to parse /v1/resolve response".to_string(),
+        })?;
+
+    Ok(resolved.manager_url)
 }
 
 pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerClient> {
@@ -598,6 +577,8 @@ async fn run_agent_foreground(
     encryption_key: &str,
     data_dir_override: Option<&str>,
 ) -> Result<()> {
+    use std::io::Write;
+
     output::info("Running agent in foreground (Ctrl+C to stop)...");
 
     let data_dir = if let Some(dir) = data_dir_override {
@@ -609,15 +590,59 @@ async fn run_agent_foreground(
             .join("agent-data")
     };
 
+    // The agent rejects `--sync-token`/`--encryption-key` because argv is
+    // visible in `ps` / `/proc/<pid>/cmdline`. Write each secret to its own
+    // tempfile (0o600 on Unix) and pass the path via `--*-file`. The
+    // `NamedTempFile`s must outlive the child process — drop deletes them.
+    let mut sync_token_file = tempfile::NamedTempFile::new().into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to create temp file for sync token".to_string(),
+        },
+    )?;
+    sync_token_file
+        .write_all(token.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write sync token".to_string(),
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            sync_token_file.path(),
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+
+    let mut encryption_key_file = tempfile::NamedTempFile::new().into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to create temp file for encryption key".to_string(),
+        },
+    )?;
+    encryption_key_file
+        .write_all(encryption_key.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to write encryption key".to_string(),
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            encryption_key_file.path(),
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+
     let status = tokio::process::Command::new(binary_path)
         .arg("--platform")
         .arg(platform)
         .arg("--sync-url")
         .arg(manager_url)
-        .arg("--sync-token")
-        .arg(token)
-        .arg("--encryption-key")
-        .arg(encryption_key)
+        .arg("--sync-token-file")
+        .arg(sync_token_file.path())
+        .arg("--encryption-key-file")
+        .arg(encryption_key_file.path())
         .arg("--data-dir")
         .arg(&data_dir)
         .stdout(std::process::Stdio::inherit())
@@ -628,6 +653,10 @@ async fn run_agent_foreground(
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to run agent: {}", binary_path.display()),
         })?;
+
+    // Tempfiles drop here, after the child exits.
+    drop(sync_token_file);
+    drop(encryption_key_file);
 
     if !status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {

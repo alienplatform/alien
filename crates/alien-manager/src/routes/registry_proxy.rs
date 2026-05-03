@@ -36,7 +36,7 @@ use alien_bindings::BindingsProviderApi;
 use alien_core::Platform;
 
 use super::AppState;
-use crate::traits::{AuthSubject, TokenType};
+use crate::auth::{Scope, Subject};
 
 // ---------------------------------------------------------------------------
 // Registry routing table
@@ -75,6 +75,23 @@ impl RegistryRoutingTable {
                 repo_name.starts_with(&r.prefix)
             }
         })
+    }
+
+    /// Extract the project_id from an OCI repo path using this table's
+    /// boot-time-static `prefix → platform` map. The provider that owns the
+    /// matching route composes its full repo name as `{prefix}{sep}{name}` —
+    /// `-` for ECR, `/` for GAR/ACR/Local — so we strip the prefix, strip the
+    /// single separator byte, and take everything up to the next `/` as the
+    /// project_id.
+    ///
+    /// Returns `None` when no route matches, when the suffix doesn't start
+    /// with `-` or `/` (defense — a path that didn't go through a provider's
+    /// `make_full_repo_name`), or when the extracted id is empty. Callers
+    /// fall back to `"default"`; the [`crate::auth::Authz`] impl then
+    /// decides whether to allow the push.
+    pub fn project_id_for_repo<'a>(&self, repo_name: &'a str) -> Option<&'a str> {
+        let route = self.resolve(repo_name)?;
+        project_id_after_prefix(repo_name, route.prefix.as_str())
     }
 
     /// Get the repo prefix for a given platform.
@@ -119,6 +136,34 @@ impl RegistryRoutingTable {
             }
         }
         Ok(())
+    }
+}
+
+/// Strip `prefix` from `repo_name`, then strip a single separator byte
+/// (`-` for ECR, `/` for GAR/ACR/Local — empty prefix needs no separator),
+/// and return everything up to the next `/`. See
+/// [`RegistryRoutingTable::project_id_for_repo`] for the full algorithm
+/// (including the route resolution this helper assumes has already happened).
+///
+/// Exposed at module level so unit tests can exercise the algorithm without
+/// constructing a full `RegistryRoutingTable` (which would require a real
+/// `BindingsProviderApi` and a tokio runtime).
+fn project_id_after_prefix<'a>(repo_name: &'a str, prefix: &str) -> Option<&'a str> {
+    let suffix = if prefix.is_empty() {
+        repo_name
+    } else {
+        let rest = repo_name.strip_prefix(prefix)?;
+        let first = rest.chars().next()?;
+        if first != '-' && first != '/' {
+            return None;
+        }
+        &rest[1..]
+    };
+    let pid = suffix.split('/').next()?;
+    if pid.is_empty() {
+        None
+    } else {
+        Some(pid)
     }
 }
 
@@ -332,7 +377,8 @@ async fn proxy_push(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
-    if let Err(e) = require_push_auth(&subject) {
+    let repo_name = extract_repo_name(&path);
+    if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
         return e;
     }
 
@@ -363,7 +409,10 @@ async fn proxy_upload_session(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
-    if let Err(e) = require_push_auth(&subject) {
+    // Upload-session URLs are signed by the upstream registry on a previous
+    // push request; treat the path itself as the repo identifier for authz.
+    let repo_name = original_uri.path().to_string();
+    if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
         return e;
     }
 
@@ -669,43 +718,53 @@ async fn forward_request(
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-/// Validate that the caller has push permissions (admin/developer only).
-fn require_push_auth(subject: &AuthSubject) -> Result<(), Response> {
-    match subject.scope.token_type {
-        TokenType::Admin => Ok(()),
-        TokenType::DeploymentGroup => Err(oci_error(
+/// Validate that the caller has push permissions. The project_id comes
+/// from the **routing table** — each provider composes repo names as
+/// `{prefix}{sep}{name}` (`-` for ECR, `/` for GAR/ACR/Local), so the
+/// routing-table prefix lookup gives us the project's name unambiguously.
+/// Pushes that don't match any prefix fall back to `"default"`; the
+/// configured [`crate::auth::Authz`] impl decides whether to allow.
+fn require_push_auth(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+) -> Result<(), Response> {
+    let project_id = state
+        .registry_routing_table
+        .project_id_for_repo(repo_name)
+        .unwrap_or("default");
+    if state.authz.can_push_image(subject, project_id, repo_name) {
+        Ok(())
+    } else {
+        Err(oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
-            "Deployment group tokens cannot push images. Use an admin API key or OAuth token.",
-        )),
-        TokenType::Deployment => Err(oci_error(
-            StatusCode::FORBIDDEN,
-            "DENIED",
-            "Deployment tokens cannot push images. Use an admin API key or OAuth token.",
-        )),
+            "Caller cannot push images to this project.",
+        ))
     }
 }
 
 /// Validate that a deployment token can access the requested repo.
 ///
-/// Uses the pull validation cache to avoid repeated DB lookups.
-/// Admin tokens bypass validation.
+/// Uses the pull validation cache to avoid repeated DB lookups. Workspace-
+/// scoped subjects bypass repo validation (they can pull anything in the
+/// workspace).
 async fn validate_pull_access(
     state: &AppState,
-    subject: &AuthSubject,
+    subject: &Subject,
     repo_name: &str,
 ) -> Result<(), Response> {
-    if subject.scope.token_type == TokenType::Admin {
-        return Ok(());
-    }
-
-    let deployment_id = subject.scope.deployment_id.as_deref().ok_or_else(|| {
-        oci_error(
-            StatusCode::FORBIDDEN,
-            "DENIED",
-            "Registry proxy requires a deployment token",
-        )
-    })?;
+    let deployment_id = match &subject.scope {
+        Scope::Workspace | Scope::Project { .. } => return Ok(()),
+        Scope::DeploymentGroup { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Registry proxy pulls require a deployment token",
+            ))
+        }
+        Scope::Deployment { deployment_id, .. } => deployment_id.as_str(),
+    };
 
     // Check cache first.
     let repo_names = if let Some((_release_id, cached_repos)) =
@@ -747,9 +806,10 @@ async fn validate_pull_access(
             })?
             .to_string();
 
+        let system = crate::auth::Subject::system();
         let release = state
             .release_store
-            .get_release(&release_id)
+            .get_release(&system, &release_id)
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get release for registry proxy");
@@ -767,7 +827,11 @@ async fn validate_pull_access(
                 )
             })?;
 
-        let repos = extract_repo_names(&release.stack);
+        let repos = release
+            .stacks
+            .values()
+            .flat_map(|stack| extract_repo_names(stack))
+            .collect::<Vec<_>>();
 
         // Cache the result.
         state
@@ -1011,6 +1075,93 @@ mod tests {
         assert_eq!(
             extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
             "alien-e2e"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // project_id_after_prefix — the algorithm behind
+    // RegistryRoutingTable::project_id_for_repo. Tests target the free
+    // helper because constructing a full `RegistryRoutingTable` requires a
+    // real `BindingsProviderApi` and a tokio runtime.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn project_id_aws_ecr_dash_separator() {
+        assert_eq!(
+            project_id_after_prefix("alien-artifacts-prj_xxx", "alien-artifacts"),
+            Some("prj_xxx")
+        );
+        assert_eq!(
+            project_id_after_prefix("alien-artifacts-prj_xxx/sub", "alien-artifacts"),
+            Some("prj_xxx")
+        );
+    }
+
+    #[test]
+    fn project_id_gar_slash_separator() {
+        assert_eq!(
+            project_id_after_prefix(
+                "alien-dev-1/alien-artifacts/prj_xxx",
+                "alien-dev-1/alien-artifacts",
+            ),
+            Some("prj_xxx")
+        );
+    }
+
+    #[test]
+    fn project_id_local_slash_separator() {
+        assert_eq!(
+            project_id_after_prefix("artifacts/default/prj_xxx", "artifacts/default"),
+            Some("prj_xxx")
+        );
+        assert_eq!(
+            project_id_after_prefix(
+                "artifacts/default/prj_xxx/release-v1",
+                "artifacts/default",
+            ),
+            Some("prj_xxx")
+        );
+    }
+
+    #[test]
+    fn project_id_acr_empty_prefix() {
+        assert_eq!(project_id_after_prefix("prj_xxx", ""), Some("prj_xxx"));
+        assert_eq!(project_id_after_prefix("prj_xxx/sub", ""), Some("prj_xxx"));
+    }
+
+    #[test]
+    fn project_id_rejects_malformed_separator() {
+        // No `-` or `/` after the prefix — defense against repos that didn't
+        // go through `make_full_repo_name`.
+        assert_eq!(
+            project_id_after_prefix("alien-artifactsXprj_xxx", "alien-artifacts"),
+            None
+        );
+    }
+
+    #[test]
+    fn project_id_rejects_empty_id() {
+        assert_eq!(
+            project_id_after_prefix("alien-artifacts-", "alien-artifacts"),
+            None
+        );
+    }
+
+    #[test]
+    fn project_id_rejects_bare_prefix() {
+        // No suffix at all after the prefix.
+        assert_eq!(
+            project_id_after_prefix("alien-artifacts", "alien-artifacts"),
+            None
+        );
+    }
+
+    #[test]
+    fn project_id_rejects_unrelated_prefix() {
+        // The prefix isn't actually a prefix of repo_name — `strip_prefix` returns None.
+        assert_eq!(
+            project_id_after_prefix("unknown/path/prj_xxx", "alien-artifacts"),
+            None
         );
     }
 }

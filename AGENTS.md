@@ -1,3 +1,13 @@
+# ⚠️ This is an open-source repository
+
+Everything you commit here is **public on GitHub**. Treat the repo as a public artifact at all times — feature flags don't hide source, "internal" naming doesn't hide source, and removing files later doesn't unpublish git history. Don't commit anything you wouldn't post publicly.
+
+All `[dependencies]` in `Cargo.toml` and all imports in source must resolve from public sources (crates.io, this repo, or other open-source repos).
+
+Thanks for contributing! If you're not sure whether something fits, open a discussion before submitting.
+
+---
+
 # Guidelines
 
 **Always follow the coding guidelines in `AGENTS.md`** — it covers error handling, testing, imports, and all Rust conventions for this project.

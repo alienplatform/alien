@@ -139,10 +139,15 @@ pub async fn reconcile_registry_access(
                 None => return,
             };
 
-        // Empty repo_id means "use just the repository prefix" — the prefix
-        // is already baked into make_full_repo_name via self.repository_prefix.
-        // Passing the prefix here would double it (e.g. "alien-quickstart-alien-quickstart").
-        let repo_id = "";
+        // The shared deployment-image repository is named after
+        // `upstream_repository_prefix()` — the same identifier the proxy
+        // routes pushes to and `alien release` writes images to. Empty means
+        // the platform has no such repo (Azure ACR pushes to the registry
+        // root; Local doesn't support cross-account).
+        let repo_id = artifact_registry.upstream_repository_prefix();
+        if repo_id.is_empty() {
+            return;
+        }
 
         // Revoke cross-account access (AWS/GCP only; Azure/Local are no-ops).
         revoke_registry_access(
@@ -185,10 +190,15 @@ pub async fn reconcile_registry_access(
         }
     };
 
-    // Empty repo_id means "use just the repository prefix" — the prefix
-    // is already baked into make_full_repo_name via self.repository_prefix.
-    // Passing the prefix here would double it (e.g. "alien-quickstart-alien-quickstart").
-    let repo_id = "";
+    // The shared deployment-image repository is named after
+    // `upstream_repository_prefix()` — the same identifier the proxy routes
+    // pushes to and `alien release` writes images to. Empty means the
+    // platform has no such repo (Azure ACR pushes to the registry root;
+    // Local doesn't support cross-account).
+    let repo_id = artifact_registry.upstream_repository_prefix();
+    if repo_id.is_empty() {
+        return;
+    }
 
     // AWS/GCP: grant IAM-based cross-account access.
     let granted = ensure_registry_access(

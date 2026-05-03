@@ -87,12 +87,4 @@ Prefer explicit next steps over vague guidance.
 
 ## Documentation Expectations
 
-If you change command behavior, update the docs at the same time.
-
-The key docs for this crate are in `platform/internal-docs/alien/`:
-
-- `03-cli/00-overview.md`
-- `02-manager/08-local-development.md`
-- `09-testing/00-framework.md`
-
-If you change the command model, bootstrap rules, or local machine interface, update all three.
+If you change command behavior, update the public docs at <https://alien.dev/docs> at the same time. In particular, keep the CLI overview, local-development guide, and testing-framework docs in sync with the command model, bootstrap rules, and local machine interface.

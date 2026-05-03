@@ -194,6 +194,12 @@ impl ErrorData {
             release_id: id.into(),
         })
     }
+
+    pub fn internal(message: impl Into<String>) -> alien_error::AlienError<ErrorData> {
+        alien_error::AlienError::new(ErrorData::InternalError {
+            message: message.into(),
+        })
+    }
 }
 
 /// Convenient type alias.

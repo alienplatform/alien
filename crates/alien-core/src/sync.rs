@@ -50,21 +50,21 @@ mod tests {
     #[test]
     fn test_sync_request_serialization() {
         let req = SyncRequest {
-            deployment_id: "ag_abc123".to_string(),
+            deployment_id: "dep_abc123".to_string(),
             current_state: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["deploymentId"], "ag_abc123");
+        assert_eq!(json["deploymentId"], "dep_abc123");
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
     }
 
     #[test]
     fn test_sync_request_deserialization() {
-        let json = r#"{"deploymentId": "ag_xyz"}"#;
+        let json = r#"{"deploymentId": "dep_xyz"}"#;
         let req: SyncRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.deployment_id, "ag_xyz");
+        assert_eq!(req.deployment_id, "dep_xyz");
         assert!(req.current_state.is_none());
     }
 
@@ -93,13 +93,13 @@ mod tests {
     #[test]
     fn test_sync_request_with_camel_case() {
         // Verify camelCase renaming works correctly
-        let json = r#"{"deploymentId": "ag_1", "currentState": null}"#;
+        let json = r#"{"deploymentId": "dep_1", "currentState": null}"#;
         let req: SyncRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.deployment_id, "ag_1");
+        assert_eq!(req.deployment_id, "dep_1");
         assert!(req.current_state.is_none());
 
         // snake_case should NOT work
-        let json = r#"{"deployment_id": "ag_1"}"#;
+        let json = r#"{"deployment_id": "dep_1"}"#;
         assert!(serde_json::from_str::<SyncRequest>(json).is_err());
     }
 }

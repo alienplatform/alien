@@ -195,6 +195,71 @@ impl PreflightRunner {
         Ok(current_stack)
     }
 
+    /// Run template-generation preflights (skips deployment prerequisite checks).
+    ///
+    /// Used by CloudFormation template generation where deployment-environment checks
+    /// (Horizon required, DNS/TLS required) are irrelevant — the platform provisions
+    /// that infrastructure separately.
+    pub async fn run_template_preflights(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+    ) -> Result<PreflightSummary> {
+        info!(
+            "Running template-generation preflights for platform {:?}",
+            platform
+        );
+
+        let checks = self.registry.get_template_checks(stack, platform);
+        let mut results = Vec::new();
+
+        for check in checks {
+            debug!("Running check: {}", check.description());
+
+            let mut result =
+                check
+                    .check(stack, platform)
+                    .await
+                    .context(ErrorData::CompileTimeCheckFailed {
+                        check_name: check.description().to_string(),
+                        message: "Check execution failed".to_string(),
+                        resource_id: None,
+                    })?;
+
+            result.check_description = Some(check.description().to_string());
+
+            if !result.success {
+                error!(check = %check.description(), "Template preflight check failed");
+                for msg in &result.errors {
+                    error!(check = %check.description(), "  {}", msg);
+                }
+            }
+
+            for warning in &result.warnings {
+                warn!(check = %check.description(), "  Warning: {}", warning);
+            }
+
+            results.push(result);
+        }
+
+        let summary = PreflightSummary::from_results(results);
+
+        if !summary.success {
+            error!(
+                error_count = summary.failed_checks,
+                warning_count = summary.warning_count,
+                "Template preflight checks failed"
+            );
+            return Err(AlienError::new(ErrorData::ValidationFailed {
+                error_count: summary.failed_checks,
+                warning_count: summary.warning_count,
+                results: summary.results,
+            }));
+        }
+
+        Ok(summary)
+    }
+
     /// Run the complete preflight pipeline for build-time (compile-time checks only)
     pub async fn run_build_time_preflights(
         &self,

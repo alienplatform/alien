@@ -114,6 +114,28 @@ export type ManagementConfig =
   | any;
 
 /**
+ * Runtime metrics (self-reported via heartbeat)
+ */
+export type CreateManagerMetrics = {
+  /**
+   * Number of active deployments
+   */
+  activeDeployments?: number | undefined;
+  /**
+   * Number of pending deployments
+   */
+  pendingDeployments?: number | undefined;
+  /**
+   * Memory usage in megabytes
+   */
+  memoryUsageMb?: number | undefined;
+  /**
+   * CPU usage percentage
+   */
+  cpuUsagePercent?: number | undefined;
+};
+
+/**
  * Manager schema
  */
 export type CreateManagerResponse = {
@@ -157,6 +179,10 @@ export type CreateManagerResponse = {
    * Manager version (self-reported via heartbeat)
    */
   version?: string | null | undefined;
+  /**
+   * Runtime metrics (self-reported via heartbeat)
+   */
+  metrics?: CreateManagerMetrics | null | undefined;
   /**
    * Timestamp of the last received heartbeat from the manager
    */
@@ -332,6 +358,27 @@ export function managementConfigFromJSON(
 }
 
 /** @internal */
+export const CreateManagerMetrics$inboundSchema: z.ZodType<
+  CreateManagerMetrics,
+  unknown
+> = z.object({
+  activeDeployments: z.number().optional(),
+  pendingDeployments: z.number().optional(),
+  memoryUsageMb: z.number().optional(),
+  cpuUsagePercent: z.number().optional(),
+});
+
+export function createManagerMetricsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerMetrics, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerMetrics$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerMetrics' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponse$inboundSchema: z.ZodType<
   CreateManagerResponse,
   unknown
@@ -353,6 +400,8 @@ export const CreateManagerResponse$inboundSchema: z.ZodType<
   workspaceId: z.string(),
   status: models.ManagerStatus$inboundSchema,
   version: z.nullable(z.string()).optional(),
+  metrics: z.nullable(z.lazy(() => CreateManagerMetrics$inboundSchema))
+    .optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

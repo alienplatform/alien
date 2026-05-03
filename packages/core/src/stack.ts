@@ -1,5 +1,6 @@
 import {
   type PermissionsConfig,
+  type Platform,
   type ResourceEntry,
   type ResourceLifecycle,
   type Stack as StackConfig,
@@ -72,6 +73,15 @@ export class Stack {
       entry.remoteAccess = true
     }
     this._config.resources![resource.config.id] = entry
+    return this
+  }
+
+  /**
+   * Declare which platforms this stack supports.
+   * When omitted, the stack supports all platforms.
+   */
+  public platforms(platforms: Platform[]): this {
+    this._config.supportedPlatforms = platforms
     return this
   }
 

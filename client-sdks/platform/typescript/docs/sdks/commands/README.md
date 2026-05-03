@@ -29,7 +29,7 @@ async function run() {
   const result = await alien.commands.list({
     workspace: "my-workspace",
     project: "my-project",
-    deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
   console.log(result);
@@ -56,7 +56,7 @@ async function run() {
   const res = await commandsList(alien, {
     workspace: "my-workspace",
     project: "my-project",
-    deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -107,7 +107,7 @@ async function run() {
   const result = await alien.commands.create({
     workspace: "my-workspace",
     createCommandRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       name: "<value>",
     },
   });
@@ -136,7 +136,7 @@ async function run() {
   const res = await commandsCreate(alien, {
     workspace: "my-workspace",
     createCommandRequest: {
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       name: "<value>",
     },
   });

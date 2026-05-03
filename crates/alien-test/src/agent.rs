@@ -96,6 +96,11 @@ pub struct TestAlienAgent {
     pub child_process: Option<tokio::process::Child>,
     /// Temp data directory for native agent (cleaned up on drop).
     pub data_dir: Option<tempfile::TempDir>,
+    /// Temp file holding the sync token (`--sync-token-file`); deleted on drop.
+    /// The agent rejects plaintext token args because argv is visible in `ps`.
+    pub sync_token_file: Option<tempfile::NamedTempFile>,
+    /// Temp file holding the encryption key (`--encryption-key-file`); deleted on drop.
+    pub encryption_key_file: Option<tempfile::NamedTempFile>,
     /// The platform this agent targets.
     pub platform: Platform,
     /// Whether the agent was installed as an OS service via `alien-deploy up`.
@@ -238,6 +243,8 @@ impl TestAlienAgent {
             kubeconfig: None,
             child_process: None,
             data_dir: None,
+            sync_token_file: None,
+            encryption_key_file: None,
             platform,
             installed_as_service: false,
             deploy_binary: None,
@@ -262,17 +269,39 @@ impl TestAlienAgent {
         let encryption_key = generate_encryption_key();
         let data_dir = tempfile::tempdir()?;
 
+        // The agent rejects `--sync-token`/`--encryption-key` (argv leak via
+        // `ps` / `/proc/<pid>/cmdline`). Write each secret to a NamedTempFile
+        // (deleted on drop — held on `TestAlienAgent` for child lifetime) and
+        // pass `--*-file` paths.
+        use std::io::Write;
+        let mut sync_token_file = tempfile::NamedTempFile::new()?;
+        sync_token_file.write_all(manager.admin_token.as_bytes())?;
+        let mut encryption_key_file = tempfile::NamedTempFile::new()?;
+        encryption_key_file.write_all(encryption_key.as_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                sync_token_file.path(),
+                std::fs::Permissions::from_mode(0o600),
+            );
+            let _ = std::fs::set_permissions(
+                encryption_key_file.path(),
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+
         let mut cmd = tokio::process::Command::new(&binary_path);
         cmd.arg("--platform")
             .arg("local")
             .arg("--sync-url")
             .arg(&manager.url)
-            .arg("--sync-token")
-            .arg(&manager.admin_token)
+            .arg("--sync-token-file")
+            .arg(sync_token_file.path())
             .arg("--data-dir")
             .arg(data_dir.path())
-            .arg("--encryption-key")
-            .arg(&encryption_key)
+            .arg("--encryption-key-file")
+            .arg(encryption_key_file.path())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
@@ -299,6 +328,8 @@ impl TestAlienAgent {
             kubeconfig: None,
             child_process: Some(child),
             data_dir: Some(data_dir),
+            sync_token_file: Some(sync_token_file),
+            encryption_key_file: Some(encryption_key_file),
             platform: Platform::Local,
             installed_as_service: false,
             deploy_binary: None,
@@ -365,6 +396,8 @@ impl TestAlienAgent {
             kubeconfig: kubeconfig.map(String::from),
             child_process: None,
             data_dir: None,
+            sync_token_file: None,
+            encryption_key_file: None,
             platform: Platform::Kubernetes,
             installed_as_service: false,
             deploy_binary: None,
@@ -421,6 +454,8 @@ impl TestAlienAgent {
             kubeconfig: None,
             child_process: None,
             data_dir: None,
+            sync_token_file: None,
+            encryption_key_file: None,
             platform: Platform::Local,
             installed_as_service: true,
             deploy_binary,

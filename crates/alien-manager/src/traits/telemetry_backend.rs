@@ -10,6 +10,16 @@ pub enum TelemetrySignal {
     Metrics,
 }
 
+/// Identity of the caller ingesting telemetry.
+#[derive(Debug, Clone)]
+pub struct TelemetryCaller {
+    pub deployment_id: String,
+    /// Project ID if known from the auth token. Avoids an extra API call to resolve it.
+    pub project_id: Option<String>,
+    /// Workspace ID of the deployment. Used for scoping telemetry data.
+    pub workspace_id: Option<String>,
+}
+
 /// Receives OTLP telemetry data from deployments.
 ///
 /// Default: `OtlpForwardingBackend` — forwards raw protobuf to an external endpoint.
@@ -20,7 +30,7 @@ pub trait TelemetryBackend: Send + Sync {
     async fn ingest(
         &self,
         signal: TelemetrySignal,
-        deployment_id: &str,
+        caller: &TelemetryCaller,
         data: bytes::Bytes,
     ) -> Result<(), AlienError>;
 }

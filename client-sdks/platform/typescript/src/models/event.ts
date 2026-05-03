@@ -262,6 +262,10 @@ export type DataError = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -319,7 +323,6 @@ export type DataErrorUnion = DataError | any;
 export const EventLifecycleEnum = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -701,6 +704,10 @@ export type ErrorFailed = {
    * caused the issue, or other relevant context information.
    */
   context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
   /**
    * HTTP status code for this error.
    *
@@ -1243,6 +1250,7 @@ export function eventDependencyFromJSON(
 export const DataError$inboundSchema: z.ZodType<DataError, unknown> = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),
@@ -1778,6 +1786,7 @@ export const ErrorFailed$inboundSchema: z.ZodType<ErrorFailed, unknown> = z
   .object({
     code: z.string(),
     context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
     httpStatusCode: z.nullable(z.int()).optional(),
     internal: z.boolean(),
     message: z.string(),

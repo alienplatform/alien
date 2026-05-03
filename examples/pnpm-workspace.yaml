@@ -5,3 +5,6 @@ packages:
   - data-connector-ts
   - event-pipeline-ts
   - webhook-api-ts
+  - byoc-database
+  - endpoint-agent
+  - github-agent/packages/remote-agent

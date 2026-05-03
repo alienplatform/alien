@@ -310,12 +310,6 @@ export class ClientSDK {
 const jsonLikeContentTypeRE = /(application|text)\/.*?\+*json.*/;
 const jsonlLikeContentTypeRE =
   /(application|text)\/(.*?\+*\bjsonl\b.*|.*?\+*\bx-ndjson\b.*)/;
-const SENSITIVE_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "x-api-key",
-  "proxy-authorization",
-]);
 async function logRequest(logger: Logger | undefined, req: Request) {
   if (!logger) {
     return;
@@ -328,7 +322,7 @@ async function logRequest(logger: Logger | undefined, req: Request) {
 
   logger.group("Headers:");
   for (const [k, v] of req.headers.entries()) {
-    logger.log(`${k}: ${SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v}`);
+    logger.log(`${k}: ${v}`);
   }
   logger.groupEnd();
 
@@ -374,7 +368,7 @@ async function logResponse(
 
   logger.group("Headers:");
   for (const [k, v] of res.headers.entries()) {
-    logger.log(`${k}: ${SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v}`);
+    logger.log(`${k}: ${v}`);
   }
   logger.groupEnd();
 

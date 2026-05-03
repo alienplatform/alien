@@ -170,6 +170,10 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
 /// When `DeploymentConfig.monitoring` is set, this injects:
 /// - `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` — the OTLP logs endpoint URL
 /// - `OTEL_EXPORTER_OTLP_HEADERS`       — auth header in "key=value" format
+/// - `OTEL_SERVICE_NAME`                — defaults to the resource name so
+///   each resource within the stack appears as a distinct `service.name` in
+///   logs (drives the dashboard's "Resource" column). Skipped if the user
+///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
 ///
 /// deepstore-* resources are skipped: they manage their own telemetry pipeline
 /// and receive OTLP config via a different mechanism.
@@ -235,6 +239,18 @@ pub fn inject_monitoring_environment_variables(
                 "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
                 monitoring.logs_auth_header.clone(),
             );
+            // The resource name (e.g. "agent" / "events") is the most useful
+            // value for `service.name`: it identifies *which slot in the
+            // stack* a log came from, which is the dimension users see in
+            // the dashboard's "Resource" column. Without this, alien-runtime
+            // falls back to the literal string "alien-runtime" and the
+            // column carries no per-row signal.
+            //
+            // We only set the env var if the user hasn't already pinned
+            // OTEL_SERVICE_NAME themselves (e.g. via the platform's user
+            // env vars), so explicit overrides keep winning.
+            env.entry("OTEL_SERVICE_NAME".to_string())
+                .or_insert_with(|| resource_name.clone());
             if let Some(metrics_endpoint) = &monitoring.metrics_endpoint {
                 env.insert(
                     "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT".to_string(),
@@ -309,6 +325,7 @@ pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Re
                     monitoring_metrics_endpoint: monitoring_metrics_endpoint.clone(),
                     monitoring_auth_hash: monitoring_auth_hash.clone(),
                     monitoring_metrics_auth_hash: monitoring_metrics_auth_hash.clone(),
+                    flatcar_image_id: horizon_config.flatcar_image_id.clone(),
                 });
                 debug!(
                     cluster_id = %cluster_id,
@@ -759,6 +776,7 @@ mod tests {
                 profiles,
                 management: alien_core::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         }
     }
 

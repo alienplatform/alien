@@ -128,12 +128,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -182,12 +184,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -233,12 +237,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -279,12 +285,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let check = FrozenResourcesUnchangedCheck;
@@ -316,12 +324,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
+            supported_platforms: None,
         };
 
         let check = FrozenResourcesUnchangedCheck;

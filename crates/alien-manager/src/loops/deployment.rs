@@ -237,9 +237,10 @@ impl DeploymentLoop {
             })
         })?;
 
+        let system = crate::auth::Subject::system();
         let release = self
             .release_store
-            .get_release(desired_release_id)
+            .get_release(&system, desired_release_id)
             .await?
             .ok_or_else(|| {
                 AlienError::new(GenericError {
@@ -250,16 +251,26 @@ impl DeploymentLoop {
         // 2. Resolve credentials for the target platform.
         let client_config = self.credential_resolver.resolve(&deployment).await?;
 
-        // 3. No stack rewriting — release stores proxy URIs.
-        // Controllers use image URIs as-is for proxy platforms.
-        // Lambda/Cloud Run resolve to native URIs via native_image_host.
+        // 3. Extract the stack for this deployment's platform from the release.
+        let deployment_stack = release
+            .stacks
+            .get(&deployment.platform)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Release {} does not contain a stack for platform {}",
+                        desired_release_id, deployment.platform
+                    ),
+                })
+            })?;
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
             release_id: desired_release_id.clone(),
             version: None,
             description: None,
-            stack: release.stack.clone(),
+            stack: deployment_stack.clone(),
         };
 
         let mut state = DeploymentState {
@@ -272,7 +283,7 @@ impl DeploymentLoop {
                     release_id: id.clone(),
                     version: None,
                     description: None,
-                    stack: release.stack.clone(),
+                    stack: deployment_stack.clone(),
                 }),
             target_release: Some(target_release),
             stack_state: deployment.stack_state.clone(),
@@ -680,9 +691,9 @@ mod tests {
         let cache = Mutex::new(HashMap::new());
 
         let provider_a =
-            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_test").unwrap();
         let provider_b =
-            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "ag_test").unwrap();
+            get_or_create_local_bindings_provider(&cache, temp_dir.path(), "dep_test").unwrap();
 
         assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
 

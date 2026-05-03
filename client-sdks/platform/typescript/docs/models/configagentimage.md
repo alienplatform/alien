@@ -1,6 +1,6 @@
 # ConfigAgentImage
 
-Branding configuration for the agent binary (white-labeling)
+Branding configuration for the agent binary
 
 ## Example Usage
 

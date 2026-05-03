@@ -1,5 +1,5 @@
 use crate::dev::{LogBuffer, LogEntry};
-use crate::traits::telemetry_backend::{TelemetryBackend, TelemetrySignal};
+use crate::traits::telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 use alien_error::AlienError;
 use async_trait::async_trait;
 
@@ -20,7 +20,7 @@ impl TelemetryBackend for InMemoryTelemetryBackend {
     async fn ingest(
         &self,
         signal: TelemetrySignal,
-        deployment_id: &str,
+        caller: &TelemetryCaller,
         data: bytes::Bytes,
     ) -> Result<(), AlienError> {
         match signal {
@@ -29,7 +29,7 @@ impl TelemetryBackend for InMemoryTelemetryBackend {
                 self.log_buffer
                     .push(LogEntry {
                         timestamp: chrono::Utc::now(),
-                        deployment_id: deployment_id.to_string(),
+                        deployment_id: caller.deployment_id.clone(),
                         body: format!("[OTLP log data: {} bytes]", data.len()),
                         severity: "INFO".to_string(),
                         resource_name: None,

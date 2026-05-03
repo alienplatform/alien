@@ -130,7 +130,7 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
     let workspace_name = config.workspace_name.clone();
     let platforms = config.platforms.clone();
 
-    match release_task_core(args, config).await {
+    match release_task_core(args, config, &ctx).await {
         Ok(release_id) => Ok(ReleaseJsonOutput {
             success: true,
             release_id: Some(release_id),
@@ -145,7 +145,9 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
 /// Resolved release configuration shared across human and JSON output paths.
 struct ReleaseConfig {
     output_dir: PathBuf,
-    manager: ManagerContext,
+    /// Manager context — used for release creation in standalone/dev mode.
+    /// In platform mode, releases are created directly on the platform API.
+    manager: Option<ManagerContext>,
     workspace_name: String,
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
@@ -175,11 +177,18 @@ async fn load_release_config(
     // In dev mode, default platforms to ["local"] and skip experimental gating
     let is_dev = ctx.is_dev();
 
+    // Load stack config (needed for supported_platforms validation and auto-build)
+    let stack = crate::config::load_configuration(current_dir.clone())
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load configuration".to_string(),
+        })?;
+
     // Determine target platforms:
-    // 1. Explicit --platforms flag takes priority
+    // 1. Explicit --platforms flag takes priority (validated against stack.supported_platforms)
     // 2. In dev mode without explicit platforms, default to ["local"]
-    // 3. Otherwise, use already-built platforms
-    // 4. If nothing built, ask the manager which platforms are configured
+    // 3. stack.supported_platforms if declared
+    // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
         // Validate explicit platforms against experimental gating (skip in dev mode)
         if !args.experimental && !is_dev {
@@ -197,41 +206,30 @@ async fn load_release_config(
                 }
             }
         }
+        // Validate against stack's supported platforms
+        validate_platforms_against_stack(platforms, &stack)?;
         platforms.clone()
     } else if is_dev {
         // Dev mode defaults to local platform
         vec!["local".to_string()]
+    } else if let Some(supported) = stack.supported_platforms() {
+        // Use declared supported platforms from alien.ts
+        supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
         if !discovered.is_empty() {
             discovered
         } else {
-            let configured = fetch_configured_platforms(ctx).await;
-            let configured: Vec<_> = if args.experimental {
-                configured
-            } else {
-                configured.into_iter()
-                    .filter(|p| !Platform::from_str(p).map(|p| p.is_experimental()).unwrap_or(false))
-                    .collect()
-            };
-            if configured.is_empty() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "platforms".to_string(),
-                    message: "No platforms configured. Run `alien build --platform <aws|gcp|azure>` first, or specify --platforms explicitly.".to_string(),
-                }));
-            }
-            configured
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platforms".to_string(),
+                message: "No platforms found. Declare .platforms() in alien.ts, run `alien build --platform <aws|gcp|azure>` first, or specify --platforms explicitly.".to_string(),
+            }));
         }
     };
 
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
-        let stack = crate::config::load_configuration(current_dir.clone())
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to load configuration".to_string(),
-            })?;
         for platform_str in &target_platforms {
             auto_build_for_platform(
                 platform_str,
@@ -247,7 +245,9 @@ async fn load_release_config(
     let platforms = if let Some(ref platforms) = args.platforms {
         platforms.clone()
     } else if is_dev {
-        // Dev mode: we already defaulted to ["local"] above, keep it
+        target_platforms.clone()
+    } else if stack.supported_platforms().is_some() {
+        // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
         let discovered = discover_built_platforms(&output_dir, args.experimental)?;
@@ -262,10 +262,16 @@ async fn load_release_config(
         discovered
     };
 
-    // Resolve manager (discovers URL in Platform mode, known in Standalone/Dev)
-    let manager = ctx
-        .resolve_manager(&project_link.project_id, &platforms[0])
-        .await?;
+    // Resolve manager for standalone/dev mode (needed for release creation).
+    // In platform mode, releases are created directly on the platform API.
+    let manager = if ctx.is_standalone() || ctx.is_dev() {
+        Some(
+            ctx.resolve_manager(&project_link.project_id, &platforms[0])
+                .await?,
+        )
+    } else {
+        None
+    };
 
     let git_metadata = if args.no_git {
         None
@@ -306,7 +312,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         )
     );
 
-    let release_id = release_task_core(args, config).await?;
+    let release_id = release_task_core(args, config, &ctx).await?;
     println!("{}", success_line("Release created."));
     println!("{} {}", dim_label("Release"), release_id);
     if !is_dev {
@@ -323,10 +329,16 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
 /// Core release logic shared by all output modes.
 ///
 /// Always uses the manager SDK to create the release — no mode branching.
-async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<ReleaseResult> {
+/// `ctx` is needed to resolve per-platform repository names in platform mode.
+async fn release_task_core(
+    args: ReleaseArgs,
+    config: ReleaseConfig,
+    ctx: &ExecutionMode,
+) -> Result<ReleaseResult> {
     let ReleaseConfig {
         output_dir,
         manager,
+        project_link,
         git_metadata,
         platforms: platforms_to_release,
         ..
@@ -379,11 +391,17 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
                 );
             }
 
-            // Get push settings (either manual override or via manager proxy)
+            // Get push settings per-platform — each cloud platform has its own
+            // registry prefix (ECR, GAR, ACR, local Docker). In platform mode,
+            // resolve_manager calls the platform API to get the per-project
+            // repo name for this specific platform.
             let push_settings = if let Some(ref image_repo) = args.image_repo {
                 create_manual_push_settings(&args, image_repo)?
             } else {
-                build_proxy_push_settings(&manager, &platform).await?
+                let per_platform = ctx
+                    .resolve_manager(&project_link.project_id, platform_str)
+                    .await?;
+                build_proxy_push_settings(&per_platform, &platform).await?
             };
 
             info!("   Pushing images to {}...", push_settings.repository);
@@ -426,17 +444,30 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
         info!("   ✓ {} platform ready", platform_str);
     }
 
-    // Convert platform SDK GitMetadata to manager SDK GitMetadata (serde roundtrip)
-    let sdk_git_metadata = git_metadata.and_then(|m| {
-        m.0.map(|inner| alien_manager_api::types::GitMetadata {
-            commit_sha: inner.commit_sha.map(|s| s.to_string()),
-            commit_ref: inner.commit_ref.map(|s| s.to_string()),
-            commit_message: inner.commit_message.map(|s| s.to_string()),
-        })
-    });
-
-    // Create release on the manager
-    let release_id = create_manager_release(&manager, stack_by_platform, sdk_git_metadata).await?;
+    // Create release
+    let release_id = if let Some(ref manager) = manager {
+        // Standalone/Dev mode: create release on the manager
+        let sdk_git_metadata = git_metadata.and_then(|m| {
+            m.0.map(|inner| alien_manager_api::types::GitMetadata {
+                commit_sha: inner.commit_sha.map(|s| s.to_string()),
+                commit_ref: inner.commit_ref.map(|s| s.to_string()),
+                commit_message: inner.commit_message.map(|s| s.to_string()),
+            })
+        });
+        create_manager_release(manager, &project_link.project_id, stack_by_platform, sdk_git_metadata).await?
+    } else {
+        // Platform mode: create release directly on the platform API
+        #[cfg(feature = "platform")]
+        {
+            create_platform_release(ctx, &project_link.project_id, &project_link.workspace, stack_by_platform, git_metadata).await?
+        }
+        #[cfg(not(feature = "platform"))]
+        {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "Platform mode requires the 'platform' feature".to_string(),
+            }));
+        }
+    };
 
     Ok(release_id)
 }
@@ -447,6 +478,7 @@ async fn release_task_core(args: ReleaseArgs, config: ReleaseConfig) -> Result<R
 })]
 async fn create_manager_release(
     manager: &ManagerContext,
+    project_id: &str,
     stack: ManagerStackByPlatform,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
 ) -> Result<String> {
@@ -458,6 +490,7 @@ async fn create_manager_release(
         .body(ManagerCreateReleaseRequest {
             stack,
             git_metadata,
+            project_id: project_id.to_string(),
         })
         .send()
         .await
@@ -469,6 +502,80 @@ async fn create_manager_release(
 
     let release_id = response.id.clone();
 
+    info!("Release created successfully!");
+    info!("   ID: {}", release_id);
+
+    Ok(release_id)
+}
+
+/// Create a release directly on the platform API (platform mode).
+///
+/// In platform mode, releases go directly to the platform API because
+/// different platforms may push through different managers. The platform API
+/// stores the full multi-platform release.
+#[cfg(feature = "platform")]
+async fn create_platform_release(
+    ctx: &ExecutionMode,
+    project_id: &str,
+    workspace: &str,
+    stack: ManagerStackByPlatform,
+    git_metadata: Option<GitMetadata>,
+) -> Result<String> {
+    use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
+
+    info!("Creating release on platform API...");
+
+    let http = ctx.auth_http().await?;
+    let platform_client = http.sdk_client();
+
+    // Convert manager SDK StackByPlatform to platform SDK StackByPlatform (serde roundtrip)
+    let stack_json = serde_json::to_value(&stack).into_alien_error().context(
+        ErrorData::ApiRequestFailed {
+            message: "Failed to serialize stack".to_string(),
+            url: None,
+        },
+    )?;
+    let platform_stack: alien_platform_api::types::StackByPlatform =
+        serde_json::from_value(stack_json).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to convert stack to platform format".to_string(),
+                url: None,
+            },
+        )?;
+
+    let workspace_param =
+        alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace).map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace: {}", e),
+            })
+        })?;
+
+    let body = alien_platform_api::types::CreateReleaseRequest::builder()
+        .project(project_id.to_string())
+        .stack(platform_stack)
+        .git_metadata(git_metadata);
+
+    let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("Failed to build release request: {}", e),
+            url: None,
+        })
+    })?;
+
+    let response = platform_client
+        .create_release()
+        .workspace(&workspace_param)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to create release on platform API".to_string(),
+            url: None,
+        })?;
+
+    let release_id = response.id.to_string();
     info!("Release created successfully!");
     info!("   ID: {}", release_id);
 
@@ -499,49 +606,6 @@ fn discover_built_platforms(output_dir: &PathBuf, include_experimental: bool) ->
     Ok(platforms)
 }
 
-/// Ask the manager which platforms have artifact registries configured.
-///
-/// Returns an empty vec on any failure (404, network error, etc.) so the caller
-/// can fall back gracefully.
-async fn fetch_configured_platforms(ctx: &ExecutionMode) -> Vec<String> {
-    let url = format!("{}/v1/platforms", ctx.manager_url());
-
-    let result: std::result::Result<Vec<String>, Box<dyn std::error::Error>> = async {
-        let auth_http = ctx.auth_http().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        let resp = auth_http.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        let body: serde_json::Value = resp.json().await?;
-        let platforms = body
-            .get("platforms")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(platforms)
-    }
-    .await;
-
-    match result {
-        Ok(platforms) => {
-            if !platforms.is_empty() {
-                info!(
-                    "Discovered configured platforms from manager: {:?}",
-                    platforms
-                );
-            }
-            platforms
-        }
-        Err(e) => {
-            info!("Could not fetch configured platforms from manager: {}", e);
-            Vec::new()
-        }
-    }
-}
 
 /// Build for a single platform.
 async fn auto_build_for_platform(
@@ -695,7 +759,56 @@ async fn build_proxy_push_settings(
     let repo_name = if let Some(ref name) = manager.repository_name {
         name.clone()
     } else {
-        fetch_build_config_repo_name(manager, platform).await?
+        // Standalone mode: call the manager's build-config endpoint directly
+        // to discover the repository name for this platform.
+        let url = format!(
+            "{}/v1/build-config?platform={}",
+            manager.manager_url, platform
+        );
+
+        let mut req = manager.http_client.get(&url);
+        if let Some(ref token) = manager.auth_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let resp = req
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to call build-config endpoint".to_string(),
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "No repository name available for proxy push (build-config returned {}: {}). \
+                     Use --image-repo to specify a container registry.",
+                    status, body
+                ),
+            }));
+        }
+
+        let bc: serde_json::Value = resp
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse build-config response".to_string(),
+            })?;
+
+        bc.get("repositoryName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "build-config response missing repositoryName. \
+                              Use --image-repo to specify a container registry."
+                        .to_string(),
+                })
+            })?
     };
 
     // Strip scheme to get the registry host (OCI clients use host:port, not URLs).
@@ -732,64 +845,6 @@ async fn build_proxy_push_settings(
     })
 }
 
-/// Fetch the repository name prefix from the manager's build-config endpoint.
-///
-/// Called when the CLI doesn't have a statically-known repository name (standalone
-/// and dev modes). The manager resolves the correct prefix based on the target
-/// platform's artifact registry configuration.
-async fn fetch_build_config_repo_name(
-    manager: &ManagerContext,
-    platform: &Platform,
-) -> Result<String> {
-    let url = format!(
-        "{}/v1/build-config?platform={}",
-        manager.manager_url, platform
-    );
-
-    let mut req = manager.http_client.get(&url);
-    if let Some(ref token) = manager.auth_token {
-        req = req.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let resp = req
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to call build-config endpoint".to_string(),
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "No repository name available for proxy push (build-config returned {}: {}). \
-                 Use --image-repo to specify a container registry.",
-                status, body
-            ),
-        }));
-    }
-
-    let bc: serde_json::Value = resp
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to parse build-config response".to_string(),
-        })?;
-
-    bc.get("repositoryName")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "build-config response missing repositoryName. \
-                          Use --image-repo to specify a container registry."
-                    .to_string(),
-            })
-        })
-}
 
 /// Translate registry URL for CLI access.
 ///
@@ -869,6 +924,33 @@ fn format_platform_summary(platforms: &[String]) -> String {
         .map(|platform| display_platform_name(platform).to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Validate that all requested platforms are supported by the stack.
+/// Returns Ok(()) if stack has no supported_platforms (all allowed) or all platforms are in the list.
+fn validate_platforms_against_stack(platforms: &[String], stack: &Stack) -> Result<()> {
+    let supported = match stack.supported_platforms() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    for p in platforms {
+        if let Ok(platform) = Platform::from_str(p) {
+            if !supported.contains(&platform) {
+                let supported_list: Vec<&str> = supported.iter().map(|p| p.as_str()).collect();
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "platforms".to_string(),
+                    message: format!(
+                        "Platform '{}' is not supported by this stack. Declared platforms: [{}]",
+                        p,
+                        supported_list.join(", ")
+                    ),
+                }));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Validate that all compute resources in the stack have remote image URIs (not local paths).

@@ -1,4 +1,4 @@
-use crate::traits::telemetry_backend::{TelemetryBackend, TelemetrySignal};
+use crate::traits::telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -48,7 +48,7 @@ impl TelemetryBackend for OtlpForwardingBackend {
     async fn ingest(
         &self,
         signal: TelemetrySignal,
-        _deployment_id: &str,
+        _caller: &TelemetryCaller,
         data: bytes::Bytes,
     ) -> Result<(), AlienError> {
         let path = match signal {

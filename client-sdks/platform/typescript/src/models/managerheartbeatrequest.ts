@@ -102,7 +102,7 @@ export type ManagerHeartbeatRequestManagementConfigUnion =
 /**
  * Optional runtime metrics
  */
-export type Metrics = {
+export type ManagerHeartbeatRequestMetrics = {
   activeDeployments?: number | undefined;
   pendingDeployments?: number | undefined;
   memoryUsageMb?: number | undefined;
@@ -136,7 +136,7 @@ export type ManagerHeartbeatRequest = {
   /**
    * Optional runtime metrics
    */
-  metrics?: Metrics | undefined;
+  metrics?: ManagerHeartbeatRequestMetrics | undefined;
 };
 
 /** @internal */
@@ -308,7 +308,7 @@ export function managerHeartbeatRequestManagementConfigUnionToJSON(
 }
 
 /** @internal */
-export type Metrics$Outbound = {
+export type ManagerHeartbeatRequestMetrics$Outbound = {
   activeDeployments?: number | undefined;
   pendingDeployments?: number | undefined;
   memoryUsageMb?: number | undefined;
@@ -316,16 +316,24 @@ export type Metrics$Outbound = {
 };
 
 /** @internal */
-export const Metrics$outboundSchema: z.ZodType<Metrics$Outbound, Metrics> = z
-  .object({
-    activeDeployments: z.number().optional(),
-    pendingDeployments: z.number().optional(),
-    memoryUsageMb: z.number().optional(),
-    cpuUsagePercent: z.number().optional(),
-  });
+export const ManagerHeartbeatRequestMetrics$outboundSchema: z.ZodType<
+  ManagerHeartbeatRequestMetrics$Outbound,
+  ManagerHeartbeatRequestMetrics
+> = z.object({
+  activeDeployments: z.number().optional(),
+  pendingDeployments: z.number().optional(),
+  memoryUsageMb: z.number().optional(),
+  cpuUsagePercent: z.number().optional(),
+});
 
-export function metricsToJSON(metrics: Metrics): string {
-  return JSON.stringify(Metrics$outboundSchema.parse(metrics));
+export function managerHeartbeatRequestMetricsToJSON(
+  managerHeartbeatRequestMetrics: ManagerHeartbeatRequestMetrics,
+): string {
+  return JSON.stringify(
+    ManagerHeartbeatRequestMetrics$outboundSchema.parse(
+      managerHeartbeatRequestMetrics,
+    ),
+  );
 }
 
 /** @internal */
@@ -341,7 +349,7 @@ export type ManagerHeartbeatRequest$Outbound = {
     | any
     | null
     | undefined;
-  metrics?: Metrics$Outbound | undefined;
+  metrics?: ManagerHeartbeatRequestMetrics$Outbound | undefined;
 };
 
 /** @internal */
@@ -363,7 +371,8 @@ export const ManagerHeartbeatRequest$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
-  metrics: z.lazy(() => Metrics$outboundSchema).optional(),
+  metrics: z.lazy(() => ManagerHeartbeatRequestMetrics$outboundSchema)
+    .optional(),
 });
 
 export function managerHeartbeatRequestToJSON(

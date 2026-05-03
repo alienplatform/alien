@@ -4,6 +4,17 @@
 //! to running deployments, and forwards telemetry. Single binary, SQLite-backed,
 //! no external dependencies.
 //!
+//! ## Single-Tenant Design
+//!
+//! OSS alien-manager is designed for **single-tenant** operation: one instance
+//! manages one project. There is no workspace isolation or tenant boundary at
+//! this layer. API keys (admin, deployment-group, deployment) assume a trusted
+//! operator with full access to the project.
+//!
+//! Each provider below is a trait, so embedders that need different policy
+//! (storage, telemetry, authn/authz, etc.) inject their own implementation via
+//! the builder.
+//!
 //! ## Provider Architecture
 //!
 //! alien-manager uses trait-based providers for its core subsystems. Each has a
@@ -21,10 +32,12 @@
 //! server.start(addr).await?;
 //! ```
 
+pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod error;
 pub(crate) mod ids;
+pub mod registry;
 pub mod standalone_config;
 pub mod traits;
 

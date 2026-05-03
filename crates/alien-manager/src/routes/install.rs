@@ -34,11 +34,43 @@ fn is_valid_version(v: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
+/// Defense-in-depth: ensure the operator-supplied releases URL parses as a URL
+/// and contains only characters safe to interpolate into a double-quoted bash
+/// string. Server-side config is normally trusted, but interpolation into a
+/// shell context warrants an explicit shape check.
+fn is_safe_releases_url(url: &str) -> bool {
+    if url.is_empty() || url.len() > 2048 {
+        return false;
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return false;
+    }
+    !url.chars().any(|c| {
+        matches!(
+            c,
+            '"' | '\\' | '$' | '`' | '\n' | '\r' | '\0'
+        ) || c.is_control()
+    })
+}
+
 async fn install_script(
     State(state): State<AppState>,
     Query(params): Query<InstallParams>,
 ) -> Response {
     let releases_url = state.config.releases_url();
+    // Server-side config, but interpolated into a bash here-doc — if an operator
+    // ever sets a value with shell-special characters (`"`, `$`, backtick,
+    // newline) the script breaks. Reject misconfigured values explicitly rather
+    // than producing a malformed/dangerous script.
+    if !is_safe_releases_url(&releases_url) {
+        tracing::error!(releases_url = %releases_url, "ALIEN_RELEASES_URL contains characters unsafe for bash interpolation");
+        return (
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Server misconfiguration: invalid ALIEN_RELEASES_URL.",
+        )
+            .into_response();
+    }
+
     let version_path = match &params.version {
         Some(v) => {
             if !is_valid_version(v) {

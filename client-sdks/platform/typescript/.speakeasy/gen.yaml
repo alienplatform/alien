@@ -20,6 +20,7 @@ generation:
     oAuth2ClientCredentialsEnabled: false
     oAuth2PasswordEnabled: false
     hoistGlobalSecurity: true
+  inferSSEOverload: true
   sdkHooksConfigAccess: true
   schemas:
     allOfMergeStrategy: shallowMerge
@@ -30,19 +31,19 @@ generation:
     generateNewTests: true
     skipResponseBodyAssertions: false
 typescript:
-  version: 1.0.74
+  version: 1.0.78
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
     devDependencies: {}
     peerDependencies: {}
   additionalPackageJSON:
-    license: FSL-1.1-Apache-2.0
     homepage: https://alien.dev
+    license: FSL-1.1-Apache-2.0
     repository:
+      directory: client-sdks/platform/typescript
       type: git
       url: https://github.com/alienplatform/alien.git
-      directory: client-sdks/platform/typescript
   additionalScripts: {}
   alwaysIncludeInboundAndOutbound: false
   author: Alien Software, Inc. <hi@alien.dev>

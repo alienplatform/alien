@@ -40,7 +40,7 @@ pub struct HorizonConfig {
     /// final download URL used in VM startup scripts.
     ///
     /// Production example: "https://releases.alien.dev/horizond/v0.3.0"
-    /// Dev example (ngrok): "https://abc123.ngrok.io"
+    /// Dev example (ngrok): "https://abc123.ngrok.dev"
     pub horizond_download_base_url: String,
 
     /// ETag of the horizond binary fetched from the releases server -- used as a
@@ -51,6 +51,11 @@ pub struct HorizonConfig {
     /// falls back to URL-only (sufficient for versioned production releases).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizond_binary_hash: Option<String>,
+
+    /// AMI / image ID for the Flatcar OS image used by EC2 instances.
+    /// The Flatcar image has horizond baked in, so no user-data script is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flatcar_image_id: Option<String>,
 
     /// Cluster configurations (one per ContainerCluster resource)
     /// Key: ContainerCluster resource ID from stack

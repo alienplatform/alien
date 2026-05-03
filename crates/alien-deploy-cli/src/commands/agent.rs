@@ -116,24 +116,52 @@ fn install(args: InstallArgs) -> Result<()> {
         }
     });
 
+    // Create data directory before writing secret files into it.
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        output::warn(&format!("Could not create data directory: {}", e));
+    }
+
+    // The agent rejects `--sync-token`/`--encryption-key` (argv leak via
+    // `ps` / `/proc`). Persist secrets to 0o600 files in the service's
+    // data directory and pass `--*-file` paths in the service args. The
+    // service runs as the user that installed it (typically root on Linux,
+    // the current user on macOS launchd), which owns these files.
+    let sync_token_path = std::path::Path::new(&data_dir).join("sync-token");
+    let encryption_key_path = std::path::Path::new(&data_dir).join("encryption-key");
+
+    alien_core::file_utils::write_secret_file(&sync_token_path, args.sync_token.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::AgentServiceError {
+            message: format!(
+                "Failed to write sync token to {}",
+                sync_token_path.display()
+            ),
+        })?;
+    alien_core::file_utils::write_secret_file(
+        &encryption_key_path,
+        encryption_key.as_bytes(),
+    )
+    .into_alien_error()
+    .context(ErrorData::AgentServiceError {
+        message: format!(
+            "Failed to write encryption key to {}",
+            encryption_key_path.display()
+        ),
+    })?;
+
     let service_args = vec![
         OsString::from("--service"),
         OsString::from("--platform"),
         OsString::from(&args.platform),
         OsString::from("--sync-url"),
         OsString::from(&args.sync_url),
-        OsString::from("--sync-token"),
-        OsString::from(&args.sync_token),
+        OsString::from("--sync-token-file"),
+        OsString::from(&sync_token_path),
         OsString::from("--data-dir"),
         OsString::from(&data_dir),
-        OsString::from("--encryption-key"),
-        OsString::from(&encryption_key),
+        OsString::from("--encryption-key-file"),
+        OsString::from(&encryption_key_path),
     ];
-
-    // Create data directory
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        output::warn(&format!("Could not create data directory: {}", e));
-    }
 
     let manager = get_manager()?;
 

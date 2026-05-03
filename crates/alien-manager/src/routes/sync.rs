@@ -148,8 +148,8 @@ pub fn router() -> Router<AppState> {
 
 /// Router for the `/v1/initialize` endpoint only.
 ///
-/// Separated so embedders can replace it with a platform-specific implementation
-/// that proxies token creation to the Platform API (e.g. platform mode's extra_routes).
+/// Separated so embedders can replace it with their own implementation
+/// (for example, one that proxies token creation to an upstream API).
 pub fn initialize_router() -> Router<AppState> {
     Router::new().route("/v1/initialize", post(initialize))
 }
@@ -177,16 +177,28 @@ async fn acquire(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    // Admin tokens can acquire any deployment. Deployment tokens can acquire
-    // their own deployment (used by alien-deploy up for push-model initial setup).
-    if !subject.is_admin()
-        && !req.deployment_ids.as_ref().map_or(false, |ids| {
-            ids.iter().all(|id| subject.can_access_deployment(id))
-        })
-    {
-        return ErrorData::forbidden("Access denied: admin or deployment token required")
-            .into_response();
+    // If the caller named specific deployments, fetch each and run
+    // `Authz::can_acquire_deployments` over the slice. Workspace-scoped
+    // callers (e.g., legacy admin tokens) can run with no id list — the
+    // store-side filter applies.
+    if let Some(ids) = req.deployment_ids.as_ref() {
+        let mut deployments = Vec::with_capacity(ids.len());
+        for id in ids {
+            match state.deployment_store.get_deployment(id).await {
+                Ok(Some(d)) => deployments.push(d),
+                Ok(None) => return ErrorData::not_found_deployment(id).into_response(),
+                Err(e) => return e.into_response(),
+            }
+        }
+        if !state.authz.can_acquire_deployments(&subject, &deployments) {
+            return ErrorData::forbidden("Access denied: cannot acquire these deployments")
+                .into_response();
+        }
+    } else if !matches!(subject.scope, crate::auth::Scope::Workspace) {
+        return ErrorData::forbidden(
+            "Access denied: only workspace-scoped tokens can acquire without an id filter",
+        )
+        .into_response();
     }
 
     let filter = DeploymentFilter {
@@ -206,12 +218,21 @@ async fn acquire(
         Err(e) => return e.into_response(),
     };
 
-    let deployments = acquired
+    let deployments: Vec<AcquiredDeploymentResponse> = match acquired
         .into_iter()
-        .map(|a| AcquiredDeploymentResponse {
-            deployment: serde_json::to_value(&a.deployment).unwrap_or_default(),
+        .map(|a| {
+            serde_json::to_value(&a.deployment)
+                .map(|deployment| AcquiredDeploymentResponse { deployment })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to serialize deployment: {e}");
+            return ErrorData::internal("Failed to serialize deployment")
+                .into_response()
+        }
+    };
 
     Json(AcquireResponse { deployments }).into_response()
 }
@@ -238,8 +259,14 @@ async fn reconcile(
         Err(e) => return e.into_response(),
     };
 
-    // Allow admin tokens (push mode) or deployment tokens (pull mode)
-    if !subject.is_admin() && !subject.can_access_deployment(&req.deployment_id) {
+    // Allow admin tokens (push mode) or deployment tokens (pull mode) per
+    // the unified Authz policy.
+    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -249,7 +276,8 @@ async fn reconcile(
     let deployment_state: DeploymentState = match serde_json::from_value(req.state.clone()) {
         Ok(s) => s,
         Err(e) => {
-            return ErrorData::bad_request(&format!("Invalid deployment state: {e}"))
+            tracing::warn!("Failed to deserialize deployment state: {e}");
+            return ErrorData::bad_request("Invalid deployment state")
                 .into_response()
         }
     };
@@ -291,7 +319,14 @@ async fn reconcile(
     )
     .await;
 
-    let current = serde_json::to_value(&final_state).unwrap_or(req.state);
+    let current = match serde_json::to_value(&final_state) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to serialize reconciled state: {e}");
+            return ErrorData::internal("Failed to serialize reconciled state")
+                .into_response()
+        }
+    };
 
     Json(ReconcileResponse {
         success: true,
@@ -321,9 +356,12 @@ async fn release(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
+    };    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+        Err(e) => return e.into_response(),
     };
-
-    if !subject.is_admin() && !subject.can_access_deployment(&req.deployment_id) {
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -359,8 +397,14 @@ async fn agent_sync(
         Err(e) => return e.into_response(),
     };
 
-    // Must be a deployment token matching this deployment
-    if !subject.can_access_deployment(&req.deployment_id) && !subject.is_admin() {
+    // Must be a deployment token matching this deployment (workspace-scoped
+    // tokens are accepted by `Authz::can_sync_deployment` for system flows).
+    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -423,7 +467,8 @@ async fn agent_sync(
         && deployment.desired_release_id != deployment.current_release_id
     {
         let release = if let Some(ref release_id) = deployment.desired_release_id {
-            match state.release_store.get_release(release_id).await {
+            let system = crate::auth::Subject::system();
+            match state.release_store.get_release(&system, release_id).await {
                 Ok(Some(r)) => Some(r),
                 _ => None,
             }
@@ -468,50 +513,73 @@ async fn agent_sync(
         )
         .await;
 
-        release.and_then(|r| {
-            // No stack rewriting — release stores proxy URIs as-is.
-            let stack = r.stack;
+        match release {
+            Some(r) => {
+                let stack = match r.stacks.get(&deployment.platform) {
+                    Some(s) => s.clone(),
+                    None => {
+                        return ErrorData::internal(format!(
+                            "Release {} does not contain a stack for platform {}",
+                            r.id, deployment.platform
+                        ))
+                        .into_response();
+                    }
+                };
 
-            let env_vars: Vec<EnvironmentVariable> = deployment
-                .user_environment_variables
-                .clone()
-                .unwrap_or_default();
+                let env_vars: Vec<EnvironmentVariable> = deployment
+                    .user_environment_variables
+                    .clone()
+                    .unwrap_or_default();
 
-            Some(TargetDeployment {
-                release_info: ReleaseInfo {
-                    release_id: r.id,
-                    version: None,
-                    description: None,
-                    stack,
-                },
-                config: DeploymentConfig::builder()
-                    .stack_settings(deployment.stack_settings.clone())
-                    .maybe_management_config(management_config)
-                    .environment_variables(EnvironmentVariablesSnapshot {
-                        variables: env_vars,
-                        hash: String::new(),
-                        created_at: String::new(),
-                    })
-                    .allow_frozen_changes(false)
-                    .external_bindings(
-                        deployment
-                            .stack_settings
-                            .external_bindings
-                            .clone()
-                            .unwrap_or_default(),
-                    )
-                    .maybe_manager_url(Some(manager_url))
-                    .maybe_deployment_token(agent_token)
-                    .maybe_native_image_host(native_image_host)
-                    .build(),
-            })
-        })
+                Some(TargetDeployment {
+                    release_info: ReleaseInfo {
+                        release_id: r.id,
+                        version: None,
+                        description: None,
+                        stack,
+                    },
+                    config: DeploymentConfig::builder()
+                        .stack_settings(deployment.stack_settings.clone())
+                        .maybe_management_config(management_config)
+                        .environment_variables(EnvironmentVariablesSnapshot {
+                            variables: env_vars,
+                            hash: String::new(),
+                            created_at: String::new(),
+                        })
+                        .allow_frozen_changes(false)
+                        .external_bindings(
+                            deployment
+                                .stack_settings
+                                .external_bindings
+                                .clone()
+                                .unwrap_or_default(),
+                        )
+                        .maybe_manager_url(Some(manager_url))
+                        .maybe_deployment_token(agent_token)
+                        .maybe_native_image_host(native_image_host)
+                        .build(),
+                })
+            }
+            None => None,
+        }
     } else {
         None
     };
 
     Json(AgentSyncResponse {
-        target: target.map(|t| serde_json::to_value(&t).unwrap_or_default()),
+        target: match target
+            .map(|t| serde_json::to_value(&t))
+            .transpose()
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Failed to serialize target deployment: {e}");
+                return ErrorData::internal(
+                    "Failed to serialize target deployment",
+                )
+                .into_response()
+            }
+        },
         commands_url: Some(state.config.commands_base_url()),
     })
     .into_response()
@@ -540,20 +608,19 @@ async fn initialize(
         Err(e) => return e.into_response(),
     };
 
-    match subject.scope.token_type {
-        TokenType::Deployment => {
+    match subject.scope.clone() {
+        crate::auth::Scope::Deployment { deployment_id, .. } => {
             // Already has a deployment - return its ID
-            let deployment_id = subject.scope.deployment_id.unwrap_or_default();
             Json(InitializeResponse {
                 deployment_id,
                 token: None,
             })
             .into_response()
         }
-        TokenType::DeploymentGroup => {
-            // Create a new deployment, or return existing one if name matches.
-            // Cloud platforms are push-model in this flow; Local/Kubernetes stay pull-model.
-            let dg_id = subject.scope.deployment_group_id.unwrap_or_default();
+        crate::auth::Scope::DeploymentGroup {
+            deployment_group_id: dg_id,
+            ..
+        } => {
 
             let name = req
                 .name
@@ -621,7 +688,8 @@ async fn initialize(
             };
 
             // Auto-assign latest release if available
-            if let Ok(Some(release)) = state.release_store.get_latest_release().await {
+            let system = crate::auth::Subject::system();
+            if let Ok(Some(release)) = state.release_store.get_latest_release(&system).await {
                 let _ = state
                     .deployment_store
                     .set_deployment_desired_release(&deployment.id, &release.id)
@@ -653,11 +721,11 @@ async fn initialize(
                 Err(e) => e.into_response(),
             }
         }
-        TokenType::Admin => {
-            // Admin tokens on standalone managers: find the most recent
-            // deployment and assign the agent to it. This enables the common
-            // self-hosted workflow where the operator creates a deployment via
-            // the API and then starts an agent with the admin token.
+        crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
+            // Admin / workspace tokens on standalone managers: find the most
+            // recent deployment and assign the agent to it. Self-hosted
+            // workflow where the operator creates a deployment via the API
+            // and then starts an agent with the admin token.
             let filter = DeploymentFilter {
                 deployment_group_id: None,
                 deployment_ids: None,

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use chrono;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// GCP Artifact Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
@@ -255,7 +255,13 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let repo_name = self.extract_repo_name(repo_id)?;
+        // Cross-account access in GAR is enforced via IAM bindings on the
+        // *parent* repository (the GAR resource provisioned by alien-infra),
+        // not on individual image paths. `repo_id` may name an image path
+        // within the parent (it's the routable name from `create_repository`),
+        // but IAM ops always target the parent registry.
+        let _ = repo_id; // The image path doesn't have its own IAM scope.
+        let repo_name = self.repository_name.clone();
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -330,7 +336,9 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let repo_name = self.extract_repo_name(repo_id)?;
+        // IAM ops target the parent registry. See `add_cross_account_access`.
+        let _ = repo_id;
+        let repo_name = self.repository_name.clone();
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -398,7 +406,9 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
-        let repo_name = self.extract_repo_name(repo_id)?;
+        // IAM ops target the parent registry. See `add_cross_account_access`.
+        let _ = repo_id;
+        let repo_name = self.repository_name.clone();
 
         info!(
             repo_name = %repo_name,
@@ -606,37 +616,22 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        let repo_name = self.extract_repo_name(repo_id)?;
-
-        info!(
-            repo_name = %repo_name,
-            project_id = %self.project_id,
-            location = %self.location,
-            "Deleting GCP Artifact Registry repository"
-        );
-
-        let _operation = self
-            .client
-            .delete_repository(
-                self.project_id.clone(),
-                self.location.clone(),
-                repo_name.clone(),
-            )
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to delete GCP Artifact Registry repository '{}'",
-                        repo_name
-                    ),
-                    Some(repo_name.clone()),
-                )
-            })?;
-
-        info!(
-            repo_name = %repo_name,
-            "GCP Artifact Registry repository deletion started"
+        // No-op, mirroring `create_repository`/`get_repository`.
+        //
+        // In GAR, image paths within the parent repository are implicit —
+        // they materialise on first push, and there's no "delete a path"
+        // operation in the GAR API. The parent repository itself is owned
+        // by `alien-infra` (provisioned at deployment time), not by the
+        // binding; deleting it would tear down the whole registry every
+        // user shares.
+        //
+        // Garbage collection of unused image data is a separate concern,
+        // achievable via `deletePackage` if/when needed. Not done here
+        // because the test pattern `create → ... → delete` should be
+        // idempotent and side-effect-free at the registry-resource level.
+        debug!(
+            repo_id = %repo_id,
+            "GCP Artifact Registry delete_repository: no-op (image paths are implicit)"
         );
         Ok(())
     }

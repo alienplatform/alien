@@ -113,7 +113,7 @@ impl LocalBindingsProvider {
     /// use std::path::PathBuf;
     ///
     /// # fn example() -> alien_local::Result<Arc<LocalBindingsProvider>> {
-    /// let state_dir = PathBuf::from("~/.alien-cli/ag_1234567890abcdef");
+    /// let state_dir = PathBuf::from("~/.alien-cli/dep_1234567890abcdef");
     /// let provider = LocalBindingsProvider::new(&state_dir)?;
     /// # Ok(provider)
     /// # }

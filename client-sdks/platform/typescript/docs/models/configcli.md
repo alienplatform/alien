@@ -1,6 +1,6 @@
 # ConfigCli
 
-Branding configuration for the deploy CLI binary (white-labeling)
+Branding configuration for the deploy CLI binary
 
 ## Example Usage
 

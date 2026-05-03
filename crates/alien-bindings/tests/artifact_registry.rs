@@ -1421,6 +1421,27 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
         });
     println!("[{}] ✓ Created repository", provider_name);
 
+    // Round-trip invariant (per `RepositoryResponse::name` doc): the value
+    // returned from `create_repository` must be usable verbatim as `repo_id`
+    // for every subsequent method on the trait. Caught the regression in
+    // commit 3f0824a where ECR receivers re-prefixed and GAR's delete called
+    // the wrong API surface.
+    let get_response = artifact_registry
+        .get_repository(&create_response.name)
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "[{}] get_repository must accept the routable name from \
+                 create_repository as-is. Provider returned: {:?}",
+                provider_name, e
+            )
+        });
+    assert_eq!(
+        get_response.name, create_response.name,
+        "[{}] get_repository must round-trip the routable name unchanged",
+        provider_name
+    );
+
     // 2. Wait for repository to be ready
     if matches!(provider_name, "gcp") {
         let is_ready = wait_for_repository_ready(

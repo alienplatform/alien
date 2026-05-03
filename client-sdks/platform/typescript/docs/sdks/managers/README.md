@@ -12,7 +12,7 @@
 * [provision](#provision) - Enqueue provisioning for a manager by ID.
 * [update](#update) - Update a manager to a specific release ID or active release.
 * [listEvents](#listevents) - Retrieve all events of a manager.
-* [generateDeepstoreToken](#generatedeepstoretoken) - Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+* [generateManagerToken](#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 * [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 * [googleCloudConnect](#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
@@ -634,13 +634,13 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## generateDeepstoreToken
+## generateManagerToken
 
-Generate a JWT token and connection info for querying manager logs directly. Returns everything the browser needs to create a DeepstoreClient and query the data plane without routing log data through the platform API (end-to-end encryption).
+Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="generateDeepstoreToken" method="post" path="/v1/managers/{id}/deepstore/token" -->
+<!-- UsageSnippet language="typescript" operationID="generateManagerToken" method="post" path="/v1/managers/{id}/token" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -649,10 +649,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.generateDeepstoreToken({
+  const result = await alien.managers.generateManagerToken({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
-    generateDeepstoreTokenRequest: {},
   });
 
   console.log(result);
@@ -667,7 +666,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { managersGenerateDeepstoreToken } from "@alienplatform/platform-api/funcs/managersGenerateDeepstoreToken.js";
+import { managersGenerateManagerToken } from "@alienplatform/platform-api/funcs/managersGenerateManagerToken.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -676,16 +675,15 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersGenerateDeepstoreToken(alien, {
+  const res = await managersGenerateManagerToken(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
-    generateDeepstoreTokenRequest: {},
   });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("managersGenerateDeepstoreToken failed:", res.error);
+    console.log("managersGenerateManagerToken failed:", res.error);
   }
 }
 
@@ -696,14 +694,14 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GenerateDeepstoreTokenRequest](../../models/operations/generatedeepstoretokenrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.GenerateManagerTokenRequest](../../models/operations/generatemanagertokenrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[models.GenerateDeepstoreTokenResponse](../../models/generatedeepstoretokenresponse.md)\>**
+**Promise\<[models.GenerateManagerTokenResponse](../../models/generatemanagertokenresponse.md)\>**
 
 ### Errors
 

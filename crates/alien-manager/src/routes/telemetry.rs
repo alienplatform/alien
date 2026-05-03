@@ -13,7 +13,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::error::ErrorData;
-use crate::traits::TelemetrySignal;
+use crate::traits::{TelemetryCaller, TelemetrySignal};
 
 use super::{auth, AppState};
 
@@ -55,28 +55,41 @@ async fn ingest(
     body: Bytes,
     signal: TelemetrySignal,
 ) -> Response {
-    // Extract deployment_id from auth subject
+    // Extract deployment_id from auth subject and run the subject telemetry-
+    // ingest authz check. The configured `Authz::can_ingest_telemetry_for`
+    // impl decides whether this caller may ingest for this deployment.
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    let deployment_id = match &subject.scope.deployment_id {
-        Some(id) => id.clone(),
-        None => {
-            // Allow admin tokens to ingest with a generic scope
-            if subject.is_admin() {
-                "admin".to_string()
-            } else {
-                return ErrorData::forbidden("Telemetry ingestion requires a deployment token")
-                    .into_response();
-            }
+    let deployment_id = match &subject.scope {
+        crate::auth::Scope::Deployment { deployment_id, .. } => deployment_id.clone(),
+        _ => {
+            return ErrorData::forbidden("Telemetry ingestion requires a deployment token")
+                .into_response()
         }
+    };
+
+    let deployment = match state.deployment_store.get_deployment(&deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    if !state.authz.can_ingest_telemetry_for(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot ingest telemetry for this deployment")
+            .into_response();
+    }
+
+    let caller = TelemetryCaller {
+        deployment_id: deployment.id.clone(),
+        project_id: Some(deployment.project_id.clone()),
+        workspace_id: Some(deployment.workspace_id.clone()),
     };
 
     match state
         .telemetry_backend
-        .ingest(signal, &deployment_id, body)
+        .ingest(signal, &caller, body)
         .await
     {
         Ok(()) => Json(TelemetryResponse { accepted: true }).into_response(),

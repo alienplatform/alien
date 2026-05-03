@@ -107,53 +107,45 @@ pub async fn import_stack_state_from_cloudformation_with_registry(
         })
     });
 
-    // Determine network settings based on VpcId and EnableNetwork parameters
-    // Three modes:
-    // 1. EnableNetwork=false or not present, VpcId empty → No network
-    // 2. VpcId provided → BYO-VPC mode
-    // 3. EnableNetwork=true, VpcId empty → Create mode (VPC was created by CFN)
-    let enable_network = get_param("EnableNetwork")
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    let vpc_id_param = get_param("VpcId");
+    // Determine network settings from the NetworkMode parameter.
+    // Modes: "create" (new VPC), "existing" (bring your own), "no-vpc" (no VPC).
+    let network_mode = get_param("NetworkMode").unwrap_or_default();
 
-    let network_settings = if let Some(vpc_id) = vpc_id_param {
-        // BYO-VPC mode: deployer provided existing VPC
-        let public_subnet_ids = get_param("PublicSubnetIds")
-            .map(|s| {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let private_subnet_ids = get_param("PrivateSubnetIds")
-            .map(|s| {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let security_group_ids = get_param("SecurityGroupId")
-            .map(|s| vec![s])
-            .unwrap_or_default();
+    let network_settings = match network_mode.as_str() {
+        "existing" => {
+            let vpc_id = get_param("VpcId").unwrap_or_default();
+            let public_subnet_ids = get_param("PublicSubnetIds")
+                .map(|s| {
+                    s.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let private_subnet_ids = get_param("PrivateSubnetIds")
+                .map(|s| {
+                    s.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let security_group_ids = get_param("SecurityGroupId")
+                .map(|s| vec![s])
+                .unwrap_or_default();
 
-        Some(alien_core::NetworkSettings::ByoVpcAws {
-            vpc_id,
-            public_subnet_ids,
-            private_subnet_ids,
-            security_group_ids,
-        })
-    } else if enable_network {
-        // Create mode: VPC was created by CloudFormation
-        Some(alien_core::NetworkSettings::Create {
+            Some(alien_core::NetworkSettings::ByoVpcAws {
+                vpc_id,
+                public_subnet_ids,
+                private_subnet_ids,
+                security_group_ids,
+            })
+        }
+        "create" => Some(alien_core::NetworkSettings::Create {
             cidr: get_param("VpcCidr"),
             availability_zones: 2,
-        })
-    } else {
-        // No network: deployer chose not to use VPC
-        None
+        }),
+        _ => None, // "no-vpc" or unrecognized
     };
 
     let stack_settings = StackSettings {
@@ -234,21 +226,37 @@ pub async fn import_stack_state_from_cloudformation_with_registry(
         stack_name: cf_stack_name.to_string(),
     };
 
-    // Build a list of futures, one per resource (using mutated_stack which has infrastructure resources)
+    // Build a list of futures, one per resource (using mutated_stack which has infrastructure resources).
+    //
+    // Import ALL resources that have a registered CloudFormation importer, regardless of lifecycle.
+    // The CF template creates both Frozen and Live resources:
+    //   - Frozen (Storage, Queue, Kv, Network, etc.) → imported to Ready state
+    //   - Live (Function, ContainerCluster, Build) → imported to appropriate state
+    //     (e.g., ContainerCluster starts at CreatingLaunchTemplate so the controller
+    //     can create Launch Templates and ASGs during Provisioning)
+    //
+    // Resources without a CF importer (e.g., Container) are skipped — the executor
+    // creates fresh controllers for them during the deployment loop.
     let import_futures = mutated_stack
         .resources()
-        .filter(|(_id, res)| res.lifecycle != ResourceLifecycle::Live)
+        .filter(|(_id, res)| {
+            // Only import resources that have a registered CF importer.
+            // This skips Container (orchestrated by Horizon, not CF) and any
+            // other resource types that don't produce CF resources.
+            registry
+                .get_cloudformation_importer(res.config.resource_type(), Platform::Aws)
+                .is_ok()
+        })
         .map(|(id, res)| {
-            // Clone data we need inside the async block
             let id = id.clone();
             let resource_cfg = res.config.clone();
             let resource_lifecycle = res.lifecycle;
             let context = import_context.clone();
-            let registry = registry.clone(); // Clone the Arc
+            let registry = registry.clone();
             async move {
                 let (resource_type, internal_state) = import_resource_state(
                     &resource_cfg,
-                    &registry, // Dereference Arc to get &ResourceRegistry
+                    &registry,
                     &context,
                 )
                 .await?;

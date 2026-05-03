@@ -48,25 +48,24 @@ async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String,
         })
 }
 
-/// Check that the caller can access the deployment that owns a command.
-/// Allows: Admin, DG token for the deployment's group, or Deployment token for this deployment.
+/// Authorize the caller against the deployment that owns a command.
+/// Loads the deployment then defers to `Authz::can_read_command`.
 async fn require_command_access(
     state: &AppState,
-    subject: &crate::traits::AuthSubject,
+    subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    if subject.is_admin() {
-        return Ok(());
+    let deployment = state
+        .deployment_store
+        .get_deployment(deployment_id)
+        .await
+        .map_err(|e| e.into_response())?
+        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    if state.authz.can_read_command(subject, &deployment) {
+        Ok(())
+    } else {
+        Err(ErrorData::forbidden("Access denied").into_response())
     }
-    if subject.can_access_deployment(deployment_id) {
-        return Ok(());
-    }
-    // Check DG access
-    let group_id = get_deployment_group_id(state, deployment_id).await?;
-    if subject.can_access_group(&group_id) {
-        return Ok(());
-    }
-    Err(ErrorData::forbidden("Access denied").into_response())
 }
 
 // --- Router ---
@@ -111,16 +110,15 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let deployment = match state.deployment_store.get_deployment(&request.deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
 
-    // Admin or DG that owns the deployment's group
-    if !subject.is_admin() {
-        let group_id = match get_deployment_group_id(&state, &request.deployment_id).await {
-            Ok(g) => g,
-            Err(e) => return e,
-        };
-        if let Err(e) = auth::require_admin_or_group(&subject, &group_id) {
-            return e.into_response();
-        }
+    if !state.authz.can_dispatch_command(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot dispatch command for this deployment")
+            .into_response();
     }
 
     match state.command_server.create_command(request).await {
@@ -141,7 +139,6 @@ async fn get_command_status(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
     let deployment_id = match get_command_owner(&state, &command_id).await {
         Ok(id) => id,
         Err(e) => return e,
@@ -170,21 +167,19 @@ async fn upload_complete(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
     let deployment_id = match get_command_owner(&state, &command_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
-    // Same auth as create: Admin or DG for the deployment's group
-    if !subject.is_admin() {
-        let group_id = match get_deployment_group_id(&state, &deployment_id).await {
-            Ok(g) => g,
-            Err(e) => return e,
-        };
-        if let Err(e) = auth::require_admin_or_group(&subject, &group_id) {
-            return e.into_response();
-        }
+    let deployment = match state.deployment_store.get_deployment(&deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    if !state.authz.can_dispatch_command(&subject, &deployment) {
+        return ErrorData::forbidden("Access denied").into_response();
     }
 
     match state
@@ -224,13 +219,16 @@ async fn submit_response(
     };
 
     if let Some(subject) = bearer_auth {
-        // Standard Bearer auth path — verify deployment access.
+        // Standard Bearer auth path — verify deployment access via Authz.
         let deployment_id = match get_command_owner(&state, &command_id).await {
             Ok(id) => id,
             Err(e) => return e,
         };
-
-        if !subject.is_admin() && !subject.can_access_deployment(&deployment_id) {
+        let deployment = match state.deployment_store.get_deployment(&deployment_id).await {
+            Ok(Some(d)) => d,
+            Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+            Err(e) => return e.into_response(),
+        };        if !state.authz.can_act_on_deployment(&subject, &deployment) {
             return ErrorData::forbidden(
                 "Access denied: only the target deployment can submit responses",
             )
@@ -273,14 +271,35 @@ async fn get_command_payload(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    let deployment_id = match get_command_owner(&state, &command_id).await {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-
-    if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
-        return e;
+    // Verify the caller has access to this command's deployment via Authz.
+    // If the command isn't in the local registry (e.g. when command metadata
+    // is managed externally), fall back to requiring workspace-write
+    // authority. A *registry lookup error* must NOT trigger that fallback —
+    // a transient store error for a deployment-owned command would otherwise
+    // expose its payload to any workspace-admin/member token.
+    match state
+        .command_server
+        .get_command_deployment_id(&command_id)
+        .await
+    {
+        Ok(Some(deployment_id)) => {
+            if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
+                return e;
+            }
+        }
+        Ok(None) => {
+            // No canonical owner in the local registry — only workspace-wide
+            // writers may inspect such payloads.
+            if !matches!(subject.scope, crate::auth::Scope::Workspace)
+                || !matches!(
+                    subject.role,
+                    crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
+                )
+            {
+                return ErrorData::forbidden("Workspace-write access required").into_response();
+            }
+        }
+        Err(e) => return e.into_response(),
     }
 
     let params = match state.command_server.get_params(&command_id).await {
@@ -319,10 +338,14 @@ async fn store_command_payload(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };
-
-    if let Err(e) = auth::require_admin(&subject) {
-        return e.into_response();
+    };    // Storing payload with no entity context is workspace-write only.
+    if !matches!(subject.scope, crate::auth::Scope::Workspace)
+        || !matches!(
+            subject.role,
+            crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
+        )
+    {
+        return ErrorData::forbidden("Workspace-write access required").into_response();
     }
 
     if let Some(params) = &request.params {
@@ -356,8 +379,15 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let deployment = match state.deployment_store.get_deployment(&lease_request.deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            return ErrorData::not_found_deployment(&lease_request.deployment_id).into_response()
+        }
+        Err(e) => return e.into_response(),
+    };
 
-    if !subject.is_admin() && !subject.can_access_deployment(&lease_request.deployment_id) {
+    if !state.authz.can_act_on_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
             .into_response();
     }

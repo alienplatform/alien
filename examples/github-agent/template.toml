@@ -1,0 +1,3 @@
+name = "github-agent"
+description = "Full app: a GitHub integration agent with a Next.js dashboard."
+language = "TypeScript"

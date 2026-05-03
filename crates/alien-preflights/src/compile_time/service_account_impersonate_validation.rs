@@ -159,6 +159,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -182,6 +183,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -214,6 +216,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
@@ -249,6 +252,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = ServiceAccountImpersonateValidationCheck;

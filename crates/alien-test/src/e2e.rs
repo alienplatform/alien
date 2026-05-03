@@ -535,6 +535,7 @@ pub async fn deploy_test_app(
         .body(alien_manager_api::types::CreateReleaseRequest {
             stack: stack_by_platform_sdk,
             git_metadata: None,
+            project_id: "default".to_string(),
         })
         .send()
         .await
@@ -703,6 +704,7 @@ pub async fn developer_setup(
         .body(alien_manager_api::types::CreateReleaseRequest {
             stack: stack_by_platform_sdk,
             git_metadata: None,
+            project_id: "default".to_string(),
         })
         .send()
         .await

@@ -34,7 +34,7 @@ impl IdConfig {
 const fn get_id_config(id_type: IdType) -> IdConfig {
     match id_type {
         IdType::Event => IdConfig::new("event", false, 28),
-        IdType::Deployment => IdConfig::new("ag", true, 28),
+        IdType::Deployment => IdConfig::new("dep", true, 28),
         IdType::DeploymentGroup => IdConfig::new("dg", true, 28),
         IdType::Release => IdConfig::new("rel", false, 28),
         IdType::Command => IdConfig::new("cmd", true, 28),
@@ -162,6 +162,6 @@ mod tests {
         let id = new_id(IdType::Deployment);
         let pattern = Regex::new(&id_regex_pattern(IdType::Deployment)).unwrap();
         assert!(pattern.is_match(&id), "unexpected deployment id: {id}");
-        assert!(id.starts_with("ag_"));
+        assert!(id.starts_with("dep_"));
     }
 }

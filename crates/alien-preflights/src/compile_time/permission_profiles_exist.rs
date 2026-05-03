@@ -159,6 +159,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesExistCheck;
@@ -194,6 +195,7 @@ mod tests {
                 profiles: IndexMap::new(), // No profiles defined!
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesExistCheck;
@@ -254,6 +256,7 @@ mod tests {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesExistCheck;

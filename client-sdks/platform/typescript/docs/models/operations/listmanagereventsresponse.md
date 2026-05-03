@@ -11,7 +11,7 @@ let value: ListManagerEventsResponse = {
   items: [
     {
       id: "event_MtSA24M3pWuAkQYxgZxuRI",
-      deploymentId: "ag_pnj2da55wi5sxbdcav9t273je",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {

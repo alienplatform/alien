@@ -32,6 +32,7 @@ use axum::{
 use http::{header, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::auth::Authz;
 use crate::traits::*;
 
 /// Shared state for all route handlers.
@@ -41,6 +42,11 @@ pub struct AppState {
     pub release_store: Arc<dyn ReleaseStore>,
     pub token_store: Arc<dyn TokenStore>,
     pub auth_validator: Arc<dyn AuthValidator>,
+    /// Authorization policy. Default: [`crate::providers::OssAuthz`].
+    /// Handlers receive a unified [`crate::auth::Subject`] from
+    /// `auth_validator` and call `authz.can_*(&subject, &entity)` for every
+    /// authorization decision.
+    pub authz: Arc<dyn Authz>,
     pub telemetry_backend: Arc<dyn TelemetryBackend>,
     pub credential_resolver: Arc<dyn CredentialResolver>,
     pub command_server: Arc<CommandServer>,
@@ -65,8 +71,9 @@ impl HasCommandServer for AppState {
     }
 }
 
-/// Create the complete router with all routes.
+/// Create the complete router with all routes (standalone mode).
 pub fn create_router(state: AppState) -> Router {
+    let cors = cors_layer(&state.config);
     create_router_inner(
         state,
         RouterOptions {
@@ -74,6 +81,7 @@ pub fn create_router(state: AppState) -> Router {
             include_install: true,
         },
     )
+    .layer(cors)
 }
 
 /// Route inclusion options for embedding alien-manager in another process.
@@ -127,19 +135,22 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         router = router.merge(sync::initialize_router());
     }
 
-    // CORS: restrict to configured origins instead of allowing any origin.
-    // Defaults to base_url; override via config.allowed_origins.
-    let allowed_origins = state
-        .config
+    router.with_state(state)
+}
+
+/// Build a CORS layer from the manager config.
+/// Applied after all routes (including platform routes) are merged.
+pub fn cors_layer(config: &crate::config::ManagerConfig) -> CorsLayer {
+    let allowed_origins = config
         .allowed_origins
         .clone()
-        .unwrap_or_else(|| vec![state.config.base_url()]);
+        .unwrap_or_else(|| vec![config.base_url()]);
     let origins: Vec<http::HeaderValue> = allowed_origins
         .iter()
         .filter_map(|o| o.parse().ok())
         .collect();
 
-    let cors = CorsLayer::new()
+    CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([
             Method::GET,
@@ -149,7 +160,5 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
             Method::HEAD,
             Method::PATCH,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT]);
-
-    router.with_state(state).layer(cors)
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
 }

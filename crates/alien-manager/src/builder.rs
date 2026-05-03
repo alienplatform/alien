@@ -5,6 +5,7 @@ use std::sync::Arc;
 use alien_error::AlienError;
 use tracing::{info, warn};
 
+use crate::auth::Authz;
 use crate::config::ManagerConfig;
 use crate::error::ErrorData;
 use crate::server::AlienManager;
@@ -18,6 +19,7 @@ pub struct AlienManagerBuilder {
     credential_resolver: Option<Arc<dyn CredentialResolver>>,
     telemetry_backend: Option<Arc<dyn TelemetryBackend>>,
     auth_validator: Option<Arc<dyn AuthValidator>>,
+    authz: Option<Arc<dyn Authz>>,
     server_bindings: Option<ServerBindings>,
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
@@ -54,6 +56,7 @@ impl AlienManagerBuilder {
             credential_resolver: None,
             telemetry_backend: None,
             auth_validator: None,
+            authz: None,
             server_bindings: None,
             extra_routes: None,
             platform_routes: None,
@@ -93,6 +96,13 @@ impl AlienManagerBuilder {
 
     pub fn auth_validator(mut self, validator: Arc<dyn AuthValidator>) -> Self {
         self.auth_validator = Some(validator);
+        self
+    }
+
+    /// Inject the authorization policy. Default:
+    /// [`crate::providers::OssAuthz`].
+    pub fn authz(mut self, authz: Arc<dyn Authz>) -> Self {
+        self.authz = Some(authz);
         self
     }
 
@@ -581,6 +591,9 @@ impl AlienManagerBuilder {
             require_provider!(self.credential_resolver, "credential_resolver");
         let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
         let auth_validator = require_provider!(self.auth_validator, "auth_validator");
+        let authz: Arc<dyn Authz> = self
+            .authz
+            .unwrap_or_else(|| Arc::new(crate::providers::OssAuthz));
         let server_bindings = Arc::new(require_provider!(self.server_bindings, "server_bindings"));
         let log_buffer = self
             .log_buffer
@@ -594,6 +607,7 @@ impl AlienManagerBuilder {
             release_store,
             token_store,
             auth_validator,
+            authz,
             telemetry_backend,
             credential_resolver,
             server_bindings,
@@ -649,6 +663,7 @@ async fn finalize(
     release_store: Arc<dyn ReleaseStore>,
     token_store: Arc<dyn TokenStore>,
     auth_validator: Arc<dyn AuthValidator>,
+    authz: Arc<dyn Authz>,
     telemetry_backend: Arc<dyn TelemetryBackend>,
     credential_resolver: Arc<dyn CredentialResolver>,
     server_bindings: Arc<ServerBindings>,
@@ -676,6 +691,7 @@ async fn finalize(
         release_store: release_store.clone(),
         token_store: token_store.clone(),
         auth_validator: auth_validator.clone(),
+        authz: authz.clone(),
         telemetry_backend: telemetry_backend.clone(),
         credential_resolver: credential_resolver.clone(),
         command_server,
@@ -697,6 +713,8 @@ async fn finalize(
     if let Some(extra) = extra_routes {
         router = router.merge(extra.with_state(app_state));
     }
+    // Apply CORS after all routes are merged so it covers platform and extra routes too.
+    let router = router.layer(crate::routes::cors_layer(&config));
 
     info!(
         port = config.port,

@@ -180,9 +180,6 @@ const alien = new Alien({
 async function run() {
   const result = await alien.packages.rebuild({
     workspace: "my-workspace",
-    requestBody: {
-      project: "<value>",
-    },
   });
 
   console.log(result);
@@ -208,9 +205,6 @@ const alien = new AlienCore({
 async function run() {
   const res = await packagesRebuild(alien, {
     workspace: "my-workspace",
-    requestBody: {
-      project: "<value>",
-    },
   });
   if (res.ok) {
     const { value: result } = res;

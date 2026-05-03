@@ -27,7 +27,7 @@ pub struct DeployCliConfig {
     /// Default platform for deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_platform: Option<String>,
-    // --- Branding (for white-labeled SaaS binaries) ---
+    // --- Branding (for rebranded distributions) ---
     /// Binary name (e.g., "acme-deploy").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -53,7 +53,7 @@ pub struct AgentConfig {
     /// Sync interval in seconds (default: 30).
     #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,
-    // --- Branding (for white-labeled SaaS binaries) ---
+    // --- Branding (for rebranded distributions) ---
     /// Binary name (e.g., "acme-agent").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -193,7 +193,7 @@ mod tests {
         let config = AgentConfig {
             manager_url: Some("https://manager.example.com".into()),
             token: Some("tok_agent123".into()),
-            deployment_id: Some("ag_abc".into()),
+            deployment_id: Some("dep_abc".into()),
             sync_interval_secs: 60,
             name: Some("acme-agent".into()),
             display_name: Some("Acme Agent".into()),

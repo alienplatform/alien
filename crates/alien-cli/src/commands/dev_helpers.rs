@@ -215,7 +215,7 @@ fn reset_local_dev_runtime_state() -> Result<()> {
             continue;
         };
 
-        if name.starts_with("ag_") || name.starts_with("dep_") {
+        if name.starts_with("dep_") {
             std::fs::remove_dir_all(&path).into_alien_error().context(
                 ErrorData::FileOperationFailed {
                     operation: "remove directory".to_string(),
@@ -433,6 +433,9 @@ pub async fn build_and_post_release_simple(
         .body(CreateReleaseRequest {
             stack: stack_by_platform,
             git_metadata: None,
+            // dev mode is single-project; "default" is the canonical
+            // sentinel and is required by the wire schema.
+            project_id: "default".to_string(),
         })
         .send()
         .await
@@ -901,7 +904,7 @@ mod tests {
             },
         );
         let snapshot = DevDeploymentSnapshot {
-            deployment_id: "ag_123".to_string(),
+            deployment_id: "dep_123".to_string(),
             deployment_name: "default".to_string(),
             status: DeploymentStatus::Running,
             commands_url: "http://localhost:9090/commands".to_string(),
@@ -913,7 +916,7 @@ mod tests {
         assert_eq!(status.api_url, "http://localhost:9090");
         assert_eq!(status.platform, "local");
         assert!(matches!(status.status, DevStatusState::Ready));
-        assert_eq!(status.agents["default"].id, "ag_123");
+        assert_eq!(status.agents["default"].id, "dep_123");
         assert_eq!(
             status.agents["default"].commands_url.as_deref(),
             Some("http://localhost:9090/commands")

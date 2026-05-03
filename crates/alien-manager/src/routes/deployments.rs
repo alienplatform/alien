@@ -235,36 +235,31 @@ async fn create_deployment(
         Err(e) => return e.into_response(),
     };
 
-    // Determine deployment group from token or request
-    let deployment_group_id = match &subject.scope.token_type {
-        TokenType::DeploymentGroup => {
-            // Deployment group token: use its own group
-            subject
-                .scope
-                .deployment_group_id
-                .clone()
-                .unwrap_or_default()
-        }
-        TokenType::Admin => {
-            // Admin: use specified group or auto-select the first available group
+    // Determine deployment group from the subject's scope or the explicit
+    // request body. DG-scoped subjects use their own group; workspace/project
+    // scopes accept the body's `deployment_group_id` (or auto-select the
+    // first available one); deployment-scoped subjects can't create.
+    let deployment_group_id = match &subject.scope {
+        crate::auth::Scope::DeploymentGroup {
+            deployment_group_id,
+            ..
+        } => deployment_group_id.clone(),
+        crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
             match &req.deployment_group_id {
                 Some(id) => id.clone(),
-                None => {
-                    // Auto-select: use the first deployment group
-                    match state.deployment_store.list_deployment_groups().await {
-                        Ok(groups) if !groups.is_empty() => groups[0].id.clone(),
-                        Ok(_) => {
-                            return ErrorData::bad_request(
-                                "No deployment groups exist. Create one first.",
-                            )
-                            .into_response()
-                        }
-                        Err(e) => return e.into_response(),
+                None => match state.deployment_store.list_deployment_groups().await {
+                    Ok(groups) if !groups.is_empty() => groups[0].id.clone(),
+                    Ok(_) => {
+                        return ErrorData::bad_request(
+                            "No deployment groups exist. Create one first.",
+                        )
+                        .into_response()
                     }
-                }
+                    Err(e) => return e.into_response(),
+                },
             }
         }
-        TokenType::Deployment => {
+        crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot create deployments")
                 .into_response()
         }
@@ -281,12 +276,15 @@ async fn create_deployment(
         Err(e) => return e.into_response(),
     };
 
-    // Check permissions
-    if let Err(e) = auth::require_admin_or_group(&subject, &deployment_group_id) {
-        return e.into_response();
+    let create_ctx = crate::auth::DeploymentCreateCtx {
+        workspace_id: &dg.workspace_id,
+        project_id: &dg.project_id,
+        deployment_group_id: Some(&deployment_group_id),
+    };
+    if !state.authz.can_create_deployment(&subject, create_ctx) {
+        return ErrorData::forbidden("Cannot create deployment in this group").into_response();
     }
 
-    // Check max deployments limit
     if dg.deployment_count >= dg.max_deployments {
         return alien_error::AlienError::new(ErrorData::MaxDeploymentsReached {
             deployment_group_id: deployment_group_id.clone(),
@@ -296,7 +294,7 @@ async fn create_deployment(
     }
 
     // Auto-assign latest release if available
-    let desired_release_id = match state.release_store.get_latest_release().await {
+    let desired_release_id = match state.release_store.get_latest_release(&subject).await {
         Ok(Some(release)) => Some(release.id),
         Ok(None) => None,
         Err(e) => return e.into_response(),
@@ -386,14 +384,16 @@ async fn list_deployments(
         Err(e) => return e.into_response(),
     };
 
-    // Determine filter based on token scope
-    let deployment_group_id = match &subject.scope.token_type {
-        TokenType::DeploymentGroup => {
-            // DG tokens can only see their own group
-            subject.scope.deployment_group_id.clone()
+    // Determine filter based on the subject's scope.
+    let deployment_group_id = match &subject.scope {
+        crate::auth::Scope::DeploymentGroup {
+            deployment_group_id,
+            ..
+        } => Some(deployment_group_id.clone()),
+        crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
+            query.deployment_group_id.clone()
         }
-        TokenType::Admin => query.deployment_group_id.clone(),
-        TokenType::Deployment => {
+        crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
                 .into_response()
         }
@@ -475,13 +475,7 @@ async fn get_deployment(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };
-
-    // Check access
-    if !subject.is_admin()
-        && !subject.can_access_group(&deployment.deployment_group_id)
-        && !subject.can_access_deployment(&deployment.id)
-    {
+    };    if !state.authz.can_read_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -516,13 +510,7 @@ async fn get_deployment_info(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };
-
-    // Check access
-    if !subject.is_admin()
-        && !subject.can_access_group(&deployment.deployment_group_id)
-        && !subject.can_access_deployment(&deployment.id)
-    {
+    };    if !state.authz.can_read_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -590,15 +578,12 @@ async fn delete_deployment(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = auth::require_admin(&subject) {
-        return e.into_response();
-    }
-
-    // Verify deployment exists
-    match state.deployment_store.get_deployment(&id).await {
-        Ok(Some(_)) => {}
+    let deployment = match state.deployment_store.get_deployment(&id).await {
+        Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
+    };    if !state.authz.can_delete_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
     if query.force {
@@ -648,10 +633,8 @@ async fn retry_deployment(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };
-
-    if let Err(e) = auth::require_admin_or_group(&subject, &deployment.deployment_group_id) {
-        return e.into_response();
+    };    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
     if let Err(e) = state.deployment_store.set_retry_requested(&id).await {
@@ -689,10 +672,8 @@ async fn redeploy(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };
-
-    if let Err(e) = auth::require_admin_or_group(&subject, &deployment.deployment_group_id) {
-        return e.into_response();
+    };    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot redeploy").into_response();
     }
 
     if let Err(e) = state.deployment_store.set_redeploy(&id).await {

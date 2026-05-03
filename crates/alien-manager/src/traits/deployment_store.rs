@@ -12,6 +12,12 @@ use alien_error::AlienError;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DeploymentRecord {
     pub id: String,
+    /// Workspace this deployment belongs to. Always `"default"` in OSS.
+    #[serde(default = "super::default_string")]
+    pub workspace_id: String,
+    /// Project this deployment belongs to. Always `"default"` in OSS.
+    #[serde(default = "super::default_string")]
+    pub project_id: String,
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
@@ -86,6 +92,12 @@ pub struct CreateDeploymentParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentGroupRecord {
     pub id: String,
+    /// Workspace this deployment group belongs to. Always `"default"` in OSS.
+    #[serde(default = "super::default_string")]
+    pub workspace_id: String,
+    /// Project this deployment group belongs to. Always `"default"` in OSS.
+    #[serde(default = "super::default_string")]
+    pub project_id: String,
     pub name: String,
     pub max_deployments: i64,
     pub deployment_count: i64,

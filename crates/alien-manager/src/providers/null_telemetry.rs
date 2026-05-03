@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tracing::debug;
 
-use crate::traits::{TelemetryBackend, TelemetrySignal};
+use crate::traits::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 
 pub struct NullTelemetryBackend;
 
@@ -17,12 +17,12 @@ impl TelemetryBackend for NullTelemetryBackend {
     async fn ingest(
         &self,
         signal: TelemetrySignal,
-        deployment_id: &str,
+        caller: &TelemetryCaller,
         data: Bytes,
     ) -> Result<(), AlienError> {
         debug!(
             signal = ?signal,
-            deployment_id = deployment_id,
+            deployment_id = caller.deployment_id,
             bytes = data.len(),
             "NullTelemetryBackend: discarding telemetry signal"
         );

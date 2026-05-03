@@ -3,15 +3,32 @@
 //! Each test gets a fresh in-memory SQLite database with migrations run,
 //! exercising store operations through the trait interfaces.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{Platform, StackSettings};
+use alien_core::{DeploymentState, DeploymentStatus, Platform, StackSettings};
+use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::deployment_store::*;
 use alien_manager::traits::release_store::*;
 use alien_manager::traits::token_store::*;
+
+/// Workspace-admin subject used by every store test. The store doesn't
+/// gate on it (Authz lives at the route layer), but every trait method
+/// requires one — so we plumb the same one through.
+fn test_subject() -> Subject {
+    Subject {
+        kind: SubjectKind::ServiceAccount {
+            id: "test".to_string(),
+        },
+        workspace_id: "default".to_string(),
+        scope: Scope::Workspace,
+        role: Role::WorkspaceAdmin,
+        bearer_token: String::new(),
+    }
+}
 
 /// Create a fresh database with all migrations applied.
 /// Uses a temp file because WAL mode doesn't work with `:memory:` databases.
@@ -68,8 +85,8 @@ async fn create_and_get_deployment() {
     let created = create_test_deployment(&store, &group_id, "my-deploy", Platform::Aws).await;
 
     assert!(
-        created.id.starts_with("ag"),
-        "deployment ID should start with 'ag' prefix, got: {}",
+        created.id.starts_with("dep_"),
+        "deployment ID should start with 'dep_' prefix, got: {}",
         created.id
     );
     assert_eq!(created.name, "my-deploy");
@@ -222,13 +239,16 @@ async fn set_desired_release() {
 
     // set_deployment_desired_release works on any deployment
     let release = release_store
-        .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("test-stack".to_string()).build(),
-            platform: None,
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: None,
-        })
+        .create_release(
+            &test_subject(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Local, alien_core::Stack::new("test-stack".to_string()).build())]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
         .await
         .unwrap();
 
@@ -328,6 +348,56 @@ async fn stale_lock_broken() {
         acquired[0].deployment.locked_by.as_deref(),
         Some("new-session")
     );
+}
+
+#[tokio::test]
+async fn reconcile_succeeds_under_other_session_lock() {
+    // Pull-mode `agent_sync` reconciles state without holding the manager
+    // session's lock — the manager grants reconcile authority via the route
+    // layer, not via the WHERE clause. This test guards against
+    // re-introducing a `LockedBy = session` predicate on `reconcile`.
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    // Session A holds the lock.
+    let acquired = store
+        .acquire("session-A", &DeploymentFilter::default(), 10)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+
+    // Session B (e.g. `"agent-sync"`) reconciles new state without acquiring.
+    let state = DeploymentState {
+        status: DeploymentStatus::Running,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    store
+        .reconcile(ReconcileData {
+            deployment_id: dep.id.clone(),
+            session: "agent-sync".to_string(),
+            state,
+            update_heartbeat: false,
+            error: None,
+        })
+        .await
+        .expect("reconcile must succeed even when another session holds the lock");
+
+    // The UPDATE applied — status is the new value.
+    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    assert_eq!(fetched.status, "running");
+    // The lock is unaffected — still held by session-A.
+    assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
 }
 
 #[tokio::test]
@@ -591,21 +661,29 @@ async fn token_types() {
 async fn create_and_get_release() {
     let db = fresh_db().await;
     let store = SqliteReleaseStore::new(db);
+    let subject = test_subject();
 
     let release = store
-        .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("my-stack".to_string()).build(),
-            platform: Some(Platform::Aws),
-            git_commit_sha: Some("abc123".to_string()),
-            git_commit_ref: Some("refs/heads/main".to_string()),
-            git_commit_message: Some("Initial commit".to_string()),
-        })
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Aws,
+                    alien_core::Stack::new("my-stack".to_string()).build(),
+                )]),
+                git_commit_sha: Some("abc123".to_string()),
+                git_commit_ref: Some("refs/heads/main".to_string()),
+                git_commit_message: Some("Initial commit".to_string()),
+            },
+        )
         .await
         .unwrap();
 
     assert!(release.id.starts_with("rel_"));
-    assert_eq!(release.stack.id, "my-stack");
-    assert_eq!(release.platform, Some(Platform::Aws));
+    assert_eq!(release.workspace_id, "default");
+    assert_eq!(release.project_id, "default");
+    assert_eq!(release.stacks.get(&Platform::Aws).unwrap().id, "my-stack");
     assert_eq!(release.git_commit_sha.as_deref(), Some("abc123"));
     assert_eq!(release.git_commit_ref.as_deref(), Some("refs/heads/main"));
     assert_eq!(
@@ -613,29 +691,91 @@ async fn create_and_get_release() {
         Some("Initial commit")
     );
 
-    // Get by ID
-    let fetched = store.get_release(&release.id).await.unwrap().unwrap();
+    // Get by ID — round-trip through SQL must preserve every field.
+    let fetched = store
+        .get_release(&subject, &release.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched.id, release.id);
-    assert_eq!(fetched.stack.id, "my-stack");
-    assert_eq!(fetched.platform, Some(Platform::Aws));
+    assert_eq!(fetched.workspace_id, "default");
+    assert_eq!(fetched.project_id, "default");
+    assert_eq!(fetched.stacks.get(&Platform::Aws).unwrap().id, "my-stack");
+    assert_eq!(fetched.git_commit_sha.as_deref(), Some("abc123"));
+    assert_eq!(fetched.git_commit_ref.as_deref(), Some("refs/heads/main"));
+    assert_eq!(fetched.git_commit_message.as_deref(), Some("Initial commit"));
+}
+
+/// Regression: a release with several platform stacks must round-trip
+/// every key. Previously the writer wrote a `platform` discriminator
+/// while the reader interpreted it as legacy single-Stack format,
+/// breaking every fresh release.
+#[tokio::test]
+async fn create_and_get_release_multi_platform() {
+    let db = fresh_db().await;
+    let store = SqliteReleaseStore::new(db);
+    let subject = test_subject();
+
+    let release = store
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([
+                    (Platform::Aws, alien_core::Stack::new("aws-stack".to_string()).build()),
+                    (Platform::Gcp, alien_core::Stack::new("gcp-stack".to_string()).build()),
+                    (Platform::Azure, alien_core::Stack::new("azure-stack".to_string()).build()),
+                ]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_release(&subject, &release.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.stacks.len(), 3);
+    assert_eq!(fetched.stacks.get(&Platform::Aws).unwrap().id, "aws-stack");
+    assert_eq!(fetched.stacks.get(&Platform::Gcp).unwrap().id, "gcp-stack");
+    assert_eq!(
+        fetched.stacks.get(&Platform::Azure).unwrap().id,
+        "azure-stack"
+    );
+
+    // get_latest_release must read it back identically.
+    let latest = store.get_latest_release(&subject).await.unwrap().unwrap();
+    assert_eq!(latest.id, release.id);
+    assert_eq!(latest.stacks.len(), 3);
 }
 
 #[tokio::test]
 async fn latest_release() {
     let db = fresh_db().await;
     let store = SqliteReleaseStore::new(db);
+    let subject = test_subject();
 
     // No releases yet
-    assert!(store.get_latest_release().await.unwrap().is_none());
+    assert!(store.get_latest_release(&subject).await.unwrap().is_none());
 
     let _rel1 = store
-        .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("stack-v1".to_string()).build(),
-            platform: None,
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: Some("first".to_string()),
-        })
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Local,
+                    alien_core::Stack::new("stack-v1".to_string()).build(),
+                )]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: Some("first".to_string()),
+            },
+        )
         .await
         .unwrap();
 
@@ -643,27 +783,37 @@ async fn latest_release() {
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
     let rel2 = store
-        .create_release(CreateReleaseParams {
-            stack: alien_core::Stack::new("stack-v2".to_string()).build(),
-            platform: None,
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: Some("second".to_string()),
-        })
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Local,
+                    alien_core::Stack::new("stack-v2".to_string()).build(),
+                )]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: Some("second".to_string()),
+            },
+        )
         .await
         .unwrap();
 
     // Latest should be the second one
-    let latest = store.get_latest_release().await.unwrap().unwrap();
+    let latest = store.get_latest_release(&subject).await.unwrap().unwrap();
     assert_eq!(latest.id, rel2.id);
-    assert_eq!(latest.stack.id, "stack-v2");
+    assert_eq!(latest.stacks.get(&Platform::Local).unwrap().id, "stack-v2");
 }
 
 #[tokio::test]
 async fn release_not_found() {
     let db = fresh_db().await;
     let store = SqliteReleaseStore::new(db);
+    let subject = test_subject();
 
-    let result = store.get_release("rel_nonexistent").await.unwrap();
+    let result = store
+        .get_release(&subject, "rel_nonexistent")
+        .await
+        .unwrap();
     assert!(result.is_none());
 }

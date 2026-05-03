@@ -4,7 +4,7 @@
     "title": "Alien Manager API",
     "description": "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
     "license": {
-      "name": "MIT"
+      "name": ""
     },
     "version": "1.0.0"
   },
@@ -328,7 +328,7 @@
     "/v1/commands/{command_id}/response": {
       "put": {
         "tags": [
-          "deployments"
+          "commands"
         ],
         "summary": "Submit response from deployment",
         "operationId": "submit_response",
@@ -1640,17 +1640,23 @@
       "CreateReleaseRequest": {
         "type": "object",
         "required": [
-          "stack"
+          "stack",
+          "projectId"
         ],
         "properties": {
           "gitMetadata": {
             "$ref": "#/components/schemas/GitMetadata",
             "nullable": true
           },
+          "projectId": {
+            "type": "string",
+            "description": "Project this release belongs to. Required. The standalone server uses the canonical value `\"default\"`."
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateTokenResponse": {
         "type": "object",
@@ -2493,6 +2499,8 @@
         "type": "object",
         "required": [
           "id",
+          "workspaceId",
+          "projectId",
           "stack",
           "createdAt"
         ],
@@ -2507,8 +2515,14 @@
           "id": {
             "type": "string"
           },
+          "projectId": {
+            "type": "string"
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
+          },
+          "workspaceId": {
+            "type": "string"
           }
         }
       },
@@ -2793,10 +2807,6 @@
     {
       "name": "leases",
       "description": "Lease management for polling deployments"
-    },
-    {
-      "name": "deployments",
-      "description": "Deployment response submission"
     }
   ]
 }

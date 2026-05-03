@@ -96,12 +96,14 @@ mod tests {
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config,
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesUnchangedCheck;
@@ -137,6 +139,7 @@ mod tests {
                 profiles: old_profiles,
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
@@ -146,6 +149,7 @@ mod tests {
                 profiles: new_profiles,
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesUnchangedCheck;
@@ -174,6 +178,7 @@ mod tests {
                 profiles: old_profiles,
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let new_stack = Stack {
@@ -183,6 +188,7 @@ mod tests {
                 profiles: new_profiles,
                 management: ManagementPermissions::Auto,
             },
+            supported_platforms: None,
         };
 
         let check = PermissionProfilesUnchangedCheck;

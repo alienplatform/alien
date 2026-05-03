@@ -1,3 +1,4 @@
+pub mod azure;
 pub mod compatibility;
 pub mod compile_time;
 pub mod error;
@@ -104,6 +105,16 @@ pub trait CompileTimeCheck: Send + Sync {
 
     /// Condition to determine if this check should run
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool;
+
+    /// Whether this check validates deployment prerequisites rather than template structure.
+    ///
+    /// Deployment prerequisite checks (e.g., "Horizon cluster required", "DNS/TLS required")
+    /// validate that the deployment environment has the necessary infrastructure. These are
+    /// skipped during CloudFormation template generation since the platform provisions
+    /// that infrastructure separately.
+    fn is_deployment_prerequisite(&self) -> bool {
+        false
+    }
 
     /// Run the check without cloud access
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult>;
@@ -249,6 +260,9 @@ impl PreflightRegistry {
         // Within each phase, order doesn't affect correctness — provisioning order is
         // determined by the dependency graph, not mutation order.
 
+        // Phase 0: Platform normalization (adjust values before anything else)
+        registry.add_mutation(Box::new(mutations::AzureMemoryAdjustmentMutation));
+
         // Phase 1: Global infrastructure
         registry.add_mutation(Box::new(mutations::NetworkMutation));
         registry.add_mutation(Box::new(mutations::AzureResourceGroupMutation));
@@ -310,6 +324,24 @@ impl PreflightRegistry {
         self.compile_time_checks
             .iter()
             .filter(|check| check.should_run(stack, platform))
+            .map(|check| check.as_ref())
+            .collect()
+    }
+
+    /// Get compile-time checks for template generation (excludes deployment prerequisites).
+    ///
+    /// Deployment prerequisite checks (Horizon required, DNS/TLS required) validate that the
+    /// deployment environment has necessary infrastructure. These are irrelevant during
+    /// CloudFormation template generation since the platform provisions that infrastructure
+    /// separately via domain_metadata and compute_backend.
+    pub fn get_template_checks(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+    ) -> Vec<&dyn CompileTimeCheck> {
+        self.compile_time_checks
+            .iter()
+            .filter(|check| check.should_run(stack, platform) && !check.is_deployment_prerequisite())
             .map(|check| check.as_ref())
             .collect()
     }

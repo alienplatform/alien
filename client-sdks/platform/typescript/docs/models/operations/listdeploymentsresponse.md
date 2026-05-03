@@ -10,7 +10,7 @@ import { ListDeploymentsResponse } from "@alienplatform/platform-api/models/oper
 let value: ListDeploymentsResponse = {
   items: [
     {
-      id: "ag_pnj2da55wi5sxbdcav9t273je",
+      id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       name: "<value>",
       status: "running",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",

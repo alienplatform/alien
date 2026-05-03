@@ -345,7 +345,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        let full_repo_name = self.make_full_repo_name(repo_id);
+        // `repo_id` is the routable name returned by `create_repository`
+        // (already `{prefix}-{logical}`). The binding never re-prefixes —
+        // the contract is documented in `traits::RepositoryResponse::name`.
+        let full_repo_name = repo_id.to_string();
 
         info!(
             repo_id = %repo_id,
@@ -445,7 +448,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let full_repo_name = self.make_full_repo_name(repo_id);
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         let aws_access = match access {
             CrossAccountAccess::Aws(aws_access) => aws_access,
@@ -571,7 +580,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let full_repo_name = self.make_full_repo_name(repo_id);
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         let aws_access = match access {
             CrossAccountAccess::Aws(aws_access) => aws_access,
@@ -626,7 +641,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
-        let full_repo_name = self.make_full_repo_name(repo_id);
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         info!(
             repo_id = %repo_id,
@@ -891,7 +912,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        let full_repo_name = self.make_full_repo_name(repo_id);
+        // `repo_id` is already a fully-qualified ECR repository name. For
+        // user-created repositories it's the routable name returned by
+        // `create_repository` (`{prefix}-{logical}`). For the deployment
+        // cross-account flow it's `upstream_repository_prefix()` — the
+        // shared deployment-image repository where `alien release` writes
+        // every function image. Either way, don't re-prefix.
+        let full_repo_name = repo_id.to_string();
 
         info!(
             repo_id = %repo_id,

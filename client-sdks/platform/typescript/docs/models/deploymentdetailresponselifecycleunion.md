@@ -6,8 +6,7 @@
 ### `models.DeploymentDetailResponseLifecycleStackStateEnum`
 
 ```typescript
-const value: models.DeploymentDetailResponseLifecycleStackStateEnum =
-  "live-on-setup";
+const value: models.DeploymentDetailResponseLifecycleStackStateEnum = "live";
 ```
 
 ### `any`

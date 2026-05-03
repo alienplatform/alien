@@ -252,6 +252,16 @@ export type DeploymentDomains = {
 export type DeploymentDomainsUnion = DeploymentDomains | any;
 
 /**
+ * External bindings for pre-existing infrastructure.
+ *
+ * @remarks
+ * Allows using existing resources (MinIO, Redis, shared Container Apps
+ * Environment, etc.) instead of having Alien provision them.
+ * Required for Kubernetes platform, optional for cloud platforms.
+ */
+export type DeploymentExternalBindings = {};
+
+/**
  * How heartbeat health checks are handled.
  */
 export const DeploymentHeartbeats = {
@@ -410,6 +420,15 @@ export type DeploymentStackSettings = {
   deploymentModel?: DeploymentDeploymentModel | undefined;
   domains?: DeploymentDomains | any | null | undefined;
   /**
+   * External bindings for pre-existing infrastructure.
+   *
+   * @remarks
+   * Allows using existing resources (MinIO, Redis, shared Container Apps
+   * Environment, etc.) instead of having Alien provision them.
+   * Required for Kubernetes platform, optional for cloud platforms.
+   */
+  externalBindings?: DeploymentExternalBindings | null | undefined;
+  /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: DeploymentHeartbeats | undefined;
@@ -512,6 +531,10 @@ export type DeploymentErrorStackState = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -569,7 +592,6 @@ export type DeploymentErrorUnion = DeploymentErrorStackState | any;
 export const DeploymentLifecycleStackStateEnum = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1719,6 +1741,10 @@ export type DeploymentError = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -2257,6 +2283,22 @@ export function deploymentDomainsUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentExternalBindings$inboundSchema: z.ZodType<
+  DeploymentExternalBindings,
+  unknown
+> = z.object({});
+
+export function deploymentExternalBindingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExternalBindings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExternalBindings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExternalBindings' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentHeartbeats$inboundSchema: z.ZodEnum<
   typeof DeploymentHeartbeats
 > = z.enum(DeploymentHeartbeats);
@@ -2452,6 +2494,9 @@ export const DeploymentStackSettings$inboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([z.lazy(() => DeploymentDomains$inboundSchema), z.any()]),
   ).optional(),
+  externalBindings: z.nullable(
+    z.lazy(() => DeploymentExternalBindings$inboundSchema),
+  ).optional(),
   heartbeats: DeploymentHeartbeats$inboundSchema.optional(),
   network: z.nullable(
     z.union([
@@ -2531,6 +2576,7 @@ export const DeploymentErrorStackState$inboundSchema: z.ZodType<
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),
@@ -4295,6 +4341,7 @@ export const DeploymentError$inboundSchema: z.ZodType<
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),

@@ -11,7 +11,7 @@ let value: SyncAcquireRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   session: "<value>",
   deploymentIds: [
-    "ag_pnj2da55wi5sxbdcav9t273je",
+    "dep_0c29fq4a2yjb7kx3smwdgxlc",
   ],
 };
 ```
