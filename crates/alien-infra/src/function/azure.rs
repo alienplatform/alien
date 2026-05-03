@@ -1152,6 +1152,30 @@ impl AzureFunctionController {
 
         info!(name=%func_cfg.id, "Successfully applied resource-scoped permissions");
 
+        // The function is the consumer of every upstream Azure role assignment
+        // applied during this deployment (storage, KV, queue, vault, plus the
+        // function/execute role just applied above). Azure RBAC propagation can
+        // take 2-5 minutes for resource-scope assignments — caller code that
+        // invokes the function within seconds of `Running` otherwise hits 403
+        // `AuthorizationPermissionMismatch`. Wait here, in the consumer, before
+        // signalling Ready. `WaitingForRbacPropagation` keeps the resource in
+        // Provisioning status so the deployment doesn't transition to Running
+        // yet.
+        Ok(HandlerAction::Continue {
+            state: WaitingForRbacPropagation,
+            suggested_delay: Some(Duration::from_secs(60)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForRbacPropagation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_rbac_propagation(
+        &mut self,
+        _ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
