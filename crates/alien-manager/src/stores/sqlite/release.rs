@@ -4,8 +4,6 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_query::{Expr, Order, Query, SqliteQueryBuilder};
-use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use super::database::{RowParser, SqliteDatabase};
@@ -21,66 +19,30 @@ impl SqliteReleaseStore {
         Self { db }
     }
 
-    const RELEASE_COLUMNS: [Releases; 9] = [
-        Releases::Id,
-        Releases::Stack,
-        Releases::Platform,
-        Releases::GitCommitSha,
-        Releases::GitCommitRef,
-        Releases::GitCommitMessage,
-        Releases::CreatedAt,
-        Releases::WorkspaceId,
-        Releases::ProjectId,
+    /// SELECT column order. Indexes in `parse_release` MUST line up with
+    /// this array — keep the two in sync.
+    const RELEASE_COLUMNS: [Releases; 8] = [
+        Releases::Id,                // 0
+        Releases::Stack,             // 1
+        Releases::GitCommitSha,      // 2
+        Releases::GitCommitRef,      // 3
+        Releases::GitCommitMessage,  // 4
+        Releases::CreatedAt,         // 5
+        Releases::WorkspaceId,       // 6
+        Releases::ProjectId,         // 7
     ];
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {
         let p = RowParser::new(row);
-        let stack_str = p.string(1, "stack")?;
-        let platform_str = p.optional_string(2, "platform")?;
-
-        // The `platform` column is the authoritative format discriminator:
-        // NULL → new format (stack JSON is `HashMap<Platform, Stack>`),
-        // non-NULL → legacy format (stack JSON is a single `Stack`).
-        // Try-parse-first would silently misread a legacy `Stack` whose
-        // top-level field names happen to coincide with `Platform` variant
-        // names.
-        let stacks: HashMap<alien_core::Platform, alien_core::Stack> = match platform_str {
-            None => serde_json::from_str(&stack_str).into_alien_error().context(
-                GenericError {
-                    message: "Failed to parse release stacks (multi-platform)".to_string(),
-                },
-            )?,
-            Some(platform_str) => {
-                let stack: alien_core::Stack = serde_json::from_str(&stack_str)
-                    .into_alien_error()
-                    .context(GenericError {
-                        message: "Failed to parse release stack (legacy)".to_string(),
-                    })?;
-                let platform = alien_core::Platform::from_str(&platform_str).map_err(|e| {
-                    AlienError::new(GenericError {
-                        message: format!(
-                            "Legacy release record has invalid platform value '{}': {}",
-                            platform_str, e
-                        ),
-                    })
-                })?;
-                HashMap::from([(platform, stack)])
-            }
-        };
-
         Ok(ReleaseRecord {
             id: p.string(0, "id")?,
-            stacks,
-            git_commit_sha: p.optional_string(3, "git_commit_sha")?,
-            git_commit_ref: p.optional_string(4, "git_commit_ref")?,
-            git_commit_message: p.optional_string(5, "git_commit_message")?,
-            created_at: p.datetime(6, "created_at")?,
-            workspace_id: p
-                .optional_string(7, "workspace_id")?
-                .unwrap_or_else(|| "default".to_string()),
-            project_id: p
-                .optional_string(8, "project_id")?
-                .unwrap_or_else(|| "default".to_string()),
+            stacks: p.json(1, "stack")?,
+            git_commit_sha: p.optional_string(2, "git_commit_sha")?,
+            git_commit_ref: p.optional_string(3, "git_commit_ref")?,
+            git_commit_message: p.optional_string(4, "git_commit_message")?,
+            created_at: p.datetime(5, "created_at")?,
+            workspace_id: p.string(6, "workspace_id")?,
+            project_id: p.string(7, "project_id")?,
         })
     }
 }
@@ -95,19 +57,14 @@ impl ReleaseStore for SqliteReleaseStore {
         let id = alien_core::new_id(alien_core::IdType::Release);
         let now = Utc::now();
 
-        // Store as JSON map: { "aws": {...}, "gcp": {...}, ... }
+        // Persisted shape: `{ "<platform>": <stack>, ... }`. Each release
+        // can target multiple platforms (one `alien release` invocation
+        // produces stacks for every configured target).
         let stacks_json = serde_json::to_string(&params.stacks)
             .into_alien_error()
             .context(GenericError {
                 message: "Failed to serialize stacks".to_string(),
             })?;
-
-        // Platform column: store first platform for backward compat
-        let platform_str: Option<String> = params
-            .stacks
-            .keys()
-            .next()
-            .map(|p| p.as_str().to_string());
 
         // The caller's `workspace_id` is always `"default"` for this
         // single-tenant store; we still propagate it from the subject
@@ -121,7 +78,6 @@ impl ReleaseStore for SqliteReleaseStore {
             .columns([
                 Releases::Id,
                 Releases::Stack,
-                Releases::Platform,
                 Releases::GitCommitSha,
                 Releases::GitCommitRef,
                 Releases::GitCommitMessage,
@@ -132,7 +88,6 @@ impl ReleaseStore for SqliteReleaseStore {
             .values_panic([
                 id.clone().into(),
                 stacks_json.into(),
-                platform_str.into(),
                 params.git_commit_sha.clone().into(),
                 params.git_commit_ref.clone().into(),
                 params.git_commit_message.clone().into(),
