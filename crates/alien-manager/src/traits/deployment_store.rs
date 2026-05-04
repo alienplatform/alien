@@ -142,14 +142,16 @@ pub struct ReconcileData {
 /// Persistence for deployments and deployment groups.
 ///
 /// Every method takes `caller: &Subject`. Single-tenant impls
-/// (`SqliteDeploymentStore`) ignore it. Multi-tenant embedders that
-/// proxy through an upstream API can use `caller.bearer_token` to forward
-/// the original request's authentication, so cross-tenant calls remain
-/// gated by the inbound caller's scope rather than the embedder's own
-/// service credential. Internal callers without an inbound request
-/// (background loops, startup hooks) pass `Subject::system()` — its
-/// empty `bearer_token` is the documented signal to embedders that no
-/// passthrough is available.
+/// (`SqliteDeploymentStore`) ignore it. Multi-tenant embedders that proxy
+/// through an upstream API can use `caller.bearer_token` to forward the
+/// original request's authentication, so cross-tenant calls remain gated
+/// by the inbound caller's scope rather than the embedder's own service
+/// credential. Internal callers without an inbound request (background
+/// loops, startup hooks) pass [`Subject::system`]; embedders that need to
+/// know whether to fall back to a service credential must check
+/// [`Subject::is_system`] explicitly — never use an empty `bearer_token`
+/// as an implicit fallback signal, since a buggy validator could otherwise
+/// silently escalate privilege.
 ///
 /// `caller` is metadata-about-who; the per-method `params` / IDs are
 /// data-to-act-on — never conflate the two on a single struct.
