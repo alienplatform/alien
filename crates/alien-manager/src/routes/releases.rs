@@ -250,7 +250,7 @@ async fn create_release(
     // Set desired_release_id on eligible deployments
     if let Err(e) = state
         .deployment_store
-        .set_desired_release(&release.id, None)
+        .set_desired_release(&subject, &release.id, None)
         .await
     {
         tracing::warn!(error = %e, "Failed to set desired release on deployments");

@@ -156,6 +156,9 @@ pub fn initialize_router() -> Router<AppState> {
 
 // --- Handlers ---
 
+/// `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+/// `caller: &Subject` is threaded into `DeploymentStore::acquire` so
+/// embedders can authorize against the inbound caller's scope.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/sync/acquire",
@@ -184,7 +187,7 @@ async fn acquire(
     if let Some(ids) = req.deployment_ids.as_ref() {
         let mut deployments = Vec::with_capacity(ids.len());
         for id in ids {
-            match state.deployment_store.get_deployment(id).await {
+            match state.deployment_store.get_deployment(&subject, id).await {
                 Ok(Some(d)) => deployments.push(d),
                 Ok(None) => return ErrorData::not_found_deployment(id).into_response(),
                 Err(e) => return e.into_response(),
@@ -211,7 +214,7 @@ async fn acquire(
 
     let acquired = match state
         .deployment_store
-        .acquire(&req.session, &filter, req.limit)
+        .acquire(&subject, &req.session, &filter, req.limit)
         .await
     {
         Ok(a) => a,
@@ -237,6 +240,8 @@ async fn acquire(
     Json(AcquireResponse { deployments }).into_response()
 }
 
+/// `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+/// bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/sync/reconcile",
@@ -261,7 +266,7 @@ async fn reconcile(
 
     // Allow admin tokens (push mode) or deployment tokens (pull mode) per
     // the unified Authz policy.
-    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -297,13 +302,16 @@ async fn reconcile(
     // 2. Persist the step result (including any registry access changes).
     let _result = match state
         .deployment_store
-        .reconcile(ReconcileData {
-            deployment_id: req.deployment_id.clone(),
-            session: req.session,
-            state: final_state.clone(),
-            update_heartbeat: req.update_heartbeat,
-            error: req.error,
-        })
+        .reconcile(
+            &subject,
+            ReconcileData {
+                deployment_id: req.deployment_id.clone(),
+                session: req.session,
+                state: final_state.clone(),
+                update_heartbeat: req.update_heartbeat,
+                error: req.error,
+            },
+        )
         .await
     {
         Ok(r) => r,
@@ -336,6 +344,8 @@ async fn reconcile(
     .into_response()
 }
 
+/// `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+/// `caller: &Subject` is threaded into `DeploymentStore::release`.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/sync/release",
@@ -356,7 +366,7 @@ async fn release(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+    };    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -367,7 +377,7 @@ async fn release(
 
     match state
         .deployment_store
-        .release(&req.deployment_id, &req.session)
+        .release(&subject, &req.deployment_id, &req.session)
         .await
     {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
@@ -375,6 +385,9 @@ async fn release(
     }
 }
 
+/// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+/// path; `caller: &Subject` is threaded into the store so embedders see
+/// the agent's own scope.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/sync",
@@ -399,7 +412,7 @@ async fn agent_sync(
 
     // Must be a deployment token matching this deployment (workspace-scoped
     // tokens are accepted by `Authz::can_sync_deployment` for system flows).
-    let deployment = match state.deployment_store.get_deployment(&req.deployment_id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -426,13 +439,16 @@ async fn agent_sync(
 
                 if let Err(e) = state
                     .deployment_store
-                    .reconcile(ReconcileData {
-                        deployment_id: req.deployment_id.clone(),
-                        session: "agent-sync".to_string(),
-                        state: agent_state.clone(),
-                        update_heartbeat: true,
-                        error: None,
-                    })
+                    .reconcile(
+                        &subject,
+                        ReconcileData {
+                            deployment_id: req.deployment_id.clone(),
+                            session: "agent-sync".to_string(),
+                            state: agent_state.clone(),
+                            update_heartbeat: true,
+                            error: None,
+                        },
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -454,7 +470,7 @@ async fn agent_sync(
 
     let deployment = match state
         .deployment_store
-        .get_deployment(&req.deployment_id)
+        .get_deployment(&subject, &req.deployment_id)
         .await
     {
         Ok(Some(d)) => d,
@@ -585,6 +601,11 @@ async fn agent_sync(
     .into_response()
 }
 
+/// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+/// or workspace bearer for self-hosted operator workflows. New deployments
+/// are created via `DeploymentStore::create_deployment(caller, …)` so
+/// embedders that proxy to an upstream API write the row in the dg's
+/// workspace, not the manager's.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/initialize",
@@ -631,7 +652,7 @@ async fn initialize(
             // group, issue a fresh deployment token and return the existing ID.
             if let Ok(Some(existing)) = state
                 .deployment_store
-                .get_deployment_by_name(&dg_id, &name)
+                .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
                 let (raw_token, key_prefix, key_hash) =
@@ -673,26 +694,31 @@ async fn initialize(
 
             let deployment = match state
                 .deployment_store
-                .create_deployment(CreateDeploymentParams {
-                    name,
-                    deployment_group_id: dg_id.clone(),
-                    platform,
-                    stack_settings: settings,
-                    environment_variables: None,
-                    deployment_token: dep_token,
-                })
+                .create_deployment(
+                    &subject,
+                    CreateDeploymentParams {
+                        name,
+                        deployment_group_id: dg_id.clone(),
+                        platform,
+                        stack_settings: settings,
+                        environment_variables: None,
+                        deployment_token: dep_token,
+                    },
+                )
                 .await
             {
                 Ok(d) => d,
                 Err(e) => return e.into_response(),
             };
 
-            // Auto-assign latest release if available
-            let system = crate::auth::Subject::system();
-            if let Ok(Some(release)) = state.release_store.get_latest_release(&system).await {
+            // Auto-assign latest release if available. Initialize is the
+            // agent's own bootstrap: keep the caller's subject for both
+            // reads and writes so embedders can authorize against the
+            // agent's scope rather than a service credential.
+            if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
                 let _ = state
                     .deployment_store
-                    .set_deployment_desired_release(&deployment.id, &release.id)
+                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
                     .await;
             }
 
@@ -733,7 +759,7 @@ async fn initialize(
                 platforms: None,
                 limit: Some(1),
             };
-            match state.deployment_store.list_deployments(&filter).await {
+            match state.deployment_store.list_deployments(&subject, &filter).await {
                 Ok(deployments) if !deployments.is_empty() => {
                     let deployment_id = deployments[0].id.clone();
                     tracing::info!(

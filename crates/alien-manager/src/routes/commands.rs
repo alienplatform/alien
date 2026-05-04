@@ -22,17 +22,6 @@ use super::{auth, AppState};
 
 // --- Helpers ---
 
-/// Look up the deployment_group_id for a deployment, for DG-scoped auth checks.
-async fn get_deployment_group_id(state: &AppState, deployment_id: &str) -> Result<String, Response> {
-    let deployment = state
-        .deployment_store
-        .get_deployment(deployment_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
-    Ok(deployment.deployment_group_id.clone())
-}
-
 /// Look up the deployment_id that owns a command, for per-command auth checks.
 async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String, Response> {
     state
@@ -57,7 +46,7 @@ async fn require_command_access(
 ) -> Result<(), Response> {
     let deployment = state
         .deployment_store
-        .get_deployment(deployment_id)
+        .get_deployment(subject, deployment_id)
         .await
         .map_err(|e| e.into_response())?
         .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
@@ -110,7 +99,7 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state.deployment_store.get_deployment(&request.deployment_id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &request.deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -172,7 +161,7 @@ async fn upload_complete(
         Err(e) => return e,
     };
 
-    let deployment = match state.deployment_store.get_deployment(&deployment_id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -224,7 +213,7 @@ async fn submit_response(
             Ok(id) => id,
             Err(e) => return e,
         };
-        let deployment = match state.deployment_store.get_deployment(&deployment_id).await {
+        let deployment = match state.deployment_store.get_deployment(&subject, &deployment_id).await {
             Ok(Some(d)) => d,
             Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
             Err(e) => return e.into_response(),
@@ -379,7 +368,11 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state.deployment_store.get_deployment(&lease_request.deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &lease_request.deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => {
             return ErrorData::not_found_deployment(&lease_request.deployment_id).into_response()

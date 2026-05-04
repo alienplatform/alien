@@ -165,11 +165,11 @@ impl Authz for OssAuthz {
 
     // -- Telemetry ingest --------------------------------------------------
 
-    fn can_ingest_telemetry_for(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+    fn can_ingest_telemetry_for(&self, s: &Subject, deployment_id: &str) -> bool {
         // Only the deployment itself ingests its own telemetry.
         matches!(
             &s.scope,
-            Scope::Deployment { deployment_id, .. } if deployment_id == &deployment.id
+            Scope::Deployment { deployment_id: scope_id, .. } if scope_id == deployment_id
         )
     }
 
@@ -290,8 +290,7 @@ mod tests {
 
     #[test]
     fn telemetry_ingest_is_self_only() {
-        let dep = deployment("d1", "dg-a");
-        assert!(OssAuthz.can_ingest_telemetry_for(&deployment_token("d1"), &dep));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&admin(), &dep));
+        assert!(OssAuthz.can_ingest_telemetry_for(&deployment_token("d1"), "d1"));
+        assert!(!OssAuthz.can_ingest_telemetry_for(&admin(), "d1"));
     }
 }

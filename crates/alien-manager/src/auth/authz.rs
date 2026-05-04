@@ -58,10 +58,15 @@ pub trait Authz: Send + Sync {
     ) -> bool;
 
     // -- Telemetry ingest --------------------------------------------------
+    /// Telemetry decisions take only the deployment ID. Authorization is a
+    /// scope check on the bearer (the validator already bound `Subject` to a
+    /// workspace and a `Scope::Deployment`); loading the full record was
+    /// historically required only because policy needed `deployment.id`, which
+    /// is the same string we already have in the `Subject`.
     fn can_ingest_telemetry_for(
         &self,
         subject: &Subject,
-        deployment: &DeploymentRecord,
+        deployment_id: &str,
     ) -> bool;
 
     // -- Registry proxy ----------------------------------------------------
