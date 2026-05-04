@@ -87,10 +87,14 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             "DefaultCommandDispatcher: looking up deployment for push dispatch"
         );
 
-        // 1. Get deployment record
+        // 1. Get deployment record. Push dispatch runs from a `Subscriber`
+        // task with no inbound caller — `Subject::system()` is the standard
+        // synthetic subject for that case (empty bearer signals no
+        // passthrough is available).
+        let system = crate::auth::Subject::system();
         let deployment = self
             .deployment_store
-            .get_deployment(deployment_id)
+            .get_deployment(&system, deployment_id)
             .await
             .context(CmdErrorData::Other {
                 message: format!("Failed to get deployment {}", deployment_id),
@@ -122,7 +126,6 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             })
         })?;
 
-        let system = crate::auth::Subject::system();
         let release = self
             .release_store
             .get_release(&system, release_id)

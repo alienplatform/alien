@@ -88,6 +88,11 @@ fn record_to_response(dg: &DeploymentGroupRecord) -> DeploymentGroupResponse {
 
 // --- Handlers ---
 
+/// Every handler in this file runs `auth::require_auth(&state, &headers)`
+/// and then threads `&subject` into the `DeploymentStore` calls — see the
+/// trait doc on [`DeploymentStore`] for the convention.
+///
+/// `POST /v1/deployment-groups` — Inbound: workspace bearer.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/deployment-groups",
@@ -117,10 +122,13 @@ async fn create_deployment_group(
 
     let dg = match state
         .deployment_store
-        .create_deployment_group(CreateDeploymentGroupParams {
-            name: req.name,
-            max_deployments: req.max_deployments,
-        })
+        .create_deployment_group(
+            &subject,
+            CreateDeploymentGroupParams {
+                name: req.name,
+                max_deployments: req.max_deployments,
+            },
+        )
         .await
     {
         Ok(dg) => dg,
@@ -147,7 +155,7 @@ async fn list_deployment_groups(State(state): State<AppState>, headers: HeaderMa
         Err(e) => return e.into_response(),
     };
 
-    let groups = match state.deployment_store.list_deployment_groups().await {
+    let groups = match state.deployment_store.list_deployment_groups(&subject).await {
         Ok(g) => g,
         Err(e) => return e.into_response(),
     };
@@ -193,7 +201,7 @@ async fn get_deployment_group(
         Err(e) => return e.into_response(),
     };
 
-    let dg = match state.deployment_store.get_deployment_group(&id).await {
+    let dg = match state.deployment_store.get_deployment_group(&subject, &id).await {
         Ok(Some(dg)) => dg,
         Ok(None) => return ErrorData::not_found_group(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -232,7 +240,7 @@ async fn create_deployment_group_token(
     };
 
     // Verify group exists, then authorize on the loaded entity.
-    let dg = match state.deployment_store.get_deployment_group(&id).await {
+    let dg = match state.deployment_store.get_deployment_group(&subject, &id).await {
         Ok(Some(dg)) => dg,
         Ok(None) => return ErrorData::not_found_group(&id).into_response(),
         Err(e) => return e.into_response(),

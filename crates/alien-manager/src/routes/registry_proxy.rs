@@ -775,7 +775,7 @@ async fn validate_pull_access(
         // Cache miss — query DB.
         let deployment = state
             .deployment_store
-            .get_deployment(deployment_id)
+            .get_deployment(subject, deployment_id)
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get deployment for registry proxy");

@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
 /// Build a vault binding and load a vault instance for the given deployment and vault name.
 async fn load_vault_for_deployment(
     state: &AppState,
+    caller: &crate::auth::Subject,
     deployment_id: &str,
     vault_name: &str,
 ) -> Result<std::sync::Arc<dyn alien_bindings::traits::Vault>> {
@@ -50,7 +51,7 @@ async fn load_vault_for_deployment(
     use std::collections::HashMap;
 
     // 1. Look up the deployment.
-    let deployment = match state.deployment_store.get_deployment(deployment_id).await {
+    let deployment = match state.deployment_store.get_deployment(caller, deployment_id).await {
         Ok(Some(d)) => d,
         Ok(None) => return Err(ErrorData::not_found_deployment(deployment_id)),
         Err(e) => {
@@ -129,9 +130,10 @@ async fn set_secret(
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
     Json(body): Json<SetSecretRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let subject = auth::require_auth(&state, &headers).await?;    let deployment = state
+    let subject = auth::require_auth(&state, &headers).await?;
+    let deployment = state
         .deployment_store
-        .get_deployment(&deployment_id)
+        .get_deployment(&subject, &deployment_id)
         .await
         .context(ErrorData::InternalError {
             message: "Failed to load deployment".to_string(),
@@ -145,7 +147,7 @@ async fn set_secret(
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Setting vault secret");
 
-    let vault = load_vault_for_deployment(&state, &deployment_id, &vault_name).await?;
+    let vault = load_vault_for_deployment(&state, &subject, &deployment_id, &vault_name).await?;
 
     vault
         .set_secret(&key, &body.value)
@@ -163,9 +165,10 @@ async fn get_secret(
     headers: HeaderMap,
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
 ) -> Result<Json<GetSecretResponse>> {
-    let subject = auth::require_auth(&state, &headers).await?;    let deployment = state
+    let subject = auth::require_auth(&state, &headers).await?;
+    let deployment = state
         .deployment_store
-        .get_deployment(&deployment_id)
+        .get_deployment(&subject, &deployment_id)
         .await
         .context(ErrorData::InternalError {
             message: "Failed to load deployment".to_string(),
@@ -179,7 +182,7 @@ async fn get_secret(
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Getting vault secret");
 
-    let vault = load_vault_for_deployment(&state, &deployment_id, &vault_name).await?;
+    let vault = load_vault_for_deployment(&state, &subject, &deployment_id, &vault_name).await?;
 
     let value = vault
         .get_secret(&key)

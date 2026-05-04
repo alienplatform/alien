@@ -14,6 +14,7 @@ use alien_core::{DeploymentState, Platform};
 use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::AlienError;
 
+use crate::auth::Subject;
 use crate::traits::deployment_store::ReconcileData;
 use crate::traits::DeploymentStore;
 
@@ -67,14 +68,21 @@ impl DeploymentLoopTransport for ManagerTransport {
         // 2. Persist the step result (including any registry access changes).
         let error_value = step_error.map(|e| serde_json::to_value(e).unwrap_or_default());
 
+        // Driven from the deployment loop with no inbound caller — use the
+        // synthetic system subject (empty bearer signals to embedders that
+        // no caller passthrough is available).
+        let caller = Subject::system();
         self.deployment_store
-            .reconcile(ReconcileData {
-                deployment_id: deployment_id.to_string(),
-                session: self.session.clone(),
-                state: updated_state.clone(),
-                update_heartbeat,
-                error: error_value,
-            })
+            .reconcile(
+                &caller,
+                ReconcileData {
+                    deployment_id: deployment_id.to_string(),
+                    session: self.session.clone(),
+                    state: updated_state.clone(),
+                    update_heartbeat,
+                    error: error_value,
+                },
+            )
             .await?;
 
         // Only return updated state if something actually changed.
