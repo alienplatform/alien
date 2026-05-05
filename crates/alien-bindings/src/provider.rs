@@ -189,8 +189,7 @@ impl BindingsProvider {
                 operation: "build Platform API HTTP client".to_string(),
             })?;
 
-        let sdk_client =
-            alien_platform_api::Client::new_with_client(base_url, authed_http_client);
+        let sdk_client = alien_platform_api::Client::new_with_client(base_url, authed_http_client);
 
         // 1. Get deployment info (caller-scoped)
         let deployment_response = sdk_client

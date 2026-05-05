@@ -26,11 +26,11 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
+ * Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
  */
 export function containersGetAttention(
   client: AlienCore,
-  request?: operations.GetContainerAttentionRequest | undefined,
+  request: operations.GetContainerAttentionRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -55,7 +55,7 @@ export function containersGetAttention(
 
 async function $do(
   client: AlienCore,
-  request?: operations.GetContainerAttentionRequest | undefined,
+  request: operations.GetContainerAttentionRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -77,9 +77,7 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.GetContainerAttentionRequest$outboundSchema.optional().parse(
-        value,
-      ),
+      operations.GetContainerAttentionRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
@@ -91,9 +89,9 @@ async function $do(
   const path = pathToFunc("/v1/containers/attention")();
 
   const query = encodeFormQuery({
-    "deploymentGroupId": payload?.deploymentGroupId,
-    "project": payload?.project,
-    "workspace": payload?.workspace,
+    "deploymentGroupId": payload.deploymentGroupId,
+    "project": payload.project,
+    "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({
@@ -137,7 +135,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["4XX", "500", "5XX"],
+    errorCodes: ["404", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -163,6 +161,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, operations.GetContainerAttentionResponse$inboundSchema),
+    M.jsonErr(404, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

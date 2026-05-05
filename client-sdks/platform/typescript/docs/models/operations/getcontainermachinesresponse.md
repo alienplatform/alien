@@ -1,6 +1,6 @@
 # GetContainerMachinesResponse
 
-Machine health across all deployments.
+Machine health across the project's deployments.
 
 ## Example Usage
 

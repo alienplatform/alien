@@ -24,10 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/platforms", get(get_platforms))
 }
 
-async fn get_platforms(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn get_platforms(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),

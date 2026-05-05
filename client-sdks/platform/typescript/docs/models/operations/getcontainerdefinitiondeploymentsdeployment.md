@@ -32,7 +32,6 @@ let value: GetContainerDefinitionDeploymentsDeployment = {
 | `deploymentName`                          | *string*                                  | :heavy_check_mark:                        | Deployment name for display               |
 | `deploymentGroupId`                       | *string*                                  | :heavy_minus_sign:                        | N/A                                       |
 | `deploymentGroupName`                     | *string*                                  | :heavy_minus_sign:                        | N/A                                       |
-| `projectName`                             | *string*                                  | :heavy_minus_sign:                        | N/A                                       |
 | `status`                                  | *string*                                  | :heavy_check_mark:                        | N/A                                       |
 | `statusReason`                            | *string*                                  | :heavy_check_mark:                        | N/A                                       |
 | `statusMessage`                           | *string*                                  | :heavy_check_mark:                        | N/A                                       |

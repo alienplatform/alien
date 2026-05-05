@@ -137,7 +137,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+   * Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
    */
   async import(
     request?: operations.ImportDeploymentRequest | undefined,

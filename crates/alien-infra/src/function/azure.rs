@@ -219,8 +219,7 @@ impl AzureFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    func_cfg.id,
-                    queue_trigger_count
+                    func_cfg.id, queue_trigger_count
                 ),
                 resource_id: Some(func_cfg.id.clone()),
             }));
@@ -349,7 +348,7 @@ impl AzureFunctionController {
                         .to_string(),
                     operation: Some("waiting_for_create_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -443,7 +442,10 @@ impl AzureFunctionController {
                                         });
                                     }
                                     Err(e) => {
-                                        warn!("Failed to resolve domain info, skipping custom domain setup: {}", e);
+                                        warn!(
+                                            "Failed to resolve domain info, skipping custom domain setup: {}",
+                                            e
+                                        );
                                         // Continue without custom domain
                                     }
                                 }
@@ -517,6 +519,18 @@ impl AzureFunctionController {
             .and_then(|meta| meta.resources.get(&function_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
+        if !self.ensure_domain_info(ctx, &function_config.id)? {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringDaprComponents,
+                suggested_delay: None,
+            });
+        }
+        if self.uses_custom_domain && self.keyvault_cert_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringCustomDomain,
+                suggested_delay: None,
+            });
+        }
 
         match status {
             Some(CertificateStatus::Issued) => Ok(HandlerAction::Continue {
@@ -546,6 +560,7 @@ impl AzureFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let function_config = ctx.desired_resource_config::<Function>()?;
+        self.ensure_domain_info(ctx, &function_config.id)?;
         let azure_cfg = ctx.get_azure_config()?;
         let resource = ctx
             .deployment_config
@@ -777,20 +792,37 @@ impl AzureFunctionController {
             match trigger {
                 alien_core::FunctionTrigger::Queue { queue } => {
                     info!(function=%func_cfg.id, queue=%queue.id, "Creating Dapr Service Bus component");
-                    self.create_dapr_service_bus_component(ctx, &container_app_name, &func_cfg, queue)
-                        .await?;
+                    self.create_dapr_service_bus_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        queue,
+                    )
+                    .await?;
                     created_any = true;
                 }
                 alien_core::FunctionTrigger::Storage { storage, events } => {
                     info!(function=%func_cfg.id, storage=%storage.id, "Creating Dapr blob storage component");
-                    self.create_dapr_blob_storage_component(ctx, &container_app_name, &func_cfg, storage, events)
-                        .await?;
+                    self.create_dapr_blob_storage_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        storage,
+                        events,
+                    )
+                    .await?;
                     created_any = true;
                 }
                 alien_core::FunctionTrigger::Schedule { cron } => {
                     info!(function=%func_cfg.id, cron=%cron, "Creating Dapr cron component");
-                    self.create_dapr_cron_component(ctx, &container_app_name, &func_cfg, cron, cron_index)
-                        .await?;
+                    self.create_dapr_cron_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        cron,
+                        cron_index,
+                    )
+                    .await?;
                     cron_index += 1;
                     created_any = true;
                 }
@@ -1086,7 +1118,7 @@ impl AzureFunctionController {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: func_cfg.id.clone(),
                     message: "Readiness probe configured but URL is missing".to_string(),
-                }))
+                }));
             }
         };
 
@@ -1226,8 +1258,8 @@ impl AzureFunctionController {
             }
         }
 
-        // Check for certificate renewal (if using custom domain)
-        if self.uses_custom_domain && self.certificate_id.is_some() {
+        // Check for certificate renewal on auto-managed public domains.
+        if func_cfg.ingress == Ingress::Public && !self.uses_custom_domain {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -1245,7 +1277,7 @@ impl AzureFunctionController {
                             "Certificate renewed, triggering update to re-import certificate"
                         );
                         return Ok(HandlerAction::Continue {
-                            state: UpdateStart,
+                            state: UpdateImportingCertificate,
                             suggested_delay: None,
                         });
                     }
@@ -1264,12 +1296,149 @@ impl AzureFunctionController {
 
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
+        state = UpdateImportingCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_importing_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+
+        if func_cfg.ingress != Ingress::Public || self.uses_custom_domain {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&func_cfg.id))
+        else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
+        let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
+        let keyvault_name = get_keyvault_name_for_function(ctx)?;
+        let keyvault_url = format!("https://{}.vault.azure.net", keyvault_name);
+        let cert_name = format!("{}-{}", ctx.resource_prefix, func_cfg.id)
+            .replace('_', "-")
+            .to_lowercase();
+        let import_request = CertificateImportParameters {
+            value: pkcs12_base64,
+            pwd: Some(String::new()),
+            policy: None,
+            attributes: None,
+            tags: HashMap::new(),
+            preserve_cert_order: None,
+        };
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let keyvault_client = ctx
+            .service_provider
+            .get_azure_key_vault_certificates_client(azure_cfg)?;
+        let response = keyvault_client
+            .import_certificate(keyvault_url, cert_name, import_request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import certificate to Key Vault".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        self.keyvault_cert_id = response.id;
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        if self.fqdn.is_some() && self.keyvault_cert_id.is_some() {
+            let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: func_cfg.id.clone(),
+                    message: "Container app name not set in state".to_string(),
+                })
+            })?;
+            let fqdn = self.fqdn.clone().unwrap();
+            let keyvault_cert_id = self.keyvault_cert_id.clone().unwrap();
+            let resource_group_name = get_resource_group_name(ctx.state)?;
+            let client = ctx
+                .service_provider
+                .get_azure_container_apps_client(azure_cfg)?;
+            let mut app = client
+                .get_container_app(&resource_group_name, container_app_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get container app for certificate renewal".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+
+            if let Some(props) = &mut app.properties {
+                if let Some(config) = &mut props.configuration {
+                    if let Some(ingress) = &mut config.ingress {
+                        ingress.custom_domains = vec![CustomDomain {
+                            name: fqdn,
+                            binding_type: Some(CustomDomainBindingType::SniEnabled),
+                            certificate_id: Some(keyvault_cert_id),
+                        }];
+                    }
+                }
+            }
+
+            client
+                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to bind renewed certificate to custom domain".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+        }
+
+        Ok(HandlerAction::Continue {
+            state: UpdateStart,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
         state = UpdateStart,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Function>()?;
+        let previous_cfg = ctx.previous_resource_config::<Function>()?;
+        if func_cfg == previous_cfg {
+            return Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -1294,6 +1463,20 @@ impl AzureFunctionController {
                 ctx,
             )
             .await?;
+        let mut desired_app = desired_app;
+        if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
+            if let Some(props) = &mut desired_app.properties {
+                if let Some(config) = &mut props.configuration {
+                    if let Some(ingress) = &mut config.ingress {
+                        ingress.custom_domains = vec![CustomDomain {
+                            name: fqdn.clone(),
+                            binding_type: Some(CustomDomainBindingType::SniEnabled),
+                            certificate_id: Some(keyvault_cert_id.clone()),
+                        }];
+                    }
+                }
+            }
+        }
 
         // Issue UPDATE
         let op_result = client
@@ -1342,7 +1525,7 @@ impl AzureFunctionController {
                         .to_string(),
                     operation: Some("waiting_for_update_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -1808,7 +1991,7 @@ impl AzureFunctionController {
                     message: "No pending_operation_url in WaitingForDeleteOperation".to_string(),
                     operation: Some("waiting_for_delete_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -1971,7 +2154,10 @@ impl AzureFunctionController {
                 .nth(4)
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::InfrastructureError {
-                        message: format!("Malformed ARM resource ID (missing resource group): {}", resource_id),
+                        message: format!(
+                            "Malformed ARM resource ID (missing resource group): {}",
+                            resource_id
+                        ),
                         operation: Some("parse_arm_resource_id".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })
@@ -1985,7 +2171,10 @@ impl AzureFunctionController {
                 .nth(2)
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::InfrastructureError {
-                        message: format!("Malformed ARM resource ID (missing subscription): {}", resource_id),
+                        message: format!(
+                            "Malformed ARM resource ID (missing subscription): {}",
+                            resource_id
+                        ),
                         operation: Some("parse_arm_resource_id".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })
@@ -2440,6 +2629,39 @@ impl AzureFunctionController {
             keyvault_cert_id: None,
             uses_custom_domain: false,
         })
+    }
+
+    fn ensure_domain_info(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.fqdn.is_some()
+            && (self.certificate_id.is_some()
+                || self.keyvault_cert_id.is_some()
+                || self.uses_custom_domain)
+        {
+            return Ok(true);
+        }
+
+        match Self::resolve_domain_info(ctx, resource_id) {
+            Ok(domain_info) => {
+                self.fqdn = Some(domain_info.fqdn.clone());
+                self.certificate_id = domain_info.certificate_id;
+                self.keyvault_cert_id = domain_info.keyvault_cert_id;
+                self.uses_custom_domain = domain_info.uses_custom_domain;
+                if self.url.is_none() {
+                    self.url = ctx
+                        .deployment_config
+                        .public_urls
+                        .as_ref()
+                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                }
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
     }
 
     fn clear_all(&mut self) {
@@ -2976,12 +3198,15 @@ impl AzureFunctionController {
         // Get storage controller to access storage account and container names
         let storage_controller =
             ctx.require_dependency::<crate::storage::azure::AzureStorageController>(storage_ref)?;
-        let storage_account_name = storage_controller.storage_account_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: function_config.id.clone(),
-                dependency_id: storage_ref.id.clone(),
-            })
-        })?;
+        let storage_account_name = storage_controller
+            .storage_account_name
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: function_config.id.clone(),
+                    dependency_id: storage_ref.id.clone(),
+                })
+            })?;
         let container_name = storage_controller.container_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::DependencyNotReady {
                 resource_id: function_config.id.clone(),
@@ -3016,7 +3241,11 @@ impl AzureFunctionController {
             service_account_id.to_string(),
         );
 
-        if let Ok(service_account_state) = ctx.require_dependency::<crate::service_account::AzureServiceAccountController>(&service_account_ref) {
+        if let Ok(service_account_state) = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )
+        {
             if let Some(client_id) = &service_account_state.identity_client_id {
                 metadata.push(DaprMetadata {
                     name: Some("azureClientId".into()),
@@ -3598,7 +3827,12 @@ mod tests {
                     .returning(|_, _, role_def| Ok(role_def.clone()));
                 mock_auth
                     .expect_build_role_assignment_id()
-                    .returning(|_, name| format!("/test/providers/Microsoft.Authorization/roleAssignments/{}", name));
+                    .returning(|_, name| {
+                        format!(
+                            "/test/providers/Microsoft.Authorization/roleAssignments/{}",
+                            name
+                        )
+                    });
                 mock_auth
                     .expect_create_or_update_role_assignment_by_id()
                     .returning(|_, role_assignment| Ok(role_assignment.clone()));

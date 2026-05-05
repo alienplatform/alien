@@ -25,6 +25,7 @@ const alienManager = new AlienManager({
 
 async function run() {
   const result = await alienManager.releases.createRelease({
+    projectId: "<id>",
     stack: {},
   });
 
@@ -51,6 +52,7 @@ const alienManager = new AlienManagerCore({
 
 async function run() {
   const res = await releasesCreateRelease(alienManager, {
+    projectId: "<id>",
     stack: {},
   });
   if (res.ok) {

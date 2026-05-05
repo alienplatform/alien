@@ -27,6 +27,7 @@ export const ListDeploymentsStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle

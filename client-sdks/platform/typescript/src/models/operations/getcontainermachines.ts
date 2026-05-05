@@ -15,7 +15,7 @@ export type GetContainerMachinesRequest = {
   /**
    * Filter by project ID or name.
    */
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -49,7 +49,6 @@ export type GetContainerMachinesDeployment = {
   deploymentName: string;
   deploymentGroupId?: string | null | undefined;
   deploymentGroupName?: string | null | undefined;
-  projectName?: string | null | undefined;
   totalMachines: number;
   machinesByStatus: DeploymentMachinesByStatus;
   capacityGroups: Array<CapacityGroup>;
@@ -68,7 +67,7 @@ export type GetContainerMachinesTotals = {
 };
 
 /**
- * Machine health across all deployments.
+ * Machine health across the project's deployments.
  */
 export type GetContainerMachinesResponse = {
   deployments: Array<GetContainerMachinesDeployment>;
@@ -78,7 +77,7 @@ export type GetContainerMachinesResponse = {
 /** @internal */
 export type GetContainerMachinesRequest$Outbound = {
   workspace?: string | undefined;
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -88,7 +87,7 @@ export const GetContainerMachinesRequest$outboundSchema: z.ZodType<
   GetContainerMachinesRequest
 > = z.object({
   workspace: z.string().optional(),
-  project: z.string().optional(),
+  project: z.string(),
   deploymentGroupId: z.string().optional(),
 });
 
@@ -174,7 +173,6 @@ export const GetContainerMachinesDeployment$inboundSchema: z.ZodType<
   deploymentName: z.string(),
   deploymentGroupId: z.nullable(z.string()).optional(),
   deploymentGroupName: z.nullable(z.string()).optional(),
-  projectName: z.nullable(z.string()).optional(),
   totalMachines: z.int(),
   machinesByStatus: z.lazy(() => DeploymentMachinesByStatus$inboundSchema),
   capacityGroups: z.array(z.lazy(() => CapacityGroup$inboundSchema)),

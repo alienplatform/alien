@@ -12,6 +12,13 @@ import * as models from "../models/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Sync extends ClientSDK {
+  /**
+   * `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+   * or workspace bearer for self-hosted operator workflows. New deployments
+   * are created via `DeploymentStore::create_deployment(caller, …)` so
+   * embedders that proxy to an upstream API write the row in the dg's
+   * workspace, not the manager's.
+   */
   async initialize(
     request: models.InitializeRequest,
     options?: RequestOptions,
@@ -23,6 +30,11 @@ export class Sync extends ClientSDK {
     ));
   }
 
+  /**
+   * `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+   * path; `caller: &Subject` is threaded into the store so embedders see
+   * the agent's own scope.
+   */
   async agentSync(
     request: models.AgentSyncRequest,
     options?: RequestOptions,
@@ -34,6 +46,11 @@ export class Sync extends ClientSDK {
     ));
   }
 
+  /**
+   * `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+   * `caller: &Subject` is threaded into `DeploymentStore::acquire` so
+   * embedders can authorize against the inbound caller's scope.
+   */
   async acquire(
     request: models.AcquireRequest,
     options?: RequestOptions,
@@ -45,6 +62,10 @@ export class Sync extends ClientSDK {
     ));
   }
 
+  /**
+   * `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+   * bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+   */
   async reconcile(
     request: models.ReconcileRequest,
     options?: RequestOptions,
@@ -56,6 +77,10 @@ export class Sync extends ClientSDK {
     ));
   }
 
+  /**
+   * `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+   * `caller: &Subject` is threaded into `DeploymentStore::release`.
+   */
   async release(
     request: models.ReleaseRequest,
     options?: RequestOptions,

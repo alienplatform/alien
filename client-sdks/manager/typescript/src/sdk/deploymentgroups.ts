@@ -21,6 +21,14 @@ export class DeploymentGroups extends ClientSDK {
     ));
   }
 
+  /**
+   * Every handler in this file runs `auth::require_auth(&state, &headers)`
+   * and then threads `&subject` into the `DeploymentStore` calls — see the
+   * trait doc on [`DeploymentStore`] for the convention.
+   *
+   * @remarks
+   * `POST /v1/deployment-groups` — Inbound: workspace bearer.
+   */
   async createDeploymentGroup(
     request: models.CreateDeploymentGroupRequest,
     options?: RequestOptions,

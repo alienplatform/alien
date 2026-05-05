@@ -51,6 +51,7 @@ export * from "./getrelease.js";
 export * from "./getworkspace.js";
 export * from "./importdeployment.js";
 export * from "./listapikeys.js";
+export * from "./listbillingauditlog.js";
 export * from "./listcommanddeployments.js";
 export * from "./listcommandnames.js";
 export * from "./listcommands.js";

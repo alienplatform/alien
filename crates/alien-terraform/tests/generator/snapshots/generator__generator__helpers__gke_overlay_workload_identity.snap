@@ -1,0 +1,224 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  description = "Kubernetes namespace for runtime resources."
+  default     = "default"
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== locals.tf ===
+locals {
+  alien_platform = "gcp"
+  alien_target   = "gke"
+  alien_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  alien_stack_settings = {}
+  alien_resources = [
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName     = google_storage_bucket.data.name
+        bucketSelfLink = google_storage_bucket.data.self_link
+        projectId      = var.gcp_project
+        location       = google_storage_bucket.data.location
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        projectId               = var.gcp_project
+        serviceAccountEmail     = google_service_account.execution_sa.email
+        serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
+        stackPermissionsApplied = true
+      }
+    }
+  ]
+  alien_kubernetes_namespace = var.kubernetes_namespace
+  alien_helm_service_accounts = {
+    execution_sa = {
+      annotations = {
+        "iam.gke.io/gcp-service-account" = google_service_account.execution_sa.email
+      }
+      labels = {}
+    }
+  }
+  alien_helm_values = {
+    serviceAccounts = local.alien_helm_service_accounts
+    stackSettings   = local.alien_stack_settings
+  }
+}
+
+=== data.tf ===
+resource "google_storage_bucket" "data" {
+  name                        = "${var.stack_name}-data"
+  project                     = var.gcp_project
+  location                    = upper(var.gcp_region)
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  force_destroy               = false
+  public_access_prevention    = "enforced"
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "data"
+    "alien-resource-type" = "storage"
+  }
+}
+
+=== execution_sa.tf ===
+resource "google_service_account" "execution_sa" {
+  project      = var.gcp_project
+  account_id   = substr(replace("${var.stack_name}-execution_sa", "_", "-"), 0, 30)
+  display_name = "Alien execution-sa service account"
+  description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
+}
+
+resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
+  project     = var.gcp_project
+  role_id     = "storageDataRead"
+  title       = "Storage Data Read"
+  description = "Allows reading data from storage buckets and containers"
+  stage       = "GA"
+  permissions = [
+    "storage.buckets.get",
+    "storage.buckets.list",
+    "storage.objects.get",
+    "storage.objects.list",
+    "storage.objects.getIamPolicy",
+    "storage.multipartUploads.list",
+    "storage.multipartUploads.listParts",
+    "iam.serviceAccounts.signBlob"
+  ]
+}
+
+resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
+  project = var.gcp_project
+  role    = google_project_iam_custom_role.execution_sa_storagedataread.name
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
+  service_account_id = google_service_account.execution_sa.name
+  role               = "roles/iam.workloadIdentityUser"
+  members = [
+    "serviceAccount:${var.gcp_project}.svc.id.goog[${var.kubernetes_namespace}/execution_sa]"
+  ]
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "gke"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+output "alien_helm_values" {
+  value       = jsonencode(local.alien_helm_values)
+  description = "Helm values JSON for the manager-fetch Kubernetes install."
+}
+
+=== README.md ===
+# Terraform module - gke-overlay
+
+Target: `gke`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=gke-overlay' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

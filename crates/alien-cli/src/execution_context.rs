@@ -375,19 +375,20 @@ impl ExecutionMode {
                     let status = resp.status();
 
                     if status.is_success() {
-                        break resp.json::<ResolveResponse>().await.into_alien_error().context(
-                            ErrorData::ApiRequestFailed {
+                        break resp
+                            .json::<ResolveResponse>()
+                            .await
+                            .into_alien_error()
+                            .context(ErrorData::ApiRequestFailed {
                                 message: "Failed to parse /v1/resolve response".to_string(),
                                 url: Some(resolve_url.clone()),
-                            },
-                        )?;
+                            })?;
                     }
 
                     let is_retryable = status.as_u16() == 503;
 
                     if is_retryable && start_time.elapsed() < max_duration {
-                        let backoff_secs =
-                            std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
+                        let backoff_secs = std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
                         if attempt == 1 {
                             info!("Manager not ready yet, waiting for startup...");
                         } else {
@@ -581,17 +582,23 @@ async fn create_or_get_artifact_repo(
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to reach artifact registry on manager at {}", manager_url),
+            message: format!(
+                "Failed to reach artifact registry on manager at {}",
+                manager_url
+            ),
             url: Some(get_url.clone()),
         })?;
 
     if get_resp.status().is_success() {
-        let body: serde_json::Value = get_resp.json().await.into_alien_error().context(
-            ErrorData::ApiRequestFailed {
-                message: "Failed to parse artifact repository response".to_string(),
-                url: Some(get_url.clone()),
-            },
-        )?;
+        let body: serde_json::Value =
+            get_resp
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to parse artifact repository response".to_string(),
+                    url: Some(get_url.clone()),
+                })?;
 
         if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
             return Ok(name.to_string());
@@ -611,19 +618,25 @@ async fn create_or_get_artifact_repo(
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to create artifact repository on manager at {}", manager_url),
+            message: format!(
+                "Failed to create artifact repository on manager at {}",
+                manager_url
+            ),
             url: Some(create_url.clone()),
         })?;
 
     let create_status = create_resp.status();
 
     if create_status.is_success() {
-        let body: serde_json::Value = create_resp.json().await.into_alien_error().context(
-            ErrorData::ApiRequestFailed {
-                message: "Failed to parse artifact repository response".to_string(),
-                url: Some(create_url.clone()),
-            },
-        )?;
+        let body: serde_json::Value =
+            create_resp
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to parse artifact repository response".to_string(),
+                    url: Some(create_url.clone()),
+                })?;
 
         if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
             return Ok(name.to_string());
@@ -638,17 +651,23 @@ async fn create_or_get_artifact_repo(
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to get artifact repository from manager at {}", manager_url),
+            message: format!(
+                "Failed to get artifact repository from manager at {}",
+                manager_url
+            ),
             url: Some(get_url.clone()),
         })?;
 
     if get_resp2.status().is_success() {
-        let body: serde_json::Value = get_resp2.json().await.into_alien_error().context(
-            ErrorData::ApiRequestFailed {
-                message: "Failed to parse artifact repository response".to_string(),
-                url: Some(get_url.clone()),
-            },
-        )?;
+        let body: serde_json::Value =
+            get_resp2
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to parse artifact repository response".to_string(),
+                    url: Some(get_url.clone()),
+                })?;
 
         if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
             return Ok(name.to_string());

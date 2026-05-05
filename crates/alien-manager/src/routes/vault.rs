@@ -7,6 +7,7 @@
 //! `PUT  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — set a secret
 //! `GET  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — get a secret
 
+use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -14,7 +15,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use alien_error::{Context, ContextError, IntoAlienError};
 use tracing::info;
 
 use super::auth;
@@ -51,7 +51,11 @@ async fn load_vault_for_deployment(
     use std::collections::HashMap;
 
     // 1. Look up the deployment.
-    let deployment = match state.deployment_store.get_deployment(caller, deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(caller, deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return Err(ErrorData::not_found_deployment(deployment_id)),
         Err(e) => {
@@ -107,19 +111,19 @@ async fn load_vault_for_deployment(
     let mut bindings = HashMap::new();
     bindings.insert(vault_name.to_string(), binding_json);
 
-    let provider = BindingsProvider::new(client_config, bindings).context(
-        ErrorData::InternalError {
+    let provider =
+        BindingsProvider::new(client_config, bindings).context(ErrorData::InternalError {
             message: "Failed to create bindings provider for vault operation".to_string(),
-        },
-    )?;
+        })?;
 
     // 6. Load the vault.
     use alien_bindings::BindingsProviderApi;
-    let vault = provider.load_vault(vault_name).await.context(
-        ErrorData::InternalError {
+    let vault = provider
+        .load_vault(vault_name)
+        .await
+        .context(ErrorData::InternalError {
             message: "Failed to load vault".to_string(),
-        },
-    )?;
+        })?;
 
     Ok(vault)
 }

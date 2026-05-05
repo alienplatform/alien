@@ -200,9 +200,11 @@ impl ArtifactRegistryTestContext {
 
         loop {
             if start_time.elapsed() > timeout_duration {
-                return Err(
-                    format!("Timeout waiting for operation {} to complete", operation_name).into(),
-                );
+                return Err(format!(
+                    "Timeout waiting for operation {} to complete",
+                    operation_name
+                )
+                .into());
             }
 
             match self

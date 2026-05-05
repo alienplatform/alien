@@ -34,6 +34,7 @@ export const DeploymentStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -1647,7 +1648,6 @@ export type DeploymentPreparedStackDependency = {
 export const DeploymentPreparedStackLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1683,6 +1683,24 @@ export type DeploymentPreparedStackResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const DeploymentSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentSupportedPlatform = ClosedEnum<
+  typeof DeploymentSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type DeploymentPreparedStack = {
@@ -1698,6 +1716,10 @@ export type DeploymentPreparedStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: DeploymentPreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?: Array<DeploymentSupportedPlatform> | null | undefined;
 };
 
 export type DeploymentPreparedStackUnion = DeploymentPreparedStack | any;
@@ -1714,7 +1736,29 @@ export type DeploymentRuntimeMetadata = {
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
   preparedStack?: DeploymentPreparedStack | any | null | undefined;
+  /**
+   * Whether cross-account registry access has been successfully granted.
+   *
+   * @remarks
+   * Set to true after the manager successfully sets the ECR/GAR repo policy
+   * for this deployment's target account. Prevents redundant API calls on
+   * every reconcile tick.
+   */
+  registryAccessGranted?: boolean | undefined;
 };
+
+/**
+ * Distribution source that imported this deployment
+ */
+export const DeploymentImportSource = {
+  Cloudformation: "cloudformation",
+  Terraform: "terraform",
+  Helm: "helm",
+} as const;
+/**
+ * Distribution source that imported this deployment
+ */
+export type DeploymentImportSource = ClosedEnum<typeof DeploymentImportSource>;
 
 /**
  * Latest error information if the deployment is in a failed state
@@ -1895,6 +1939,10 @@ export type Deployment = {
    * ID of the pinned release
    */
   pinnedReleaseId?: string | null | undefined;
+  /**
+   * Distribution source that imported this deployment
+   */
+  importSource?: DeploymentImportSource | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -4275,6 +4323,11 @@ export function deploymentPreparedStackResourcesFromJSON(
 }
 
 /** @internal */
+export const DeploymentSupportedPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentSupportedPlatform
+> = z.enum(DeploymentSupportedPlatform);
+
+/** @internal */
 export const DeploymentPreparedStack$inboundSchema: z.ZodType<
   DeploymentPreparedStack,
   unknown
@@ -4285,6 +4338,9 @@ export const DeploymentPreparedStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => DeploymentPreparedStackResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(DeploymentSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentPreparedStackFromJSON(
@@ -4322,6 +4378,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([z.lazy(() => DeploymentPreparedStack$inboundSchema), z.any()]),
   ).optional(),
+  registryAccessGranted: z.boolean().optional(),
 });
 
 export function deploymentRuntimeMetadataFromJSON(
@@ -4333,6 +4390,11 @@ export function deploymentRuntimeMetadataFromJSON(
     `Failed to parse 'DeploymentRuntimeMetadata' from JSON`,
   );
 }
+
+/** @internal */
+export const DeploymentImportSource$inboundSchema: z.ZodEnum<
+  typeof DeploymentImportSource
+> = z.enum(DeploymentImportSource);
 
 /** @internal */
 export const DeploymentError$inboundSchema: z.ZodType<
@@ -4430,6 +4492,7 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     currentReleaseId: z.nullable(z.string()).optional(),
     desiredReleaseId: z.nullable(z.string()).optional(),
     pinnedReleaseId: z.nullable(z.string()).optional(),
+    importSource: z.nullable(DeploymentImportSource$inboundSchema).optional(),
     retryRequested: z.boolean(),
     lastHeartbeatAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),

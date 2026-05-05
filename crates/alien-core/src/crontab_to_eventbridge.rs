@@ -74,7 +74,9 @@ pub fn crontab_to_eventbridge(crontab: &str) -> Result<String, String> {
         max: i64,
         name_list: &[&str],
     ) -> Result<(), String> {
-        if name_list.contains(&value.to_uppercase().as_str()) || value == "L" || value.ends_with('W')
+        if name_list.contains(&value.to_uppercase().as_str())
+            || value == "L"
+            || value.ends_with('W')
         {
             return Ok(());
         }
@@ -336,18 +338,12 @@ mod tests {
 
     #[test]
     fn rate_every_hour() {
-        assert_eq!(
-            crontab_to_eventbridge("0 * * * *").unwrap(),
-            "rate(1 hour)"
-        );
+        assert_eq!(crontab_to_eventbridge("0 * * * *").unwrap(), "rate(1 hour)");
     }
 
     #[test]
     fn rate_every_day() {
-        assert_eq!(
-            crontab_to_eventbridge("0 0 * * *").unwrap(),
-            "rate(1 day)"
-        );
+        assert_eq!(crontab_to_eventbridge("0 0 * * *").unwrap(), "rate(1 day)");
     }
 
     #[test]
@@ -533,10 +529,7 @@ mod tests {
     #[test]
     fn invalid_month_value() {
         let err = crontab_to_eventbridge("0 0 * 13 *").unwrap_err();
-        assert_eq!(
-            err,
-            "Invalid value 13 in month field of crontab expression"
-        );
+        assert_eq!(err, "Invalid value 13 in month field of crontab expression");
     }
 
     #[test]
@@ -788,10 +781,7 @@ mod tests {
     #[test]
     fn overflow_month_13() {
         let err = crontab_to_eventbridge("0 0 * 13 *").unwrap_err();
-        assert_eq!(
-            err,
-            "Invalid value 13 in month field of crontab expression"
-        );
+        assert_eq!(err, "Invalid value 13 in month field of crontab expression");
     }
 
     #[test]
@@ -806,9 +796,6 @@ mod tests {
     #[test]
     fn invalid_special_characters_in_year() {
         let err = crontab_to_eventbridge("0 0 * * * !").unwrap_err();
-        assert_eq!(
-            err,
-            "Invalid value ! in year field of crontab expression"
-        );
+        assert_eq!(err, "Invalid value ! in year field of crontab expression");
     }
 }

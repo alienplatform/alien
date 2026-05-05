@@ -24,6 +24,11 @@ import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+ * path; `caller: &Subject` is threaded into the store so embedders see
+ * the agent's own scope.
+ */
 export function syncAgentSync(
   client: AlienManagerCore,
   request: models.AgentSyncRequest,

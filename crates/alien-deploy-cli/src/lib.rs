@@ -9,8 +9,8 @@ pub mod error;
 pub mod output;
 
 use crate::commands::{
-    agent_command, down_command, list_command, status_command, up_command, AgentArgs, DownArgs,
-    ListArgs, StatusArgs, UpArgs,
+    agent_command, down_command, list_command, register_command, status_command, up_command,
+    AgentArgs, DownArgs, ListArgs, RegisterArgs, StatusArgs, UpArgs,
 };
 use crate::error::Result;
 use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
@@ -44,6 +44,9 @@ pub enum Commands {
     List(ListArgs),
     /// Manage the alien-agent background service
     Agent(AgentArgs),
+    /// Register an externally-provisioned stack (CloudFormation Outputs,
+    /// Terraform, …) with a manager.
+    Register(RegisterArgs),
 }
 
 pub fn setup_tracing(verbose: bool) {
@@ -72,6 +75,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Status(args) => status_command(args).await,
         Commands::List(args) => list_command(args).await,
         Commands::Agent(args) => agent_command(args).await,
+        Commands::Register(args) => register_command(args).await,
     }
 }
 
@@ -133,5 +137,35 @@ mod tests {
     fn test_parse_down_command() {
         let cli = Cli::try_parse_from(["alien-deploy", "down", "--name", "prod"]).unwrap();
         assert!(matches!(cli.command, Commands::Down(_)));
+    }
+
+    #[test]
+    fn test_parse_register_cloudformation_command() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "register",
+            "--import",
+            "cloudformation",
+            "--stack-name",
+            "acme-prod",
+            "--region",
+            "us-east-1",
+            "--manager-url",
+            "https://manager.example.com",
+            "--token",
+            "dg_abc",
+        ])
+        .unwrap();
+        let Commands::Register(args) = cli.command else {
+            panic!("expected register variant");
+        };
+        assert_eq!(
+            args.import,
+            crate::commands::register::ImportKind::Cloudformation
+        );
+        assert_eq!(args.stack_name.as_deref(), Some("acme-prod"));
+        assert_eq!(args.region, "us-east-1");
+        assert_eq!(args.manager_url, "https://manager.example.com");
+        assert_eq!(args.token, "dg_abc");
     }
 }

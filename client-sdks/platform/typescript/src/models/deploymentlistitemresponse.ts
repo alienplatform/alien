@@ -38,6 +38,7 @@ export const DeploymentListItemResponseStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -194,6 +195,21 @@ export type DeploymentListItemResponseEnvironmentInfoUnion =
   | any;
 
 /**
+ * Distribution source that imported this deployment
+ */
+export const DeploymentListItemResponseImportSource = {
+  Cloudformation: "cloudformation",
+  Terraform: "terraform",
+  Helm: "helm",
+} as const;
+/**
+ * Distribution source that imported this deployment
+ */
+export type DeploymentListItemResponseImportSource = ClosedEnum<
+  typeof DeploymentListItemResponseImportSource
+>;
+
+/**
  * Latest error information if in a failed state
  */
 export type DeploymentListItemResponseError = {
@@ -317,6 +333,10 @@ export type DeploymentListItemResponse = {
    * ID of the pinned release
    */
   pinnedReleaseId?: string | null | undefined;
+  /**
+   * Distribution source that imported this deployment
+   */
+  importSource?: DeploymentListItemResponseImportSource | null | undefined;
   /**
    * Timestamp of the last received heartbeat
    */
@@ -533,6 +553,11 @@ export function deploymentListItemResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentListItemResponseImportSource$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseImportSource
+> = z.enum(DeploymentListItemResponseImportSource);
+
+/** @internal */
 export const DeploymentListItemResponseError$inboundSchema: z.ZodType<
   DeploymentListItemResponseError,
   unknown
@@ -587,6 +612,8 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   currentReleaseId: z.nullable(z.string()).optional(),
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
+  importSource: z.nullable(DeploymentListItemResponseImportSource$inboundSchema)
+    .optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

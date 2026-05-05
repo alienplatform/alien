@@ -270,6 +270,14 @@ pub trait ComputeApi: Send + Sync + Debug {
         target_https_proxy: TargetHttpsProxy,
     ) -> Result<Operation>;
 
+    /// Replaces the SSL certificates associated with a target HTTPS proxy.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies/setSslCertificates
+    async fn set_target_https_proxy_ssl_certificates(
+        &self,
+        target_https_proxy_name: String,
+        ssl_certificates: Vec<String>,
+    ) -> Result<Operation>;
+
     /// Deletes a target HTTPS proxy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies/delete
     async fn delete_target_https_proxy(&self, target_https_proxy_name: String)
@@ -1100,6 +1108,27 @@ impl ComputeApi for ComputeClient {
             .unwrap_or_else(|| "targetHttpsProxy".to_string());
         self.base
             .execute_request(Method::POST, &path, None, Some(target_https_proxy), &name)
+            .await
+    }
+
+    async fn set_target_https_proxy_ssl_certificates(
+        &self,
+        target_https_proxy_name: String,
+        ssl_certificates: Vec<String>,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/global/targetHttpsProxies/{}/setSslCertificates",
+            self.project_id, target_https_proxy_name
+        );
+        let request = SetSslCertificatesRequest { ssl_certificates };
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(request),
+                &target_https_proxy_name,
+            )
             .await
     }
 
@@ -3585,6 +3614,12 @@ pub struct TargetHttpsProxy {
     /// QUIC protocol override (e.g., "NONE", "ENABLE", "DISABLE").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quic_override: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSslCertificatesRequest {
+    pub ssl_certificates: Vec<String>,
 }
 
 // =============================================================================================

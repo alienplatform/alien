@@ -486,13 +486,12 @@ impl AzureArtifactRegistryController {
         if let (Some(registry_name), Some(resource_group_name)) =
             (&self.registry_name, &self.resource_group_name)
         {
-            let subscription_id = self
-                .subscription_id
-                .as_deref()
-                .unwrap_or_else(|| {
-                    tracing::error!("Azure subscription_id missing when building artifact registry outputs");
-                    "missing-subscription-id"
-                });
+            let subscription_id = self.subscription_id.as_deref().unwrap_or_else(|| {
+                tracing::error!(
+                    "Azure subscription_id missing when building artifact registry outputs"
+                );
+                "missing-subscription-id"
+            });
             let registry_id = format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ContainerRegistry/registries/{}",
                 subscription_id,

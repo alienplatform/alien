@@ -173,20 +173,17 @@ async fn test_create_job(ctx: &CloudSchedulerTestContext) {
         Some("Test job created by alien integration tests".to_string())
     );
     assert_eq!(created_job.schedule, "0 */6 * * *");
-    assert_eq!(
-        created_job.time_zone,
-        Some("America/New_York".to_string())
+    assert_eq!(created_job.time_zone, Some("America/New_York".to_string()));
+    assert!(
+        created_job.http_target.is_some(),
+        "job must have an HTTP target"
     );
-    assert!(created_job.http_target.is_some(), "job must have an HTTP target");
 
     let http_target = created_job.http_target.unwrap();
     assert_eq!(http_target.uri, "https://httpbin.org/post");
     assert_eq!(http_target.http_method, Some("POST".to_string()));
 
-    assert!(
-        created_job.state.is_some(),
-        "created job must have a state"
-    );
+    assert!(created_job.state.is_some(), "created job must have a state");
     assert_eq!(
         created_job.state.as_deref(),
         Some("ENABLED"),
@@ -240,7 +237,10 @@ async fn test_get_job(ctx: &CloudSchedulerTestContext) {
     assert_eq!(created_job.time_zone, retrieved_job.time_zone);
     assert_eq!(created_job.state, retrieved_job.state);
 
-    assert!(retrieved_job.http_target.is_some(), "retrieved job must have an HTTP target");
+    assert!(
+        retrieved_job.http_target.is_some(),
+        "retrieved job must have an HTTP target"
+    );
     let created_target = created_job.http_target.unwrap();
     let retrieved_target = retrieved_job.http_target.unwrap();
     assert_eq!(created_target.uri, retrieved_target.uri);
@@ -373,7 +373,10 @@ async fn test_create_job_with_oidc_auth(ctx: &CloudSchedulerTestContext) {
     );
     assert_eq!(created_job.schedule, "0 12 * * *");
 
-    assert!(created_job.http_target.is_some(), "job must have an HTTP target");
+    assert!(
+        created_job.http_target.is_some(),
+        "job must have an HTTP target"
+    );
     let http_target = created_job.http_target.unwrap();
     assert_eq!(http_target.uri, "https://httpbin.org/post");
     assert_eq!(http_target.http_method, Some("POST".to_string()));
@@ -384,8 +387,7 @@ async fn test_create_job_with_oidc_auth(ctx: &CloudSchedulerTestContext) {
     );
     let oidc_token = http_target.oidc_token.unwrap();
     assert_eq!(
-        oidc_token.service_account_email,
-        ctx.service_account_email,
+        oidc_token.service_account_email, ctx.service_account_email,
         "OIDC token service account email must match"
     );
     assert_eq!(

@@ -1,0 +1,914 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.100"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "azure_location" {
+  type        = string
+  description = "Azure location."
+  default     = "eastus"
+}
+
+variable "azure_subscription_id" {
+  type        = string
+  description = "Azure subscription ID hosting the stack."
+}
+
+variable "azure_resource_group_name" {
+  type        = string
+  description = "Azure resource group name."
+}
+
+variable "azure_managing_tenant_id" {
+  type        = string
+  description = "Azure tenant ID the manager uses for cross-tenant access."
+  default     = ""
+}
+
+variable "azure_management_principal_id" {
+  type        = string
+  description = "Optional service-principal object ID for local development fallback role assignment."
+  default     = ""
+}
+
+variable "azure_oidc_issuer" {
+  type        = string
+  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
+  default     = ""
+}
+
+variable "azure_oidc_subject" {
+  type        = string
+  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "azurerm" {
+  features {}
+}
+
+=== locals.tf ===
+locals {
+  alien_platform = "azure"
+  alien_target   = "azure"
+  alien_management_config = {
+    platform              = "azure"
+    managingTenantId      = var.azure_managing_tenant_id
+    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
+    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
+    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+  }
+  alien_stack_settings = {
+    network = {
+      availability_zones = 1
+      cidr               = "10.46.0.0/16"
+      type               = "create"
+    }
+    updates = "approval-required"
+  }
+  alien_resources = [
+    {
+      id   = "default-resource-group"
+      type = "azure_resource_group"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = azurerm_resource_group.default_resource_group.name
+        location       = azurerm_resource_group.default_resource_group.location
+      }
+    },
+    {
+      id   = "default-storage-account"
+      type = "azure_storage_account"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        blobEndpoint       = azurerm_storage_account.default_storage_account.primary_blob_endpoint
+        queueEndpoint      = azurerm_storage_account.default_storage_account.primary_queue_endpoint
+      }
+    },
+    {
+      id   = "default-service-bus-namespace"
+      type = "azure_service_bus_namespace"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
+        endpoint       = "${azurerm_servicebus_namespace.default_service_bus_namespace.name}.servicebus.windows.net"
+      }
+    },
+    {
+      id   = "default-container-apps-environment"
+      type = "azure_container_apps_environment"
+      importData = {
+        subscriptionId  = var.azure_subscription_id
+        resourceGroup   = var.azure_resource_group_name
+        environmentName = azurerm_container_app_environment.default_container_apps_environment.name
+        defaultDomain   = azurerm_container_app_environment.default_container_apps_environment.default_domain
+      }
+    },
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        vnetId         = azurerm_virtual_network.default_network.id
+        vnetName       = azurerm_virtual_network.default_network.name
+        subnetIds = [
+          azurerm_subnet.default_network_public.id,
+          azurerm_subnet.default_network_private.id
+        ]
+        natGatewayId           = azurerm_nat_gateway.default_network_nat.id
+        networkSecurityGroupId = azurerm_network_security_group.default_network_workload.id
+        isByoVnet              = false
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        subscriptionId          = var.azure_subscription_id
+        resourceGroup           = var.azure_resource_group_name
+        identityId              = azurerm_user_assigned_identity.execution_sa.id
+        principalId             = azurerm_user_assigned_identity.execution_sa.principal_id
+        clientId                = azurerm_user_assigned_identity.execution_sa.client_id
+        stackPermissionsApplied = true
+      }
+    },
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        subscriptionId               = var.azure_subscription_id
+        resourceGroup                = var.azure_resource_group_name
+        identityId                   = azurerm_user_assigned_identity.management.id
+        principalId                  = azurerm_user_assigned_identity.management.principal_id
+        clientId                     = azurerm_user_assigned_identity.management.client_id
+        managementPermissionsApplied = true
+      }
+    },
+    {
+      id   = "assets"
+      type = "storage"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        containerName      = azurerm_storage_container.assets.name
+      }
+    },
+    {
+      id   = "jobs"
+      type = "queue"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
+        queueName      = azurerm_servicebus_queue.jobs.name
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        accountName    = azurerm_cosmosdb_account.metadata.name
+        databaseName   = azurerm_cosmosdb_sql_database.metadata_db.name
+        containerName  = azurerm_cosmosdb_sql_container.metadata_container.name
+        endpoint       = azurerm_cosmosdb_account.metadata.endpoint
+      }
+    },
+    {
+      id   = "secrets"
+      type = "vault"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        vaultName      = azurerm_key_vault.secrets.name
+        vaultUri       = azurerm_key_vault.secrets.vault_uri
+      }
+    },
+    {
+      id   = "registry"
+      type = "artifact-registry"
+      importData = {
+        subscriptionId  = var.azure_subscription_id
+        resourceGroup   = var.azure_resource_group_name
+        registryName    = azurerm_container_registry.registry.name
+        loginServer     = azurerm_container_registry.registry.login_server
+        pullPrincipalId = azurerm_user_assigned_identity.registry_pull.principal_id
+        pushPrincipalId = azurerm_user_assigned_identity.registry_push.principal_id
+      }
+    },
+    {
+      id   = "builder"
+      type = "build"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        registryName   = azurerm_container_registry.registry.name
+        taskName       = azurerm_container_registry_task.builder.name
+        buildEnvVars = {
+          PROFILE = "release"
+        }
+      }
+    },
+    {
+      id   = "public-api"
+      type = "function"
+      importData = {
+        subscriptionId   = var.azure_subscription_id
+        resourceGroup    = var.azure_resource_group_name
+        containerAppName = azurerm_container_app.public_api.name
+        fqdn             = azurerm_container_app.public_api.latest_revision_fqdn
+      }
+    },
+    {
+      id   = "worker"
+      type = "function"
+      importData = {
+        subscriptionId   = var.azure_subscription_id
+        resourceGroup    = var.azure_resource_group_name
+        containerAppName = azurerm_container_app.worker.name
+        fqdn             = null
+      }
+    }
+  ]
+}
+
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-resource-group"
+    "alien-resource-type" = "resource-group"
+  }
+}
+
+=== default_storage_account.tf ===
+resource "azurerm_storage_account" "default_storage_account" {
+  name                            = substr(replace(lower("${var.stack_name}default"), "-", ""), 0, 24)
+  resource_group_name             = var.azure_resource_group_name
+  location                        = var.azure_location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  account_kind                    = "StorageV2"
+  access_tier                     = "Hot"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-storage-account"
+    "alien-resource-type" = "storage-account"
+  }
+
+  blob_properties {
+    versioning_enabled  = true
+    change_feed_enabled = false
+  }
+}
+
+=== default_service_bus_namespace.tf ===
+resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
+  name                = substr(lower("${var.stack_name}-sb"), 0, 50)
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  sku                 = "Standard"
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-service-bus-namespace"
+    "alien-resource-type" = "service-bus-namespace"
+  }
+}
+
+=== default_container_apps_environment.tf ===
+resource "azurerm_log_analytics_workspace" "default_container_apps_environment_logs" {
+  name                = "${var.stack_name}-default_container_apps_environment-logs"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-container-apps-environment"
+    "alien-resource-type" = "container-apps-environment"
+  }
+}
+
+resource "azurerm_container_app_environment" "default_container_apps_environment" {
+  name                       = "${var.stack_name}-default_container_apps_environment"
+  resource_group_name        = var.azure_resource_group_name
+  location                   = var.azure_location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-container-apps-environment"
+    "alien-resource-type" = "container-apps-environment"
+  }
+}
+
+=== default_network.tf ===
+resource "azurerm_virtual_network" "default_network" {
+  name                = "${var.stack_name}-default_network"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  address_space = [
+    "10.46.0.0/16"
+  ]
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+}
+
+resource "azurerm_subnet" "default_network_public" {
+  name                 = "${var.stack_name}-default_network-public"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 0)
+  ]
+}
+
+resource "azurerm_subnet" "default_network_private" {
+  name                 = "${var.stack_name}-default_network-private"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
+  ]
+}
+
+resource "azurerm_public_ip" "default_network_nat_pip" {
+  name                = "${var.stack_name}-default_network-nat-pip"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+}
+
+resource "azurerm_nat_gateway" "default_network_nat" {
+  name                    = "${var.stack_name}-default_network-nat"
+  resource_group_name     = var.azure_resource_group_name
+  location                = var.azure_location
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = 10
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "default_network_nat" {
+  nat_gateway_id       = azurerm_nat_gateway.default_network_nat.id
+  public_ip_address_id = azurerm_public_ip.default_network_nat_pip.id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "default_network_private" {
+  subnet_id      = azurerm_subnet.default_network_private.id
+  nat_gateway_id = azurerm_nat_gateway.default_network_nat.id
+}
+
+resource "azurerm_network_security_group" "default_network_workload" {
+  name                = "${var.stack_name}-default_network-workload"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+
+  security_rule {
+    name                       = "AllowVnetInbound"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "default_network_private" {
+  subnet_id                 = azurerm_subnet.default_network_private.id
+  network_security_group_id = azurerm_network_security_group.default_network_workload.id
+}
+
+=== execution_sa.tf ===
+resource "azurerm_user_assigned_identity" "execution_sa" {
+  name                = "${var.stack_name}-execution-sa"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "execution-sa"
+    "alien-resource-type" = "service-account"
+  }
+}
+
+resource "azurerm_role_definition" "execution_sa_storage_data_read" {
+  name        = "Storage Data Read (${var.stack_name})"
+  scope       = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description = "Allows reading data from storage buckets and containers"
+
+  permissions {
+    actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+      "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+      "Microsoft.Storage/storageAccounts/blobServices/read",
+      "Microsoft.Storage/storageAccounts/listKeys/action"
+    ]
+    data_actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
+  name               = uuidv5("dns", "${var.stack_name}-storage/data-read-${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+}
+
+resource "azurerm_role_definition" "execution_sa_queue_data_write" {
+  name        = "Queue Data Write (${var.stack_name})"
+  scope       = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description = "Allows sending messages to queues and acknowledging received messages"
+
+  permissions {
+    actions = [
+      "Microsoft.ServiceBus/namespaces/queues/read",
+      "Microsoft.ServiceBus/namespaces/read"
+    ]
+    data_actions = [
+      "Microsoft.ServiceBus/namespaces/messages/send/action"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment" {
+  name               = uuidv5("dns", "${var.stack_name}-queue/data-write-${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+}
+
+=== management.tf ===
+resource "azurerm_user_assigned_identity" "management" {
+  name                = "${var.stack_name}-management-identity"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "management"
+    "alien-resource-type" = "remote-stack-management"
+  }
+}
+
+resource "azurerm_role_definition" "management_management_role" {
+  name               = "${var.stack_name}-management-role"
+  role_definition_id = uuidv5("oid", "alien:azure:mgmt-role-def:${var.stack_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Management role for Alien stack '${var.stack_name}'"
+
+  permissions {
+    actions          = []
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_assignment" "management_management_uami_assignment" {
+  name               = uuidv5("oid", "alien:azure:mgmt-role-assign:${var.stack_name}:uami")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+}
+
+resource "azurerm_role_assignment" "management_management_sp_assignment" {
+  count              = var.azure_management_principal_id == "" ? 0 : 1
+  name               = uuidv5("oid", "alien:azure:mgmt-role-assign:${var.stack_name}:sp")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
+  principal_id       = var.azure_management_principal_id
+}
+
+resource "azurerm_federated_identity_credential" "management_fic" {
+  count               = var.azure_oidc_issuer == "" || var.azure_oidc_subject == "" ? 0 : 1
+  name                = "${var.stack_name}-alien-fic"
+  resource_group_name = var.azure_resource_group_name
+  parent_id           = azurerm_user_assigned_identity.management.id
+  audience = [
+    "api://AzureADTokenExchange"
+  ]
+  issuer  = var.azure_oidc_issuer
+  subject = var.azure_oidc_subject
+}
+
+resource "azurerm_role_assignment" "management_acr_push_assignment" {
+  name               = uuidv5("oid", "alien:azure:mgmt-acr-assign:${var.stack_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}"
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec"
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+}
+
+=== assets.tf ===
+resource "azurerm_storage_container" "assets" {
+  name                  = replace(lower("${var.stack_name}-assets"), "_", "-")
+  storage_account_name  = azurerm_storage_account.default_storage_account.name
+  container_access_type = "private"
+}
+
+=== jobs.tf ===
+resource "azurerm_servicebus_queue" "jobs" {
+  name                                 = "${var.stack_name}-jobs"
+  namespace_id                         = azurerm_servicebus_namespace.default_service_bus_namespace.id
+  partitioning_enabled                 = false
+  lock_duration                        = "PT30S"
+  default_message_ttl                  = "P14D"
+  max_delivery_count                   = 10
+  dead_lettering_on_message_expiration = true
+}
+
+=== metadata.tf ===
+resource "azurerm_cosmosdb_account" "metadata" {
+  name                          = lower("${var.stack_name}-metadata")
+  resource_group_name           = var.azure_resource_group_name
+  location                      = var.azure_location
+  offer_type                    = "Standard"
+  kind                          = "GlobalDocumentDB"
+  local_authentication_disabled = true
+
+  consistency_policy {
+    consistency_level = "Session"
+  }
+
+  geo_location {
+    location          = var.azure_location
+    failover_priority = 0
+  }
+
+  backup {
+    type                = "Periodic"
+    interval_in_minutes = 240
+    retention_in_hours  = 8
+    storage_redundancy  = "Local"
+  }
+
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "metadata"
+    "alien-resource-type" = "kv"
+  }
+}
+
+resource "azurerm_cosmosdb_sql_database" "metadata_db" {
+  name                = "${var.stack_name}-metadata-db"
+  resource_group_name = azurerm_cosmosdb_account.metadata.resource_group_name
+  account_name        = azurerm_cosmosdb_account.metadata.name
+}
+
+resource "azurerm_cosmosdb_sql_container" "metadata_container" {
+  name                = "${var.stack_name}-metadata"
+  resource_group_name = azurerm_cosmosdb_account.metadata.resource_group_name
+  account_name        = azurerm_cosmosdb_account.metadata.name
+  database_name       = azurerm_cosmosdb_sql_database.metadata_db.name
+  partition_key_paths = [
+    "/pk"
+  ]
+  partition_key_version = 2
+}
+
+=== secrets.tf ===
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "secrets" {
+  name                          = substr(lower("${var.stack_name}-secrets"), 0, 24)
+  resource_group_name           = var.azure_resource_group_name
+  location                      = var.azure_location
+  tenant_id                     = data.azurerm_client_config.current.tenant_id
+  sku_name                      = "standard"
+  rbac_authorization_enabled    = true
+  purge_protection_enabled      = true
+  soft_delete_retention_days    = 90
+  public_network_access_enabled = true
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "secrets"
+    "alien-resource-type" = "vault"
+  }
+}
+
+=== registry.tf ===
+resource "azurerm_container_registry" "registry" {
+  name                = substr(replace(lower("${var.stack_name}registry"), "-", ""), 0, 50)
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  sku                 = "Premium"
+  admin_enabled       = false
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "registry"
+    "alien-resource-type" = "artifact-registry"
+  }
+}
+
+resource "azurerm_user_assigned_identity" "registry_pull" {
+  name                = "${var.stack_name}-registry-pull"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "registry"
+    "alien-resource-type" = "artifact-registry"
+  }
+}
+
+resource "azurerm_role_assignment" "registry_pull_role" {
+  name                 = uuidv5("dns", "${var.stack_name}-registry-pull-${azurerm_user_assigned_identity.registry_pull.principal_id}")
+  scope                = azurerm_container_registry.registry.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.registry_pull.principal_id
+}
+
+resource "azurerm_user_assigned_identity" "registry_push" {
+  name                = "${var.stack_name}-registry-push"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "registry"
+    "alien-resource-type" = "artifact-registry"
+  }
+}
+
+resource "azurerm_role_assignment" "registry_push_role" {
+  name                 = uuidv5("dns", "${var.stack_name}-registry-push-${azurerm_user_assigned_identity.registry_push.principal_id}")
+  scope                = azurerm_container_registry.registry.id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.registry_push.principal_id
+}
+
+=== builder.tf ===
+resource "azurerm_container_registry_task" "builder" {
+  name                  = "${var.stack_name}-builder"
+  container_registry_id = azurerm_container_registry.registry.id
+  is_system_task        = false
+
+  platform {
+    os           = "Linux"
+    architecture = "amd64"
+  }
+
+  encoded_step {
+    task_content  = "version: v1.1.0\nsteps:\n  - cmd: echo \"alien build placeholder\"\n"
+    value_content = "PROFILE: \"release\""
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  lifecycle {
+    ignore_changes  = all
+    prevent_destroy = true
+  }
+}
+
+=== public_api.tf ===
+resource "azurerm_container_app" "public_api" {
+  name                         = "${var.stack_name}-public-api"
+  resource_group_name          = var.azure_resource_group_name
+  container_app_environment_id = azurerm_container_app_environment.default_container_apps_environment.id
+  revision_mode                = "Single"
+
+  template {
+    min_replicas = 0
+    max_replicas = 10
+
+    container {
+      name   = "public-api"
+      image  = "acmeprod.azurecr.io/api:1.2.3"
+      cpu    = 0.5
+      memory = "512Mi"
+
+      env {
+        name  = "RUST_LOG"
+        value = "info"
+      }
+    }
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8080
+    transport        = "auto"
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "public-api"
+    "alien-resource-type" = "function"
+  }
+
+  identity {
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.execution_sa.id
+    ]
+  }
+
+  lifecycle {
+    ignore_changes  = all
+    prevent_destroy = true
+  }
+}
+
+=== worker.tf ===
+resource "azurerm_container_app" "worker" {
+  name                         = "${var.stack_name}-worker"
+  resource_group_name          = var.azure_resource_group_name
+  container_app_environment_id = azurerm_container_app_environment.default_container_apps_environment.id
+  revision_mode                = "Single"
+
+  template {
+    min_replicas = 0
+    max_replicas = 10
+
+    container {
+      name   = "worker"
+      image  = "acmeprod.azurecr.io/worker:1.2.3"
+      cpu    = 0.5
+      memory = "256Mi"
+    }
+  }
+
+  ingress {
+    external_enabled = false
+    target_port      = 8080
+    transport        = "auto"
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "worker"
+    "alien-resource-type" = "function"
+  }
+
+  identity {
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.execution_sa.id
+    ]
+  }
+
+  lifecycle {
+    ignore_changes  = all
+    prevent_destroy = true
+  }
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "azure"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - full-azure
+
+Target: `azure`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=full-azure' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

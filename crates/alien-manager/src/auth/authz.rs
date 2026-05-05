@@ -51,11 +51,7 @@ pub trait Authz: Send + Sync {
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-    fn can_acquire_deployments(
-        &self,
-        subject: &Subject,
-        deployments: &[DeploymentRecord],
-    ) -> bool;
+    fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
 
     // -- Telemetry ingest --------------------------------------------------
     /// Telemetry decisions take only the deployment ID. Authorization is a
@@ -63,11 +59,7 @@ pub trait Authz: Send + Sync {
     /// workspace and a `Scope::Deployment`); loading the full record was
     /// historically required only because policy needed `deployment.id`, which
     /// is the same string we already have in the `Subject`.
-    fn can_ingest_telemetry_for(
-        &self,
-        subject: &Subject,
-        deployment_id: &str,
-    ) -> bool;
+    fn can_ingest_telemetry_for(&self, subject: &Subject, deployment_id: &str) -> bool;
 
     // -- Registry proxy ----------------------------------------------------
     /// Push: caller has write access on the project carrying the repo.

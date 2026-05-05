@@ -3,14 +3,22 @@ name: E2E Tests
 on:
   workflow_dispatch:
     inputs:
-      deploy_method:
-        description: "Deployment method"
-        type: choice
-        default: "All"
-        options:
-          - All
-          - Push
-          - Pull
+      run_push:
+        description: "Run native push E2E"
+        type: boolean
+        default: true
+      run_pull:
+        description: "Run native pull E2E"
+        type: boolean
+        default: true
+      run_terraform:
+        description: "Run Terraform distribution E2E"
+        type: boolean
+        default: false
+      run_cloudformation:
+        description: "Run CloudFormation distribution E2E"
+        type: boolean
+        default: false
       platform_aws:
         description: "Platform: AWS (aarch64)"
         type: boolean
@@ -21,6 +29,10 @@ on:
         default: true
       platform_azure:
         description: "Platform: Azure (x86_64)"
+        type: boolean
+        default: true
+      platform_k8s:
+        description: "Platform: Kubernetes"
         type: boolean
         default: true
       local_linux:
@@ -79,9 +91,13 @@ jobs:
       push_matrix: ${{ steps.set.outputs.push_matrix }}
       pull_matrix: ${{ steps.set.outputs.pull_matrix }}
       local_matrix: ${{ steps.set.outputs.local_matrix }}
+      terraform_matrix: ${{ steps.set.outputs.terraform_matrix }}
+      cloudformation_matrix: ${{ steps.set.outputs.cloudformation_matrix }}
       has_push: ${{ steps.set.outputs.has_push }}
       has_pull: ${{ steps.set.outputs.has_pull }}
       has_local: ${{ steps.set.outputs.has_local }}
+      has_terraform: ${{ steps.set.outputs.has_terraform }}
+      has_cloudformation: ${{ steps.set.outputs.has_cloudformation }}
       needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
@@ -109,9 +125,13 @@ jobs:
             echo 'push_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo 'pull_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo 'local_matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo 'terraform_matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo 'cloudformation_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo "has_push=false" >> $GITHUB_OUTPUT
             echo "has_pull=false" >> $GITHUB_OUTPUT
             echo "has_local=false" >> $GITHUB_OUTPUT
+            echo "has_terraform=false" >> $GITHUB_OUTPUT
+            echo "has_cloudformation=false" >> $GITHUB_OUTPUT
             echo "needs_x86_64=false" >> $GITHUB_OUTPUT
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
@@ -125,6 +145,7 @@ jobs:
             AWS="${{ inputs.platform_aws }}"
             GCP="${{ inputs.platform_gcp }}"
             AZURE="${{ inputs.platform_azure }}"
+            K8S="${{ inputs.platform_k8s }}"
             LOCAL_LINUX="${{ inputs.local_linux }}"
             LOCAL_MACOS="${{ inputs.local_macos }}"
             LOCAL_WINDOWS="${{ inputs.local_windows }}"
@@ -132,15 +153,15 @@ jobs:
             BUILD_IMAGES="${{ inputs.build_images }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
-            case "${{ inputs.deploy_method }}" in
-              All)  PUSH=true;  PULL=true  ;;
-              Push) PUSH=true;  PULL=false ;;
-              Pull) PUSH=false; PULL=true  ;;
-            esac
+            PUSH="${{ inputs.run_push }}"
+            PULL="${{ inputs.run_pull }}"
+            TERRAFORM="${{ inputs.run_terraform }}"
+            CLOUDFORMATION="${{ inputs.run_cloudformation }}"
           else
-            AWS=true; GCP=true; AZURE=true
+            AWS=true; GCP=true; AZURE=true; K8S=true
             LOCAL_LINUX=true; LOCAL_MACOS=true; LOCAL_WINDOWS=true
             PUSH=true; PULL=true
+            TERRAFORM=false; CLOUDFORMATION=false
             LANG=All; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
@@ -200,6 +221,14 @@ jobs:
                 PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-azure-typescript","test_filter":"pull_azure_typescript"}]')
               fi
             fi
+            if [ "$K8S" = "true" ]; then
+              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-kubernetes-rust","test_filter":"pull_kubernetes_rust"}]')
+              fi
+              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-kubernetes-typescript","test_filter":"pull_kubernetes_typescript"}]')
+              fi
+            fi
           fi
 
           HAS_PUSH=$([ "$(echo "$PUSH_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
@@ -234,11 +263,50 @@ jobs:
 
           HAS_LOCAL=$([ "$(echo "$LOCAL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
 
+          # Build Terraform distribution matrix. Helm is implicit for K8s
+          # targets; it is the runtime installer, not a separate top-level
+          # workflow input.
+          TERRAFORM_ENTRIES='[]'
+          if [ "$TERRAFORM" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              if [ "$AWS" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false}]')
+              fi
+              if [ "$GCP" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false}]')
+              fi
+              if [ "$AZURE" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true}]')
+              fi
+              if [ "$K8S" = "true" ] && [ "$AWS" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false}]')
+              fi
+              if [ "$K8S" = "true" ] && [ "$GCP" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false}]')
+              fi
+              if [ "$K8S" = "true" ] && [ "$AZURE" = "true" ]; then
+                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true}]')
+              fi
+            fi
+          fi
+
+          # Build CloudFormation distribution matrix. CloudFormation is AWS-only
+          # and currently validates the push/import path.
+          CLOUDFORMATION_ENTRIES='[]'
+          if [ "$CLOUDFORMATION" = "true" ] && [ "$AWS" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false}]')
+            fi
+          fi
+
+          HAS_TERRAFORM=$([ "$(echo "$TERRAFORM_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+          HAS_CLOUDFORMATION=$([ "$(echo "$CLOUDFORMATION_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+
           # Architecture needs: AWS→aarch64, GCP/Azure→x86_64
           # Pull tests always run on ARM runners, so the agent Docker image
           # must include an aarch64 binary whenever any pull tests are enabled.
           ANY_TESTS=false
-          if [ "$HAS_PUSH" = "true" ] || [ "$HAS_PULL" = "true" ]; then ANY_TESTS=true; fi
+          if [ "$HAS_PUSH" = "true" ] || [ "$HAS_PULL" = "true" ] || [ "$HAS_TERRAFORM" = "true" ] || [ "$HAS_CLOUDFORMATION" = "true" ]; then ANY_TESTS=true; fi
 
           NEEDS_X86_64=false
           NEEDS_AARCH64=false
@@ -249,13 +317,21 @@ jobs:
           # Pull tests run on ARM runners and use the agent Docker image,
           # so aarch64 is always needed when pull tests are in the matrix.
           if [ "$HAS_PULL" = "true" ]; then NEEDS_AARCH64=true; fi
+          # Distribution tests run on ARM runners. K8s Terraform+Helm tests also
+          # consume the agent image, so keep both architectures available.
+          if [ "$HAS_TERRAFORM" = "true" ]; then NEEDS_X86_64=true; NEEDS_AARCH64=true; fi
+          if [ "$HAS_CLOUDFORMATION" = "true" ]; then NEEDS_AARCH64=true; fi
 
           echo "push_matrix=$(echo "$PUSH_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "pull_matrix=$(echo "$PULL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "local_matrix=$(echo "$LOCAL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
+          echo "terraform_matrix=$(echo "$TERRAFORM_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
+          echo "cloudformation_matrix=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "has_push=$HAS_PUSH" >> $GITHUB_OUTPUT
           echo "has_pull=$HAS_PULL" >> $GITHUB_OUTPUT
           echo "has_local=$HAS_LOCAL" >> $GITHUB_OUTPUT
+          echo "has_terraform=$HAS_TERRAFORM" >> $GITHUB_OUTPUT
+          echo "has_cloudformation=$HAS_CLOUDFORMATION" >> $GITHUB_OUTPUT
           echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
@@ -473,7 +549,9 @@ jobs:
     if: |
       needs.compute-matrix.outputs.has_push == 'true' ||
       needs.compute-matrix.outputs.has_pull == 'true' ||
-      needs.compute-matrix.outputs.has_local == 'true'
+      needs.compute-matrix.outputs.has_local == 'true' ||
+      needs.compute-matrix.outputs.has_terraform == 'true' ||
+      needs.compute-matrix.outputs.has_cloudformation == 'true'
     # Prevent concurrent terraform applies on the same workspace
     concurrency:
       group: terraform-test-infra
@@ -753,6 +831,213 @@ jobs:
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
+  # ── E2E CloudFormation distribution matrix ─────────────────────────
+
+  cloudformation-test:
+    needs: [compute-matrix, setup, build-base-image]
+    if: |
+      !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.has_cloudformation == 'true'
+    environment: e2e-tests
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.cloudformation_matrix) }}
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install CloudFormation linter
+        run: pipx install cfn-lint
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Mask sensitive values from .env.test
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Run E2E CloudFormation distribution test
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
+  # ── E2E Terraform distribution matrix ──────────────────────────────
+
+  terraform-test:
+    needs: [compute-matrix, setup, build-base-image, build-agent-image]
+    if: |
+      !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.has_terraform == 'true'
+    environment: e2e-tests
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
+      - name: Acquire Azure OIDC token and start refresh loop
+        if: matrix.needs_oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+          (
+            while true; do
+              sleep 240
+              NEW_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+              if [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
+                echo "$NEW_TOKEN" > /tmp/azure-oidc-token
+              fi
+            done
+          ) &
+          echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
+
+      - uses: docker/login-action@v3
+        if: needs.compute-matrix.outputs.build_images == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull agent image
+        if: needs.compute-matrix.outputs.build_images == 'true'
+        run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: depot/setup-action@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@cargo-nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install kubectl and kind
+        run: |
+          curl -Lo kubectl https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+
+      - name: Install kubeconform
+        run: |
+          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Install JS dependencies and build packages
+        run: pnpm install --frozen-lockfile && pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Mask sensitive values from .env.test
+        run: |
+          while IFS= read -r line; do
+            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            val="${line#*=}"
+            val="${val#\'}" && val="${val%\'}"
+            val="${val#\"}" && val="${val%\"}"
+            [ -n "$val" ] && echo "::add-mask::$val"
+          done < .env.test
+
+      - name: Run E2E Terraform distribution test
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
+        run: |
+          set -a && source .env.test && set +a
+          depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+
   # ── E2E local test matrix ──────────────────────────────────────────
   # Installs alien-agent as an OS service via `alien-deploy up` on each
   # OS (Linux, macOS, Windows), matching the real customer deployment flow.
@@ -897,7 +1182,7 @@ jobs:
   # orphaned cloud resources in the dedicated test target accounts.
 
   cleanup:
-    needs: [compute-matrix, push-test, pull-test, local-test]
+    needs: [compute-matrix, push-test, pull-test, cloudformation-test, terraform-test, local-test]
     if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30

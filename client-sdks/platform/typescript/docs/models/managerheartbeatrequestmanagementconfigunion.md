@@ -27,7 +27,6 @@ const value: models.ManagerHeartbeatRequestManagementConfigGcp = {
 
 ```typescript
 const value: models.ManagerHeartbeatRequestManagementConfigAzure = {
-  managementPrincipalId: "<id>",
   managingTenantId: "<id>",
   platform: "azure",
 };

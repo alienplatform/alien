@@ -3,18 +3,24 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
 import {
   AwsCustomCertificateConfig,
+  AwsCustomCertificateConfig$inboundSchema,
   AwsCustomCertificateConfig$Outbound,
   AwsCustomCertificateConfig$outboundSchema,
 } from "./awscustomcertificateconfig.js";
 import {
   AzureCustomCertificateConfig,
+  AzureCustomCertificateConfig$inboundSchema,
   AzureCustomCertificateConfig$Outbound,
   AzureCustomCertificateConfig$outboundSchema,
 } from "./azurecustomcertificateconfig.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   GcpCustomCertificateConfig,
+  GcpCustomCertificateConfig$inboundSchema,
   GcpCustomCertificateConfig$Outbound,
   GcpCustomCertificateConfig$outboundSchema,
 } from "./gcpcustomcertificateconfig.js";
@@ -28,6 +34,15 @@ export type CustomCertificateConfig = {
   gcp?: GcpCustomCertificateConfig | null | undefined;
 };
 
+/** @internal */
+export const CustomCertificateConfig$inboundSchema: z.ZodType<
+  CustomCertificateConfig,
+  unknown
+> = z.object({
+  aws: z.nullable(AwsCustomCertificateConfig$inboundSchema).optional(),
+  azure: z.nullable(AzureCustomCertificateConfig$inboundSchema).optional(),
+  gcp: z.nullable(GcpCustomCertificateConfig$inboundSchema).optional(),
+});
 /** @internal */
 export type CustomCertificateConfig$Outbound = {
   aws?: AwsCustomCertificateConfig$Outbound | null | undefined;
@@ -50,5 +65,14 @@ export function customCertificateConfigToJSON(
 ): string {
   return JSON.stringify(
     CustomCertificateConfig$outboundSchema.parse(customCertificateConfig),
+  );
+}
+export function customCertificateConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<CustomCertificateConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CustomCertificateConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CustomCertificateConfig' from JSON`,
   );
 }

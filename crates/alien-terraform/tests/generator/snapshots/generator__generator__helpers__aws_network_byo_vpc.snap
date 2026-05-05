@@ -1,0 +1,193 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the manager IAM identity allowed to assume management roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  default     = ""
+}
+
+variable "default_network_vpc_id" {
+  type        = string
+  description = "BYO VPC id supplied by the customer."
+  default     = "vpc-0123456789abcdef0"
+}
+
+variable "default_network_public_subnet_ids" {
+  type        = list(string)
+  description = "BYO public subnet ids supplied by the customer."
+  default = [
+    "subnet-public-a"
+  ]
+}
+
+variable "default_network_private_subnet_ids" {
+  type        = list(string)
+  description = "BYO private subnet ids supplied by the customer."
+  default = [
+    "subnet-private-a"
+  ]
+}
+
+variable "default_network_security_group_ids" {
+  type        = list(string)
+  description = "BYO security group ids supplied by the customer."
+  default = [
+    "sg-0123456789abcdef0"
+  ]
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== locals.tf ===
+locals {
+  alien_platform = "aws"
+  alien_target   = "aws"
+  alien_management_config = {
+    platform        = "aws"
+    managingRoleArn = data.aws_caller_identity.current.arn
+  }
+  alien_stack_settings = {
+    network = {
+      private_subnet_ids = [
+        "subnet-private-a"
+      ]
+      public_subnet_ids = [
+        "subnet-public-a"
+      ]
+      security_group_ids = [
+        "sg-0123456789abcdef0"
+      ]
+      type   = "byo-vpc-aws"
+      vpc_id = "vpc-0123456789abcdef0"
+    }
+  }
+  alien_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = var.default_network_vpc_id
+        cidrBlock           = null
+        internetGatewayId   = null
+        natGatewayId        = null
+        eipAllocationId     = null
+        publicSubnetIds     = var.default_network_public_subnet_ids
+        privateSubnetIds    = var.default_network_private_subnet_ids
+        publicRouteTableId  = null
+        privateRouteTableId = null
+        securityGroupId     = try(var.default_network_security_group_ids[0], null)
+        availabilityZones   = data.aws_availability_zones.available.names
+        isByoVpc            = true
+      }
+    }
+  ]
+}
+
+=== default_network.tf ===
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-byo
+
+Target: `aws`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-byo' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

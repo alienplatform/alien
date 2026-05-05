@@ -45,8 +45,17 @@ pub use service_activation::*;
 
 mod queue;
 
-pub mod cloudformation;
-pub use cloudformation::import_stack_state_from_cloudformation;
+mod import;
+pub use import::*;
+
+pub mod import_helpers;
+
+#[cfg(feature = "aws")]
+mod aws_importers;
+#[cfg(feature = "azure")]
+mod azure_importers;
+#[cfg(feature = "gcp")]
+mod gcp_importers;
 
 mod remote_access_resolver;
 pub use remote_access_resolver::*;
@@ -63,6 +72,8 @@ pub use kubeconfig::*;
 // Test utilities
 #[cfg(any(feature = "test-utils", doc, test))]
 pub use core::controller_test;
+#[cfg(any(feature = "test-utils", doc, test))]
+pub use core::MockPlatformServiceProvider;
 
 #[cfg(feature = "aws")]
 pub use alien_aws_clients::AwsClientConfig;

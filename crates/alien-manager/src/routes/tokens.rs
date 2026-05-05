@@ -64,7 +64,8 @@ async fn list_tokens(State(state): State<AppState>, headers: HeaderMap) -> Respo
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };    if !subject.is_workspace_admin() {
+    };
+    if !subject.is_workspace_admin() {
         return ErrorData::forbidden("Admin access required").into_response();
     }
 
@@ -85,7 +86,8 @@ async fn delete_token(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };    if !subject.is_workspace_admin() {
+    };
+    if !subject.is_workspace_admin() {
         return ErrorData::forbidden("Admin access required").into_response();
     }
 

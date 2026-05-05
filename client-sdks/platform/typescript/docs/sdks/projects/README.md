@@ -445,7 +445,7 @@ async function run() {
     requestBody: {
       name: "my-app",
       targetNamespace: "<value>",
-      templatePath: "examples/minimal-cloud-agent",
+      templatePath: "examples/remote-worker-ts",
     },
   });
 
@@ -475,7 +475,7 @@ async function run() {
     requestBody: {
       name: "my-app",
       targetNamespace: "<value>",
-      templatePath: "examples/minimal-cloud-agent",
+      templatePath: "examples/remote-worker-ts",
     },
   });
   if (res.ok) {

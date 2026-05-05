@@ -8,6 +8,7 @@ import { DeploymentInfoTerraform } from "@alienplatform/platform-api/models";
 let value: DeploymentInfoTerraform = {
   status: "canceled",
   providerSource: "<value>",
+  moduleSource: "<value>",
 };
 ```
 
@@ -20,3 +21,5 @@ let value: DeploymentInfoTerraform = {
 | `outputs`                                                | [models.TerraformOutputs](../models/terraformoutputs.md) | :heavy_minus_sign:                                       | Outputs from a Terraform provider package build          |
 | `error`                                                  | *any*                                                    | :heavy_minus_sign:                                       | N/A                                                      |
 | `providerSource`                                         | *string*                                                 | :heavy_check_mark:                                       | Terraform provider source (without https://)             |
+| `moduleSource`                                           | *string*                                                 | :heavy_check_mark:                                       | Terraform module source                                  |
+| `moduleVersion`                                          | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |

@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    DeploymentState, EnvironmentInfo, EnvironmentVariable, ManagementConfig, Platform,
-    RuntimeMetadata, StackSettings, StackState,
+    import::ImportSourceKind, DeploymentState, EnvironmentInfo, EnvironmentVariable,
+    ManagementConfig, Platform, RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -29,6 +29,9 @@ pub struct DeploymentRecord {
     pub runtime_metadata: Option<RuntimeMetadata>,
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
+    /// Distribution source that created this deployment, if it was imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_source: Option<ImportSourceKind>,
     pub user_environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Management config from the platform API (platform mode only).
     /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.
@@ -61,7 +64,11 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("runtime_metadata", &self.runtime_metadata)
             .field("current_release_id", &self.current_release_id)
             .field("desired_release_id", &self.desired_release_id)
-            .field("user_environment_variables", &self.user_environment_variables)
+            .field("import_source", &self.import_source)
+            .field(
+                "user_environment_variables",
+                &self.user_environment_variables,
+            )
             .field("management_config", &self.management_config)
             .field(
                 "deployment_token",
@@ -87,6 +94,24 @@ pub struct CreateDeploymentParams {
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,
+}
+
+/// Parameters for creating a deployment whose layer-2 stack state was produced
+/// by a distribution artifact (CloudFormation, Terraform, Helm).
+#[derive(Debug, Clone)]
+pub struct CreateImportedDeploymentParams {
+    pub name: String,
+    pub deployment_group_id: String,
+    pub platform: Platform,
+    pub stack_settings: StackSettings,
+    pub stack_state: StackState,
+    /// Initial status — imported deployments normally start at
+    /// `"provisioning"` so the manager can complete layer-3 runtime work.
+    pub status: String,
+    pub current_release_id: Option<String>,
+    pub import_source: Option<ImportSourceKind>,
+    pub deployment_token: Option<String>,
+    pub management_config: Option<ManagementConfig>,
 }
 
 /// A deployment group record.
@@ -165,6 +190,38 @@ pub trait DeploymentStore: Send + Sync {
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
+    /// Persist a deployment whose stack state was produced by a distribution
+    /// artifact (CloudFormation Custom Resource, Terraform provider, Helm
+    /// bootstrap chart). Same idempotency contract as
+    /// [`Self::get_deployment_by_name`] — callers should look up the existing
+    /// record first; this method only handles the "doesn't exist yet" path.
+    ///
+    /// Implementations that proxy to an upstream API (platform mode) translate
+    /// this into the upstream's import endpoint; SQLite-backed standalone
+    /// stores insert directly with `stack_state` populated and `status` set
+    /// from the params.
+    async fn create_with_state(
+        &self,
+        caller: &crate::auth::Subject,
+        params: CreateImportedDeploymentParams,
+    ) -> Result<DeploymentRecord, AlienError>;
+
+    /// Replace `stack_state` (and pin `current_release_id`) on an existing
+    /// imported deployment. Used by `POST /v1/stack/import` when the request
+    /// re-imports a deployment that was created by an earlier call —
+    /// CloudFormation Update events, Terraform refresh+apply cycles, and Helm
+    /// upgrades all fire this path. Implementations must overwrite
+    /// `stack_state` wholesale (the import payload is the source of truth)
+    /// and leave fields outside the import contract (status, deployment
+    /// token, environment variables, runtime metadata, …) untouched.
+    async fn update_imported_stack_state(
+        &self,
+        caller: &crate::auth::Subject,
+        deployment_id: &str,
+        stack_state: StackState,
+        current_release_id: Option<String>,
+    ) -> Result<DeploymentRecord, AlienError>;
+
     async fn get_deployment(
         &self,
         caller: &crate::auth::Subject,
@@ -202,11 +259,8 @@ pub trait DeploymentStore: Send + Sync {
         id: &str,
     ) -> Result<(), AlienError>;
 
-    async fn set_redeploy(
-        &self,
-        caller: &crate::auth::Subject,
-        id: &str,
-    ) -> Result<(), AlienError>;
+    async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)
+        -> Result<(), AlienError>;
 
     /// Set desired_release_id on a specific deployment.
     async fn set_deployment_desired_release(
@@ -281,10 +335,7 @@ pub trait DeploymentStore: Send + Sync {
     /// `Subject::system()` from the standalone binary; embedders that mount
     /// the manager's startup hook into a request context can pass the request
     /// caller instead.
-    async fn cleanup_stale_locks(
-        &self,
-        _caller: &crate::auth::Subject,
-    ) -> Result<u64, AlienError> {
+    async fn cleanup_stale_locks(&self, _caller: &crate::auth::Subject) -> Result<u64, AlienError> {
         Ok(0)
     }
 }

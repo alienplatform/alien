@@ -965,7 +965,6 @@ export type SyncReconcileRequestCurrentReleaseDependency = {
 export const SyncReconcileRequestCurrentReleaseLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1001,6 +1000,24 @@ export type SyncReconcileRequestCurrentReleaseResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestCurrentReleaseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestCurrentReleaseSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileRequestCurrentReleaseStack = {
@@ -1016,6 +1033,13 @@ export type SyncReconcileRequestCurrentReleaseStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileRequestCurrentReleaseResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileRequestCurrentReleaseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 /**
@@ -2151,7 +2175,6 @@ export type SyncReconcileRequestPreparedStackDependency = {
 export const SyncReconcileRequestPreparedStackLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2187,6 +2210,24 @@ export type SyncReconcileRequestPreparedStackResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestPreparedStackSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestPreparedStackSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileRequestPreparedStack = {
@@ -2202,6 +2243,13 @@ export type SyncReconcileRequestPreparedStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileRequestPreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileRequestPreparedStackSupportedPlatform>
+    | null
+    | undefined;
 };
 
 export type SyncReconcileRequestPreparedStackUnion =
@@ -2224,6 +2272,15 @@ export type SyncReconcileRequestRuntimeMetadata = {
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
   preparedStack?: SyncReconcileRequestPreparedStack | any | null | undefined;
+  /**
+   * Whether cross-account registry access has been successfully granted.
+   *
+   * @remarks
+   * Set to true after the manager successfully sets the ECR/GAR repo policy
+   * for this deployment's target account. Prevents redundant API calls on
+   * every reconcile tick.
+   */
+  registryAccessGranted?: boolean | undefined;
 };
 
 export type SyncReconcileRequestRuntimeMetadataUnion =
@@ -2310,6 +2367,10 @@ export type SyncReconcileRequestErrorState = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -2369,7 +2430,6 @@ export type SyncReconcileRequestErrorUnion =
 export const SyncReconcileRequestStackStateLifecycleEnum = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2463,13 +2523,6 @@ export type SyncReconcileRequestStackStateResources = {
   dependencies?: Array<SyncReconcileRequestStackStateDependency> | undefined;
   error?: SyncReconcileRequestErrorState | any | null | undefined;
   /**
-   * True if the resource was provisioned by an external system (e.g., CloudFormation).
-   *
-   * @remarks
-   * Defaults to false, indicating dynamic provisioning by the executor.
-   */
-  isExternallyProvisioned?: boolean | undefined;
-  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -2547,6 +2600,7 @@ export const SyncReconcileRequestStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -3512,7 +3566,6 @@ export type SyncReconcileRequestTargetReleaseDependency = {
 export const SyncReconcileRequestTargetReleaseLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -3548,6 +3601,24 @@ export type SyncReconcileRequestTargetReleaseResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestTargetReleaseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestTargetReleaseSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileRequestTargetReleaseStack = {
@@ -3563,6 +3634,13 @@ export type SyncReconcileRequestTargetReleaseStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileRequestTargetReleaseResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileRequestTargetReleaseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 /**
@@ -3615,6 +3693,15 @@ export type SyncReconcileRequestState = {
    * Represents the target cloud platform.
    */
   platform: SyncReconcileRequestPlatform;
+  /**
+   * Protocol version for cross-actor compatibility.
+   *
+   * @remarks
+   * All actors (manager, push client, agent) check this before stepping.
+   * Mismatched versions produce a clear error instead of silent corruption.
+   * See docs/02-manager/10-deployment-protocol.md.
+   */
+  protocolVersion?: number | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    *
@@ -6050,6 +6137,11 @@ export function syncReconcileRequestCurrentReleaseResourcesToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestCurrentReleaseSupportedPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseSupportedPlatform> = z
+    .enum(SyncReconcileRequestCurrentReleaseSupportedPlatform);
+
+/** @internal */
 export type SyncReconcileRequestCurrentReleaseStack$Outbound = {
   id: string;
   permissions?:
@@ -6058,6 +6150,7 @@ export type SyncReconcileRequestCurrentReleaseStack$Outbound = {
   resources: {
     [k: string]: SyncReconcileRequestCurrentReleaseResources$Outbound;
   };
+  supportedPlatforms?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -6073,6 +6166,9 @@ export const SyncReconcileRequestCurrentReleaseStack$outboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileRequestCurrentReleaseResources$outboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileRequestCurrentReleaseSupportedPlatform$outboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileRequestCurrentReleaseStackToJSON(
@@ -8648,6 +8744,12 @@ export function syncReconcileRequestPreparedStackResourcesToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestPreparedStackSupportedPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackSupportedPlatform> = z.enum(
+    SyncReconcileRequestPreparedStackSupportedPlatform,
+  );
+
+/** @internal */
 export type SyncReconcileRequestPreparedStack$Outbound = {
   id: string;
   permissions?:
@@ -8656,6 +8758,7 @@ export type SyncReconcileRequestPreparedStack$Outbound = {
   resources: {
     [k: string]: SyncReconcileRequestPreparedStackResources$Outbound;
   };
+  supportedPlatforms?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -8671,6 +8774,9 @@ export const SyncReconcileRequestPreparedStack$outboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileRequestPreparedStackResources$outboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileRequestPreparedStackSupportedPlatform$outboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileRequestPreparedStackToJSON(
@@ -8716,6 +8822,7 @@ export type SyncReconcileRequestRuntimeMetadata$Outbound = {
     | any
     | null
     | undefined;
+  registryAccessGranted?: boolean | undefined;
 };
 
 /** @internal */
@@ -8730,6 +8837,7 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccessGranted: z.boolean().optional(),
 });
 
 export function syncReconcileRequestRuntimeMetadataToJSON(
@@ -8836,6 +8944,7 @@ export function syncReconcileRequestStackStateDependencyToJSON(
 export type SyncReconcileRequestErrorState$Outbound = {
   code: string;
   context?: any | null | undefined;
+  hint?: string | null | undefined;
   httpStatusCode?: number | null | undefined;
   internal: boolean;
   message: string;
@@ -8850,6 +8959,7 @@ export const SyncReconcileRequestErrorState$outboundSchema: z.ZodType<
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),
@@ -9047,7 +9157,6 @@ export type SyncReconcileRequestStackStateResources$Outbound = {
     | Array<SyncReconcileRequestStackStateDependency$Outbound>
     | undefined;
   error?: SyncReconcileRequestErrorState$Outbound | any | null | undefined;
-  isExternallyProvisioned?: boolean | undefined;
   lastFailedState?: any | null | undefined;
   lifecycle?: string | any | null | undefined;
   outputs?: SyncReconcileRequestOutputs$Outbound | any | null | undefined;
@@ -9078,7 +9187,6 @@ export const SyncReconcileRequestStackStateResources$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
-  isExternallyProvisioned: z.boolean().optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
     z.union([
@@ -11482,6 +11590,12 @@ export function syncReconcileRequestTargetReleaseResourcesToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestTargetReleaseSupportedPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseSupportedPlatform> = z.enum(
+    SyncReconcileRequestTargetReleaseSupportedPlatform,
+  );
+
+/** @internal */
 export type SyncReconcileRequestTargetReleaseStack$Outbound = {
   id: string;
   permissions?:
@@ -11490,6 +11604,7 @@ export type SyncReconcileRequestTargetReleaseStack$Outbound = {
   resources: {
     [k: string]: SyncReconcileRequestTargetReleaseResources$Outbound;
   };
+  supportedPlatforms?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -11505,6 +11620,9 @@ export const SyncReconcileRequestTargetReleaseStack$outboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileRequestTargetReleaseResources$outboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileRequestTargetReleaseSupportedPlatform$outboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileRequestTargetReleaseStackToJSON(
@@ -11589,6 +11707,7 @@ export type SyncReconcileRequestState$Outbound = {
     | null
     | undefined;
   platform: string;
+  protocolVersion?: number | undefined;
   retryRequested?: boolean | undefined;
   runtimeMetadata?:
     | SyncReconcileRequestRuntimeMetadata$Outbound
@@ -11626,6 +11745,7 @@ export const SyncReconcileRequestState$outboundSchema: z.ZodType<
     ]),
   ).optional(),
   platform: SyncReconcileRequestPlatform$outboundSchema,
+  protocolVersion: z.int().optional(),
   retryRequested: z.boolean().optional(),
   runtimeMetadata: z.nullable(
     z.union([

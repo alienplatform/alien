@@ -166,20 +166,24 @@ impl AwsCloudFormationPermissionsGenerator {
         template: &str,
         context: &PermissionContext,
     ) -> Result<JsonValue> {
+        let template = template.replace("arn:aws:", "arn:${AWS::Partition}:");
+
         // Check if the template contains CloudFormation variables or regular variables
         let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
-        let contains_regular_vars = template.contains("${") && !contains_cf_vars;
+        let contains_regular_vars = [
+            "${stackPrefix}",
+            "${resourceName}",
+            "${awsRegion}",
+            "${awsAccountId}",
+            "${externalId}",
+            "${managingAccountId}",
+        ]
+        .iter()
+        .any(|placeholder| template.contains(placeholder));
 
-        if contains_cf_vars {
-            // Template already contains CloudFormation variables, wrap in Fn::Sub
-            Ok(json!({
-                "Fn::Sub": template
-            }))
-        } else if contains_regular_vars {
-            // Template contains our custom variables that need to be replaced
-            let mut result = template.to_string();
-
-            // First, replace our known variables with CloudFormation equivalents or literal values
+        if contains_regular_vars {
+            // Template contains our custom variables that need to be replaced.
+            let mut result = template;
             if let Some(stack_prefix) = context.stack_prefix.as_ref() {
                 if stack_prefix.is_empty() {
                     // Empty stack prefix means just use the stack name
@@ -198,7 +202,7 @@ impl AwsCloudFormationPermissionsGenerator {
             if let Some(resource_name) = context.resource_name.as_ref() {
                 // For resource names in CloudFormation context, we usually want the raw logical ID
                 // unless it's in an ARN context where we need to build the full ARN
-                if result.contains("arn:aws:") && result.contains("${resourceName}") {
+                if result.contains("arn:${AWS::Partition}:") && result.contains("${resourceName}") {
                     // This is an ARN template, replace with the resource name directly
                     result = result.replace("${resourceName}", resource_name);
                 } else {
@@ -247,6 +251,11 @@ impl AwsCloudFormationPermissionsGenerator {
                 // Just a plain string after substitution
                 Ok(json!(result))
             }
+        } else if contains_cf_vars {
+            // Template already contains CloudFormation variables, wrap in Fn::Sub
+            Ok(json!({
+                "Fn::Sub": template
+            }))
         } else {
             // No variables, just return as plain string
             Ok(json!(template))

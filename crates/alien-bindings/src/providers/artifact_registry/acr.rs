@@ -1,8 +1,8 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
-        CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
     },
 };
 use alien_azure_clients::long_running_operation::LongRunningOperationClient;
@@ -351,9 +351,7 @@ impl ArtifactRegistry for AcrArtifactRegistry {
         );
 
         // ACR OAuth2 access tokens expire in ~5 minutes
-        let expires_at = Some(
-            (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339(),
-        );
+        let expires_at = Some((chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339());
 
         Ok(ArtifactRegistryCredentials {
             auth_method: RegistryAuthMethod::Bearer,

@@ -43,7 +43,6 @@ pub async fn handle_provisioning(
         debug!(
             resource_id = %res_id,
             status = ?res_state.status,
-            is_externally_provisioned = res_state.is_externally_provisioned,
             has_outputs = res_state.outputs.is_some(),
             lifecycle = ?res_state.lifecycle,
             "Provisioning: resource in stack state"

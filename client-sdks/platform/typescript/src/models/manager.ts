@@ -46,13 +46,21 @@ export type ManagerPlatformAzure = ClosedEnum<typeof ManagerPlatformAzure>;
  */
 export type ManagerManagementConfigAzure = {
   /**
-   * The principal ID of the service principal in the management account
+   * Management service principal object ID for local development fallback
    */
-  managementPrincipalId: string;
+  managementPrincipalId?: string | null | undefined;
   /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
   platform: ManagerPlatformAzure;
 };
 
@@ -92,9 +100,9 @@ export type ManagerManagementConfigAws = {
  * Management configuration for cross-account access (self-reported via heartbeat)
  */
 export type ManagerManagementConfigUnion =
-  | ManagerManagementConfigAzure
   | ManagerManagementConfigAws
   | ManagerManagementConfigGcp
+  | ManagerManagementConfigAzure
   | ManagerManagementConfigKubernetes
   | any;
 
@@ -141,9 +149,9 @@ export type Manager = {
    * Management configuration for cross-account access (self-reported via heartbeat)
    */
   managementConfig?:
-    | ManagerManagementConfigAzure
     | ManagerManagementConfigAws
     | ManagerManagementConfigGcp
+    | ManagerManagementConfigAzure
     | ManagerManagementConfigKubernetes
     | any
     | null
@@ -223,8 +231,10 @@ export const ManagerManagementConfigAzure$inboundSchema: z.ZodType<
   ManagerManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.string(),
+  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
   platform: ManagerPlatformAzure$inboundSchema,
 });
 
@@ -291,9 +301,9 @@ export const ManagerManagementConfigUnion$inboundSchema: z.ZodType<
   ManagerManagementConfigUnion,
   unknown
 > = z.union([
-  z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
   z.lazy(() => ManagerManagementConfigAws$inboundSchema),
   z.lazy(() => ManagerManagementConfigGcp$inboundSchema),
+  z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
   z.lazy(() => ManagerManagementConfigKubernetes$inboundSchema),
   z.any(),
 ]);
@@ -335,9 +345,9 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   url: z.nullable(z.string()).optional(),
   managementConfig: z.nullable(
     z.union([
-      z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
       z.lazy(() => ManagerManagementConfigAws$inboundSchema),
       z.lazy(() => ManagerManagementConfigGcp$inboundSchema),
+      z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
       z.lazy(() => ManagerManagementConfigKubernetes$inboundSchema),
       z.any(),
     ]),

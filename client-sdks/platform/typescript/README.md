@@ -157,6 +157,10 @@ run();
 
 * [whoami](docs/sdks/auth/README.md#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
 
+### [Billing](docs/sdks/billing/README.md)
+
+* [listAuditLog](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
+
 ### [Commands](docs/sdks/commands/README.md)
 
 * [list](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
@@ -168,10 +172,10 @@ run();
 
 ### [Containers](docs/sdks/containers/README.md)
 
-* [getOverview](docs/sdks/containers/README.md#getoverview) - Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
-* [getAttention](docs/sdks/containers/README.md#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
-* [getDeployments](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
-* [getMachines](docs/sdks/containers/README.md#getmachines) - Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+* [getOverview](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+* [getAttention](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
+* [getDeployments](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
+* [getMachines](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
 * [getDeploymentCluster](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 * [listDeploymentContainers](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
 * [getDeploymentContainer](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
@@ -202,7 +206,7 @@ run();
 * [get](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [import](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+* [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -317,18 +321,19 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`apiKeysRevoke`](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 - [`apiKeysUpdate`](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
 - [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+- [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 - [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
-- [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
+- [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
 - [`containersGetDeploymentCluster`](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 - [`containersGetDeploymentContainer`](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
-- [`containersGetDeployments`](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
-- [`containersGetMachines`](docs/sdks/containers/README.md#getmachines) - Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
-- [`containersGetOverview`](docs/sdks/containers/README.md#getoverview) - Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+- [`containersGetDeployments`](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
+- [`containersGetMachines`](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+- [`containersGetOverview`](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
 - [`containersListDeploymentContainerInstanceEvents`](docs/sdks/containers/README.md#listdeploymentcontainerinstanceevents) - List orchestration events for a specific container in a deployment.
 - [`containersListDeploymentContainers`](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
 - [`containersListDeploymentEvents`](docs/sdks/containers/README.md#listdeploymentevents) - List orchestration events for a deployment's container cluster.
@@ -346,7 +351,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
-- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
 - [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
@@ -529,7 +534,7 @@ run();
 ### Error Classes
 **Primary errors:**
 * [`AlienError`](./src/models/errors/alienerror.ts): The base class for HTTP error responses.
-  * [`APIError`](./src/models/errors/apierror.ts): Generic error.
+  * [`APIError`](./src/models/errors/apierror.ts): *
 
 <details><summary>Less common errors (6)</summary>
 
@@ -547,6 +552,8 @@ run();
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>
+
+\* Check [the method documentation](#available-resources-and-operations) to see if the error is applicable.
 <!-- End Error Handling [errors] -->
 
 <!-- Start Server Selection [server] -->

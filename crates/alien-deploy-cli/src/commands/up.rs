@@ -8,6 +8,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
@@ -23,7 +24,6 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
-use alien_cli_common::network::{self, NetworkArgs};
 use clap::Parser;
 use std::str::FromStr;
 
@@ -202,9 +202,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             // Build progress callback
-            let progress = std::sync::Arc::new(std::sync::Mutex::new(
-                output::DeployProgress::new(),
-            ));
+            let progress =
+                std::sync::Arc::new(std::sync::Mutex::new(output::DeployProgress::new()));
             let progress_clone = progress.clone();
             let on_progress: alien_deployment::runner::ProgressCallback =
                 Box::new(move |step_progress| {
@@ -295,7 +294,9 @@ fn resolve_deployment_info(
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "platform".to_string(),
-                message: "--platform is required for new deployments. Choose from: aws, gcp, azure.".to_string(),
+                message:
+                    "--platform is required for new deployments. Choose from: aws, gcp, azure."
+                        .to_string(),
             })
         })?;
 
@@ -382,13 +383,13 @@ async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Re
         manager_url: String,
     }
 
-    let resolved: ResolveResponse = resp
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to parse /v1/resolve response".to_string(),
-        })?;
+    let resolved: ResolveResponse =
+        resp.json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse /v1/resolve response".to_string(),
+            })?;
 
     Ok(resolved.manager_url)
 }
@@ -674,16 +675,17 @@ async fn run_kubernetes_pull_model(
 ) -> Result<()> {
     output::info("Kubernetes platform detected — use Helm to install the agent.");
     output::info("");
-    output::info("Add the chart and install:");
+    output::info("Generate the stack-specific chart and install it:");
     println!();
-    println!("  helm install alien-agent ./charts/alien-agent \\");
-    println!("    --set syncUrl={} \\", manager_url);
-    println!("    --set syncToken={} \\", token);
-    println!("    --set encryptionKey=$(openssl rand -hex 32) \\",);
-    println!("    --set namespace=<your-app-namespace>");
+    println!("  alien render --format helm --stack ./alien.ts --output ./dist/helm");
+    println!("  # Edit ./dist/helm/values.yaml:");
+    println!("  #   management.url: {}", manager_url);
+    println!("  #   management.token: {}", token);
+    println!("  #   management.deploymentId: {}", deployment_id);
+    println!("  helm install alien-agent ./dist/helm --namespace <your-app-namespace> --create-namespace");
     println!();
     output::info(&format!("Deployment ID: {}", deployment_id));
-    output::info("The agent will register with the manager on first sync.");
+    output::info("The generated chart is stack-specific; do not use the old generic agent chart.");
 
     Ok(())
 }
@@ -889,7 +891,7 @@ pub async fn push_initial_setup(
                 let rel = resp.into_inner();
                 // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
                 // Extract the inner stack value for the target platform.
-                let mut platform_stack_value = match platform {
+                let platform_stack_value = match platform {
                     Platform::Aws => rel.stack.aws,
                     Platform::Gcp => rel.stack.gcp,
                     Platform::Azure => rel.stack.azure,
@@ -970,8 +972,8 @@ pub async fn push_initial_setup(
 
     // Override network settings if the customer provided CLI flags
     if let Some(net_args) = network_args {
-        let network_override =
-            network::parse_network_settings(net_args, platform.as_str()).map_err(|e| {
+        let network_override = network::parse_network_settings(net_args, platform.as_str())
+            .map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "network".to_string(),
                     message: e,
@@ -1104,7 +1106,9 @@ pub async fn push_initial_setup(
             ),
         })),
         LoopOutcome::Neutral => {
-            output::success("Setup complete. Your deployment is being provisioned and will be ready shortly.");
+            output::success(
+                "Setup complete. Your deployment is being provisioned and will be ready shortly.",
+            );
             Ok(())
         }
     }

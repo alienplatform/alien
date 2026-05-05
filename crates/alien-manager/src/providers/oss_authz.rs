@@ -27,7 +27,10 @@ impl OssAuthz {
     fn can_act_on_project(s: &Subject, _project_id: &str) -> bool {
         // OSS is single-project; project_id is always "default" and any
         // authenticated token is project-bound.
-        matches!(s.kind, SubjectKind::ServiceAccount { .. } | SubjectKind::User { .. })
+        matches!(
+            s.kind,
+            SubjectKind::ServiceAccount { .. } | SubjectKind::User { .. }
+        )
     }
 }
 
@@ -256,6 +259,7 @@ mod tests {
             runtime_metadata: None,
             current_release_id: None,
             desired_release_id: None,
+            import_source: None,
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,

@@ -235,9 +235,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message:
-                        "`alien dev deployments token` is not supported in local dev mode."
-                            .to_string(),
+                    message: "`alien dev deployments token` is not supported in local dev mode."
+                        .to_string(),
                 }));
             }
             let client = ctx.sdk_client().await?;
@@ -339,10 +338,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client) -> Result<()>
     Ok(())
 }
 
-async fn get_deployment_task(
-    client: &alien_manager_api::Client,
-    reference: &str,
-) -> Result<()> {
+async fn get_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
     println!(
@@ -443,10 +439,7 @@ async fn delete_deployment_task(
     Ok(())
 }
 
-async fn retry_deployment_task(
-    client: &alien_manager_api::Client,
-    reference: &str,
-) -> Result<()> {
+async fn retry_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
     println!(

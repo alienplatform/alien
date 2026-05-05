@@ -19,6 +19,7 @@ export type ReleaseResponse = {
   createdAt: string;
   gitMetadata?: GitMetadataResponse | null | undefined;
   id: string;
+  projectId: string;
   /**
    * The release API accepts stacks keyed by platform.
    *
@@ -26,6 +27,7 @@ export type ReleaseResponse = {
    * Only one platform stack needs to be present.
    */
   stack: StackByPlatform;
+  workspaceId: string;
 };
 
 /** @internal */
@@ -36,7 +38,9 @@ export const ReleaseResponse$inboundSchema: z.ZodType<
   createdAt: z.string(),
   gitMetadata: z.nullable(GitMetadataResponse$inboundSchema).optional(),
   id: z.string(),
+  projectId: z.string(),
   stack: StackByPlatform$inboundSchema,
+  workspaceId: z.string(),
 });
 
 export function releaseResponseFromJSON(

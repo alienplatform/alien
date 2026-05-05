@@ -9,8 +9,8 @@ use alien_aws_clients::{
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
     elbv2::{Elbv2Api, Elbv2Client},
-    iam::{IamApi, IamClient},
     eventbridge::{EventBridgeApi, EventBridgeClient},
+    iam::{IamApi, IamClient},
     lambda::{LambdaApi, LambdaClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
@@ -64,7 +64,7 @@ use alien_k8s_clients::{
 };
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 
 /// Trait that provides methods to get platform service clients.
@@ -72,7 +72,7 @@ use mockall::automock;
 ///
 /// For cloud platforms (AWS, GCP, Azure, Kubernetes), this provides API clients.
 /// For local platform, this will provide local service managers (function manager, storage manager, etc).
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait PlatformServiceProvider: Send + Sync {
     // AWS clients

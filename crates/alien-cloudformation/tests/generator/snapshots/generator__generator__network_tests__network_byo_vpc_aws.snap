@@ -1,0 +1,198 @@
+---
+source: crates/alien-cloudformation/tests/generator/network_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: byo vpc aws
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - DeploymentGroupToken
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - VpcId
+      - PublicSubnetIds
+      - PrivateSubnetIds
+      - SecurityGroupIds
+    - Label:
+        default: Domains
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      CertificateArn:
+        default: Certificate ARN
+      DeploymentGroupToken:
+        default: Deployment group token
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager AWS account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      PrivateSubnetIds:
+        default: Private subnet IDs
+      PublicSubnetIds:
+        default: Public subnet IDs
+      SecurityGroupIds:
+        default: Security group IDs
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+      VpcId:
+        default: VPC ID
+Parameters:
+  DeploymentGroupToken:
+    Type: String
+    Description: Deployment-group token used when registering the resolved stack import.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Default: ''
+  VpcId:
+    Type: String
+    Description: Existing VPC ID.
+    Default: vpc-0123456789abcdef0
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Existing public subnet IDs.
+    Default: subnet-public-a,subnet-public-b
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Existing private subnet IDs.
+    Default: subnet-private-a,subnet-private-b
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Existing security group IDs.
+    Default: sg-0123456789abcdef0
+  DomainName:
+    Type: String
+    Description: Optional domain name for public endpoints. Empty disables custom domains.
+  HostedZoneId:
+    Type: String
+    Description: Optional Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: Optional ACM certificate ARN for the domain.
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - off
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: on
+    AllowedValues:
+    - off
+    - on
+Conditions:
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-logs-bucket
+Outputs:
+  AlienSourceKind:
+    Value: cloudformation
+    Description: Distribution source kind.
+  AlienPlatform:
+    Value: aws
+    Description: Target platform.
+  AlienRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  AlienManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Manager import ManagementConfig JSON.
+  AlienStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          type: byo-vpc-aws
+          vpcId:
+            Ref: VpcId
+          publicSubnetIds:
+            Ref: PublicSubnetIds
+          privateSubnetIds:
+            Ref: PrivateSubnetIds
+          securityGroupIds:
+            Ref: SecurityGroupIds
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+    Description: Manager import StackSettings JSON.
+  AlienResources:
+    Value:
+      Fn::ToJsonString:
+      - id: logs-bucket
+        type: sample-resource
+        importData:
+          bucketName:
+            Ref: LogsBucket
+          bucketArn:
+            Fn::GetAtt:
+            - LogsBucket
+            - Arn
+    Description: Manager import resources JSON.

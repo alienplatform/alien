@@ -1,0 +1,184 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== locals.tf ===
+locals {
+  alien_platform = "gcp"
+  alien_target   = "gcp"
+  alien_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  alien_stack_settings = {}
+  alien_resources = [
+    {
+      id   = "public-api"
+      type = "function"
+      importData = {
+        projectId               = var.gcp_project
+        region                  = var.gcp_region
+        serviceName             = google_cloud_run_v2_service.public_api.name
+        url                     = google_cloud_run_v2_service.public_api.uri
+        pubsubSubscriptionNames = []
+        schedulerJobNames       = []
+        eventarcTriggerNames    = []
+      }
+    }
+  ]
+}
+
+=== public_api.tf ===
+resource "google_cloud_run_v2_service" "public_api" {
+  name     = "${var.stack_name}-public-api"
+  project  = var.gcp_project
+  location = var.gcp_region
+  ingress  = "INGRESS_TRAFFIC_ALL"
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "public-api"
+    "alien-resource-type" = "function"
+  }
+
+  template {
+    timeout = "60s"
+
+    containers {
+      image = "us-central1-docker.pkg.dev/proj/app/api:1"
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle = true
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes  = all
+    prevent_destroy = true
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "public_api_public_invoker" {
+  project  = var.gcp_project
+  location = google_cloud_run_v2_service.public_api.location
+  name     = google_cloud_run_v2_service.public_api.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+
+  lifecycle {
+    ignore_changes  = all
+    prevent_destroy = true
+  }
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-public
+
+Target: `gcp`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-public' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

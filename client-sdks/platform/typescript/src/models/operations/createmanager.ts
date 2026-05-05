@@ -57,13 +57,21 @@ export type CreateManagerPlatformAzure = ClosedEnum<
  */
 export type ManagementConfigAzure = {
   /**
-   * The principal ID of the service principal in the management account
+   * Management service principal object ID for local development fallback
    */
-  managementPrincipalId: string;
+  managementPrincipalId?: string | null | undefined;
   /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
   platform: CreateManagerPlatformAzure;
 };
 
@@ -107,9 +115,9 @@ export type ManagementConfigAws = {
  * Management configuration for cross-account access (self-reported via heartbeat)
  */
 export type ManagementConfig =
-  | ManagementConfigAzure
   | ManagementConfigAws
   | ManagementConfigGcp
+  | ManagementConfigAzure
   | ManagementConfigKubernetes
   | any;
 
@@ -156,9 +164,9 @@ export type CreateManagerResponse = {
    * Management configuration for cross-account access (self-reported via heartbeat)
    */
   managementConfig?:
-    | ManagementConfigAzure
     | ManagementConfigAws
     | ManagementConfigGcp
+    | ManagementConfigAzure
     | ManagementConfigKubernetes
     | any
     | null
@@ -272,8 +280,10 @@ export const ManagementConfigAzure$inboundSchema: z.ZodType<
   ManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.string(),
+  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
   platform: CreateManagerPlatformAzure$inboundSchema,
 });
 
@@ -340,9 +350,9 @@ export const ManagementConfig$inboundSchema: z.ZodType<
   ManagementConfig,
   unknown
 > = z.union([
-  z.lazy(() => ManagementConfigAzure$inboundSchema),
   z.lazy(() => ManagementConfigAws$inboundSchema),
   z.lazy(() => ManagementConfigGcp$inboundSchema),
+  z.lazy(() => ManagementConfigAzure$inboundSchema),
   z.lazy(() => ManagementConfigKubernetes$inboundSchema),
   z.any(),
 ]);
@@ -389,9 +399,9 @@ export const CreateManagerResponse$inboundSchema: z.ZodType<
   url: z.nullable(z.string()).optional(),
   managementConfig: z.nullable(
     z.union([
-      z.lazy(() => ManagementConfigAzure$inboundSchema),
       z.lazy(() => ManagementConfigAws$inboundSchema),
       z.lazy(() => ManagementConfigGcp$inboundSchema),
+      z.lazy(() => ManagementConfigAzure$inboundSchema),
       z.lazy(() => ManagementConfigKubernetes$inboundSchema),
       z.any(),
     ]),

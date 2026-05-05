@@ -25,7 +25,6 @@ const value: models.SyncReconcileResponseManagementConfigGcp = {
 
 ```typescript
 const value: models.SyncReconcileResponseManagementConfigAzure = {
-  managementPrincipalId: "<id>",
   managingTenantId: "<id>",
   platform: "azure",
 };

@@ -14,6 +14,10 @@ export type ListAPIKeysRequest = {
    */
   workspace?: string | undefined;
   /**
+   * Filter by project ID or name.
+   */
+  project?: string | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -40,6 +44,7 @@ export type ListAPIKeysResponse = {
 /** @internal */
 export type ListAPIKeysRequest$Outbound = {
   workspace?: string | undefined;
+  project?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -50,6 +55,7 @@ export const ListAPIKeysRequest$outboundSchema: z.ZodType<
   ListAPIKeysRequest
 > = z.object({
   workspace: z.string().optional(),
+  project: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });

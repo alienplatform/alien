@@ -22,7 +22,8 @@ test-utils = [
     "alien-gcp-clients/test-utils", 
     "alien-azure-clients/test-utils",
     "alien-client-config/test-utils",
-    "dep:alien-preflights"
+    "dep:alien-preflights",
+    "dep:mockall"
 ]
 
 [lib]
@@ -58,6 +59,7 @@ serde_yaml = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
 alien-preflights = { workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 pem = { workspace = true }
 p12 = "0.6"
 

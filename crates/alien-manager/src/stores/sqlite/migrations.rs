@@ -23,6 +23,7 @@ pub(crate) enum Deployments {
     RuntimeMetadata,
     CurrentReleaseId,
     DesiredReleaseId,
+    ImportSource,
     RetryRequested,
     EnvironmentVariables,
     DeploymentToken,
@@ -117,6 +118,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Deployments::RuntimeMetadata).text())
             .col(ColumnDef::new(Deployments::CurrentReleaseId).text())
             .col(ColumnDef::new(Deployments::DesiredReleaseId).text())
+            .col(ColumnDef::new(Deployments::ImportSource).text())
             .col(ColumnDef::new(Deployments::EnvironmentVariables).text())
             .col(ColumnDef::new(Deployments::DeploymentToken).text())
             .col(
@@ -297,6 +299,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
     let alter_statements: &[&str] = &[
         "ALTER TABLE deployments ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployments ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE deployments ADD COLUMN import_source TEXT",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",

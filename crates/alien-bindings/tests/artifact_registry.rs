@@ -74,8 +74,7 @@ impl AsyncTestContext for LocalProviderArtifactRegistryTestContext {
             // Start a container registry for testing (no auth, matching production behavior)
             use container_registry::ContainerRegistry;
 
-            let mut registry = ContainerRegistry::builder()
-                .build_for_testing();
+            let mut registry = ContainerRegistry::builder().build_for_testing();
 
             // Bind to a random port on localhost
             registry.bind(([127, 0, 0, 1], 0).into());
@@ -174,8 +173,7 @@ impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
             // Start a container registry for the gRPC server (no auth, matching production behavior)
             use container_registry::ContainerRegistry;
 
-            let mut registry = ContainerRegistry::builder()
-                .build_for_testing();
+            let mut registry = ContainerRegistry::builder().build_for_testing();
 
             // Bind to a random port on localhost
             registry.bind(([127, 0, 0, 1], 0).into());

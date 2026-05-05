@@ -1,0 +1,19 @@
+[package]
+name = "alien-helm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Helm chart generation for Alien stacks"
+license-file.workspace = true
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+indexmap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+alien-test-kit = { workspace = true, features = ["linters"] }
+insta = { workspace = true }
+serde_yaml = { workspace = true }

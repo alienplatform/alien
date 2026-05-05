@@ -29,6 +29,71 @@ pub enum DeploymentModel {
     Pull,
 }
 
+/// Infrastructure artifact used for initial setup in distribution E2E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributionFlow {
+    /// CloudFormation creates AWS infrastructure and registers the stack.
+    CloudFormationAwsPush,
+    /// Terraform creates AWS infrastructure and registers the stack.
+    TerraformAwsPush,
+    /// Terraform creates GCP infrastructure and registers the stack.
+    TerraformGcpPush,
+    /// Terraform creates Azure infrastructure and registers the stack.
+    TerraformAzurePush,
+    /// Terraform creates AWS-side infra, Helm installs the K8s runtime on EKS.
+    TerraformEksHelmPull,
+    /// Terraform creates GCP-side infra, Helm installs the K8s runtime on GKE.
+    TerraformGkeHelmPull,
+    /// Terraform creates Azure-side infra, Helm installs the K8s runtime on AKS.
+    TerraformAksHelmPull,
+    /// Terraform/external values feed Helm's local-import path for on-prem K8s.
+    TerraformOnpremHelmPull,
+}
+
+impl DistributionFlow {
+    /// Platform used by the running deployment after import.
+    pub fn platform(self) -> Platform {
+        match self {
+            DistributionFlow::CloudFormationAwsPush | DistributionFlow::TerraformAwsPush => {
+                Platform::Aws
+            }
+            DistributionFlow::TerraformGcpPush => Platform::Gcp,
+            DistributionFlow::TerraformAzurePush => Platform::Azure,
+            DistributionFlow::TerraformEksHelmPull
+            | DistributionFlow::TerraformGkeHelmPull
+            | DistributionFlow::TerraformAksHelmPull
+            | DistributionFlow::TerraformOnpremHelmPull => Platform::Kubernetes,
+        }
+    }
+
+    /// Deployment model used by the running deployment after import.
+    pub fn deployment_model(self) -> DeploymentModel {
+        match self {
+            DistributionFlow::CloudFormationAwsPush
+            | DistributionFlow::TerraformAwsPush
+            | DistributionFlow::TerraformGcpPush
+            | DistributionFlow::TerraformAzurePush => DeploymentModel::Push,
+            DistributionFlow::TerraformEksHelmPull
+            | DistributionFlow::TerraformGkeHelmPull
+            | DistributionFlow::TerraformAksHelmPull
+            | DistributionFlow::TerraformOnpremHelmPull => DeploymentModel::Pull,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DistributionFlow::CloudFormationAwsPush => "cloudformation_aws_push",
+            DistributionFlow::TerraformAwsPush => "terraform_aws_push",
+            DistributionFlow::TerraformGcpPush => "terraform_gcp_push",
+            DistributionFlow::TerraformAzurePush => "terraform_azure_push",
+            DistributionFlow::TerraformEksHelmPull => "terraform_eks_helm_pull",
+            DistributionFlow::TerraformGkeHelmPull => "terraform_gke_helm_pull",
+            DistributionFlow::TerraformAksHelmPull => "terraform_aks_helm_pull",
+            DistributionFlow::TerraformOnpremHelmPull => "terraform_onprem_helm_pull",
+        }
+    }
+}
+
 impl std::fmt::Display for DeploymentModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -217,7 +282,7 @@ pub fn exclusion_reason(
 // ---------------------------------------------------------------------------
 
 /// Returns the relative path to the test app directory for a given language.
-pub fn test_app_path(language: Language) -> &'static str {
+pub(crate) fn test_app_path(language: Language) -> &'static str {
     match language {
         Language::Rust => "test-apps/comprehensive-rust",
         Language::TypeScript => "test-apps/comprehensive-typescript",
@@ -264,6 +329,9 @@ pub struct TestContext {
     pub language: Language,
     /// Alien-agent handle (pull model only).
     pub agent: Option<crate::agent::TestAlienAgent>,
+    /// Distribution artifacts that must be destroyed outside the native
+    /// deployment state machine (Terraform state, CFN stack, Helm release).
+    pub distribution_cleanups: Vec<crate::distribution::DistributionArtifactCleanup>,
 }
 
 impl TestContext {
@@ -325,6 +393,10 @@ impl TestContext {
         // This prevents orphaned agent processes from spamming logs after the test.
         self.deployment.kill_foreground_agent().await;
 
+        for cleanup in self.distribution_cleanups {
+            cleanup.cleanup().await;
+        }
+
         info!(deployment = %self.deployment.id, "cleanup: complete");
     }
 }
@@ -338,7 +410,7 @@ impl TestContext {
 /// The config file (alien.ts) uses the `@alienplatform/core` SDK to define
 /// stacks. This function evaluates it via bun and captures the serialized
 /// JSON output.
-pub async fn load_stack_json(
+pub(crate) async fn load_stack_json(
     app_dir: &std::path::Path,
     config_file: &str,
     platform: Platform,
@@ -381,6 +453,93 @@ console.log(JSON.stringify(stack));
     Ok(stack_by_platform)
 }
 
+async fn start_generated_helm_agent(
+    manager: &Arc<TestManager>,
+    deployment: &TestDeployment,
+    stack: &Stack,
+    agent_image: &str,
+) -> anyhow::Result<crate::agent::TestAlienAgent> {
+    let chart_dir = tempfile::tempdir().context("failed to create generated Helm chart dir")?;
+    let registry = alien_helm::HelmRegistry::built_in();
+    let mut stack_settings = alien_core::StackSettings::default();
+    stack_settings.deployment_model = alien_core::DeploymentModel::Pull;
+    let chart = alien_helm::generate_helm_chart(
+        stack,
+        alien_helm::HelmOptions {
+            registry: &registry,
+            stack_settings,
+            chart_name: format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("failed to generate Helm agent chart: {error}"))?;
+
+    for (path, contents) in chart.files {
+        let path = chart_dir.path().join(path);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, contents).await?;
+    }
+
+    let (repository, tag) = split_image_tag(agent_image)?;
+    let values = serde_json::json!({
+        "management": {
+            "token": deployment.token.clone(),
+            "name": deployment.name.clone(),
+            "url": manager.url.clone(),
+            "deploymentId": deployment.id.clone(),
+            "updates": "auto",
+            "telemetry": "auto",
+            "healthChecks": "on",
+        },
+        "runtime": {
+            "image": {
+                "repository": repository,
+                "tag": tag,
+                "pullPolicy": "IfNotPresent",
+            }
+        },
+        "stackSettings": {
+            "deploymentModel": "pull",
+            "updates": "auto",
+            "telemetry": "auto",
+            "heartbeats": "on",
+        },
+        "infrastructure": null,
+    });
+    let values_path = chart_dir.path().join("values.e2e.yaml");
+    tokio::fs::write(&values_path, serde_yaml::to_string(&values)?).await?;
+
+    crate::agent::TestAlienAgent::helm_install_with_values(
+        chart_dir.path(),
+        &values_path,
+        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        "alien-test",
+        None,
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!("Failed to start alien-agent via generated Helm chart: {error}")
+    })
+}
+
+fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
+    if image.contains('@') {
+        anyhow::bail!(
+            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
+        );
+    }
+    let last_slash = image.rfind('/');
+    let last_colon = image.rfind(':');
+    if let Some(colon) =
+        last_colon.filter(|colon| last_slash.map(|slash| *colon > slash).unwrap_or(true))
+    {
+        Ok((image[..colon].to_string(), image[colon + 1..].to_string()))
+    } else {
+        Ok((image.to_string(), "latest".to_string()))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tracing
 // ---------------------------------------------------------------------------
@@ -404,7 +563,7 @@ pub fn init_tracing() {
 ///
 /// Uses `CARGO_MANIFEST_DIR` (which points to `crates/alien-test/`) and walks
 /// up two levels to the workspace root, then joins `tests/e2e/`.
-fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
+pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         // crates/alien-test/ → workspace root
         let workspace_root = PathBuf::from(&manifest)
@@ -436,7 +595,7 @@ fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 /// Deploy a test app to the given platform with the specified model and language.
 ///
 /// Extract ECR image tags from a pushed stack's function resources.
-fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
+pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
     use alien_core::Function;
 
     stack
@@ -1246,7 +1405,7 @@ pub async fn setup(
         //
         // Cloud pull: deploy alien-agent Docker image with injected creds.
         // K8s pull: helm install alien-agent chart.
-        let (deployment, _stack) = deploy_test_app(&manager, platform, model, language).await?;
+        let (deployment, stack) = deploy_test_app(&manager, platform, model, language).await?;
         info!(
             deployment_id = %deployment.id,
             "Deployment created, waiting for running status"
@@ -1281,15 +1440,9 @@ pub async fn setup(
 
             match platform {
                 Platform::Kubernetes => {
-                    let agent = crate::agent::TestAlienAgent::helm_install(
-                        &manager,
-                        "charts/alien-agent",
-                        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-                        "alien-test",
-                        None,
-                    )
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start alien-agent via Helm: {}", e))?;
+                    let agent =
+                        start_generated_helm_agent(&manager, &deployment, &stack, &agent_image)
+                            .await?;
                     Some(agent)
                 }
                 _ => {
@@ -1388,7 +1541,22 @@ pub async fn setup(
         model,
         language,
         agent,
+        distribution_cleanups: Vec::new(),
     })
+}
+
+/// Run the full distribution E2E setup for a given artifact flow.
+///
+/// This intentionally does not call [`setup`]. Distribution tests must not
+/// silently fall back to native controller provisioning; each flow has to prove
+/// its own initial infrastructure path before reusing the common assertions.
+pub async fn setup_distribution(
+    flow: DistributionFlow,
+    language: Language,
+) -> anyhow::Result<TestContext> {
+    init_tracing();
+
+    crate::distribution::setup_distribution(flow, language).await
 }
 
 /// Best-effort cleanup when setup() fails after creating a deployment/agent.

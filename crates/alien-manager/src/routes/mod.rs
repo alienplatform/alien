@@ -10,6 +10,7 @@ pub mod install;
 pub mod platforms;
 pub mod registry_proxy;
 pub mod releases;
+pub mod stack;
 pub mod sync;
 pub mod telemetry;
 pub mod tokens;
@@ -63,6 +64,13 @@ pub struct AppState {
     pub pull_validation_cache: Arc<registry_proxy::PullValidationCache>,
     /// Routing table mapping repo path prefixes to upstream registries.
     pub registry_routing_table: Arc<registry_proxy::RegistryRoutingTable>,
+    /// Registry of per-`(ResourceType, Platform)` importers used by the
+    /// stack-import endpoint to translate distribution-artifact payloads
+    /// (CFN Custom Resource, Terraform provider, Helm chart) into typed
+    /// `StackResourceState`. Built once at startup with
+    /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
+    /// is a `Arc` clone and a hash-map lookup.
+    pub import_registry: Arc<alien_infra::ImporterRegistry>,
 }
 
 impl HasCommandServer for AppState {
@@ -104,6 +112,8 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(deployments::router())
         // Releases
         .merge(releases::router())
+        // Stack import (distribution artifacts: CFN, TF, Helm)
+        .merge(stack::router())
         // Deployment groups
         .merge(deployment_groups::router())
         // Commands (authenticated handlers defined in routes/commands.rs)

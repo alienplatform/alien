@@ -9,7 +9,7 @@ let value: CreateDeploymentResponse = {
   deployment: {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     name: "acme-prod",
-    status: "running",
+    status: "refresh-failed",
     projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     platform: "kubernetes",
     deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",

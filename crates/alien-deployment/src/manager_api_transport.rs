@@ -45,11 +45,12 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
     ) -> Result<StepReconcileResult, AlienError> {
-        let state_json = serde_json::to_value(state)
-            .into_alien_error()
-            .context(alien_error::GenericError {
-                message: "Failed to serialize state for reconcile".to_string(),
-            })?;
+        let state_json =
+            serde_json::to_value(state)
+                .into_alien_error()
+                .context(alien_error::GenericError {
+                    message: "Failed to serialize state for reconcile".to_string(),
+                })?;
 
         let error_json = step_error.map(|e| {
             serde_json::to_value(e)

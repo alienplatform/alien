@@ -9,7 +9,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use alien_core::{ContainerOutputs, EnvironmentVariable, FunctionOutputs, Platform, StackSettings};
+use alien_core::{
+    import::ImportSourceKind, ContainerOutputs, EnvironmentVariable, FunctionOutputs, Platform,
+    StackSettings,
+};
 
 use crate::error::ErrorData;
 use crate::ids;
@@ -64,6 +67,8 @@ pub struct DeploymentResponse {
     pub current_release_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desired_release_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_source: Option<ImportSourceKind>,
     pub retry_requested: bool,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,6 +208,7 @@ fn record_to_response(
             .map(|m| serde_json::to_value(m).unwrap_or_default()),
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
+        import_source: r.import_source,
         retry_requested: r.retry_requested,
         created_at: r.created_at.to_rfc3339(),
         updated_at: r.updated_at.map(|u| u.to_rfc3339()),
@@ -255,13 +261,17 @@ async fn create_deployment(
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
             match &req.deployment_group_id {
                 Some(id) => id.clone(),
-                None => match state.deployment_store.list_deployment_groups(&subject).await {
+                None => match state
+                    .deployment_store
+                    .list_deployment_groups(&subject)
+                    .await
+                {
                     Ok(groups) if !groups.is_empty() => groups[0].id.clone(),
                     Ok(_) => {
                         return ErrorData::bad_request(
                             "No deployment groups exist. Create one first.",
                         )
-                        .into_response()
+                        .into_response();
                     }
                     Err(e) => return e.into_response(),
                 },
@@ -269,7 +279,7 @@ async fn create_deployment(
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot create deployments")
-                .into_response()
+                .into_response();
         }
     };
 
@@ -406,7 +416,7 @@ async fn list_deployments(
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
-                .into_response()
+                .into_response();
         }
     };
 
@@ -415,7 +425,11 @@ async fn list_deployments(
         ..Default::default()
     };
 
-    let deployments = match state.deployment_store.list_deployments(&subject, &filter).await {
+    let deployments = match state
+        .deployment_store
+        .list_deployments(&subject, &filter)
+        .await
+    {
         Ok(d) => d,
         Err(e) => return e.into_response(),
     };
@@ -486,7 +500,8 @@ async fn get_deployment(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_read_deployment(&subject, &deployment) {
+    };
+    if !state.authz.can_read_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -521,7 +536,8 @@ async fn get_deployment_info(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_read_deployment(&subject, &deployment) {
+    };
+    if !state.authz.can_read_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -593,16 +609,25 @@ async fn delete_deployment(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_delete_deployment(&subject, &deployment) {
+    };
+    if !state.authz.can_delete_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
     if query.force {
-        if let Err(e) = state.deployment_store.delete_deployment(&subject, &id).await {
+        if let Err(e) = state
+            .deployment_store
+            .delete_deployment(&subject, &id)
+            .await
+        {
             return e.into_response();
         }
     } else {
-        if let Err(e) = state.deployment_store.set_delete_pending(&subject, &id).await {
+        if let Err(e) = state
+            .deployment_store
+            .set_delete_pending(&subject, &id)
+            .await
+        {
             return e.into_response();
         }
     }
@@ -644,11 +669,16 @@ async fn retry_deployment(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_update_deployment(&subject, &deployment) {
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
-    if let Err(e) = state.deployment_store.set_retry_requested(&subject, &id).await {
+    if let Err(e) = state
+        .deployment_store
+        .set_retry_requested(&subject, &id)
+        .await
+    {
         return e.into_response();
     }
 
@@ -683,7 +713,8 @@ async fn redeploy(
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_update_deployment(&subject, &deployment) {
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot redeploy").into_response();
     }
 

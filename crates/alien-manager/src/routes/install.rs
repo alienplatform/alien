@@ -45,12 +45,8 @@ fn is_safe_releases_url(url: &str) -> bool {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return false;
     }
-    !url.chars().any(|c| {
-        matches!(
-            c,
-            '"' | '\\' | '$' | '`' | '\n' | '\r' | '\0'
-        ) || c.is_control()
-    })
+    !url.chars()
+        .any(|c| matches!(c, '"' | '\\' | '$' | '`' | '\n' | '\r' | '\0') || c.is_control())
 }
 
 async fn install_script(

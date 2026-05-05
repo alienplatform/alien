@@ -16,7 +16,7 @@ export type GetContainerAttentionRequest = {
   /**
    * Filter by project ID or name.
    */
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -51,7 +51,6 @@ export type GetContainerAttentionDeployment = {
    */
   deploymentGroupId?: string | null | undefined;
   deploymentGroupName?: string | null | undefined;
-  projectName?: string | null | undefined;
   issues: Array<Issue>;
 };
 
@@ -68,7 +67,7 @@ export type GetContainerAttentionResponse = {
 /** @internal */
 export type GetContainerAttentionRequest$Outbound = {
   workspace?: string | undefined;
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -78,7 +77,7 @@ export const GetContainerAttentionRequest$outboundSchema: z.ZodType<
   GetContainerAttentionRequest
 > = z.object({
   workspace: z.string().optional(),
-  project: z.string().optional(),
+  project: z.string(),
   deploymentGroupId: z.string().optional(),
 });
 
@@ -125,7 +124,6 @@ export const GetContainerAttentionDeployment$inboundSchema: z.ZodType<
   deploymentName: z.string(),
   deploymentGroupId: z.nullable(z.string()).optional(),
   deploymentGroupName: z.nullable(z.string()).optional(),
-  projectName: z.nullable(z.string()).optional(),
   issues: z.array(z.lazy(() => Issue$inboundSchema)),
 });
 

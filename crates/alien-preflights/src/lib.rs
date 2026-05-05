@@ -341,7 +341,9 @@ impl PreflightRegistry {
     ) -> Vec<&dyn CompileTimeCheck> {
         self.compile_time_checks
             .iter()
-            .filter(|check| check.should_run(stack, platform) && !check.is_deployment_prerequisite())
+            .filter(|check| {
+                check.should_run(stack, platform) && !check.is_deployment_prerequisite()
+            })
             .map(|check| check.as_ref())
             .collect()
     }

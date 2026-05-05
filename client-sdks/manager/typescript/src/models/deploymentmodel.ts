@@ -18,5 +18,8 @@ export const DeploymentModel = {
 export type DeploymentModel = ClosedEnum<typeof DeploymentModel>;
 
 /** @internal */
-export const DeploymentModel$outboundSchema: z.ZodEnum<typeof DeploymentModel> =
+export const DeploymentModel$inboundSchema: z.ZodEnum<typeof DeploymentModel> =
   z.enum(DeploymentModel);
+/** @internal */
+export const DeploymentModel$outboundSchema: z.ZodEnum<typeof DeploymentModel> =
+  DeploymentModel$inboundSchema;

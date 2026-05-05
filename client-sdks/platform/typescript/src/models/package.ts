@@ -54,7 +54,7 @@ export type ConfigTerraform = {
 };
 
 /**
- * Branding configuration for the agent binary
+ * Branding configuration for the agent binary.
  */
 export type ConfigAgentImage = {
   /**
@@ -91,7 +91,7 @@ export type ConfigCloudformation = {
 };
 
 /**
- * Branding configuration for the deploy CLI binary
+ * Branding configuration for the deploy CLI binary.
  */
 export type ConfigCli = {
   /**
@@ -202,6 +202,10 @@ export type OutputsCloudformation = {
    * Template size in bytes
    */
   size: number;
+  /**
+   * S3 URL to the CloudFormation stack policy
+   */
+  stackPolicyUrl: string;
   /**
    * S3 URL to the CloudFormation template
    */
@@ -559,6 +563,7 @@ export const OutputsCloudformation$inboundSchema: z.ZodType<
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
+  stackPolicyUrl: z.string(),
   templateUrl: z.string(),
   type: OutputsTypeCloudformation$inboundSchema,
 });

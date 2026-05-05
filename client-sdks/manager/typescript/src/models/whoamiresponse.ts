@@ -11,7 +11,9 @@ import { ScopeInfo, ScopeInfo$inboundSchema } from "./scopeinfo.js";
 export type WhoamiResponse = {
   id: string;
   kind: string;
+  role: string;
   scope: ScopeInfo;
+  workspaceId: string;
 };
 
 /** @internal */
@@ -19,7 +21,9 @@ export const WhoamiResponse$inboundSchema: z.ZodType<WhoamiResponse, unknown> =
   z.object({
     id: z.string(),
     kind: z.string(),
+    role: z.string(),
     scope: ScopeInfo$inboundSchema,
+    workspaceId: z.string(),
   });
 
 export function whoamiResponseFromJSON(

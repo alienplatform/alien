@@ -20,7 +20,7 @@ const value: models.SyncReconcileResponsePreparedStack = {
           type: "<value>",
         },
       ],
-      lifecycle: "live-on-setup",
+      lifecycle: "live",
     },
   },
 };

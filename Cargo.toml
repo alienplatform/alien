@@ -24,6 +24,11 @@ members = [
   "crates/alien-preflights",
   "crates/alien-deployment",
   "crates/alien-local",
+  "crates/alien-cloudformation",
+  "crates/alien-terraform",
+  "crates/alien-helm",
+  "crates/alien-terraform-provider",
+  "crates/alien-test-kit",
   "crates/alien-manager",
   "crates/alien-agent",
   "crates/alien-deploy-cli",
@@ -76,6 +81,11 @@ alien-preflights = { path = "crates/alien-preflights", version = "1.3.5" }
 alien-deployment = { path = "crates/alien-deployment", version = "1.3.5" }
 alien-cli-common = { path = "crates/alien-cli-common", version = "1.3.5" }
 alien-local = { path = "crates/alien-local", version = "1.3.5" }
+alien-cloudformation = { path = "crates/alien-cloudformation", version = "1.3.5" }
+alien-terraform = { path = "crates/alien-terraform", version = "1.3.5" }
+alien-helm = { path = "crates/alien-helm", version = "1.3.5" }
+alien-terraform-provider = { path = "crates/alien-terraform-provider", version = "1.3.5" }
+alien-test-kit = { path = "crates/alien-test-kit", version = "1.3.5" }
 alien-manager = { path = "crates/alien-manager", version = "1.3.5" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "1.3.5", default-features = false, features = ["rustls"] }
@@ -205,6 +215,7 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 hex = "0.4"
 httpmock = { version = "0.7" }
 mockall = { version = "0.13.1" }
+hcl-rs = "0.19"
 ratatui = { git = "https://github.com/ratatui/ratatui", rev = "fd8e0f024847af467129e0a166390d7e291c1b2e" }
 crossterm = "0.29"
 

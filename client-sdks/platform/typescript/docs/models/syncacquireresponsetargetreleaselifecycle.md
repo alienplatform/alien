@@ -13,5 +13,5 @@ let value: SyncAcquireResponseTargetReleaseLifecycle = "live";
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

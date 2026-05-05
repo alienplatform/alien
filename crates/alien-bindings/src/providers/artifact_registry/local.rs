@@ -1,8 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
-        CrossAccountAccess, CrossAccountPermissions, RepositoryResponse,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
+        CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
     },
 };
 use alien_core::bindings::ArtifactRegistryBinding;

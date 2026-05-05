@@ -171,10 +171,20 @@ export type CloudformationOutputs = {
    */
   size: number;
   /**
+   * S3 URL to the CloudFormation stack policy
+   */
+  stackPolicyUrl: string;
+  /**
    * S3 URL to the CloudFormation template
    */
   templateUrl: string;
 };
+
+export const DeploymentInfoMode = {
+  Auto: "auto",
+  Outputs: "outputs",
+} as const;
+export type DeploymentInfoMode = ClosedEnum<typeof DeploymentInfoMode>;
 
 export type DeploymentInfoCloudformation = {
   /**
@@ -187,10 +197,12 @@ export type DeploymentInfoCloudformation = {
    */
   outputs?: CloudformationOutputs | undefined;
   error?: any | null | undefined;
+  mode: DeploymentInfoMode;
   /**
    * CloudFormation launch URL
    */
   launchUrl: string;
+  outputsSchema?: any | null | undefined;
 };
 
 /**
@@ -281,6 +293,59 @@ export type DeploymentInfoTerraform = {
    * Terraform provider source (without https://)
    */
   providerSource: string;
+  /**
+   * Terraform module source
+   */
+  moduleSource: string;
+  moduleVersion?: string | undefined;
+};
+
+/**
+ * Status of a package build
+ */
+export const HelmStatus = {
+  Pending: "pending",
+  Building: "building",
+  Ready: "ready",
+  Failed: "failed",
+  Canceled: "canceled",
+} as const;
+/**
+ * Status of a package build
+ */
+export type HelmStatus = ClosedEnum<typeof HelmStatus>;
+
+/**
+ * Outputs from a Helm chart package build
+ */
+export type HelmOutputs = {
+  /**
+   * OCI chart reference (e.g., "oci://public.ecr.aws/acme/charts/project-id")
+   */
+  chart: string;
+  /**
+   * Chart version (e.g., "1.2.3")
+   */
+  version: string;
+};
+
+export type DeploymentInfoHelm = {
+  /**
+   * Status of a package build
+   */
+  status: HelmStatus;
+  version?: string | undefined;
+  /**
+   * Outputs from a Helm chart package build
+   */
+  outputs?: HelmOutputs | undefined;
+  error?: any | null | undefined;
+  /**
+   * OCI chart reference
+   */
+  chartRef: string;
+  managerFetchExample: string;
+  localImportExample: string;
 };
 
 export type Packages = {
@@ -291,6 +356,7 @@ export type Packages = {
   cli?: DeploymentInfoCli | undefined;
   cloudformation?: DeploymentInfoCloudformation | undefined;
   terraform?: DeploymentInfoTerraform | undefined;
+  helm?: DeploymentInfoHelm | undefined;
 };
 
 export type DeploymentInfo = {
@@ -476,6 +542,7 @@ export const CloudformationOutputs$inboundSchema: z.ZodType<
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
+  stackPolicyUrl: z.string(),
   templateUrl: z.string(),
 });
 
@@ -490,6 +557,11 @@ export function cloudformationOutputsFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoMode$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoMode
+> = z.enum(DeploymentInfoMode);
+
+/** @internal */
 export const DeploymentInfoCloudformation$inboundSchema: z.ZodType<
   DeploymentInfoCloudformation,
   unknown
@@ -498,7 +570,9 @@ export const DeploymentInfoCloudformation$inboundSchema: z.ZodType<
   version: z.string().optional(),
   outputs: z.lazy(() => CloudformationOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
+  mode: DeploymentInfoMode$inboundSchema,
   launchUrl: z.string(),
+  outputsSchema: z.nullable(z.any()).optional(),
 });
 
 export function deploymentInfoCloudformationFromJSON(
@@ -589,6 +663,8 @@ export const DeploymentInfoTerraform$inboundSchema: z.ZodType<
   outputs: z.lazy(() => TerraformOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
   providerSource: z.string(),
+  moduleSource: z.string(),
+  moduleVersion: z.string().optional(),
 });
 
 export function deploymentInfoTerraformFromJSON(
@@ -602,12 +678,59 @@ export function deploymentInfoTerraformFromJSON(
 }
 
 /** @internal */
+export const HelmStatus$inboundSchema: z.ZodEnum<typeof HelmStatus> = z.enum(
+  HelmStatus,
+);
+
+/** @internal */
+export const HelmOutputs$inboundSchema: z.ZodType<HelmOutputs, unknown> = z
+  .object({
+    chart: z.string(),
+    version: z.string(),
+  });
+
+export function helmOutputsFromJSON(
+  jsonString: string,
+): SafeParseResult<HelmOutputs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HelmOutputs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HelmOutputs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoHelm$inboundSchema: z.ZodType<
+  DeploymentInfoHelm,
+  unknown
+> = z.object({
+  status: HelmStatus$inboundSchema,
+  version: z.string().optional(),
+  outputs: z.lazy(() => HelmOutputs$inboundSchema).optional(),
+  error: z.nullable(z.any()).optional(),
+  chartRef: z.string(),
+  managerFetchExample: z.string(),
+  localImportExample: z.string(),
+});
+
+export function deploymentInfoHelmFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoHelm, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoHelm$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoHelm' from JSON`,
+  );
+}
+
+/** @internal */
 export const Packages$inboundSchema: z.ZodType<Packages, unknown> = z.object({
   ready: z.boolean(),
   cli: z.lazy(() => DeploymentInfoCli$inboundSchema).optional(),
   cloudformation: z.lazy(() => DeploymentInfoCloudformation$inboundSchema)
     .optional(),
   terraform: z.lazy(() => DeploymentInfoTerraform$inboundSchema).optional(),
+  helm: z.lazy(() => DeploymentInfoHelm$inboundSchema).optional(),
 });
 
 export function packagesFromJSON(

@@ -25,7 +25,7 @@ let value: CreateProjectFromTemplateResponse = {
   template: {
     sourceRepository: "alienplatform/alien",
     forkRepository: "<value>",
-    templatePath: "examples/minimal-cloud-agent",
+    templatePath: "examples/remote-worker-ts",
     resolvedRootDirectory: "<value>",
   },
 };

@@ -1283,10 +1283,7 @@ async fn test_insert_and_delete_notification(ctx: &mut GcsTestContext) {
 
     // Create a Pub/Sub topic for the notification
     let (pubsub_client, project_id) = create_pubsub_client();
-    let topic_id = format!(
-        "alien-test-notif-topic-{}",
-        Uuid::new_v4().simple()
-    );
+    let topic_id = format!("alien-test-notif-topic-{}", Uuid::new_v4().simple());
 
     let topic = Topic::builder().build();
     pubsub_client
@@ -1308,14 +1305,20 @@ async fn test_insert_and_delete_notification(ctx: &mut GcsTestContext) {
             let rm_cfg = GcpClientConfig {
                 project_id: project_id.clone(),
                 region: "us-central1".to_string(),
-                credentials: GcpCredentials::ServiceAccountKey { json: gcp_creds_json },
+                credentials: GcpCredentials::ServiceAccountKey {
+                    json: gcp_creds_json,
+                },
                 service_overrides: None,
                 project_number: None,
             };
             let rm_client = ResourceManagerClient::new(reqwest::Client::new(), rm_cfg);
-            let project = rm_client.get_project_metadata(project_id.clone()).await
+            let project = rm_client
+                .get_project_metadata(project_id.clone())
+                .await
                 .expect("Failed to get project metadata for project number");
-            project.project_number.expect("Project metadata missing project_number")
+            project
+                .project_number
+                .expect("Project metadata missing project_number")
         };
         let gcs_service_agent = format!(
             "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
@@ -1362,7 +1365,10 @@ async fn test_insert_and_delete_notification(ctx: &mut GcsTestContext) {
     );
     // GCS may return payload_format as "JSON_API_V1" or omit it (defaults to JSON_API_V1)
     if let Some(fmt) = &created_notification.payload_format {
-        assert_eq!(fmt, "JSON_API_V1", "Payload format should be JSON_API_V1 if present");
+        assert_eq!(
+            fmt, "JSON_API_V1",
+            "Payload format should be JSON_API_V1 if present"
+        );
     }
 
     // Delete the notification
@@ -1396,10 +1402,7 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
 
     // Create a Pub/Sub topic
     let (pubsub_client, project_id) = create_pubsub_client();
-    let topic_id = format!(
-        "alien-test-notif-evt-topic-{}",
-        Uuid::new_v4().simple()
-    );
+    let topic_id = format!("alien-test-notif-evt-topic-{}", Uuid::new_v4().simple());
 
     let topic = Topic::builder().build();
     pubsub_client
@@ -1420,14 +1423,20 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
             let rm_cfg = GcpClientConfig {
                 project_id: project_id.clone(),
                 region: "us-central1".to_string(),
-                credentials: GcpCredentials::ServiceAccountKey { json: gcp_creds_json },
+                credentials: GcpCredentials::ServiceAccountKey {
+                    json: gcp_creds_json,
+                },
                 service_overrides: None,
                 project_number: None,
             };
             let rm_client = ResourceManagerClient::new(reqwest::Client::new(), rm_cfg);
-            let project = rm_client.get_project_metadata(project_id.clone()).await
+            let project = rm_client
+                .get_project_metadata(project_id.clone())
+                .await
                 .expect("Failed to get project metadata for project number");
-            project.project_number.expect("Project metadata missing project_number")
+            project
+                .project_number
+                .expect("Project metadata missing project_number")
         };
         let gcs_service_agent = format!(
             "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
@@ -1456,10 +1465,7 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
 
     let notification = GcsNotification {
         topic: Some(topic_name.clone()),
-        event_types: vec![
-            "OBJECT_FINALIZE".to_string(),
-            "OBJECT_DELETE".to_string(),
-        ],
+        event_types: vec!["OBJECT_FINALIZE".to_string(), "OBJECT_DELETE".to_string()],
         payload_format: Some("JSON_API_V1".to_string()),
         object_name_prefix: Some("uploads/".to_string()),
         custom_attributes: custom_attrs.clone(),
@@ -1479,15 +1485,29 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
     // GCS may return event_types in the response or omit them.
     // If returned, verify they match what we set.
     if !created_notification.event_types.is_empty() {
-        assert_eq!(created_notification.event_types.len(), 2, "Should have two event types");
-        assert!(created_notification.event_types.contains(&"OBJECT_FINALIZE".to_string()));
-        assert!(created_notification.event_types.contains(&"OBJECT_DELETE".to_string()));
+        assert_eq!(
+            created_notification.event_types.len(),
+            2,
+            "Should have two event types"
+        );
+        assert!(created_notification
+            .event_types
+            .contains(&"OBJECT_FINALIZE".to_string()));
+        assert!(created_notification
+            .event_types
+            .contains(&"OBJECT_DELETE".to_string()));
     }
     if let Some(prefix) = &created_notification.object_name_prefix {
-        assert_eq!(prefix, "uploads/", "Object name prefix should match if returned");
+        assert_eq!(
+            prefix, "uploads/",
+            "Object name prefix should match if returned"
+        );
     }
     if let Some(env_val) = created_notification.custom_attributes.get("env") {
-        assert_eq!(env_val, "test", "Custom attribute 'env' should match if returned");
+        assert_eq!(
+            env_val, "test",
+            "Custom attribute 'env' should match if returned"
+        );
     }
 
     // Clean up: delete the notification, then the topic

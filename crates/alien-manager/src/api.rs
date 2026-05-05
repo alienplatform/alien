@@ -29,6 +29,8 @@ use utoipa::OpenApi;
         crate::routes::releases::create_release,
         crate::routes::releases::get_release,
         crate::routes::releases::get_latest_release,
+        // Stack import
+        crate::routes::stack::stack_import,
         // Deployment Groups
         crate::routes::deployment_groups::create_deployment_group,
         crate::routes::deployment_groups::list_deployment_groups,
@@ -56,6 +58,11 @@ use utoipa::OpenApi;
         crate::routes::releases::CreateReleaseRequest,
         crate::routes::releases::GitMetadata,
         crate::routes::releases::ReleaseResponse,
+        // Stack import types (mirror the alien-core request schemas).
+        alien_core::import::request::StackImportRequest,
+        alien_core::import::request::StackImportResponse,
+        alien_core::import::request::ImportSourceKind,
+        alien_core::import::request::ImportedResource,
         // Deployment group types
         crate::routes::deployment_groups::CreateDeploymentGroupRequest,
         crate::routes::deployment_groups::DeploymentGroupResponse,
@@ -88,6 +95,7 @@ use utoipa::OpenApi;
         (name = "deployments", description = "Deployment lifecycle management"),
         (name = "releases", description = "Release management"),
         (name = "deployment-groups", description = "Deployment group management"),
+        (name = "stack-import", description = "Distribution-artifact stack import (CFN, TF, Helm)"),
         (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),

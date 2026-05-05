@@ -86,23 +86,21 @@ impl LocalVault {
 
         let path = secrets_file.clone();
         let data = json.into_bytes();
-        tokio::task::spawn_blocking(move || {
-            alien_core::file_utils::write_secret_file(&path, &data)
-        })
-        .await
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to spawn blocking write task".to_string(),
-            resource_id: None,
-        })?
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to write vault secrets file: {}",
-                secrets_file.display()
-            ),
-            resource_id: None,
-        })
+        tokio::task::spawn_blocking(move || alien_core::file_utils::write_secret_file(&path, &data))
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to spawn blocking write task".to_string(),
+                resource_id: None,
+            })?
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to write vault secrets file: {}",
+                    secrets_file.display()
+                ),
+                resource_id: None,
+            })
     }
 }
 

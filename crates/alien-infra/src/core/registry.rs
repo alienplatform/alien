@@ -34,12 +34,6 @@ pub trait ControllerFactory: Send + Sync + Debug {
     fn create(&self) -> Box<dyn ResourceController>;
 }
 
-/// Factory trait for creating CloudFormation resource importers
-pub trait CloudFormationImporterFactory: Send + Sync + Debug {
-    /// Creates a new instance of the CloudFormation importer
-    fn create(&self) -> Box<dyn crate::cloudformation::traits::CloudFormationResourceImporter>;
-}
-
 /// A factory implementation for controllers that implement Default
 #[derive(Debug)]
 pub struct DefaultControllerFactory<T> {
@@ -69,40 +63,6 @@ where
     }
 }
 
-/// A factory implementation for CloudFormation importers that implement Default
-#[derive(Debug)]
-pub struct DefaultCloudFormationImporterFactory<T> {
-    _phantom: PhantomData<T>,
-}
-
-impl<T> Default for DefaultCloudFormationImporterFactory<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> DefaultCloudFormationImporterFactory<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T> CloudFormationImporterFactory for DefaultCloudFormationImporterFactory<T>
-where
-    T: crate::cloudformation::traits::CloudFormationResourceImporter
-        + Default
-        + Send
-        + Sync
-        + std::fmt::Debug
-        + 'static,
-{
-    fn create(&self) -> Box<dyn crate::cloudformation::traits::CloudFormationResourceImporter> {
-        Box::new(T::default())
-    }
-}
-
 /// Default factory for infrastructure requirements providers
 #[derive(Debug)]
 pub struct DefaultInfraRequirementsProviderFactory<T> {
@@ -128,9 +88,6 @@ impl<T> DefaultInfraRequirementsProviderFactory<T> {
 pub struct ResourceRegistry {
     /// Maps (resource_type, platform) to controller factories
     controller_factories: HashMap<(ResourceType, Platform), Box<dyn ControllerFactory>>,
-    /// Maps (resource_type, platform) to CloudFormation importer factories
-    cloudformation_importer_factories:
-        HashMap<(ResourceType, Platform), Box<dyn CloudFormationImporterFactory>>,
 }
 
 impl Clone for ResourceRegistry {
@@ -147,7 +104,6 @@ impl ResourceRegistry {
     pub fn new() -> Self {
         Self {
             controller_factories: HashMap::new(),
-            cloudformation_importer_factories: HashMap::new(),
         }
     }
 
@@ -177,23 +133,6 @@ impl ResourceRegistry {
             .map(|factory| factory.create())
     }
 
-    /// Gets a CloudFormation importer for the given resource type and platform
-    pub fn get_cloudformation_importer(
-        &self,
-        resource_type: ResourceType,
-        platform: Platform,
-    ) -> Result<Box<dyn crate::cloudformation::traits::CloudFormationResourceImporter>> {
-        let key = (resource_type.clone(), platform);
-        self.cloudformation_importer_factories
-            .get(&key)
-            .ok_or_else(|| AlienError::new(ErrorData::InfrastructureError {
-                message: format!("CloudFormation importer not registered for resource type '{}' on platform {:?}", resource_type, platform),
-                operation: Some("get_cloudformation_importer".to_string()),
-                resource_id: None,
-            }))
-            .map(|factory| factory.create())
-    }
-
     /// Registers a controller factory for a specific resource type and platform
     pub fn register_controller_factory(
         &mut self,
@@ -203,17 +142,6 @@ impl ResourceRegistry {
     ) {
         let key = (resource_type, platform);
         self.controller_factories.insert(key, factory);
-    }
-
-    /// Registers a CloudFormation importer factory for a specific resource type and platform
-    pub fn register_cloudformation_importer_factory(
-        &mut self,
-        resource_type: ResourceType,
-        platform: Platform,
-        factory: Box<dyn CloudFormationImporterFactory>,
-    ) {
-        let key = (resource_type, platform);
-        self.cloudformation_importer_factories.insert(key, factory);
     }
 
     /// Creates a default registry with built-in resource types
@@ -486,50 +414,6 @@ impl ResourceRegistry {
             >::new()),
         );
 
-        // Register built-in CloudFormation importers for AWS
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                Function::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::function::AwsFunctionCloudFormationImporter,
-                >::new()),
-            );
-
-            registry.register_cloudformation_importer_factory(
-                Storage::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::storage::AwsStorageCloudFormationImporter,
-                >::new()),
-            );
-
-            registry.register_cloudformation_importer_factory(
-                alien_core::Queue::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::queue::templates::AwsQueueCloudFormationImporter,
-                >::new()),
-            );
-
-            registry.register_cloudformation_importer_factory(
-                Build::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::build::AwsBuildCloudFormationImporter,
-                >::new()),
-            );
-
-            registry.register_cloudformation_importer_factory(
-                Kv::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::kv::templates::AwsKvCloudFormationImporter,
-                >::new()),
-            );
-        }
-
         // Register built-in ArtifactRegistry controllers
         #[cfg(feature = "aws")]
         registry.register_controller_factory(
@@ -570,18 +454,6 @@ impl ResourceRegistry {
                 crate::artifact_registry::LocalArtifactRegistryController,
             >::new()),
         );
-
-        // Register built-in ArtifactRegistry CloudFormation importers for AWS
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                ArtifactRegistry::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::artifact_registry::AwsArtifactRegistryCloudFormationImporter,
-                >::new()),
-            );
-        }
 
         // Register built-in ServiceAccount controllers
         #[cfg(feature = "aws")]
@@ -634,18 +506,6 @@ impl ResourceRegistry {
             >::new()),
         );
 
-        // Register built-in ServiceAccount CloudFormation importers
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                ServiceAccount::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::service_account::AwsServiceAccountCloudFormationImporter,
-                >::new()),
-            );
-        }
-
         // Register built-in Network controllers
         #[cfg(feature = "aws")]
         registry.register_controller_factory(
@@ -673,30 +533,6 @@ impl ResourceRegistry {
                 crate::network::AzureNetworkController,
             >::new()),
         );
-
-        // Register built-in Network CloudFormation importers
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                Network::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::network::AwsNetworkCloudFormationImporter,
-                >::new()),
-            );
-        }
-
-        // Register built-in RemoteStackManagement CloudFormation importers
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                RemoteStackManagement::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::remote_stack_management::AwsRemoteStackManagementCloudFormationImporter,
-                >::new()),
-            );
-        }
 
         // Register built-in Vault controllers
         #[cfg(feature = "aws")]
@@ -745,18 +581,6 @@ impl ResourceRegistry {
             Platform::Test,
             Box::new(DefaultControllerFactory::<crate::vault::TestVaultController>::new()),
         );
-
-        // Register built-in Vault CloudFormation importers
-        #[cfg(feature = "aws")]
-        {
-            registry.register_cloudformation_importer_factory(
-                Vault::RESOURCE_TYPE,
-                Platform::Aws,
-                Box::new(DefaultCloudFormationImporterFactory::<
-                    crate::vault::AwsVaultCloudFormationImporter,
-                >::new()),
-            );
-        }
 
         // Register built-in KV controllers
         #[cfg(feature = "aws")]
@@ -873,33 +697,6 @@ where
     ) -> Self {
         self.registry
             .register_controller_factory(self.resource_type.clone(), platform, factory);
-        self
-    }
-
-    /// Registers a CloudFormation importer for the given platform
-    pub fn with_cloudformation_importer<I>(self, platform: Platform) -> Self
-    where
-        I: crate::cloudformation::traits::CloudFormationResourceImporter + Default + 'static,
-    {
-        self.registry.register_cloudformation_importer_factory(
-            self.resource_type.clone(),
-            platform,
-            Box::new(DefaultCloudFormationImporterFactory::<I>::new()),
-        );
-        self
-    }
-
-    /// Registers a custom CloudFormation importer factory for the given platform
-    pub fn with_cloudformation_importer_factory(
-        self,
-        platform: Platform,
-        factory: Box<dyn CloudFormationImporterFactory>,
-    ) -> Self {
-        self.registry.register_cloudformation_importer_factory(
-            self.resource_type.clone(),
-            platform,
-            factory,
-        );
         self
     }
 }

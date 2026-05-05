@@ -150,9 +150,7 @@ async fn build_standalone_server(
 /// hashes it with SHA-256, and stores it in SQLite via TokenStore.
 /// On subsequent runs: reads the existing token from the file and verifies it exists in the DB.
 /// Returns the pre-created TokenStore so the builder reuses the same DB connection.
-async fn bootstrap_standalone_admin_token(
-    config: &ManagerConfig,
-) -> (Arc<dyn TokenStore>, String) {
+async fn bootstrap_standalone_admin_token(config: &ManagerConfig) -> (Arc<dyn TokenStore>, String) {
     let state_dir = config
         .state_dir
         .as_ref()
@@ -179,14 +177,15 @@ async fn bootstrap_standalone_admin_token(
             "ax_admin_{}",
             uuid::Uuid::new_v4().to_string().replace('-', "")
         );
-        alien_core::file_utils::write_secret_file(&token_path, token.as_bytes())
-            .unwrap_or_else(|e| {
+        alien_core::file_utils::write_secret_file(&token_path, token.as_bytes()).unwrap_or_else(
+            |e| {
                 panic!(
                     "Failed to write admin token to {}: {}",
                     token_path.display(),
                     e
                 )
-            });
+            },
+        );
 
         println!("Generated admin token (save this securely):");
         println!("  {}", token);

@@ -11,6 +11,9 @@
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
             "elasticloadbalancing:DescribeListeners",
+            "acm:ImportCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate",
             "ec2:DescribeVolumes"
           ]
         },
@@ -30,6 +33,9 @@
         "grant": {
           "permissions": [
             "compute.backendServices.get",
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
             "compute.healthChecks.get",
             "compute.globalForwardingRules.get",
             "compute.disks.get"
@@ -52,6 +58,8 @@
           "actions": [
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read",
             "Microsoft.Compute/disks/read"
           ]
         },

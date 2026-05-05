@@ -18,5 +18,8 @@ export const HeartbeatsMode = {
 export type HeartbeatsMode = ClosedEnum<typeof HeartbeatsMode>;
 
 /** @internal */
-export const HeartbeatsMode$outboundSchema: z.ZodEnum<typeof HeartbeatsMode> = z
+export const HeartbeatsMode$inboundSchema: z.ZodEnum<typeof HeartbeatsMode> = z
   .enum(HeartbeatsMode);
+/** @internal */
+export const HeartbeatsMode$outboundSchema: z.ZodEnum<typeof HeartbeatsMode> =
+  HeartbeatsMode$inboundSchema;

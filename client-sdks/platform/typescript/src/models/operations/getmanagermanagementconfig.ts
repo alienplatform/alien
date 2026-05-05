@@ -27,13 +27,21 @@ export type Kubernetes = {
  */
 export type Azure = {
   /**
-   * The principal ID of the service principal in the management account
+   * Management service principal object ID for local development fallback
    */
-  managementPrincipalId: string;
+  managementPrincipalId?: string | null | undefined;
   /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
   platform: "azure";
 };
 
@@ -116,8 +124,10 @@ export function kubernetesFromJSON(
 
 /** @internal */
 export const Azure$inboundSchema: z.ZodType<Azure, unknown> = z.object({
-  managementPrincipalId: z.string(),
+  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
   platform: z.literal("azure"),
 });
 

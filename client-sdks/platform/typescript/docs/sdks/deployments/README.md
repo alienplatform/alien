@@ -12,7 +12,7 @@
 * [get](#get) - Retrieve an agent by ID.
 * [delete](#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [import](#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+* [import](#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 * [redeploy](#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -645,7 +645,7 @@ run();
 
 ## import
 
-Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 
 ### Example Usage
 
@@ -661,15 +661,28 @@ async function run() {
   const result = await alien.deployments.import({
     workspace: "my-workspace",
     importDeploymentRequest: {
-      name: "acme-prod",
-      platform: "gcp",
+      mode: "forward",
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      project: "<value>",
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
-        type: "cloudformation",
-        stackName: "<value>",
+        deploymentName: "<value>",
+        platform: "gcp",
         region: "<value>",
+        stackSettings: {},
+        managementConfig: {
+          platform: "kubernetes",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
       },
     },
   });
@@ -698,15 +711,28 @@ async function run() {
   const res = await deploymentsImport(alien, {
     workspace: "my-workspace",
     importDeploymentRequest: {
-      name: "acme-prod",
-      platform: "gcp",
+      mode: "forward",
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      project: "<value>",
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
-        type: "cloudformation",
-        stackName: "<value>",
+        deploymentName: "<value>",
+        platform: "gcp",
         region: "<value>",
+        stackSettings: {},
+        managementConfig: {
+          platform: "kubernetes",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
       },
     },
   });

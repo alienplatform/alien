@@ -77,6 +77,59 @@
             "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ]
+          }
+        }
       }
     ],
     "gcp": [
@@ -129,6 +182,38 @@
             "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
           }
         }
+      },
+      {
+        "grant": {
+          "permissions": [
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
+            "compute.networkEndpointGroups.create",
+            "compute.networkEndpointGroups.delete",
+            "compute.networkEndpointGroups.get",
+            "compute.backendServices.create",
+            "compute.backendServices.delete",
+            "compute.backendServices.get",
+            "compute.backendServices.update",
+            "compute.urlMaps.create",
+            "compute.urlMaps.delete",
+            "compute.urlMaps.get",
+            "compute.targetHttpsProxies.create",
+            "compute.targetHttpsProxies.delete",
+            "compute.targetHttpsProxies.get",
+            "compute.globalAddresses.create",
+            "compute.globalAddresses.delete",
+            "compute.globalAddresses.get",
+            "compute.globalForwardingRules.create",
+            "compute.globalForwardingRules.delete",
+            "compute.globalForwardingRules.get"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
       }
     ],
     "azure": [
@@ -153,7 +238,9 @@
             "Microsoft.App/managedEnvironments/join/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
           ],
           "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
         },

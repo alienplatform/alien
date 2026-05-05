@@ -1,6 +1,6 @@
 # GetContainerOverviewResponse
 
-Container overview across all deployments.
+Container overview across the project's deployments.
 
 ## Example Usage
 

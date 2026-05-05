@@ -367,10 +367,7 @@ async fn test_delete_rule(ctx: &mut EventBridgeTestContext) {
 #[tokio::test]
 async fn test_delete_nonexistent_rule(ctx: &mut EventBridgeTestContext) {
     let rule_name = test_rule_name("nonexistent");
-    info!(
-        "Testing DeleteRule on nonexistent rule: {}",
-        rule_name
-    );
+    info!("Testing DeleteRule on nonexistent rule: {}", rule_name);
 
     // EventBridge DeleteRule is idempotent — succeeds even for non-existent rules
     ctx.client

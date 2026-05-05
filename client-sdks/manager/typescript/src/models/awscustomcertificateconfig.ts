@@ -3,11 +3,21 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type AwsCustomCertificateConfig = {
   certificateArn: string;
 };
 
+/** @internal */
+export const AwsCustomCertificateConfig$inboundSchema: z.ZodType<
+  AwsCustomCertificateConfig,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+});
 /** @internal */
 export type AwsCustomCertificateConfig$Outbound = {
   certificateArn: string;
@@ -26,5 +36,14 @@ export function awsCustomCertificateConfigToJSON(
 ): string {
   return JSON.stringify(
     AwsCustomCertificateConfig$outboundSchema.parse(awsCustomCertificateConfig),
+  );
+}
+export function awsCustomCertificateConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<AwsCustomCertificateConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => AwsCustomCertificateConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'AwsCustomCertificateConfig' from JSON`,
   );
 }

@@ -32,3 +32,12 @@ const value: models.SyncReconcileResponseExternalBindingsServicebus = {
 };
 ```
 
+### `models.SyncReconcileResponseExternalBindingsLocalQueue`
+
+```typescript
+const value: models.SyncReconcileResponseExternalBindingsLocalQueue = {
+  service: "local-queue",
+  type: "queue",
+};
+```
+

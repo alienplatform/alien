@@ -1,6 +1,6 @@
 # ConfigAgentImage
 
-Branding configuration for the agent binary
+Branding configuration for the agent binary.
 
 ## Example Usage
 

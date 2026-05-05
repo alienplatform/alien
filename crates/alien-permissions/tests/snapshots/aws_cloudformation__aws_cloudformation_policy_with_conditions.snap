@@ -13,7 +13,7 @@ expression: result
       ],
       "Resource": [
         {
-          "Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+          "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
         }
       ]
     },
@@ -26,7 +26,7 @@ expression: result
       ],
       "Resource": [
         {
-          "Fn::Sub": "arn:aws:ecr:*:${ManagingAccountId}:repository/*"
+          "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*"
         }
       ],
       "Condition": {

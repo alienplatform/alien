@@ -3,12 +3,12 @@
  */
 
 import * as z from "zod/v4";
-import { Platform, Platform$outboundSchema } from "./platform.js";
+import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
 
 export type AcquireRequest = {
   deploymentIds?: Array<string> | null | undefined;
   limit?: number | undefined;
-  platforms?: Array<Platform> | null | undefined;
+  platforms?: Array<PlatformEnum> | null | undefined;
   session: string;
   statuses?: Array<string> | null | undefined;
 };
@@ -29,7 +29,7 @@ export const AcquireRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentIds: z.nullable(z.array(z.string())).optional(),
   limit: z.int().optional(),
-  platforms: z.nullable(z.array(Platform$outboundSchema)).optional(),
+  platforms: z.nullable(z.array(PlatformEnum$outboundSchema)).optional(),
   session: z.string(),
   statuses: z.nullable(z.array(z.string())).optional(),
 });

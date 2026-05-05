@@ -109,7 +109,11 @@ impl AuthValidator for TokenDbValidator {
 /// — `workspace_id` is always `"default"` and the project_id on every scope
 /// variant is `"default"`.
 fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: String) -> Subject {
-    let (scope, role) = match (&record.token_type, record.deployment_group_id.as_deref(), record.deployment_id.as_deref()) {
+    let (scope, role) = match (
+        &record.token_type,
+        record.deployment_group_id.as_deref(),
+        record.deployment_id.as_deref(),
+    ) {
         (TokenType::Admin, _, _) => (Scope::Workspace, Role::WorkspaceAdmin),
         (TokenType::DeploymentGroup, Some(group_id), _) => (
             Scope::DeploymentGroup {

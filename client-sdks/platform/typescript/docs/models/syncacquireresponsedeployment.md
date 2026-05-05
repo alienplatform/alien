@@ -10,7 +10,7 @@ let value: SyncAcquireResponseDeployment = {
   projectId: "<id>",
   current: {
     platform: "aws",
-    status: "updating",
+    status: "update-failed",
   },
   config: {
     environmentVariables: {

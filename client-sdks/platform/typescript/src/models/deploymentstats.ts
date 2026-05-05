@@ -20,6 +20,14 @@ export type DeploymentStats = {
    * Count of deployments by platform (only includes platforms with non-zero counts)
    */
   byPlatform: { [k: string]: number };
+  /**
+   * Count of deployments by currentReleaseId. The empty string key represents deployments with no current release (initial provisioning).
+   */
+  byCurrentRelease: { [k: string]: number };
+  /**
+   * Count of deployments by pinnedReleaseId among deployments that are pinned. Excludes unpinned deployments.
+   */
+  byPinnedRelease: { [k: string]: number };
 };
 
 /** @internal */
@@ -30,6 +38,8 @@ export const DeploymentStats$inboundSchema: z.ZodType<
   total: z.number(),
   byStatus: z.record(z.string(), z.number()),
   byPlatform: z.record(z.string(), z.number()),
+  byCurrentRelease: z.record(z.string(), z.number()),
+  byPinnedRelease: z.record(z.string(), z.number()),
 });
 
 export function deploymentStatsFromJSON(

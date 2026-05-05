@@ -11,7 +11,7 @@ let value: SyncReconcileResponseCurrentReleaseResources = {
     type: "<value>",
   },
   dependencies: [],
-  lifecycle: "live-on-setup",
+  lifecycle: "live",
 };
 ```
 

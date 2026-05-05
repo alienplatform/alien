@@ -1,9 +1,9 @@
 use crate::{
     error::{map_cloud_client_error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding, RegistryAuthMethod,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         ComputeServiceType, CrossAccountAccess, CrossAccountPermissions, GcpCrossAccountAccess,
-        RepositoryResponse,
+        RegistryAuthMethod, RepositoryResponse,
     },
 };
 use alien_core::bindings::{ArtifactRegistryBinding, GarArtifactRegistryBinding};

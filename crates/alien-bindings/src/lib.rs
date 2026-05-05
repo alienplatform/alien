@@ -6,10 +6,10 @@ pub use alien_core::{BindingsMode, Platform};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
-    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, RegistryAuthMethod,
+    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
-    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RepositoryResponse,
-    ServiceAccount, ServiceAccountInfo, Storage, Vault,
+    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod,
+    RepositoryResponse, ServiceAccount, ServiceAccountInfo, Storage, Vault,
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 

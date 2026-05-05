@@ -1,0 +1,150 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== locals.tf ===
+locals {
+  alien_platform = "gcp"
+  alien_target   = "gcp"
+  alien_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  alien_stack_settings = {}
+  alien_resources = [
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName     = google_storage_bucket.data.name
+        bucketSelfLink = google_storage_bucket.data.self_link
+        projectId      = var.gcp_project
+        location       = google_storage_bucket.data.location
+      }
+    }
+  ]
+}
+
+=== data.tf ===
+resource "google_storage_bucket" "data" {
+  name                        = "${var.stack_name}-data"
+  project                     = var.gcp_project
+  location                    = upper(var.gcp_region)
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  force_destroy               = false
+  public_access_prevention    = "enforced"
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "data"
+    "alien-resource-type" = "storage"
+  }
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-prod
+
+Target: `gcp`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-prod' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

@@ -30,7 +30,7 @@ alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server", "test-utils"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-deployment = { workspace = true }
-alien-infra = { workspace = true, features = ["test-utils"] }
+alien-infra = { workspace = true, features = ["test-utils", "aws", "gcp", "azure"] }
 alien-local = { workspace = true }
 
 # Client config extensions (always available — needed for cross-account credential resolution)
@@ -101,6 +101,8 @@ futures = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tempfile = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = { workspace = true }
 container-registry = { workspace = true, features = ["test-support"] }
 dockdash = { workspace = true, features = ["test-utils"] }
 sec = { workspace = true }

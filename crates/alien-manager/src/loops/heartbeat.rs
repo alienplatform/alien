@@ -50,7 +50,11 @@ impl HeartbeatLoop {
         // empty `bearer_token` — the documented signal to embedders that
         // no caller passthrough is available.
         let caller = Subject::system();
-        match self.deployment_store.list_deployments(&caller, &filter).await {
+        match self
+            .deployment_store
+            .list_deployments(&caller, &filter)
+            .await
+        {
             Ok(deployments) => {
                 if !deployments.is_empty() {
                     debug!(

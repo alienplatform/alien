@@ -3,11 +3,21 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type GcpCustomCertificateConfig = {
   certificateName: string;
 };
 
+/** @internal */
+export const GcpCustomCertificateConfig$inboundSchema: z.ZodType<
+  GcpCustomCertificateConfig,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
 /** @internal */
 export type GcpCustomCertificateConfig$Outbound = {
   certificateName: string;
@@ -26,5 +36,14 @@ export function gcpCustomCertificateConfigToJSON(
 ): string {
   return JSON.stringify(
     GcpCustomCertificateConfig$outboundSchema.parse(gcpCustomCertificateConfig),
+  );
+}
+export function gcpCustomCertificateConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<GcpCustomCertificateConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GcpCustomCertificateConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GcpCustomCertificateConfig' from JSON`,
   );
 }

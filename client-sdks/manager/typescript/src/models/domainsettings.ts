@@ -3,11 +3,15 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
 import {
   CustomDomainConfig,
+  CustomDomainConfig$inboundSchema,
   CustomDomainConfig$Outbound,
   CustomDomainConfig$outboundSchema,
 } from "./customdomainconfig.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
  * Domain configuration for the stack.
@@ -24,6 +28,13 @@ export type DomainSettings = {
   customDomains?: { [k: string]: CustomDomainConfig } | null | undefined;
 };
 
+/** @internal */
+export const DomainSettings$inboundSchema: z.ZodType<DomainSettings, unknown> =
+  z.object({
+    customDomains: z.nullable(
+      z.record(z.string(), CustomDomainConfig$inboundSchema),
+    ).optional(),
+  });
 /** @internal */
 export type DomainSettings$Outbound = {
   customDomains?:
@@ -44,4 +55,13 @@ export const DomainSettings$outboundSchema: z.ZodType<
 
 export function domainSettingsToJSON(domainSettings: DomainSettings): string {
   return JSON.stringify(DomainSettings$outboundSchema.parse(domainSettings));
+}
+export function domainSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DomainSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DomainSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainSettings' from JSON`,
+  );
 }

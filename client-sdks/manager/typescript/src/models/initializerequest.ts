@@ -3,11 +3,11 @@
  */
 
 import * as z from "zod/v4";
-import { Platform, Platform$outboundSchema } from "./platform.js";
+import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
 
 export type InitializeRequest = {
   name?: string | null | undefined;
-  platform?: Platform | null | undefined;
+  platform?: PlatformEnum | null | undefined;
 };
 
 /** @internal */
@@ -22,7 +22,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   InitializeRequest
 > = z.object({
   name: z.nullable(z.string()).optional(),
-  platform: z.nullable(Platform$outboundSchema).optional(),
+  platform: z.nullable(PlatformEnum$outboundSchema).optional(),
 });
 
 export function initializeRequestToJSON(

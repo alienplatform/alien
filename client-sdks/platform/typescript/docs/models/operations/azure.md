@@ -8,7 +8,6 @@ Azure management configuration extracted from stack settings
 import { Azure } from "@alienplatform/platform-api/models/operations";
 
 let value: Azure = {
-  managementPrincipalId: "<id>",
   managingTenantId: "<id>",
   platform: "azure",
 };
@@ -16,8 +15,10 @@ let value: Azure = {
 
 ## Fields
 
-| Field                                                               | Type                                                                | Required                                                            | Description                                                         |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `managementPrincipalId`                                             | *string*                                                            | :heavy_check_mark:                                                  | The principal ID of the service principal in the management account |
-| `managingTenantId`                                                  | *string*                                                            | :heavy_check_mark:                                                  | The managing Azure Tenant ID for cross-tenant access                |
-| `platform`                                                          | *"azure"*                                                           | :heavy_check_mark:                                                  | N/A                                                                 |
+| Field                                                                 | Type                                                                  | Required                                                              | Description                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `managementPrincipalId`                                               | *string*                                                              | :heavy_minus_sign:                                                    | Management service principal object ID for local development fallback |
+| `managingTenantId`                                                    | *string*                                                              | :heavy_check_mark:                                                    | The managing Azure Tenant ID for cross-tenant access                  |
+| `oidcIssuer`                                                          | *string*                                                              | :heavy_minus_sign:                                                    | OIDC issuer URL for federated identity credential creation            |
+| `oidcSubject`                                                         | *string*                                                              | :heavy_minus_sign:                                                    | OIDC subject claim for federated identity credential creation         |
+| `platform`                                                            | *"azure"*                                                             | :heavy_check_mark:                                                    | N/A                                                                   |

@@ -29,7 +29,10 @@ pub fn nearest_valid_memory(memory_mb: u32) -> Option<u32> {
 
 /// The maximum valid Azure Container Apps memory value.
 pub fn max_memory() -> u32 {
-    AZURE_VALID_COMBOS.last().expect("AZURE_VALID_COMBOS is non-empty").1
+    AZURE_VALID_COMBOS
+        .last()
+        .expect("AZURE_VALID_COMBOS is non-empty")
+        .1
 }
 
 #[cfg(test)]

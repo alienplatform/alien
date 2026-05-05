@@ -29,6 +29,10 @@ alien-manager-api = { path = "../../client-sdks/manager/rust" }
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 
+# AWS SDK for `register --import cloudformation`.
+aws-config = { version = "1", default-features = false, features = ["rustls", "behavior-version-latest"] }
+aws-sdk-cloudformation = { version = "1", default-features = false, features = ["rustls"] }
+
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

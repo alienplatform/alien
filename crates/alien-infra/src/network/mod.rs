@@ -13,16 +13,26 @@ mod aws;
 pub use aws::*;
 
 #[cfg(feature = "aws")]
-mod templates;
+mod aws_import;
 #[cfg(feature = "aws")]
-pub use templates::AwsNetworkCloudFormationImporter;
+pub use aws_import::AwsNetworkImporter;
 
 #[cfg(feature = "gcp")]
 mod gcp;
 #[cfg(feature = "gcp")]
 pub use gcp::*;
 
+#[cfg(feature = "gcp")]
+mod gcp_import;
+#[cfg(feature = "gcp")]
+pub use gcp_import::GcpNetworkImporter;
+
 #[cfg(feature = "azure")]
 mod azure;
 #[cfg(feature = "azure")]
 pub use azure::*;
+
+#[cfg(feature = "azure")]
+mod azure_import;
+#[cfg(feature = "azure")]
+pub use azure_import::AzureNetworkImporter;

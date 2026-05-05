@@ -1210,15 +1210,14 @@ impl S3Api for S3Client {
         configuration: &NotificationConfiguration,
     ) -> Result<()> {
         let host = self.host(bucket);
-        let body =
-            quick_xml::se::to_string_with_root("NotificationConfiguration", configuration)
-                .into_alien_error()
-                .context(ErrorData::SerializationError {
-                    message: format!(
-                        "Failed to serialize NotificationConfiguration for bucket '{}'",
-                        bucket
-                    ),
-                })?;
+        let body = quick_xml::se::to_string_with_root("NotificationConfiguration", configuration)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize NotificationConfiguration for bucket '{}'",
+                    bucket
+                ),
+            })?;
 
         let body_clone = body.clone();
         let builder = self

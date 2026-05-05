@@ -8,7 +8,7 @@ import { CreateProjectFromTemplateRequestBody } from "@alienplatform/platform-ap
 let value: CreateProjectFromTemplateRequestBody = {
   name: "my-app",
   targetNamespace: "<value>",
-  templatePath: "examples/byoc-database",
+  templatePath: "examples/endpoint-agent",
 };
 ```
 

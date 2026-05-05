@@ -7,11 +7,11 @@ Template root directory inside alienplatform/alien
 ```typescript
 import { TemplatePathResponse } from "@alienplatform/platform-api/models/operations";
 
-let value: TemplatePathResponse = "examples/github-agent/packages/remote-agent";
+let value: TemplatePathResponse = "examples/byoc-database";
 ```
 
 ## Values
 
 ```typescript
-"examples/minimal-cloud-agent" | "examples/endpoint-agent" | "examples/byoc-database" | "examples/github-agent/packages/remote-agent"
+"examples/remote-worker-ts" | "examples/github-agent/packages/remote-agent" | "examples/endpoint-agent" | "examples/byoc-database"
 ```

@@ -490,6 +490,8 @@
         "tags": [
           "deployment-groups"
         ],
+        "summary": "Every handler in this file runs `auth::require_auth(&state, &headers)`\nand then threads `&subject` into the `DeploymentStore` calls — see the\ntrait doc on [`DeploymentStore`] for the convention.",
+        "description": "`POST /v1/deployment-groups` — Inbound: workspace bearer.",
         "operationId": "create_deployment_group",
         "requestBody": {
           "content": {
@@ -650,6 +652,8 @@
         "tags": [
           "deployments"
         ],
+        "summary": "Every handler in this file runs `auth::require_auth(&state, &headers)`\nand then threads `&subject` into the `DeploymentStore` calls. Embedders\nthat proxy to an upstream API can use the subject's `bearer_token` for\npassthrough; single-tenant impls ignore it. See the trait doc on\n[`DeploymentStore`] for the full convention.",
+        "description": "`POST /v1/deployments` — Inbound: workspace / project / dg bearer (or\nauthenticated user). Deployment-scoped tokens cannot create deployments.",
         "operationId": "create_deployment",
         "requestBody": {
           "content": {
@@ -875,6 +879,7 @@
         "tags": [
           "sync"
         ],
+        "summary": "`POST /v1/initialize` — Inbound: deployment-group bearer (typical),\nor workspace bearer for self-hosted operator workflows. New deployments\nare created via `DeploymentStore::create_deployment(caller, …)` so\nembedders that proxy to an upstream API write the row in the dg's\nworkspace, not the manager's.",
         "operationId": "initialize",
         "requestBody": {
           "content": {
@@ -1052,11 +1057,69 @@
         ]
       }
     },
+    "/v1/stack/import": {
+      "post": {
+        "tags": [
+          "stack-import"
+        ],
+        "summary": "`POST /v1/stack/import` — Inbound: deployment-group bearer.",
+        "description": "The body's `deploymentGroupToken` field is informational (mirrored back\nfor log correlation) — actual authentication is the standard `Authorization\nBearer` header processed by [`auth::require_auth`]. The handler tolerates\nthe body field being either the raw token or empty; it never reads\ncredentials from the body to make the secret path uniform with every\nother endpoint.",
+        "operationId": "stack_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Imported stack updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackImportResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Stack imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment group or release not found"
+          },
+          "409": {
+            "description": "Deployment name conflict"
+          }
+        }
+      }
+    },
     "/v1/sync": {
       "post": {
         "tags": [
           "sync"
         ],
+        "summary": "`POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync\npath; `caller: &Subject` is threaded into the store so embedders see\nthe agent's own scope.",
         "operationId": "agent_sync",
         "requestBody": {
           "content": {
@@ -1092,6 +1155,7 @@
         "tags": [
           "sync"
         ],
+        "summary": "`POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.\n`caller: &Subject` is threaded into `DeploymentStore::acquire` so\nembedders can authorize against the inbound caller's scope.",
         "operationId": "acquire",
         "requestBody": {
           "content": {
@@ -1127,6 +1191,7 @@
         "tags": [
           "sync"
         ],
+        "summary": "`POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment\nbearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.",
         "operationId": "reconcile",
         "requestBody": {
           "content": {
@@ -1162,6 +1227,7 @@
         "tags": [
           "sync"
         ],
+        "summary": "`POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.\n`caller: &Subject` is threaded into `DeploymentStore::release`.",
         "operationId": "release",
         "requestBody": {
           "content": {
@@ -1298,6 +1364,58 @@
           "target": {}
         }
       },
+      "AlienError": {
+        "type": "object",
+        "description": "Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "internal"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A unique identifier for the type of error.\n\nThis should be a short, machine-readable string that can be used\nby clients to programmatically handle different error types.\nExamples: \"NOT_FOUND\", \"VALIDATION_ERROR\", \"TIMEOUT\"",
+            "example": "NOT_FOUND",
+            "maxLength": 128
+          },
+          "context": {
+            "description": "Additional diagnostic information about the error context.\n\nThis optional field can contain structured data providing more details\nabout the error, such as validation errors, request parameters that\ncaused the issue, or other relevant context information."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Optional human-facing remediation hint.",
+            "nullable": true
+          },
+          "httpStatusCode": {
+            "type": "integer",
+            "format": "int32",
+            "description": "HTTP status code for this error.\n\nUsed when converting the error to an HTTP response. If None, falls back to\nthe error type's default status code or 500.",
+            "maximum": 599,
+            "minimum": 100,
+            "nullable": true
+          },
+          "internal": {
+            "type": "boolean",
+            "description": "Indicates if this is an internal error that should not be exposed to users.\n\nWhen `true`, this error contains sensitive information or implementation\ndetails that should not be shown to end-users. Such errors should be\nlogged for debugging but replaced with generic error messages in responses."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error message.\n\nThis message should be clear and actionable for developers or end-users,\nproviding context about what went wrong and potentially how to fix it.",
+            "example": "Item not found.",
+            "maxLength": 16384
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Indicates whether the operation that caused the error should be retried.\n\nWhen `true`, the error is transient and the operation might succeed\nif attempted again. When `false`, retrying the same operation is\nunlikely to succeed without changes.",
+            "default": false
+          },
+          "source": {
+            "description": "The underlying error that caused this error, creating an error chain.\n\nThis allows for proper error propagation and debugging by maintaining\nthe full context of how an error occurred through multiple layers\nof an application."
+          }
+        }
+      },
       "AwsCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -1306,6 +1424,19 @@
         "properties": {
           "certificateArn": {
             "type": "string"
+          }
+        }
+      },
+      "AwsManagementConfig": {
+        "type": "object",
+        "description": "AWS management configuration extracted from stack settings",
+        "required": [
+          "managingRoleArn"
+        ],
+        "properties": {
+          "managingRoleArn": {
+            "type": "string",
+            "description": "The managing AWS IAM role ARN that can assume cross-account roles"
           }
         }
       },
@@ -1319,6 +1450,65 @@
             "type": "string"
           }
         }
+      },
+      "AzureManagementConfig": {
+        "type": "object",
+        "description": "Azure management configuration extracted from stack settings",
+        "required": [
+          "managingTenantId"
+        ],
+        "properties": {
+          "managementPrincipalId": {
+            "type": "string",
+            "description": "Management service principal object ID for local development fallback",
+            "nullable": true
+          },
+          "managingTenantId": {
+            "type": "string",
+            "description": "The managing Azure Tenant ID for cross-tenant access"
+          },
+          "oidcIssuer": {
+            "type": "string",
+            "description": "OIDC issuer URL for federated identity credential creation",
+            "nullable": true
+          },
+          "oidcSubject": {
+            "type": "string",
+            "description": "OIDC subject claim for federated identity credential creation",
+            "nullable": true
+          }
+        }
+      },
+      "BaseResource": {
+        "type": "object",
+        "description": "Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BaseResourceOutputs": {
+        "type": "object",
+        "description": "Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "additionalProperties": true
       },
       "BodySpec": {
         "oneOf": [
@@ -1650,7 +1840,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Project this release belongs to. Required. The standalone server uses the canonical value `\"default\"`."
+            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`."
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -1826,6 +2016,10 @@
           "id": {
             "type": "string"
           },
+          "importSource": {
+            "$ref": "#/components/schemas/ImportSourceKind",
+            "nullable": true
+          },
           "name": {
             "type": "string"
           },
@@ -1982,6 +2176,19 @@
           }
         }
       },
+      "GcpManagementConfig": {
+        "type": "object",
+        "description": "GCP management configuration extracted from stack settings",
+        "required": [
+          "serviceAccountEmail"
+        ],
+        "properties": {
+          "serviceAccountEmail": {
+            "type": "string",
+            "description": "Service account email for management roles"
+          }
+        }
+      },
       "GitMetadata": {
         "type": "object",
         "properties": {
@@ -2034,6 +2241,39 @@
           "off",
           "on"
         ]
+      },
+      "ImportSourceKind": {
+        "type": "string",
+        "description": "Distribution source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
+        "enum": [
+          "cloud-formation",
+          "terraform",
+          "helm"
+        ]
+      },
+      "ImportedResource": {
+        "type": "object",
+        "description": "One resolved resource import payload.",
+        "required": [
+          "id",
+          "type",
+          "importData"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Resource id from the active stack."
+          },
+          "importData": {
+            "type": "object",
+            "description": "Resolved typed payload for this resource."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType",
+            "description": "Resource type from the active stack."
+          }
+        },
+        "additionalProperties": false
       },
       "InitializeRequest": {
         "type": "object",
@@ -2183,6 +2423,95 @@
           "get",
           "delete"
         ]
+      },
+      "ManagementConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsManagementConfig",
+                "description": "AWS management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "aws"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS management configuration"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpManagementConfig",
+                "description": "GCP management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "gcp"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP management configuration"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureManagementConfig",
+                "description": "Azure management configuration"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "azure"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure management configuration"
+          },
+          {
+            "type": "object",
+            "description": "Kubernetes management configuration (minimal for now)",
+            "required": [
+              "platform"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "kubernetes"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount."
       },
       "NetworkSettings": {
         "oneOf": [
@@ -2561,6 +2890,51 @@
           }
         }
       },
+      "ResourceLifecycle": {
+        "type": "string",
+        "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
+        "enum": [
+          "frozen",
+          "live"
+        ]
+      },
+      "ResourceRef": {
+        "type": "object",
+        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        }
+      },
+      "ResourceStatus": {
+        "type": "string",
+        "description": "Represents the high-level status of a resource during its lifecycle.",
+        "enum": [
+          "pending",
+          "provisioning",
+          "provision-failed",
+          "running",
+          "updating",
+          "update-failed",
+          "deleting",
+          "delete-failed",
+          "deleted",
+          "refresh-failed"
+        ]
+      },
+      "ResourceType": {
+        "type": "string",
+        "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
+        "example": "function"
+      },
       "ResponseHandling": {
         "type": "object",
         "description": "Response handling configuration for deployments",
@@ -2600,6 +2974,10 @@
             "type": "string",
             "nullable": true
           },
+          "projectId": {
+            "type": "string",
+            "nullable": true
+          },
           "type": {
             "type": "string"
           }
@@ -2615,6 +2993,152 @@
           "kubernetes": {},
           "local": {},
           "test": {}
+        }
+      },
+      "StackImportRequest": {
+        "type": "object",
+        "description": "Request body for manager-side stack import.",
+        "required": [
+          "deploymentGroupToken",
+          "deploymentName",
+          "platform",
+          "region",
+          "stackSettings",
+          "managementConfig",
+          "resources"
+        ],
+        "properties": {
+          "deploymentGroupToken": {
+            "type": "string",
+            "description": "Deployment-group token authorizing the import."
+          },
+          "deploymentName": {
+            "type": "string",
+            "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each distribution adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
+          },
+          "managementConfig": {
+            "$ref": "#/components/schemas/ManagementConfig",
+            "description": "Platform-derived management configuration."
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform being imported."
+          },
+          "region": {
+            "type": "string",
+            "description": "Region or location reported by the distribution artifact."
+          },
+          "releaseId": {
+            "type": "string",
+            "description": "Optional release id that produced the distribution artifact. When\nomitted, the manager imports against the latest release.",
+            "nullable": true
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportedResource"
+            },
+            "description": "Imported resources with typed per-resource payloads."
+          },
+          "sourceKind": {
+            "$ref": "#/components/schemas/ImportSourceKind",
+            "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which distribution artifact emitted the payload.",
+            "nullable": true
+          },
+          "stackSettings": {
+            "$ref": "#/components/schemas/StackSettings",
+            "description": "Resolved stack settings supplied by the distribution artifact."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StackImportResponse": {
+        "type": "object",
+        "description": "Response body returned after a stack import.",
+        "required": [
+          "deploymentId",
+          "stackSettings",
+          "stackState"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment created."
+          },
+          "stackSettings": {
+            "$ref": "#/components/schemas/StackSettings",
+            "description": "Stack settings persisted for the deployment."
+          },
+          "stackState": {
+            "$ref": "#/components/schemas/StackState",
+            "description": "Fully populated imported stack state."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StackResourceState": {
+        "type": "object",
+        "description": "Represents the state of a single resource within the stack for a specific platform.",
+        "required": [
+          "type",
+          "status",
+          "config"
+        ],
+        "properties": {
+          "_internal": {
+            "description": "The platform-specific resource controller that manages this resource's lifecycle.\nThis is None when the resource status is Pending.\nStored as JSON to make the struct serializable and movable to alien-core."
+          },
+          "config": {
+            "$ref": "#/components/schemas/BaseResource",
+            "description": "The current resource configuration."
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceRef"
+            },
+            "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
+          },
+          "error": {
+            "$ref": "#/components/schemas/AlienError",
+            "description": "Stores the last error encountered during a failed step transition.",
+            "nullable": true
+          },
+          "lastFailedState": {
+            "description": "Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core."
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ResourceLifecycle",
+            "description": "The lifecycle of the resource (Frozen or Live).\nDefaults to Live if not specified.",
+            "nullable": true
+          },
+          "outputs": {
+            "$ref": "#/components/schemas/BaseResourceOutputs",
+            "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name).",
+            "nullable": true
+          },
+          "previousConfig": {
+            "$ref": "#/components/schemas/BaseResource",
+            "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails.",
+            "nullable": true
+          },
+          "remoteBindingParams": {
+            "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "retryAttempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tracks consecutive retry attempts for the current state transition.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResourceStatus",
+            "description": "High-level status derived from the internal state."
+          },
+          "type": {
+            "type": "string",
+            "description": "The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE)."
+          }
         }
       },
       "StackSettings": {
@@ -2651,6 +3175,32 @@
           "updates": {
             "$ref": "#/components/schemas/UpdatesMode",
             "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
+          }
+        }
+      },
+      "StackState": {
+        "type": "object",
+        "description": "Represents the collective state of all resources in a stack, including platform and pending actions.",
+        "required": [
+          "platform",
+          "resources",
+          "resourcePrefix"
+        ],
+        "properties": {
+          "platform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "The target platform for this stack state."
+          },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "A prefix used for resource naming to ensure uniqueness across deployments."
+          },
+          "resources": {
+            "type": "object",
+            "description": "The state of individual resources, keyed by resource ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StackResourceState"
+            }
           }
         }
       },
@@ -2751,6 +3301,8 @@
         "required": [
           "kind",
           "id",
+          "workspaceId",
+          "role",
           "scope"
         ],
         "properties": {
@@ -2760,8 +3312,14 @@
           "kind": {
             "type": "string"
           },
+          "role": {
+            "type": "string"
+          },
           "scope": {
             "$ref": "#/components/schemas/ScopeInfo"
+          },
+          "workspaceId": {
+            "type": "string"
           }
         }
       }
@@ -2787,6 +3345,10 @@
     {
       "name": "deployment-groups",
       "description": "Deployment group management"
+    },
+    {
+      "name": "stack-import",
+      "description": "Distribution-artifact stack import (CFN, TF, Helm)"
     },
     {
       "name": "sync",

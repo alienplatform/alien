@@ -18,10 +18,10 @@ const value: any = "<value>";
 const value: string = "<value>";
 ```
 
-### `models.SyncAcquireResponseRepositoryPrefix`
+### `models.SyncAcquireResponseRepositoryPrefix1`
 
 ```typescript
-const value: models.SyncAcquireResponseRepositoryPrefix = {
+const value: models.SyncAcquireResponseRepositoryPrefix1 = {
   secretRef: {
     key: "<key>",
     name: "<value>",

@@ -5,7 +5,7 @@
 //! locally. This module provides helpers to start and stop such agents during
 //! E2E tests.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use alien_core::Platform;
 use tracing::info;
@@ -375,6 +375,67 @@ impl TestAlienAgent {
             "--timeout",
             "120s",
         ]);
+
+        if let Some(kc) = kubeconfig {
+            cmd.env("KUBECONFIG", kc);
+        }
+
+        let output = cmd.output().await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Helm install failed: {}", stderr).into());
+        }
+
+        info!(%release_name, "alien-agent helm release installed");
+
+        Ok(Self {
+            container_id: None,
+            helm_release: Some(release_name.to_string()),
+            helm_namespace: Some(namespace.to_string()),
+            kubeconfig: kubeconfig.map(String::from),
+            child_process: None,
+            data_dir: None,
+            sync_token_file: None,
+            encryption_key_file: None,
+            platform: Platform::Kubernetes,
+            installed_as_service: false,
+            deploy_binary: None,
+        })
+    }
+
+    /// Install a generated Alien Helm chart with an explicit values file.
+    ///
+    /// Distribution tests use this path after Terraform has produced the
+    /// cloud-specific identity values and the import API has returned a
+    /// concrete deployment ID.
+    pub async fn helm_install_with_values(
+        chart_dir: &Path,
+        values_file: &Path,
+        release_name: &str,
+        namespace: &str,
+        kubeconfig: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        info!(
+            %release_name,
+            %namespace,
+            chart = %chart_dir.display(),
+            values = %values_file.display(),
+            "installing alien-agent via helm values file"
+        );
+
+        let mut cmd = tokio::process::Command::new("helm");
+        cmd.arg("install")
+            .arg(release_name)
+            .arg(chart_dir)
+            .arg("--namespace")
+            .arg(namespace)
+            .arg("--create-namespace")
+            .arg("-f")
+            .arg(values_file)
+            .arg("--wait")
+            .arg("--timeout")
+            .arg("120s");
 
         if let Some(kc) = kubeconfig {
             cmd.env("KUBECONFIG", kc);

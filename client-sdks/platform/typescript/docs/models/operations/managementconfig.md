@@ -27,7 +27,6 @@ const value: operations.ManagementConfigGcp = {
 
 ```typescript
 const value: operations.ManagementConfigAzure = {
-  managementPrincipalId: "<id>",
   managingTenantId: "<id>",
   platform: "azure",
 };

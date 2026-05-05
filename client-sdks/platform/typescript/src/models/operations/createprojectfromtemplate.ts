@@ -13,11 +13,11 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
  * Template root directory inside alienplatform/alien
  */
 export const TemplatePathRequest = {
-  ExamplesMinimalCloudAgent: "examples/minimal-cloud-agent",
-  ExamplesEndpointAgent: "examples/endpoint-agent",
-  ExamplesByocDatabase: "examples/byoc-database",
+  ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
     "examples/github-agent/packages/remote-agent",
+  ExamplesEndpointAgent: "examples/endpoint-agent",
+  ExamplesByocDatabase: "examples/byoc-database",
 } as const;
 /**
  * Template root directory inside alienplatform/alien
@@ -393,11 +393,11 @@ export type SourceRepository = ClosedEnum<typeof SourceRepository>;
  * Template root directory inside alienplatform/alien
  */
 export const TemplatePathResponse = {
-  ExamplesMinimalCloudAgent: "examples/minimal-cloud-agent",
-  ExamplesEndpointAgent: "examples/endpoint-agent",
-  ExamplesByocDatabase: "examples/byoc-database",
+  ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
     "examples/github-agent/packages/remote-agent",
+  ExamplesEndpointAgent: "examples/endpoint-agent",
+  ExamplesByocDatabase: "examples/byoc-database",
 } as const;
 /**
  * Template root directory inside alienplatform/alien

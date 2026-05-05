@@ -257,13 +257,16 @@ async fn setup() -> TestSetup {
     let stack = test_stack("test-stack", "test-fn", &image_uri);
 
     let release = release_store
-        .create_release(&test_subject(), CreateReleaseParams {
-            project_id: "default".to_string(),
-            stacks: HashMap::from([(Platform::Local, stack)]),
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: None,
-        })
+        .create_release(
+            &test_subject(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Local, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
         .await
         .unwrap();
 
@@ -323,13 +326,16 @@ async fn setup() -> TestSetup {
             protocol_version: 0,
         };
         deployment_store
-            .reconcile(&test_subject(), alien_manager::traits::ReconcileData {
-                deployment_id: dep.id.clone(),
-                session: "test-setup".to_string(),
-                state,
-                update_heartbeat: false,
-                error: None,
-            })
+            .reconcile(
+                &test_subject(),
+                alien_manager::traits::ReconcileData {
+                    deployment_id: dep.id.clone(),
+                    session: "test-setup".to_string(),
+                    state,
+                    update_heartbeat: false,
+                    error: None,
+                },
+            )
             .await
             .unwrap();
     }
@@ -758,13 +764,16 @@ async fn test_proxy_push_then_pull() {
 
     let new_release = s
         .release_store
-        .create_release(&test_subject(), CreateReleaseParams {
-            project_id: "default".to_string(),
-            stacks: HashMap::from([(Platform::Local, proxy_stack)]),
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: None,
-        })
+        .create_release(
+            &test_subject(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Local, proxy_stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
         .await
         .expect("Create release should succeed");
     println!("Created release {} with proxy image", new_release.id);
@@ -788,13 +797,16 @@ async fn test_proxy_push_then_pull() {
             protocol_version: 0,
         };
         s.deployment_store
-            .reconcile(&test_subject(), alien_manager::traits::ReconcileData {
-                deployment_id: s.deployment_id.clone(),
-                session: "push-test".to_string(),
-                state,
-                update_heartbeat: false,
-                error: None,
-            })
+            .reconcile(
+                &test_subject(),
+                alien_manager::traits::ReconcileData {
+                    deployment_id: s.deployment_id.clone(),
+                    session: "push-test".to_string(),
+                    state,
+                    update_heartbeat: false,
+                    error: None,
+                },
+            )
             .await
             .expect("Reconcile with new release should succeed");
     }

@@ -379,14 +379,15 @@ async fn exchange_oidc_token(
         access_token: String,
     }
 
-    let token_response: TokenResponse = response
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::AuthenticationFailed {
-            message: "Failed to parse OIDC token exchange response".to_string(),
-            method: Some("oidc_token_exchange".to_string()),
-        })?;
+    let token_response: TokenResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                message: "Failed to parse OIDC token exchange response".to_string(),
+                method: Some("oidc_token_exchange".to_string()),
+            })?;
 
     Ok(token_response.access_token)
 }
@@ -432,14 +433,15 @@ async fn exchange_sp_credentials(
         access_token: String,
     }
 
-    let token_response: TokenResponse = response
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::AuthenticationFailed {
-            message: "Failed to parse SP token response".to_string(),
-            method: Some("sp_cross_tenant".to_string()),
-        })?;
+    let token_response: TokenResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                message: "Failed to parse SP token response".to_string(),
+                method: Some("sp_cross_tenant".to_string()),
+            })?;
 
     Ok(token_response.access_token)
 }

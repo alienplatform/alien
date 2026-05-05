@@ -46,6 +46,7 @@ export const DeploymentDetailResponseStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -1743,7 +1744,6 @@ export type DeploymentDetailResponsePreparedStackDependency = {
 export const DeploymentDetailResponsePreparedStackLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1779,6 +1779,24 @@ export type DeploymentDetailResponsePreparedStackResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const DeploymentDetailResponseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentDetailResponseSupportedPlatform = ClosedEnum<
+  typeof DeploymentDetailResponseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type DeploymentDetailResponsePreparedStack = {
@@ -1794,6 +1812,13 @@ export type DeploymentDetailResponsePreparedStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: DeploymentDetailResponsePreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<DeploymentDetailResponseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 export type DeploymentDetailResponsePreparedStackUnion =
@@ -1816,7 +1841,31 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | any
     | null
     | undefined;
+  /**
+   * Whether cross-account registry access has been successfully granted.
+   *
+   * @remarks
+   * Set to true after the manager successfully sets the ECR/GAR repo policy
+   * for this deployment's target account. Prevents redundant API calls on
+   * every reconcile tick.
+   */
+  registryAccessGranted?: boolean | undefined;
 };
+
+/**
+ * Distribution source that imported this deployment
+ */
+export const DeploymentDetailResponseImportSource = {
+  Cloudformation: "cloudformation",
+  Terraform: "terraform",
+  Helm: "helm",
+} as const;
+/**
+ * Distribution source that imported this deployment
+ */
+export type DeploymentDetailResponseImportSource = ClosedEnum<
+  typeof DeploymentDetailResponseImportSource
+>;
 
 /**
  * Latest error information if the deployment is in a failed state
@@ -1997,6 +2046,10 @@ export type DeploymentDetailResponse = {
    * ID of the pinned release
    */
   pinnedReleaseId?: string | null | undefined;
+  /**
+   * Distribution source that imported this deployment
+   */
+  importSource?: DeploymentDetailResponseImportSource | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -4860,6 +4913,11 @@ export function deploymentDetailResponsePreparedStackResourcesFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseSupportedPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseSupportedPlatform
+> = z.enum(DeploymentDetailResponseSupportedPlatform);
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
   DeploymentDetailResponsePreparedStack,
   unknown
@@ -4871,6 +4929,9 @@ export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => DeploymentDetailResponsePreparedStackResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(DeploymentDetailResponseSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentDetailResponsePreparedStackFromJSON(
@@ -4919,6 +4980,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccessGranted: z.boolean().optional(),
 });
 
 export function deploymentDetailResponseRuntimeMetadataFromJSON(
@@ -4936,6 +4998,11 @@ export function deploymentDetailResponseRuntimeMetadataFromJSON(
     `Failed to parse 'DeploymentDetailResponseRuntimeMetadata' from JSON`,
   );
 }
+
+/** @internal */
+export const DeploymentDetailResponseImportSource$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseImportSource
+> = z.enum(DeploymentDetailResponseImportSource);
 
 /** @internal */
 export const DeploymentDetailResponseError$inboundSchema: z.ZodType<
@@ -5046,6 +5113,8 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   currentReleaseId: z.nullable(z.string()).optional(),
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
+  importSource: z.nullable(DeploymentDetailResponseImportSource$inboundSchema)
+    .optional(),
   retryRequested: z.boolean(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

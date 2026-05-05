@@ -1,0 +1,165 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the manager IAM identity allowed to assume management roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== locals.tf ===
+locals {
+  alien_platform = "aws"
+  alien_target   = "aws"
+  alien_management_config = {
+    platform        = "aws"
+    managingRoleArn = data.aws_caller_identity.current.arn
+  }
+  alien_stack_settings = {}
+  alien_resources = [
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        roleName                     = aws_iam_role.management.name
+        roleArn                      = aws_iam_role.management.arn
+        managementPermissionsApplied = true
+      }
+    }
+  ]
+}
+
+=== management.tf ===
+resource "aws_iam_role" "management" {
+  name               = "${var.stack_name}-management"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn }, "ForAnyValue:StringEquals" = { "sts:ExternalId" = var.deployment_group_token } } }] })
+  tags = {
+    ManagedBy         = "alien.dev"
+    AlienStackId      = var.stack_name
+    AlienResourceId   = "management"
+    AlienResourceType = "remote-stack-management"
+  }
+}
+
+resource "aws_iam_role_policy" "management_set_0" {
+  name   = "function-management-0"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["apigateway:POST"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"], Sid = "FunctionManagement6" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement7" }], Version = "2012-10-17" })
+}
+
+resource "aws_iam_role_policy" "management_set_1" {
+  name   = "storage-heartbeat-1"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Statement = [{ Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${var.stack_name}-*"], Sid = "StorageHeartbeat" }], Version = "2012-10-17" })
+}
+
+resource "aws_iam_role_policy" "management_self_read" {
+  name   = "alien-management-self-read"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-management" }] })
+}
+
+=== import.tf ===
+resource "terraform_data" "alien_stack_import" {
+  input = {
+    platform               = local.alien_platform
+    deployment_group_token = var.deployment_group_token
+    manager_url            = var.manager_url
+    management_config      = local.alien_management_config
+    stack_settings         = local.alien_stack_settings
+    resources              = local.alien_resources
+  }
+}
+
+=== outputs.tf ===
+output "alien_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "alien_platform" {
+  value       = local.alien_platform
+  description = "Target platform."
+}
+
+output "alien_management_config" {
+  value       = jsonencode(local.alien_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "alien_stack_settings" {
+  value       = jsonencode(local.alien_stack_settings)
+  description = "Manager import StackSettings JSON."
+}
+
+output "alien_resources" {
+  value       = jsonencode(local.alien_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-mgmt
+
+Target: `aws`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-mgmt' -var='deployment_group_token=...'
+```
+
+Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.

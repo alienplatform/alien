@@ -13,5 +13,5 @@ let value: SyncReconcileRequestStackStateLifecycleEnum = "live";
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

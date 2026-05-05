@@ -59,6 +59,26 @@ pub enum ErrorData {
     AgentServiceError { message: String },
 
     #[error(
+        code = "HTTP_ERROR",
+        message = "HTTP {operation} to {url} failed: {reason}",
+        retryable = "true",
+        internal = "false"
+    )]
+    HttpError {
+        operation: String,
+        url: String,
+        reason: String,
+    },
+
+    #[error(
+        code = "JSON_ERROR",
+        message = "JSON {operation} failed: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    JsonError { operation: String, reason: String },
+
+    #[error(
         code = "GENERIC_ERROR",
         message = "{message}",
         retryable = "false",

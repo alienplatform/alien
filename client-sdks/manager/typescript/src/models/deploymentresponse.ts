@@ -10,7 +10,11 @@ import {
   DeploymentGroupMinimal$inboundSchema,
 } from "./deploymentgroupminimal.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import { Platform, Platform$inboundSchema } from "./platform.js";
+import {
+  ImportSourceKind,
+  ImportSourceKind$inboundSchema,
+} from "./importsourcekind.js";
+import { PlatformEnum, PlatformEnum$inboundSchema } from "./platformenum.js";
 
 export type DeploymentResponse = {
   createdAt: string;
@@ -21,11 +25,12 @@ export type DeploymentResponse = {
   environmentInfo?: any | undefined;
   error?: any | undefined;
   id: string;
+  importSource?: ImportSourceKind | null | undefined;
   name: string;
   /**
    * Represents the target cloud platform.
    */
-  platform: Platform;
+  platform: PlatformEnum;
   retryRequested: boolean;
   runtimeMetadata?: any | undefined;
   stackSettings?: any | undefined;
@@ -47,8 +52,9 @@ export const DeploymentResponse$inboundSchema: z.ZodType<
   environmentInfo: z.any().optional(),
   error: z.any().optional(),
   id: z.string(),
+  importSource: z.nullable(ImportSourceKind$inboundSchema).optional(),
   name: z.string(),
-  platform: Platform$inboundSchema,
+  platform: PlatformEnum$inboundSchema,
   retryRequested: z.boolean(),
   runtimeMetadata: z.any().optional(),
   stackSettings: z.any().optional(),
