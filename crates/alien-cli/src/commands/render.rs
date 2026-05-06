@@ -249,6 +249,7 @@ fn render_terraform(
         alien_terraform::TerraformOptions {
             registry: &registry,
             stack_settings: stack_settings.clone(),
+            registration: None,
         },
     )
     .map_err(render_error)?;

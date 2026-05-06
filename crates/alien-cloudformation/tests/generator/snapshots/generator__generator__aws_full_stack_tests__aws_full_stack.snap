@@ -550,6 +550,7 @@ Resources:
           Version: 2012-10-17
           Statement:
           - Action:
+            - lambda:AddPermission
             - lambda:CreateAlias
             - lambda:DeleteAlias
             - lambda:DeleteFunctionConcurrency
@@ -568,6 +569,7 @@ Resources:
             - lambda:PublishVersion
             - lambda:PutFunctionConcurrency
             - lambda:PutFunctionEventInvokeConfig
+            - lambda:RemovePermission
             - lambda:UpdateAlias
             - lambda:UpdateEventSourceMapping
             - lambda:UpdateFunctionCode

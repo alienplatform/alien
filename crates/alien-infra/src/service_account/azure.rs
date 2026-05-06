@@ -64,7 +64,9 @@ fn wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
     if remaining == 0 {
         None
     } else {
-        Some(Duration::from_secs(remaining.min(AZURE_RBAC_WAIT_POLL_SECS)))
+        Some(Duration::from_secs(
+            remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
+        ))
     }
 }
 

@@ -21,6 +21,7 @@ pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -
         TerraformOptions {
             registry: &registry,
             stack_settings: settings,
+            registration: None,
         },
     )
     .expect("module should render")

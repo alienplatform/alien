@@ -14,7 +14,7 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule, Queue,
-    ResourceLifecycle, Stack, StackSettings, Storage, Vault,
+    ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -28,6 +28,29 @@ fn storage_account() -> AzureStorageAccount {
 
 fn service_bus_namespace() -> AzureServiceBusNamespace {
     AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build()
+}
+
+#[test]
+fn azure_resource_dependencies_emit_depends_on() {
+    let stack = Stack::new("acme-deps".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            storage_account(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(
+                AzureResourceGroup::RESOURCE_TYPE,
+                "default-resource-group",
+            )],
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let storage_account_tf = module
+        .get("default_storage_account.tf")
+        .expect("storage account file");
+
+    assert!(storage_account_tf.contains("depends_on = ["));
+    assert!(storage_account_tf.contains("azurerm_resource_group.default_resource_group"));
+    assert_terraform_valid(&module, "azure_resource_dependencies");
 }
 
 #[test]

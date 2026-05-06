@@ -25,6 +25,8 @@
             "lambda:GetFunctionUrlConfig",
             "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig",
+            "lambda:AddPermission",
+            "lambda:RemovePermission",
             "lambda:GetEventSourceMapping",
             "lambda:ListEventSourceMappings",
             "lambda:UpdateEventSourceMapping"
@@ -167,6 +169,13 @@
             "run.services.deleteTagBinding",
             "run.jobs.createTagBinding",
             "run.jobs.deleteTagBinding",
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
             "iam.serviceAccounts.actAs",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
@@ -238,7 +247,13 @@
             "Microsoft.App/managedEnvironments/join/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete"
           ],
           "dataActions": [
             "Microsoft.ServiceBus/namespaces/messages/send/action",

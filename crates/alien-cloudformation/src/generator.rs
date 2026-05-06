@@ -118,6 +118,9 @@ pub fn generate_cloudformation_template(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
+        if !should_emit_resource(resource_type.as_ref()) {
+            continue;
+        }
         let emitter = options.registry.require(&resource_type, Platform::Aws)?;
 
         let ctx = EmitContext {
@@ -213,6 +216,9 @@ pub fn generate_cloudformation_stack_policy(stack: &Stack) -> Result<serde_json:
             if resource.lifecycle != ResourceLifecycle::Live {
                 return None;
             }
+            if !should_emit_resource(resource.config.resource_type().as_ref()) {
+                return None;
+            }
             let logical_id = names.get(resource_id)?;
             Some(json!({
                 "Effect": "Deny",
@@ -224,6 +230,12 @@ pub fn generate_cloudformation_stack_policy(stack: &Stack) -> Result<serde_json:
         .collect::<Vec<_>>();
 
     Ok(json!({ "Statement": statements }))
+}
+
+fn should_emit_resource(resource_type: &str) -> bool {
+    // Workload resources are reconciled by the runtime after the infrastructure
+    // import has registered the cloud primitives they run on.
+    resource_type != "container"
 }
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {

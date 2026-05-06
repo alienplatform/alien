@@ -1,20 +1,16 @@
-//! Azure ServiceActivation — `azurerm_resource_provider_registration`.
+//! Azure ServiceActivation - import metadata for Azure resource providers.
 //!
 //! `ServiceActivation` resources land in the stack via the
 //! `AzureServiceActivationMutation` preflight when the stack contains a
 //! workload that depends on a particular Azure resource provider
 //! (Microsoft.App for Container Apps, Microsoft.Storage, Microsoft.KeyVault,
-//! Microsoft.DocumentDB, …). Each one becomes a registration block so
-//! `terraform apply` waits for the RP to reach `Registered` before the
-//! dependent resources start.
-//!
-//! Customers who already have these providers registered (most do)
-//! still get a no-op apply: the AzureRM provider's
-//! `resource_provider_registration` is idempotent on existing
-//! registrations.
+//! Microsoft.DocumentDB, ...).
+//! The AzureRM provider registers required resource providers itself. Emitting
+//! `azurerm_resource_provider_registration` conflicts with subscriptions where
+//! the provider is already registered, so Terraform distributions only report
+//! the activation in Alien import metadata.
 
 use crate::{
-    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, required_label},
     expr,
@@ -27,17 +23,8 @@ pub struct AzureServiceActivationEmitter;
 
 impl TfEmitter for AzureServiceActivationEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        let activation = downcast::<ServiceActivation>(ctx, ServiceActivation::RESOURCE_TYPE)?;
-        let label = required_label(ctx)?;
-
-        Ok(TfFragment::default().with_resource(resource_block(
-            "azurerm_resource_provider_registration",
-            label,
-            [attr(
-                "name",
-                Expression::String(activation.service_name.clone()),
-            )],
-        )))
+        let _ = downcast::<ServiceActivation>(ctx, ServiceActivation::RESOURCE_TYPE)?;
+        Ok(TfFragment::empty())
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {

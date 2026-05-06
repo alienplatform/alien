@@ -20,6 +20,12 @@ variable "stack_name" {
   description = "Stable physical-name prefix for resources created by this module."
 }
 
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
 variable "deployment_group_token" {
   type        = string
   description = "Deployment group token used when registering the resolved stack import."
@@ -65,6 +71,7 @@ provider "google" {
 locals {
   alien_platform = "gcp"
   alien_target   = "gke"
+  alien_region   = var.gcp_region
   alien_management_config = {
     platform            = "gcp"
     projectId           = var.gcp_project
@@ -75,7 +82,7 @@ locals {
     {
       id   = "data"
       type = "storage"
-      importData = {
+      import_data = {
         bucketName     = google_storage_bucket.data.name
         bucketSelfLink = google_storage_bucket.data.self_link
         projectId      = var.gcp_project
@@ -85,7 +92,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      importData = {
+      import_data = {
         projectId               = var.gcp_project
         serviceAccountEmail     = google_service_account.execution_sa.email
         serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
@@ -188,6 +195,11 @@ output "alien_platform" {
   description = "Target platform."
 }
 
+output "alien_region" {
+  value       = local.alien_region
+  description = "Target cloud region or location."
+}
+
 output "alien_management_config" {
   value       = jsonencode(local.alien_management_config)
   description = "Manager import ManagementConfig JSON."
@@ -221,4 +233,4 @@ terraform validate
 terraform apply -var='stack_name=gke-overlay' -var='deployment_group_token=...'
 ```
 
-Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.
+Self-registering distributions create `alien_deployment.this`; other renderers can use `alien_management_config` / `alien_stack_settings` / `alien_resources` with their own registration flow.

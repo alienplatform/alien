@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 53
 expression: buf
 ---
 === versions.tf ===
@@ -19,6 +18,12 @@ terraform {
 variable "stack_name" {
   type        = string
   description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
 }
 
 variable "deployment_group_token" {
@@ -82,6 +87,7 @@ provider "azurerm" {
 locals {
   alien_platform = "azure"
   alien_target   = "azure"
+  alien_region   = var.azure_location
   alien_management_config = {
     platform              = "azure"
     managingTenantId      = var.azure_managing_tenant_id
@@ -94,7 +100,7 @@ locals {
     {
       id   = "default-resource-group"
       type = "azure_resource_group"
-      importData = {
+      import_data = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = azurerm_resource_group.default_resource_group.name
         location       = azurerm_resource_group.default_resource_group.location
@@ -103,7 +109,7 @@ locals {
     {
       id   = "default-storage-account"
       type = "azure_storage_account"
-      importData = {
+      import_data = {
         subscriptionId     = var.azure_subscription_id
         resourceGroup      = var.azure_resource_group_name
         storageAccountName = azurerm_storage_account.default_storage_account.name
@@ -114,7 +120,7 @@ locals {
     {
       id   = "data"
       type = "storage"
-      importData = {
+      import_data = {
         subscriptionId     = var.azure_subscription_id
         resourceGroup      = var.azure_resource_group_name
         storageAccountName = azurerm_storage_account.default_storage_account.name
@@ -191,6 +197,11 @@ output "alien_platform" {
   description = "Target platform."
 }
 
+output "alien_region" {
+  value       = local.alien_region
+  description = "Target cloud region or location."
+}
+
 output "alien_management_config" {
   value       = jsonencode(local.alien_management_config)
   description = "Manager import ManagementConfig JSON."
@@ -219,4 +230,4 @@ terraform validate
 terraform apply -var='stack_name=acme-prod' -var='deployment_group_token=...'
 ```
 
-Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.
+Self-registering distributions create `alien_deployment.this`; other renderers can use `alien_management_config` / `alien_stack_settings` / `alien_resources` with their own registration flow.

@@ -20,6 +20,12 @@ variable "stack_name" {
   description = "Stable physical-name prefix for resources created by this module."
 }
 
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
 variable "deployment_group_token" {
   type        = string
   description = "Deployment group token used when registering the resolved stack import."
@@ -63,6 +69,7 @@ data "aws_region" "current" {}
 locals {
   alien_platform = "aws"
   alien_target   = "aws"
+  alien_region   = data.aws_region.current.region
   alien_management_config = {
     platform        = "aws"
     managingRoleArn = data.aws_caller_identity.current.arn
@@ -79,7 +86,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      importData = {
+      import_data = {
         vpcId               = aws_vpc.default_network.id
         cidrBlock           = aws_vpc.default_network.cidr_block
         internetGatewayId   = aws_internet_gateway.default_network.id
@@ -97,7 +104,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      importData = {
+      import_data = {
         roleName                = aws_iam_role.execution_sa.name
         roleArn                 = aws_iam_role.execution_sa.arn
         stackPermissionsApplied = true
@@ -106,7 +113,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      importData = {
+      import_data = {
         roleName                     = aws_iam_role.management.name
         roleArn                      = aws_iam_role.management.arn
         managementPermissionsApplied = true
@@ -115,7 +122,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      importData = {
+      import_data = {
         bucketName = aws_s3_bucket.assets.bucket
         bucketArn  = aws_s3_bucket.assets.arn
       }
@@ -123,7 +130,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      importData = {
+      import_data = {
         queueName = aws_sqs_queue.jobs.name
         queueUrl  = aws_sqs_queue.jobs.url
         queueArn  = aws_sqs_queue.jobs.arn
@@ -132,7 +139,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      importData = {
+      import_data = {
         tableName = aws_dynamodb_table.metadata.name
         tableArn  = aws_dynamodb_table.metadata.arn
       }
@@ -140,7 +147,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      importData = {
+      import_data = {
         accountId       = data.aws_caller_identity.current.account_id
         region          = data.aws_region.current.region
         parameterPrefix = "${var.stack_name}-secrets"
@@ -149,7 +156,7 @@ locals {
     {
       id   = "registry"
       type = "artifact-registry"
-      importData = {
+      import_data = {
         accountId        = data.aws_caller_identity.current.account_id
         region           = data.aws_region.current.region
         registryId       = "${data.aws_caller_identity.current.account_id}:${data.aws_region.current.region}"
@@ -162,7 +169,7 @@ locals {
     {
       id   = "builder"
       type = "build"
-      importData = {
+      import_data = {
         projectName = aws_codebuild_project.builder.name
         projectArn  = aws_codebuild_project.builder.arn
         buildEnvVars = {
@@ -173,7 +180,7 @@ locals {
     {
       id   = "public-api"
       type = "function"
-      importData = {
+      import_data = {
         functionName         = aws_lambda_function.public_api.function_name
         functionArn          = aws_lambda_function.public_api.arn
         eventSourceMappings  = []
@@ -192,7 +199,7 @@ locals {
     {
       id   = "worker"
       type = "function"
-      importData = {
+      import_data = {
         functionName = aws_lambda_function.worker.function_name
         functionArn  = aws_lambda_function.worker.arn
         eventSourceMappings = [
@@ -390,7 +397,7 @@ resource "aws_iam_role" "management" {
 resource "aws_iam_role_policy" "management_set_0" {
   name   = "function-management-0"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["apigateway:POST"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"], Sid = "FunctionManagement6" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement7" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["apigateway:POST"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"], Sid = "FunctionManagement6" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement7" }], Version = "2012-10-17" })
 }
 
 resource "aws_iam_role_policy" "management_set_1" {
@@ -918,6 +925,11 @@ output "alien_platform" {
   description = "Target platform."
 }
 
+output "alien_region" {
+  value       = local.alien_region
+  description = "Target cloud region or location."
+}
+
 output "alien_management_config" {
   value       = jsonencode(local.alien_management_config)
   description = "Manager import ManagementConfig JSON."
@@ -946,4 +958,4 @@ terraform validate
 terraform apply -var='stack_name=full-aws' -var='deployment_group_token=...'
 ```
 
-Outputs `alien_management_config` / `alien_stack_settings` / `alien_resources` for registration via `alien_deployment` (T11) or `alien-deploy register`.
+Self-registering distributions create `alien_deployment.this`; other renderers can use `alien_management_config` / `alien_stack_settings` / `alien_resources` with their own registration flow.

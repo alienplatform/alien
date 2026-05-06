@@ -681,6 +681,7 @@ async fn apply_terraform_and_import(
         alien_terraform::TerraformOptions {
             registry: &registry,
             stack_settings: stack_settings_for_flow(prepared.model),
+            registration: None,
         },
     )
     .map_err(|error| anyhow::anyhow!("Terraform render failed: {error}"))?;

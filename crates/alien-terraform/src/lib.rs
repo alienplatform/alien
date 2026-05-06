@@ -25,6 +25,8 @@ mod registry;
 mod target;
 
 pub use emitter::{TfEmitter, TfFragment};
-pub use generator::{generate_terraform_module, ModuleFiles, TerraformOptions};
+pub use generator::{
+    generate_terraform_module, ModuleFiles, TerraformOptions, TerraformRegistration,
+};
 pub use registry::TfRegistry;
 pub use target::TerraformTarget;

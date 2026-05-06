@@ -106,6 +106,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         TerraformOptions {
             registry: &registry,
             stack_settings: StackSettings::default(),
+            registration: None,
         },
     )
     .expect_err("OSS registry should not register container_cluster");
