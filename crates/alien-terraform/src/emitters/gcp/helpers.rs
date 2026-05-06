@@ -70,6 +70,15 @@ pub fn stack_name_template(suffix: &str) -> Expression {
     expr::template(format!("${{var.stack_name}}-{suffix}"))
 }
 
+/// GCP service-account IDs are capped at 30 chars and must end in an
+/// alphanumeric character. Truncating a long stack/resource name can leave a
+/// trailing dash, so trim dashes after truncation.
+pub fn service_account_id_template(suffix: &str) -> Expression {
+    expr::raw(format!(
+        "trim(substr(replace(lower(\"${{var.stack_name}}-{suffix}\"), \"_\", \"-\"), 0, 30), \"-\")"
+    ))
+}
+
 /// Standard Alien labels block for GCP. GCP labels must be lowercase
 /// kebab-case for both keys and values, max 63 chars.
 pub fn labels(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {

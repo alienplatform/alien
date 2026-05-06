@@ -58,9 +58,11 @@
           "actions": [
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read",
             "Microsoft.Compute/disks/read"
+          ],
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
           ]
         },
         "binding": {

@@ -82,7 +82,7 @@ locals {
 === management.tf ===
 resource "google_service_account" "management" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-management", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-management"), "_", "-"), 0, 30), "-")
   display_name = "Alien stack management identity"
   description  = "${var.stack_name} cross-account management service account"
 }

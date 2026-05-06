@@ -656,13 +656,13 @@ resource "azurerm_cosmosdb_sql_container" "metadata_container" {
 }
 
 === secrets.tf ===
-data "azurerm_client_config" "current" {}
+data "azurerm_client_config" "secrets_current" {}
 
 resource "azurerm_key_vault" "secrets" {
   name                          = substr(lower("${var.stack_name}-secrets"), 0, 24)
   resource_group_name           = var.azure_resource_group_name
   location                      = var.azure_location
-  tenant_id                     = data.azurerm_client_config.current.tenant_id
+  tenant_id                     = data.azurerm_client_config.secrets_current.tenant_id
   sku_name                      = "standard"
   rbac_authorization_enabled    = true
   purge_protection_enabled      = true

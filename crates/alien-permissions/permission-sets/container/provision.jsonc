@@ -195,7 +195,7 @@
       // Key Vault certificate for HTTPS containers
       {
         "grant": {
-          "actions": [
+          "dataActions": [
             "Microsoft.KeyVault/vaults/certificates/import/action",
             "Microsoft.KeyVault/vaults/certificates/read"
           ]

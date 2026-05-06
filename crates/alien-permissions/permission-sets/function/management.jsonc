@@ -238,11 +238,13 @@
             "Microsoft.App/managedEnvironments/join/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": [
+            "Microsoft.ServiceBus/namespaces/messages/send/action",
             "Microsoft.KeyVault/vaults/certificates/import/action",
             "Microsoft.KeyVault/vaults/certificates/read"
-          ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+          ]
         },
         "binding": {
           "stack": {

@@ -262,7 +262,7 @@ resource "google_compute_firewall" "default_network_internal" {
 === execution_sa.tf ===
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-execution_sa", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-execution_sa"), "_", "-"), 0, 30), "-")
   display_name = "Alien execution-sa service account"
   description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
 }
@@ -313,7 +313,7 @@ resource "google_project_iam_member" "execution_sa_queuedatawrite_binding_0" {
 === management.tf ===
 resource "google_service_account" "management" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-management", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-management"), "_", "-"), 0, 30), "-")
   display_name = "Alien stack management identity"
   description  = "${var.stack_name} cross-account management service account"
 }
@@ -576,7 +576,7 @@ resource "google_artifact_registry_repository" "registry" {
 
 resource "google_service_account" "registry_pull" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-registry-pull", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-pull"), "_", "-"), 0, 30), "-")
   display_name = "Alien registry artifact registry pull identity"
 }
 
@@ -590,7 +590,7 @@ resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
 
 resource "google_service_account" "registry_push" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-registry-push", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-push"), "_", "-"), 0, 30), "-")
   display_name = "Alien registry artifact registry push identity"
 }
 

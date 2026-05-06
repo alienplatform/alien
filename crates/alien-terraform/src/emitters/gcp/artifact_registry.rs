@@ -9,7 +9,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        downcast, labels, required_label, sanitize_label_value, service_account_member_for_label,
+        downcast, labels, required_label, sanitize_label_value, service_account_id_template,
+        service_account_member_for_label,
     },
     expr,
 };
@@ -59,9 +60,7 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
                 format!("{label}_push"),
             ),
         ] {
-            let id_template = expr::raw(format!(
-                "substr(replace(\"${{var.stack_name}}-{label}-{suffix}\", \"_\", \"-\"), 0, 30)"
-            ));
+            let id_template = service_account_id_template(&format!("{label}-{suffix}"));
             fragment.resource_blocks.push(resource_block(
                 "google_service_account",
                 &sa_label,

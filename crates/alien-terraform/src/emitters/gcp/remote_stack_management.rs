@@ -20,7 +20,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
         downcast, emit_custom_role_and_bindings, permission_context, required_label,
-        service_account_member_for_label,
+        service_account_id_template, service_account_member_for_label,
     },
     expr,
 };
@@ -38,9 +38,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         let label = required_label(ctx)?;
         let mut fragment = TfFragment::default();
 
-        let account_id_template = expr::raw(format!(
-            "substr(replace(\"${{var.stack_name}}-{label}\", \"_\", \"-\"), 0, 30)"
-        ));
+        let account_id_template = service_account_id_template(label);
         fragment.resource_blocks.push(resource_block(
             "google_service_account",
             label,

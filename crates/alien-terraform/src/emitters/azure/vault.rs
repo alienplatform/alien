@@ -8,7 +8,7 @@
 //! * RBAC enabled (`rbac_authorization_enabled = true`); legacy access
 //!   policies are not used.
 //! * Tenant id sourced from the AzureRM provider's
-//!   `data.azurerm_client_config.current.tenant_id` so the rendered
+//!   `data.azurerm_client_config.<resource>_current.tenant_id` so the rendered
 //!   module doesn't need an extra customer-supplied variable.
 
 use crate::{
@@ -29,22 +29,15 @@ impl TfEmitter for AzureVaultEmitter {
         let label = required_label(ctx)?;
         let mut fragment = TfFragment::default();
 
-        // The provider exposes a singleton data source for "current
-        // client config" — pull the tenant id from there rather than
-        // surfacing yet another variable.
-        if !fragment.data_blocks.iter().any(|block| {
-            block
-                .labels
-                .first()
-                .map(|label| label.as_str() == "azurerm_client_config")
-                .unwrap_or(false)
-        }) {
-            fragment.data_blocks.push(data_block(
-                "azurerm_client_config",
-                "current",
-                Vec::<hcl::structure::Structure>::new(),
-            ));
-        }
+        // Scope the data source label to the vault resource. Multiple vaults can
+        // be rendered into one module, and Terraform requires data labels to be
+        // unique per type.
+        let client_config_label = format!("{label}_current");
+        fragment.data_blocks.push(data_block(
+            "azurerm_client_config",
+            &client_config_label,
+            Vec::<hcl::structure::Structure>::new(),
+        ));
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_key_vault",
@@ -58,7 +51,9 @@ impl TfEmitter for AzureVaultEmitter {
                 attr("location", expr::raw("var.azure_location")),
                 attr(
                     "tenant_id",
-                    expr::raw("data.azurerm_client_config.current.tenant_id"),
+                    expr::raw(format!(
+                        "data.azurerm_client_config.{client_config_label}.tenant_id"
+                    )),
                 ),
                 attr("sku_name", Expression::String("standard".to_string())),
                 attr("rbac_authorization_enabled", Expression::Bool(true)),

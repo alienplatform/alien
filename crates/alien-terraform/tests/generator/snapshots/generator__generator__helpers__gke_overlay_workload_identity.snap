@@ -128,7 +128,7 @@ resource "google_storage_bucket" "data" {
 === execution_sa.tf ===
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
-  account_id   = substr(replace("${var.stack_name}-execution_sa", "_", "-"), 0, 30)
+  account_id   = trim(substr(replace(lower("${var.stack_name}-execution_sa"), "_", "-"), 0, 30), "-")
   display_name = "Alien execution-sa service account"
   description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
 }

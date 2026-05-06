@@ -9,7 +9,8 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use alien_core::{
     import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBindings, ManagementConfig, Platform, Stack, StackSettings, StackState,
+    ExternalBindings, Function, FunctionCode, ManagementConfig, Platform, Stack, StackSettings,
+    StackState,
 };
 use anyhow::Context;
 use serde_json::Value;
@@ -140,7 +141,7 @@ pub async fn setup_distribution(
 ) -> anyhow::Result<TestContext> {
     let mut prepared = prepare_distribution(flow, language).await?;
 
-    let mut result = match flow {
+    let result = match flow {
         DistributionFlow::CloudFormationAwsPush => run_cloudformation_aws(&mut prepared).await,
         DistributionFlow::TerraformAwsPush => {
             run_terraform_cloud(&mut prepared, alien_terraform::TerraformTarget::Aws).await
@@ -163,11 +164,16 @@ pub async fn setup_distribution(
         DistributionFlow::TerraformOnpremHelmPull => run_onprem_k8s(&mut prepared).await,
     };
 
-    if let Ok(ctx) = &mut result {
-        wait_and_finalize(ctx).await?;
+    match result {
+        Ok(mut ctx) => {
+            if let Err(error) = wait_and_finalize(&mut ctx).await {
+                ctx.cleanup().await;
+                return Err(error);
+            }
+            Ok(ctx)
+        }
+        Err(error) => Err(error),
     }
-
-    result
 }
 
 async fn prepare_distribution(
@@ -222,11 +228,16 @@ async fn prepare_distribution(
         }
     }
 
+    let render_stack = if model == DeploymentModel::Push {
+        rewrite_push_distribution_images(pushed_stack.clone(), build_platform, &config)?
+    } else {
+        pushed_stack.clone()
+    };
+
     let stack_settings = stack_settings_for_flow(model);
-    let rendered_stack =
-        apply_render_mutations(pushed_stack.clone(), build_platform, &stack_settings)
-            .await
-            .context("Failed to apply distribution render preflights")?;
+    let rendered_stack = apply_render_mutations(render_stack, build_platform, &stack_settings)
+        .await
+        .context("Failed to apply distribution render preflights")?;
 
     create_release(&manager, build_platform, &rendered_stack).await?;
     let (group_id, dg_token) = create_deployment_group_token(&manager).await?;
@@ -434,51 +445,135 @@ async fn run_cloudformation_aws(
         .context("AWS management role ARN is required")?;
     let managing_account_id = mgmt.account_id.clone().unwrap_or_default();
 
-    let mut create = Command::new("aws");
-    create.args([
-        "cloudformation",
-        "create-stack",
-        "--stack-name",
-        &stack_name,
-        "--template-body",
-        &format!("file://{}", template_path.display()),
-        "--capabilities",
-        "CAPABILITY_IAM",
-        "CAPABILITY_NAMED_IAM",
-        "--region",
-        &target.region,
-        "--parameters",
-        &format!(
-            "ParameterKey=DeploymentGroupToken,ParameterValue={}",
-            prepared.dg_token
-        ),
-        &format!("ParameterKey=ManagingRoleArn,ParameterValue={role_arn}"),
-        &format!("ParameterKey=ManagingAccountId,ParameterValue={managing_account_id}"),
-        "ParameterKey=DomainName,ParameterValue=",
-        "ParameterKey=HostedZoneId,ParameterValue=",
-        "ParameterKey=CertificateArn,ParameterValue=",
-    ]);
-    apply_env(&mut create, &env);
-    run_command(create, "aws cloudformation create-stack").await?;
+    let create_result = async {
+        let mut create = Command::new("aws");
+        create.args([
+            "cloudformation",
+            "create-stack",
+            "--stack-name",
+            &stack_name,
+            "--template-body",
+            &format!("file://{}", template_path.display()),
+            "--capabilities",
+            "CAPABILITY_IAM",
+            "CAPABILITY_NAMED_IAM",
+            "CAPABILITY_AUTO_EXPAND",
+            "--region",
+            &target.region,
+            "--parameters",
+            &format!(
+                "ParameterKey=DeploymentGroupToken,ParameterValue={}",
+                prepared.dg_token
+            ),
+            &format!("ParameterKey=ManagingRoleArn,ParameterValue={role_arn}"),
+            &format!("ParameterKey=ManagingAccountId,ParameterValue={managing_account_id}"),
+            "ParameterKey=DomainName,ParameterValue=",
+            "ParameterKey=HostedZoneId,ParameterValue=",
+            "ParameterKey=CertificateArn,ParameterValue=",
+        ]);
+        apply_env(&mut create, &env);
+        run_command(create, "aws cloudformation create-stack").await?;
 
-    let mut wait = Command::new("aws");
-    wait.args([
-        "cloudformation",
-        "wait",
-        "stack-create-complete",
-        "--stack-name",
-        &stack_name,
-        "--region",
-        &target.region,
-    ]);
-    apply_env(&mut wait, &env);
-    run_command(wait, "aws cloudformation wait stack-create-complete").await?;
+        let mut wait = Command::new("aws");
+        wait.args([
+            "cloudformation",
+            "wait",
+            "stack-create-complete",
+            "--stack-name",
+            &stack_name,
+            "--region",
+            &target.region,
+        ]);
+        apply_env(&mut wait, &env);
+        run_command(wait, "aws cloudformation wait stack-create-complete").await?;
 
-    let request =
-        cloudformation_import_request(&stack_name, &target.region, &env, &prepared.dg_token)
-            .await?;
-    let deployment = import_stack(prepared, request).await?;
-    Ok(context_from_deployment(prepared, deployment, vec![cleanup]))
+        let request =
+            cloudformation_import_request(&stack_name, &target.region, &env, &prepared.dg_token)
+                .await?;
+        import_stack(prepared, request).await
+    }
+    .await;
+
+    match create_result {
+        Ok(deployment) => Ok(context_from_deployment(prepared, deployment, vec![cleanup])),
+        Err(error) => {
+            cleanup.cleanup().await;
+            Err(error)
+        }
+    }
+}
+
+fn rewrite_push_distribution_images(
+    mut stack: Stack,
+    platform: Platform,
+    config: &TestConfig,
+) -> anyhow::Result<Stack> {
+    let Some(native_host) = native_image_host_for_distribution(platform, config)? else {
+        return Ok(stack);
+    };
+
+    for (_id, entry) in stack.resources_mut() {
+        let Some(function) = entry.config.downcast_mut::<Function>() else {
+            continue;
+        };
+        let FunctionCode::Image { image } = &mut function.code else {
+            continue;
+        };
+        if let Some(rewritten) =
+            alien_core::image_rewrite::resolve_native_image_uri(image, &native_host)
+        {
+            *image = rewritten;
+        }
+    }
+
+    Ok(stack)
+}
+
+fn native_image_host_for_distribution(
+    platform: Platform,
+    config: &TestConfig,
+) -> anyhow::Result<Option<String>> {
+    match platform {
+        Platform::Aws => {
+            let account_id = config
+                .aws_mgmt
+                .as_ref()
+                .and_then(|aws| aws.account_id.as_deref())
+                .context("AWS management account ID is required for AWS distribution images")?;
+            let region = config
+                .aws_target
+                .as_ref()
+                .or(config.aws_mgmt.as_ref())
+                .map(|aws| aws.region.as_str())
+                .context("AWS region is required for AWS distribution images")?;
+            Ok(Some(format!("{account_id}.dkr.ecr.{region}.amazonaws.com")))
+        }
+        Platform::Gcp => {
+            let host = config
+                .e2e_artifact_registry
+                .gcp_gar_repository
+                .as_deref()
+                .and_then(|repository| {
+                    let endpoint = alien_core::image_rewrite::strip_url_scheme(repository);
+                    endpoint.split_once('/').and_then(|(host, _path)| {
+                        if host.contains('.') || host.contains(':') {
+                            Some(host.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .or_else(|| {
+                    config
+                        .gcp_mgmt
+                        .as_ref()
+                        .map(|gcp| format!("{}-docker.pkg.dev", gcp.region))
+                })
+                .context("GCP Artifact Registry host is required for GCP distribution images")?;
+            Ok(Some(host))
+        }
+        _ => Ok(None),
+    }
 }
 
 async fn run_terraform_cloud(
@@ -499,13 +594,26 @@ async fn run_terraform_k8s(
 ) -> anyhow::Result<TestContext> {
     let kubeconfig = required_kubeconfig(target)?;
     let result = apply_terraform_and_import(prepared, target).await?;
-    let chart_dir = render_helm_chart(prepared).await?;
+    let chart_dir = match render_helm_chart(prepared).await {
+        Ok(chart_dir) => chart_dir,
+        Err(error) => {
+            result.cleanup.cleanup().await;
+            return Err(error);
+        }
+    };
     let values_file =
-        write_manager_fetch_values(prepared, &result.deployment, &result.outputs, &chart_dir)
-            .await?;
+        match write_manager_fetch_values(prepared, &result.deployment, &result.outputs, &chart_dir)
+            .await
+        {
+            Ok(values_file) => values_file,
+            Err(error) => {
+                result.cleanup.cleanup().await;
+                return Err(error);
+            }
+        };
     let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let namespace = "alien-test".to_string();
-    let agent = crate::agent::TestAlienAgent::helm_install_with_values(
+    let agent_result = crate::agent::TestAlienAgent::helm_install_with_values(
         chart_dir.path(),
         &values_file,
         &release,
@@ -513,7 +621,16 @@ async fn run_terraform_k8s(
         Some(&kubeconfig),
     )
     .await
-    .map_err(|error| anyhow::anyhow!("Failed to install Helm distribution runtime: {error}"))?;
+    .map_err(|error| error.to_string());
+    let agent = match agent_result {
+        Ok(agent) => agent,
+        Err(error) => {
+            result.cleanup.cleanup().await;
+            return Err(anyhow::anyhow!(
+                "Failed to install Helm distribution runtime: {error}"
+            ));
+        }
+    };
 
     let mut ctx = context_from_deployment(prepared, result.deployment, vec![result.cleanup]);
     ctx.agent = Some(agent);
@@ -559,33 +676,43 @@ async fn apply_terraform_and_import(
     .await?;
 
     let workdir_path = workdir.path().to_path_buf();
+    let apply_result = async {
+        run_terraform_cmd(
+            &workdir_path,
+            &env,
+            ["init", "-backend=false", "-input=false"],
+        )
+        .await?;
+        run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
+        run_terraform_cmd(
+            &workdir_path,
+            &env,
+            ["apply", "-auto-approve", "-input=false"],
+        )
+        .await?;
+
+        let outputs = terraform_output_json(&workdir_path, &env).await?;
+        let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
+        let deployment = import_stack(prepared, request).await?;
+        Ok::<_, anyhow::Error>((deployment, outputs))
+    }
+    .await;
+
     let cleanup = DistributionArtifactCleanup::Terraform {
         workdir,
         env: env.clone(),
     };
-
-    run_terraform_cmd(
-        &workdir_path,
-        &env,
-        ["init", "-backend=false", "-input=false"],
-    )
-    .await?;
-    run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
-    run_terraform_cmd(
-        &workdir_path,
-        &env,
-        ["apply", "-auto-approve", "-input=false"],
-    )
-    .await?;
-
-    let outputs = terraform_output_json(&workdir_path, &env).await?;
-    let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
-    let deployment = import_stack(prepared, request).await?;
-    Ok(TerraformApplyResult {
-        deployment,
-        cleanup,
-        outputs,
-    })
+    match apply_result {
+        Ok((deployment, outputs)) => Ok(TerraformApplyResult {
+            deployment,
+            cleanup,
+            outputs,
+        }),
+        Err(error) => {
+            cleanup.cleanup().await;
+            Err(error)
+        }
+    }
 }
 
 async fn render_helm_chart(prepared: &DistributionPrepared) -> anyhow::Result<TempDir> {
