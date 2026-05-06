@@ -150,7 +150,7 @@ resource "azurerm_log_analytics_workspace" "default_container_apps_environment_l
 }
 
 resource "azurerm_container_app_environment" "default_container_apps_environment" {
-  name                       = "${var.stack_name}-default_container_apps_environment"
+  name                       = replace(lower("${var.stack_name}-default_container_apps_environment"), "_", "-")
   resource_group_name        = var.azure_resource_group_name
   location                   = var.azure_location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
@@ -163,6 +163,8 @@ resource "azurerm_container_app_environment" "default_container_apps_environment
 }
 
 === public_api.tf ===
+data "azurerm_client_config" "public_api_current" {}
+
 resource "azurerm_container_app" "public_api" {
   name                         = "${var.stack_name}-public-api"
   resource_group_name          = var.azure_resource_group_name
@@ -180,6 +182,16 @@ resource "azurerm_container_app" "public_api" {
       memory = "512Mi"
 
       env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "public-api"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "azure"
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
@@ -187,6 +199,21 @@ resource "azurerm_container_app" "public_api" {
       env {
         name  = "ALIEN_TRANSPORT"
         value = "container-app"
+      }
+
+      env {
+        name  = "AZURE_REGION"
+        value = var.azure_location
+      }
+
+      env {
+        name  = "AZURE_SUBSCRIPTION_ID"
+        value = var.azure_subscription_id
+      }
+
+      env {
+        name  = "AZURE_TENANT_ID"
+        value = data.azurerm_client_config.public_api_current.tenant_id
       }
     }
   }

@@ -33,4 +33,15 @@ impl CfEmitter for AwsVaultEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let vault = resource_config::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("parameter-store")),
+            (
+                "vaultPrefix",
+                CfExpression::sub(format!("${{AWS::StackName}}-{}", vault.id())),
+            ),
+        ])))
+    }
 }

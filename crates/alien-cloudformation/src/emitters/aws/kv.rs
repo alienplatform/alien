@@ -75,4 +75,13 @@ impl CfEmitter for AwsKvEmitter {
             ("tableArn", CfExpression::get_att(table_id, "Arn")),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let table_id = required_logical_id(ctx)?;
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("dynamodb")),
+            ("tableName", CfExpression::ref_(table_id)),
+            ("region", CfExpression::ref_("AWS::Region")),
+        ])))
+    }
 }

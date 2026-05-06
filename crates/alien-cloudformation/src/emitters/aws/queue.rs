@@ -40,6 +40,14 @@ impl CfEmitter for AwsQueueEmitter {
             ("queueArn", CfExpression::get_att(queue_id, "Arn")),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let queue_id = required_logical_id(ctx)?;
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("sqs")),
+            ("queueUrl", CfExpression::ref_(queue_id)),
+        ])))
+    }
 }
 
 /// SQS visibility timeout = max function timeout × 6, clamped to

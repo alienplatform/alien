@@ -91,4 +91,26 @@ impl TfEmitter for AzureServiceAccountEmitter {
             ("stackPermissionsApplied", Expression::Bool(true)),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            (
+                "service",
+                Expression::String("azuremanagedidentity".to_string()),
+            ),
+            (
+                "clientId",
+                expr::traversal(["azurerm_user_assigned_identity", label, "client_id"]),
+            ),
+            (
+                "resourceId",
+                expr::traversal(["azurerm_user_assigned_identity", label, "id"]),
+            ),
+            (
+                "principalId",
+                expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
+            ),
+        ])))
+    }
 }

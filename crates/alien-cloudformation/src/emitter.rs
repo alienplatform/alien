@@ -5,7 +5,10 @@
 //! against the same `CfRegistry`. Emitters return CFN-native [`CfResource`] /
 //! [`CfExpression`] directly \u2014 there is no intermediate IR.
 
-use crate::template::{CfExpression, CfResource};
+use crate::{
+    registry::CfRegistry,
+    template::{CfExpression, CfResource},
+};
 use alien_core::{import::EmitContext, Result};
 
 /// Generator-side trait that emits raw CloudFormation resources plus the
@@ -15,8 +18,25 @@ pub trait CfEmitter: Send + Sync {
     /// generator merges them into the template body.
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>>;
 
+    /// Emit resources with access to the full registry. Resource emitters that
+    /// need linked-resource binding references can override this while older
+    /// emitters keep implementing the simpler method.
+    fn emit_resources_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        _registry: &CfRegistry,
+    ) -> Result<Vec<CfResource>> {
+        self.emit_resources(ctx)
+    }
+
     /// Emit an expression that resolves to this resource's typed `ImportData`
     /// at apply time (typically a `Fn::GetAtt` / `Ref` object). Embedded into
     /// the auto-import payload by the generator.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression>;
+
+    /// Expression that resolves to this resource's runtime binding payload.
+    /// Import data feeds the manager; binding data feeds user code.
+    fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        Ok(None)
+    }
 }

@@ -512,8 +512,8 @@ impl AwsBuildController {
         ctx: &ResourceControllerContext<'_>,
         project_name_for_error_logging: &str,
     ) -> Result<HashMap<String, String>> {
-        EnvironmentVariableBuilder::new(initial_env)
-            .add_standard_alien_env_vars(ctx)
+        EnvironmentVariableBuilder::try_new(initial_env)?
+            .add_standard_alien_env_vars(ctx)?
             .add_linked_resources(links, ctx, project_name_for_error_logging)
             .await
             .map(|builder| builder.build())

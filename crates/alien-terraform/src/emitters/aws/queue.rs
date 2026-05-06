@@ -49,6 +49,14 @@ impl TfEmitter for AwsQueueEmitter {
             ("queueArn", expr::traversal(["aws_sqs_queue", label, "arn"])),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("sqs".to_string())),
+            ("queueUrl", expr::traversal(["aws_sqs_queue", label, "url"])),
+        ])))
+    }
 }
 
 fn visibility_timeout(ctx: &EmitContext<'_>) -> u32 {

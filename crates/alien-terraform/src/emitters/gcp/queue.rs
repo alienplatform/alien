@@ -91,6 +91,21 @@ impl TfEmitter for GcpQueueEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("pubsub".to_string())),
+            (
+                "topic",
+                expr::traversal(["google_pubsub_topic", label, "id"]),
+            ),
+            (
+                "subscription",
+                expr::traversal(["google_pubsub_subscription", label, "id"]),
+            ),
+        ])))
+    }
 }
 
 fn ack_deadline_for(ctx: &EmitContext<'_>) -> u32 {

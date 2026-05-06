@@ -87,4 +87,22 @@ impl TfEmitter for GcpServiceAccountEmitter {
             ("stackPermissionsApplied", Expression::Bool(true)),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            (
+                "service",
+                Expression::String("gcpserviceaccount".to_string()),
+            ),
+            (
+                "email",
+                expr::traversal(["google_service_account", label, "email"]),
+            ),
+            (
+                "uniqueId",
+                expr::traversal(["google_service_account", label, "unique_id"]),
+            ),
+        ])))
+    }
 }

@@ -163,6 +163,26 @@ impl TfEmitter for AzureKvEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        let container_label = format!("{label}_container");
+        Ok(Some(expr::object([
+            ("service", Expression::String("tablestorage".to_string())),
+            (
+                "resourceGroupName",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            (
+                "accountName",
+                expr::traversal(["azurerm_cosmosdb_account", label, "name"]),
+            ),
+            (
+                "tableName",
+                expr::traversal(["azurerm_cosmosdb_sql_container", &container_label, "name"]),
+            ),
+        ])))
+    }
 }
 
 /// Cosmos DB account names are 3-50 chars, lowercase alphanumeric, and

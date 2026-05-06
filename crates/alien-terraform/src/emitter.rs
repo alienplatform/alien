@@ -9,6 +9,7 @@
 //! against a [`crate::TfRegistry`]. Built-ins layer the same way (see
 //! [`crate::TfRegistry::built_in`]).
 
+use crate::registry::TfRegistry;
 use alien_core::{import::EmitContext, Result};
 use hcl::{expr::Expression, structure::Block};
 use indexmap::IndexMap;
@@ -67,9 +68,27 @@ pub trait TfEmitter: Send + Sync {
     /// generator merges the fragment into the module body.
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment>;
 
+    /// Emit with access to the full registry. Resource emitters that need
+    /// linked-resource binding references can override this while older
+    /// emitters keep implementing the simpler method.
+    fn emit_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        _registry: &TfRegistry,
+    ) -> Result<TfFragment> {
+        self.emit(ctx)
+    }
+
     /// Apply-time expression that resolves to this resource's typed
     /// `ImportData`. Embedded in the module's `alien_resources` local + a
     /// per-resource output. Typically an HCL object built from `aws_x.y.z`
     /// references.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression>;
+
+    /// Apply-time expression that resolves to this resource's runtime binding
+    /// payload. This is intentionally separate from [`Self::emit_import_ref`]:
+    /// import data feeds the manager, while binding data feeds user code.
+    fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        Ok(None)
+    }
 }

@@ -149,6 +149,15 @@ Resources:
         - Arn
       MemorySize: 256
       Timeout: 30
+      Environment:
+        Variables:
+          ALIEN_CURRENT_FUNCTION_BINDING_NAME: api
+          ALIEN_DEPLOYMENT_TYPE: aws
+          ALIEN_LAMBDA_MODE: buffered
+          ALIEN_RUNTIME_SEND_OTLP: 'true'
+          ALIEN_TRANSPORT: lambda
+          AWS_ACCOUNT_ID:
+            Ref: AWS::AccountId
       Tags:
       - Key: ManagedBy
         Value: alien.dev

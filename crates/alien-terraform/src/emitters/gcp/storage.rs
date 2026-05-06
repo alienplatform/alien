@@ -50,6 +50,17 @@ impl TfEmitter for GcpStorageEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("gcs".to_string())),
+            (
+                "bucketName",
+                expr::traversal(["google_storage_bucket", label, "name"]),
+            ),
+        ])))
+    }
 }
 
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structure::Block {

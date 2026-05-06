@@ -62,6 +62,15 @@ impl TfEmitter for AwsServiceAccountEmitter {
             ("stackPermissionsApplied", Expression::Bool(true)),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("awsiam".to_string())),
+            ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
+            ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
+        ])))
+    }
 }
 
 fn trust_principals<'a>(

@@ -269,7 +269,7 @@ resource "google_service_account" "execution_sa" {
 
 resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
   project     = var.gcp_project
-  role_id     = format("%s_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageDataRead", var.stack_name)), 0, 8))
+  role_id     = format("%s_execution_sa_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-storageDataRead", var.stack_name)), 0, 8))
   title       = "Storage Data Read"
   description = "Allows reading data from storage buckets and containers"
   stage       = "GA"
@@ -293,7 +293,7 @@ resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
 
 resource "google_project_iam_custom_role" "execution_sa_queuedatawrite" {
   project     = var.gcp_project
-  role_id     = format("%s_queueDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-queueDataWrite", var.stack_name)), 0, 8))
+  role_id     = format("%s_execution_sa_queueDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-queueDataWrite", var.stack_name)), 0, 8))
   title       = "Queue Data Write"
   description = "Allows sending messages to queues and acknowledging received messages"
   stage       = "GA"
@@ -320,7 +320,7 @@ resource "google_service_account" "management" {
 
 resource "google_project_iam_custom_role" "management_functionmanagement" {
   project     = var.gcp_project
-  role_id     = format("%s_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-functionManagement", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-functionManagement", var.stack_name)), 0, 8))
   title       = "Function Management"
   description = "Allows managing function configuration, versions, aliases, and monitoring"
   stage       = "GA"
@@ -394,7 +394,7 @@ resource "google_project_iam_member" "management_functionmanagement_binding_0" {
 
 resource "google_project_iam_custom_role" "management_storageheartbeat" {
   project     = var.gcp_project
-  role_id     = format("%s_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageHeartbeat", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-storageHeartbeat", var.stack_name)), 0, 8))
   title       = "Storage Heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources"
   stage       = "GA"
@@ -419,7 +419,7 @@ resource "google_project_iam_member" "management_storageheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_queueheartbeat" {
   project     = var.gcp_project
-  role_id     = format("%s_queueHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-queueHeartbeat", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_queueHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-queueHeartbeat", var.stack_name)), 0, 8))
   title       = "Queue Heartbeat"
   description = "Allows readonly monitoring and health checks for queue resources"
   stage       = "GA"
@@ -439,7 +439,7 @@ resource "google_project_iam_member" "management_queueheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_kvheartbeat" {
   project     = var.gcp_project
-  role_id     = format("%s_kvHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-kvHeartbeat", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_kvHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-kvHeartbeat", var.stack_name)), 0, 8))
   title       = "Kv Heartbeat"
   description = "Allows readonly monitoring and health checks for kv resources"
   stage       = "GA"
@@ -461,7 +461,7 @@ resource "google_project_iam_member" "management_kvheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_vaultdatawrite" {
   project     = var.gcp_project
-  role_id     = format("%s_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-vaultDataWrite", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
   title       = "Vault Data Write"
   description = "Allows creating, updating, and deleting individual secrets within vault"
   stage       = "GA"
@@ -663,13 +663,53 @@ resource "google_cloud_run_v2_service" "public_api" {
       }
 
       env {
+        name  = "ALIEN_ASSETS_BINDING"
+        value = jsonencode({ service = "gcs", bucketName = google_storage_bucket.assets.name })
+      }
+
+      env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "public-api"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "gcp"
+      }
+
+      env {
+        name  = "ALIEN_METADATA_BINDING"
+        value = jsonencode({ service = "firestore", projectId = var.gcp_project, databaseId = google_firestore_database.metadata.name, collectionName = "metadata" })
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
 
       env {
+        name  = "ALIEN_SECRETS_BINDING"
+        value = jsonencode({ service = "secret-manager", vaultPrefix = "${var.stack_name}-secrets" })
+      }
+
+      env {
         name  = "ALIEN_TRANSPORT"
         value = "cloud-run"
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.gcp_project
+      }
+
+      env {
+        name  = "GCP_REGION"
+        value = var.gcp_region
+      }
+
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.gcp_project
       }
 
       env {
@@ -728,6 +768,16 @@ resource "google_cloud_run_v2_service" "worker" {
       }
 
       env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "worker"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "gcp"
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
@@ -735,6 +785,21 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "ALIEN_TRANSPORT"
         value = "cloud-run"
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.gcp_project
+      }
+
+      env {
+        name  = "GCP_REGION"
+        value = var.gcp_region
+      }
+
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.gcp_project
       }
     }
 

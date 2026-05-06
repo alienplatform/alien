@@ -157,7 +157,7 @@ pub fn generate_terraform_module(
             names: &labels,
         };
 
-        let mut fragment = emitter.emit(&ctx)?;
+        let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
         if resource.lifecycle == ResourceLifecycle::Live {
             add_live_resource_lifecycle(&mut fragment);
         }

@@ -37,4 +37,15 @@ impl TfEmitter for AwsVaultEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("parameter-store".to_string())),
+            (
+                "vaultPrefix",
+                expr::template(format!("${{var.stack_name}}-{}", vault.id())),
+            ),
+        ])))
+    }
 }

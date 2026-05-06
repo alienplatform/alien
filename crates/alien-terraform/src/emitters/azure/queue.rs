@@ -84,6 +84,22 @@ impl TfEmitter for AzureQueueEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        let parent_label = parent_namespace_label(ctx)?.to_string();
+        Ok(Some(expr::object([
+            ("service", Expression::String("servicebus".to_string())),
+            (
+                "namespace",
+                expr::traversal(["azurerm_servicebus_namespace", &parent_label, "name"]),
+            ),
+            (
+                "queueName",
+                expr::traversal(["azurerm_servicebus_queue", label, "name"]),
+            ),
+        ])))
+    }
 }
 
 fn parent_namespace_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {

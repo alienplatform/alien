@@ -378,7 +378,7 @@ resource "aws_iam_role_policy" "execution_sa_set_1" {
 === management.tf ===
 resource "aws_iam_role" "management" {
   name               = "${var.stack_name}-management"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn }, "ForAnyValue:StringEquals" = { "sts:ExternalId" = var.deployment_group_token } } }] })
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
     ManagedBy         = "alien.dev"
     AlienStackId      = var.stack_name
@@ -685,7 +685,16 @@ resource "aws_lambda_function" "public_api" {
 
   environment {
     variables = {
-      RUST_LOG = "info"
+      ALIEN_ASSETS_BINDING                = jsonencode({ service = "s3", bucketName = aws_s3_bucket.assets.bucket })
+      ALIEN_CURRENT_FUNCTION_BINDING_NAME = "public-api"
+      ALIEN_DEPLOYMENT_TYPE               = "aws"
+      ALIEN_LAMBDA_MODE                   = "buffered"
+      ALIEN_METADATA_BINDING              = jsonencode({ service = "dynamodb", tableName = aws_dynamodb_table.metadata.name, region = data.aws_region.current.region })
+      ALIEN_RUNTIME_SEND_OTLP             = "true"
+      ALIEN_SECRETS_BINDING               = jsonencode({ service = "parameter-store", vaultPrefix = "${var.stack_name}-secrets" })
+      ALIEN_TRANSPORT                     = "lambda"
+      AWS_ACCOUNT_ID                      = data.aws_caller_identity.current.account_id
+      RUST_LOG                            = "info"
     }
   }
 
@@ -804,6 +813,17 @@ resource "aws_lambda_function" "worker" {
   role          = aws_iam_role.execution_sa.arn
   memory_size   = 256
   timeout       = 180
+
+  environment {
+    variables = {
+      ALIEN_CURRENT_FUNCTION_BINDING_NAME = "worker"
+      ALIEN_DEPLOYMENT_TYPE               = "aws"
+      ALIEN_LAMBDA_MODE                   = "buffered"
+      ALIEN_RUNTIME_SEND_OTLP             = "true"
+      ALIEN_TRANSPORT                     = "lambda"
+      AWS_ACCOUNT_ID                      = data.aws_caller_identity.current.account_id
+    }
+  }
 
   vpc_config {
     subnet_ids = aws_subnet.default_network_private[*].id

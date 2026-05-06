@@ -72,6 +72,17 @@ impl CfEmitter for AwsServiceAccountEmitter {
             ("stackPermissionsApplied", CfExpression::from(true)),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        resource_config::<ServiceAccount>(ctx, ServiceAccount::RESOURCE_TYPE)?;
+        let logical_id = required_logical_id(ctx)?;
+        let role_id = format!("{logical_id}Role");
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("awsiam")),
+            ("roleName", CfExpression::ref_(&role_id)),
+            ("roleArn", CfExpression::get_att(&role_id, "Arn")),
+        ])))
+    }
 }
 
 fn service_account_trust_policy(

@@ -62,4 +62,18 @@ impl TfEmitter for GcpKvEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let kv = downcast::<Kv>(ctx, Kv::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("firestore".to_string())),
+            ("projectId", expr::raw("var.gcp_project")),
+            (
+                "databaseId",
+                expr::traversal(["google_firestore_database", label, "name"]),
+            ),
+            ("collectionName", Expression::String(kv.id().to_string())),
+        ])))
+    }
 }

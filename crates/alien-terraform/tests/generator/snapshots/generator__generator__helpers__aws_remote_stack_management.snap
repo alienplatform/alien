@@ -84,7 +84,7 @@ locals {
 === management.tf ===
 resource "aws_iam_role" "management" {
   name               = "${var.stack_name}-management"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn }, "ForAnyValue:StringEquals" = { "sts:ExternalId" = var.deployment_group_token } } }] })
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
     ManagedBy         = "alien.dev"
     AlienStackId      = var.stack_name

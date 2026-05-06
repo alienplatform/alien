@@ -77,6 +77,19 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
             ("pushRoleArn", CfExpression::get_att(push_role_id, "Arn")),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let registry = resource_config::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
+        let logical_id = required_logical_id(ctx)?;
+        let pull_role_id = format!("{logical_id}PullRole");
+        let push_role_id = format!("{logical_id}PushRole");
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("ecr")),
+            ("repositoryPrefix", stack_name(registry.id())),
+            ("pullRoleArn", CfExpression::get_att(pull_role_id, "Arn")),
+            ("pushRoleArn", CfExpression::get_att(push_role_id, "Arn")),
+        ])))
+    }
 }
 
 fn ecr_access_role(

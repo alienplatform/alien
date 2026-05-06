@@ -186,6 +186,16 @@ resource "google_cloud_run_v2_service" "worker" {
       }
 
       env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "worker"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "gcp"
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
@@ -193,6 +203,21 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "ALIEN_TRANSPORT"
         value = "cloud-run"
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.gcp_project
+      }
+
+      env {
+        name  = "GCP_REGION"
+        value = var.gcp_region
+      }
+
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.gcp_project
       }
     }
   }

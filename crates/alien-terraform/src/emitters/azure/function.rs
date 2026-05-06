@@ -10,22 +10,19 @@
 //!   `external_enabled = false`, only reachable from the environment's
 //!   own VNet.
 //! * Workload identity binds the matching `azurerm_user_assigned_identity`
-//!   when a `<profile>-sa` exists in the stack — the helper resolves
-//!   the principal via [`super::helpers::service_account_principal_id`].
-
-use std::collections::BTreeMap;
+//!   when a `<profile>-sa` exists in the stack.
 
 use crate::{
-    block::{attr, block, nested, resource_block},
+    block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{
-        downcast, required_label, service_account_principal_id, stack_name_template, tags,
-    },
+    emitters::azure::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::function_environment::{function_environment, AzureFunctionEnvironmentRenderer},
     expr,
+    registry::TfRegistry,
 };
 use alien_core::{
     import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Function, FunctionCode, Ingress,
-    Result,
+    Result, ServiceAccount,
 };
 use alien_error::AlienError;
 use hcl::{
@@ -39,6 +36,15 @@ pub struct AzureFunctionEmitter;
 
 impl TfEmitter for AzureFunctionEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let registry = TfRegistry::built_in();
+        self.emit_with_registry(ctx, &registry)
+    }
+
+    fn emit_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        registry: &TfRegistry,
+    ) -> Result<TfFragment> {
         let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
         let FunctionCode::Image { image } = &function.code else {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -51,22 +57,27 @@ impl TfEmitter for AzureFunctionEmitter {
         };
         let label = required_label(ctx)?;
         let env_label = parent_environment_label(ctx)?.to_string();
-
-        let principal_id_expr = service_account_principal_id(ctx, &function.permissions);
+        let client_config_label = format!("{label}_current");
+        let service_account_label = sa_label_for(ctx, &function.permissions);
 
         // Container env-var blocks (one per K/V pair).
-        let env_blocks: Vec<Structure> = function_environment(function)
-            .into_iter()
-            .map(|(k, v)| {
-                nested(block(
-                    "env",
-                    [
-                        attr("name", Expression::String(k)),
-                        attr("value", Expression::String(v)),
-                    ],
-                ))
-            })
-            .collect();
+        let env_renderer = AzureFunctionEnvironmentRenderer {
+            ctx,
+            registry,
+            function_id: &function.id,
+            client_config_label: &client_config_label,
+            service_account_label: service_account_label.as_deref(),
+        };
+        let env_blocks: Vec<Structure> =
+            function_environment(function, alien_core::Platform::Azure, &env_renderer)?
+                .into_iter()
+                .map(|(k, v)| {
+                    nested(block(
+                        "env",
+                        [attr("name", Expression::String(k)), attr("value", v)],
+                    ))
+                })
+                .collect();
 
         let mut container_body: Vec<Structure> = vec![
             attr(
@@ -130,35 +141,33 @@ impl TfEmitter for AzureFunctionEmitter {
         // matching service account in the stack. AzureRM requires
         // `identity_ids` to be a list of identity resource ids; we use
         // a `set` because Terraform's identity block expects sets.
-        if let Some(_principal_id) = &principal_id_expr {
-            // Resolve the SA's UAMI label by stripping `principal_id`
-            // off the traversal — easier to derive from the helper's
-            // output than to recompute. For simplicity, look it up
-            // again by Stack iteration.
-            if let Some(sa_label) = sa_label_for(ctx, &function.permissions) {
-                body.push(nested(Block {
-                    identifier: Identifier::sanitized("identity"),
-                    labels: vec![],
-                    body: hcl::structure::Body::from(vec![
-                        attr("type", Expression::String("UserAssigned".to_string())),
-                        attr(
-                            "identity_ids",
-                            Expression::Array(vec![expr::traversal([
-                                "azurerm_user_assigned_identity",
-                                &sa_label,
-                                "id",
-                            ])]),
-                        ),
-                    ]),
-                }));
-            }
+        if let Some(sa_label) = &service_account_label {
+            body.push(nested(Block {
+                identifier: Identifier::sanitized("identity"),
+                labels: vec![],
+                body: hcl::structure::Body::from(vec![
+                    attr("type", Expression::String("UserAssigned".to_string())),
+                    attr(
+                        "identity_ids",
+                        Expression::Array(vec![expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            sa_label,
+                            "id",
+                        ])]),
+                    ),
+                ]),
+            }));
         }
 
-        Ok(TfFragment::default().with_resource(resource_block(
-            "azurerm_container_app",
-            label,
-            body,
-        )))
+        let mut fragment = TfFragment::default().with_data(data_block(
+            "azurerm_client_config",
+            &client_config_label,
+            Vec::<Structure>::new(),
+        ));
+        fragment
+            .resource_blocks
+            .push(resource_block("azurerm_container_app", label, body));
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -180,6 +189,47 @@ impl TfEmitter for AzureFunctionEmitter {
             ),
             ("fqdn", fqdn),
         ]))
+    }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let env_label = parent_environment_label(ctx)?.to_string();
+        let private_url = expr::template(format!(
+            "https://${{azurerm_container_app.{label}.name}}.${{azurerm_container_app_environment.{env_label}.default_domain}}"
+        ));
+        let mut fields = vec![
+            (
+                "service".to_string(),
+                Expression::String("containerapp".to_string()),
+            ),
+            (
+                "subscriptionId".to_string(),
+                expr::raw("var.azure_subscription_id"),
+            ),
+            (
+                "resourceGroupName".to_string(),
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            (
+                "containerAppName".to_string(),
+                expr::traversal(["azurerm_container_app", label, "name"]),
+            ),
+            ("privateUrl".to_string(), private_url),
+        ];
+        if matches!(function.ingress, Ingress::Public) {
+            fields.push((
+                "publicUrl".to_string(),
+                expr::template(format!(
+                    "https://${{azurerm_container_app.{label}.latest_revision_fqdn}}"
+                )),
+            ));
+        }
+        Ok(Some(expr::object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone())),
+        )))
     }
 }
 
@@ -205,18 +255,12 @@ fn parent_environment_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
 
 fn sa_label_for(ctx: &EmitContext<'_>, profile_name: &str) -> Option<String> {
     let service_account_id = format!("{profile_name}-sa");
+    let (_id, entry) = ctx
+        .stack
+        .resources()
+        .find(|(id, _entry)| id.as_str() == service_account_id)?;
+    entry.config.downcast_ref::<ServiceAccount>()?;
     ctx.name_for(&service_account_id).map(|s| s.to_string())
-}
-
-fn function_environment(function: &Function) -> BTreeMap<String, String> {
-    let mut env = function
-        .environment
-        .clone()
-        .into_iter()
-        .collect::<BTreeMap<_, _>>();
-    env.insert("ALIEN_TRANSPORT".to_string(), "container-app".to_string());
-    env.insert("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string());
-    env
 }
 
 /// Container Apps container names must be lowercase alphanumeric +

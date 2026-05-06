@@ -1,6 +1,14 @@
 use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_core::{bindings::serialize_binding_as_env_var, Platform, ResourceRef, ResourceStatus};
+use alien_core::{
+    bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
+    function_runtime_environment_contract, passthrough_transport_runtime_environment_plan,
+    render_runtime_environment_entries, render_runtime_environment_plan,
+    standard_runtime_environment_plan, validate_prepared_runtime_environment_map, ResourceRef,
+    ResourceStatus, RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer,
+    RuntimeEnvironmentValue, ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
+    ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::collections::HashMap;
 
@@ -14,6 +22,69 @@ pub struct EnvironmentVariableBuilder {
     bindings: Vec<(String, serde_json::Value)>,
 }
 
+struct ControllerRuntimeEnvironmentRenderer<'ctx, 'state> {
+    ctx: &'ctx ResourceControllerContext<'state>,
+    current_container_id: Option<&'ctx str>,
+    current_function_id: Option<&'ctx str>,
+}
+
+impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_> {
+    type Value = String;
+
+    fn render_runtime_environment_value(
+        &self,
+        value: RuntimeEnvironmentValue,
+    ) -> alien_core::Result<Option<Self::Value>> {
+        match value {
+            RuntimeEnvironmentValue::Literal(value) => Ok(Some(value.to_string())),
+            RuntimeEnvironmentValue::AwsAccountId => Ok(self
+                .ctx
+                .get_aws_config()
+                .ok()
+                .map(|config| config.account_id.clone())),
+            RuntimeEnvironmentValue::AzureRegion => Ok(self
+                .ctx
+                .get_azure_config()
+                .ok()
+                .and_then(|config| config.region.clone())),
+            RuntimeEnvironmentValue::AzureSubscriptionId => Ok(self
+                .ctx
+                .get_azure_config()
+                .ok()
+                .map(|config| config.subscription_id.clone())),
+            RuntimeEnvironmentValue::AzureTenantId => Ok(self
+                .ctx
+                .get_azure_config()
+                .ok()
+                .map(|config| config.tenant_id.clone())),
+            RuntimeEnvironmentValue::GcpProjectId => Ok(self
+                .ctx
+                .get_gcp_config()
+                .ok()
+                .map(|config| config.project_id.clone())),
+            RuntimeEnvironmentValue::GcpRegion => Ok(self
+                .ctx
+                .get_gcp_config()
+                .ok()
+                .map(|config| config.region.clone())),
+            RuntimeEnvironmentValue::CurrentContainerBindingName => {
+                Ok(self.current_container_id.map(ToString::to_string))
+            }
+            RuntimeEnvironmentValue::CurrentFunctionBindingName => {
+                Ok(self.current_function_id.map(ToString::to_string))
+            }
+            RuntimeEnvironmentValue::AzureClientId => Ok(None),
+        }
+    }
+
+    fn render_runtime_environment_binding(
+        &self,
+        _entry: &RuntimeEnvironmentBindingEntry,
+    ) -> alien_core::Result<Option<Self::Value>> {
+        Ok(None)
+    }
+}
+
 impl EnvironmentVariableBuilder {
     /// Create a new builder starting with the initial environment variables.
     pub fn new(initial_env: &HashMap<String, String>) -> Self {
@@ -23,61 +94,91 @@ impl EnvironmentVariableBuilder {
         }
     }
 
+    /// Create a new builder and reject user-provided Alien runtime names.
+    pub fn try_new(initial_env: &HashMap<String, String>) -> Result<Self> {
+        validate_prepared_runtime_environment_map(initial_env).map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })?;
+        Ok(Self::new(initial_env))
+    }
+
     /// Add standard Alien environment variables that should be available to all resources.
     /// This includes ALIEN_DEPLOYMENT_TYPE which indicates the current platform, plus platform-specific
     /// identifiers like AWS_ACCOUNT_ID, AWS_REGION, GCP_PROJECT_ID, AZURE_TENANT_ID, etc.
-    pub fn add_standard_alien_env_vars(mut self, ctx: &ResourceControllerContext<'_>) -> Self {
-        // Add the current platform as ALIEN_DEPLOYMENT_TYPE
-        self.env_vars.insert(
-            "ALIEN_DEPLOYMENT_TYPE".to_string(),
-            ctx.platform.to_string(),
-        );
-
-        // Add platform-specific environment variables
-        match ctx.platform {
-            Platform::Aws => {
-                if let Ok(aws_config) = ctx.get_aws_config() {
-                    self.env_vars
-                        .insert("AWS_ACCOUNT_ID".to_string(), aws_config.account_id.clone());
-                }
-            }
-            Platform::Gcp => {
-                if let Ok(gcp_config) = ctx.get_gcp_config() {
-                    // Use GOOGLE_CLOUD_PROJECT as it's the standard GCP environment variable
-                    self.env_vars.insert(
-                        "GOOGLE_CLOUD_PROJECT".to_string(),
-                        gcp_config.project_id.clone(),
-                    );
-                    // Also provide GCP_PROJECT_ID for convenience
-                    self.env_vars
-                        .insert("GCP_PROJECT_ID".to_string(), gcp_config.project_id.clone());
-                    self.env_vars
-                        .insert("GCP_REGION".to_string(), gcp_config.region.clone());
-                }
-            }
-            Platform::Azure => {
-                if let Ok(azure_config) = ctx.get_azure_config() {
-                    self.env_vars.insert(
-                        "AZURE_SUBSCRIPTION_ID".to_string(),
-                        azure_config.subscription_id.clone(),
-                    );
-                    self.env_vars.insert(
-                        "AZURE_TENANT_ID".to_string(),
-                        azure_config.tenant_id.clone(),
-                    );
-                    // Region is optional in Azure config
-                    if let Some(region) = &azure_config.region {
-                        self.env_vars
-                            .insert("AZURE_REGION".to_string(), region.clone());
-                    }
-                }
-            }
-            _ => {
-                // Kubernetes, Local, and Test don't have platform-specific identifiers to add
-            }
+    pub fn add_standard_alien_env_vars(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Self> {
+        let renderer = ControllerRuntimeEnvironmentRenderer {
+            ctx,
+            current_container_id: None,
+            current_function_id: None,
+        };
+        for (name, value) in render_runtime_environment_entries(
+            standard_runtime_environment_plan(ctx.platform),
+            &renderer,
+        )
+        .map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })? {
+            self.env_vars.insert(name.to_string(), value);
         }
 
-        self
+        Ok(self)
+    }
+
+    /// Add the complete scalar runtime environment for a Function.
+    pub fn add_function_runtime_env_vars(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+        function_id: &str,
+    ) -> Result<Self> {
+        let renderer = ControllerRuntimeEnvironmentRenderer {
+            ctx,
+            current_container_id: None,
+            current_function_id: Some(function_id),
+        };
+        let plan = function_runtime_environment_contract(ctx.platform, function_id, &[]);
+        for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: Some(function_id.to_string()),
+            })
+        })? {
+            self.env_vars.insert(name, value);
+        }
+
+        Ok(self)
+    }
+
+    /// Add the complete scalar runtime environment for a Container.
+    pub fn add_container_runtime_env_vars(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+        container_id: &str,
+    ) -> Result<Self> {
+        let renderer = ControllerRuntimeEnvironmentRenderer {
+            ctx,
+            current_container_id: Some(container_id),
+            current_function_id: None,
+        };
+        let plan = container_runtime_environment_contract(ctx.platform, container_id, &[]);
+        for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: Some(container_id.to_string()),
+            })
+        })? {
+            self.env_vars.insert(name, value);
+        }
+
+        Ok(self)
     }
 
     /// Add environment variables for linked resources.
@@ -180,56 +281,14 @@ impl EnvironmentVariableBuilder {
         self
     }
 
-    /// Set `ALIEN_TRANSPORT` for a **Function** resource based on platform.
-    ///
-    /// Functions are hosted by the platform's serverless runtime (Lambda, Cloud Run,
-    /// Container Apps). The transport tells alien-runtime which platform API to poll for
-    /// invocations and how to parse incoming events.
-    ///
-    /// - AWS:        `lambda` + `ALIEN_LAMBDA_MODE=buffered`
-    /// - GCP:        `cloud-run`
-    /// - Azure:      `container-app`
-    /// - Kubernetes: `passthrough`
-    /// - Local/Test: `passthrough`
-    ///
-    /// Do NOT call this for Container resources — use `add_container_transport_env_vars`
-    /// instead, which hardcodes `passthrough` regardless of platform.
-    pub fn add_function_transport_env_vars(mut self, platform: Platform) -> Self {
-        match platform {
-            Platform::Aws => {
+    /// Add passthrough transport for non-Function runtime workloads.
+    pub fn add_passthrough_transport_env_vars(mut self) -> Self {
+        for entry in passthrough_transport_runtime_environment_plan() {
+            if let RuntimeEnvironmentValue::Literal(value) = entry.value {
                 self.env_vars
-                    .insert("ALIEN_TRANSPORT".to_string(), "lambda".to_string());
-                // Use buffered mode: API Gateway HTTP APIs don't support Lambda
-                // response streaming. Streaming only works with Function URLs.
-                self.env_vars
-                    .insert("ALIEN_LAMBDA_MODE".to_string(), "buffered".to_string());
+                    .insert(entry.name.to_string(), value.to_string());
             }
-            Platform::Gcp => {
-                self.env_vars
-                    .insert("ALIEN_TRANSPORT".to_string(), "cloud-run".to_string());
-            }
-            Platform::Azure => {
-                self.env_vars
-                    .insert("ALIEN_TRANSPORT".to_string(), "container-app".to_string());
-            }
-            Platform::Kubernetes | Platform::Local | Platform::Test => {
-                self.env_vars
-                    .insert("ALIEN_TRANSPORT".to_string(), "passthrough".to_string());
-            }
-        };
-        self
-    }
-
-    /// Set `ALIEN_TRANSPORT=passthrough` for a **Container** resource.
-    ///
-    /// Containers on Horizon own their HTTP port directly -- Horizon manages external
-    /// networking and load balancing. The alien-runtime provides bindings (gRPC) only;
-    /// it does not intercept or transform HTTP traffic. Platform-specific function
-    /// transports (Lambda polling, CloudRun CloudEvents, Container App Dapr) are not
-    /// applicable here.
-    pub fn add_container_transport_env_vars(mut self) -> Self {
-        self.env_vars
-            .insert("ALIEN_TRANSPORT".to_string(), "passthrough".to_string());
+        }
         self
     }
 
@@ -250,7 +309,7 @@ impl EnvironmentVariableBuilder {
     ) -> Result<Self> {
         // Always add the current function's binding name (its ID)
         self.env_vars.insert(
-            "ALIEN_CURRENT_FUNCTION_BINDING_NAME".to_string(),
+            ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME.to_string(),
             function_id.to_string(),
         );
 
@@ -265,6 +324,31 @@ impl EnvironmentVariableBuilder {
             )?;
 
             // Add all the binding environment variables
+            self.env_vars.extend(binding_env_vars);
+        }
+
+        Ok(self)
+    }
+
+    /// Add the container's own binding to its environment variables for self-introspection.
+    pub fn add_self_container_binding(
+        mut self,
+        container_id: &str,
+        binding_params: Option<&serde_json::Value>,
+    ) -> Result<Self> {
+        self.env_vars.insert(
+            ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME.to_string(),
+            container_id.to_string(),
+        );
+
+        if let Some(params) = binding_params {
+            let binding_env_vars = serialize_binding_as_env_var(container_id, params).context(
+                ErrorData::ResourceConfigInvalid {
+                    message: "Failed to serialize self container binding parameters".to_string(),
+                    resource_id: Some(container_id.to_string()),
+                },
+            )?;
+
             self.env_vars.extend(binding_env_vars);
         }
 

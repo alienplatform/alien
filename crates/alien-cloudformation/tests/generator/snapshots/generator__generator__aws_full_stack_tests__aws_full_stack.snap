@@ -544,9 +544,6 @@ Resources:
             StringEquals:
               aws:PrincipalArn:
                 Ref: ManagingRoleArn
-            ForAnyValue:StringEquals:
-              sts:ExternalId:
-                Ref: DeploymentGroupToken
       Policies:
       - PolicyName: alien-management-policy
         PolicyDocument:
@@ -684,6 +681,8 @@ Resources:
   Assets:
     Type: AWS::S3::Bucket
     Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-assets
       BucketEncryption:
         ServerSideEncryptionConfiguration:
         - ServerSideEncryptionByDefault:
@@ -994,6 +993,30 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
+          ALIEN_ASSETS_BINDING:
+            Fn::ToJsonString:
+              service: s3
+              bucketName:
+                Fn::Sub: ${AWS::StackName}-assets
+          ALIEN_CURRENT_FUNCTION_BINDING_NAME: public-api
+          ALIEN_DEPLOYMENT_TYPE: aws
+          ALIEN_LAMBDA_MODE: buffered
+          ALIEN_METADATA_BINDING:
+            Fn::ToJsonString:
+              service: dynamodb
+              tableName:
+                Ref: Metadata
+              region:
+                Ref: AWS::Region
+          ALIEN_RUNTIME_SEND_OTLP: 'true'
+          ALIEN_SECRETS_BINDING:
+            Fn::ToJsonString:
+              service: parameter-store
+              vaultPrefix:
+                Fn::Sub: ${AWS::StackName}-secrets
+          ALIEN_TRANSPORT: lambda
+          AWS_ACCOUNT_ID:
+            Ref: AWS::AccountId
           RUST_LOG: info
       VpcConfig:
         SubnetIds:
@@ -1091,6 +1114,15 @@ Resources:
         - Arn
       MemorySize: 256
       Timeout: 180
+      Environment:
+        Variables:
+          ALIEN_CURRENT_FUNCTION_BINDING_NAME: worker
+          ALIEN_DEPLOYMENT_TYPE: aws
+          ALIEN_LAMBDA_MODE: buffered
+          ALIEN_RUNTIME_SEND_OTLP: 'true'
+          ALIEN_TRANSPORT: lambda
+          AWS_ACCOUNT_ID:
+            Ref: AWS::AccountId
       VpcConfig:
         SubnetIds:
         - Ref: DefaultNetworkPrivateSubnet1

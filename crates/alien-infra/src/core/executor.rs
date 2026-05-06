@@ -299,6 +299,17 @@ impl StackExecutor {
                     lifecycle: resource_entry.lifecycle,
                 },
             );
+
+            if let Some(binding) = deployment_config.external_bindings.get(&id) {
+                alien_core::validate_binding_type(&resource_entry.config, binding).context(
+                    ErrorData::ResourceConfigInvalid {
+                        message: format!("External binding type mismatch for resource '{}'", id),
+                        resource_id: Some(id.clone()),
+                    },
+                )?;
+                continue;
+            }
+
             // Ensure that a controller exists for the resource on the specified platform.
             let resource_type = resource_entry.config.resource_type();
             resource_registry
@@ -404,6 +415,10 @@ impl StackExecutor {
             .service_provider(service_provider)
             .maybe_lifecycle_filter(lifecycle_filter)
             .build()
+    }
+
+    fn is_external_binding_resource(&self, resource_id: &str) -> bool {
+        self.deployment_config.external_bindings.has(resource_id)
     }
 
     /// Computes the **diff** between the *desired* stack configuration and the
@@ -971,10 +986,34 @@ impl StackExecutor {
                                 }
                             }
                             Ok(None) => {
-                                warn!(
-                                    "Cannot start delete transition for status {:?} because it has no controller, executor will proceed",
-                                    resource_state.status
-                                );
+                                if self.is_external_binding_resource(resource_id) {
+                                    info!(
+                                        resource_id = %resource_id,
+                                        "Marking external binding resource as deleted"
+                                    );
+                                    resource_state.status = ResourceStatus::Deleted;
+                                    resource_state.outputs = None;
+                                    resource_state.remote_binding_params = None;
+                                    resource_state.retry_attempt = 0;
+                                    resource_state.error = None;
+                                } else {
+                                    warn!(
+                                        "Cannot start delete transition for status {:?} because it has no controller",
+                                        resource_state.status
+                                    );
+                                    let failed_state = resource_state.with_failure(
+                                        ResourceStatus::DeleteFailed,
+                                        AlienError::new(
+                                            ErrorData::ResourceStateSerializationFailed {
+                                                resource_id: resource_id.clone(),
+                                                message: "Missing controller state for non-external resource deletion"
+                                                    .to_string(),
+                                            },
+                                        )
+                                        .into_generic(),
+                                    );
+                                    *resource_state = failed_state;
+                                }
                             }
                             Err(e) => {
                                 error!(
@@ -1266,10 +1305,17 @@ impl StackExecutor {
             // We don't need to get a separate controller since the controller is stored
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
-                warn!(
-                    "Resource '{}' has no controller state. Skipping step.",
-                    resource_id
-                );
+                if self.is_external_binding_resource(&resource_id) {
+                    debug!(
+                        resource_id = %resource_id,
+                        "External binding resource has no controller state; skipping step"
+                    );
+                } else {
+                    warn!(
+                        "Resource '{}' has no controller state. Skipping step.",
+                        resource_id
+                    );
+                }
                 continue;
             }
 
@@ -1664,6 +1710,14 @@ impl StackExecutor {
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {
         match state.resources.get(resource_id) {
             Some(view) => {
+                if self.is_external_binding_resource(resource_id) {
+                    if self.resources.contains_key(resource_id) {
+                        return view.status == ResourceStatus::Running;
+                    }
+                    return view.status == ResourceStatus::Deleted
+                        || view.status == ResourceStatus::DeleteFailed;
+                }
+
                 // If controller exists, check its status. Otherwise (Pending), it's not terminal.
                 match view.get_internal_controller() {
                     Ok(Some(controller)) => controller.get_status().is_terminal(),
@@ -1704,13 +1758,16 @@ impl StackExecutor {
                         // DeleteFailed is NOT a valid terminal state for a *desired* resource.
                         let is_running = current_view.status == ResourceStatus::Running;
 
-                        let config_matches =
+                        let config_matches = if self.is_external_binding_resource(id) {
+                            current_view.config == desired_resource_config.resource
+                        } else {
                             current_view
                                 .internal_state
                                 .as_ref()
                                 .is_some_and(|_controller| {
                                     current_view.config == desired_resource_config.resource
-                                });
+                                })
+                        };
 
                         is_running && config_matches
                     }

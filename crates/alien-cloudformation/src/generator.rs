@@ -129,7 +129,7 @@ pub fn generate_cloudformation_template(
             names: &names,
         };
 
-        for emitted in emitter.emit_resources(&ctx)? {
+        for emitted in emitter.emit_resources_with_registry(&ctx, options.registry)? {
             insert_resource(&mut template, emitted)?;
         }
 

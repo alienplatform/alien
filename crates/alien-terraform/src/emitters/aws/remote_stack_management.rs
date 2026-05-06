@@ -1,8 +1,7 @@
 //! AWS RemoteStackManagement — cross-account IAM role.
 //!
 //! Trust policy allows the manager identity (passed as
-//! `var.managing_role_arn`) to assume the role gated on
-//! `sts:ExternalId == var.deployment_group_token`.
+//! `var.managing_role_arn`) to assume the role.
 //!
 //! Inline policies come from `AwsRuntimePermissionsGenerator` over the
 //! materialised management profile (the `ManagementPermissionProfileMutation`
@@ -111,22 +110,10 @@ fn trust_policy() -> Expression {
                 ("Action", Expression::String("sts:AssumeRole".to_string())),
                 (
                     "Condition",
-                    expr::object([
-                        (
-                            "StringEquals",
-                            expr::object([(
-                                "aws:PrincipalArn",
-                                expr::raw("var.managing_role_arn"),
-                            )]),
-                        ),
-                        (
-                            "ForAnyValue:StringEquals",
-                            expr::object([(
-                                "sts:ExternalId",
-                                expr::raw("var.deployment_group_token"),
-                            )]),
-                        ),
-                    ]),
+                    expr::object([(
+                        "StringEquals",
+                        expr::object([("aws:PrincipalArn", expr::raw("var.managing_role_arn"))]),
+                    )]),
                 ),
             ])]),
         ),

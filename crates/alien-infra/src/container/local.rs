@@ -144,9 +144,8 @@ impl LocalContainerController {
 
         // Build environment variables using EnvironmentVariableBuilder
         // This populates binding env vars with HOST paths
-        let mut env_vars = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_container_transport_env_vars()
+        let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_container_runtime_env_vars(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();

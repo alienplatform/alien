@@ -82,14 +82,29 @@ pub fn service_account_id_template(suffix: &str) -> Expression {
 }
 
 /// GCP custom role ids are project-global. Scope every generated role id to
-/// the stack name so parallel distribution tests and repeated applies do not
-/// try to create the same `storageDataRead`/`functionExecute` role in the
-/// target project.
-fn custom_role_id_template(role_id: &str) -> Expression {
-    let role_id_prefix = role_id.chars().take(32).collect::<String>();
+/// the stack name and owning resource label so parallel distribution tests,
+/// repeated applies, and multiple identities in one stack do not try to create
+/// the same `storageDataRead`/`functionExecute` role in the target project.
+fn custom_role_id_template(owner_label: &str, role_id: &str) -> Expression {
+    let owner_prefix = role_id_segment(owner_label, 12);
+    let role_id_prefix = role_id_segment(role_id, 26);
     expr::raw(format!(
-        "format(\"%s_{role_id_prefix}_%s\", substr(replace(var.stack_name, \"-\", \"_\"), 0, 20), substr(sha1(format(\"%s-{role_id}\", var.stack_name)), 0, 8))"
+        "format(\"%s_{owner_prefix}_{role_id_prefix}_%s\", substr(replace(var.stack_name, \"-\", \"_\"), 0, 12), substr(sha1(format(\"%s-{owner_label}-{role_id}\", var.stack_name)), 0, 8))"
     ))
+}
+
+fn role_id_segment(value: &str, max_len: usize) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .take(max_len)
+        .collect()
 }
 
 /// Standard Alien labels block for GCP. GCP labels must be lowercase
@@ -247,7 +262,7 @@ pub fn emit_custom_role_and_bindings(
         &role_label,
         [
             attr("project", expr::raw("var.gcp_project")),
-            attr("role_id", custom_role_id_template(&role_id)),
+            attr("role_id", custom_role_id_template(sa_label, &role_id)),
             attr("title", Expression::String(custom_role.title.clone())),
             attr(
                 "description",

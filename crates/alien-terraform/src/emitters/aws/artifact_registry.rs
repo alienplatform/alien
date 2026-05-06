@@ -113,6 +113,26 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        let registry = downcast::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("ecr".to_string())),
+            (
+                "repositoryPrefix",
+                expr::template(format!("${{var.stack_name}}-{}", registry.id())),
+            ),
+            (
+                "pullRoleArn",
+                expr::traversal(["aws_iam_role", &format!("{label}_pull"), "arn"]),
+            ),
+            (
+                "pushRoleArn",
+                expr::traversal(["aws_iam_role", &format!("{label}_push"), "arn"]),
+            ),
+        ])))
+    }
 }
 
 fn ecr_role(

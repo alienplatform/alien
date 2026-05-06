@@ -18,6 +18,8 @@ use tracing::{debug, error, info, warn};
 use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
+    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYMENT_ID,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -510,7 +512,7 @@ impl DeploymentLoop {
 
         // 1. ALIEN_DEPLOYMENT_ID — always included.
         vars.push(EnvironmentVariable {
-            name: "ALIEN_DEPLOYMENT_ID".to_string(),
+            name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
             value: deployment_id.to_string(),
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
@@ -551,13 +553,13 @@ impl DeploymentLoop {
         if needs_polling {
             let commands_base = self.config.commands_base_url();
             vars.push(EnvironmentVariable {
-                name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
                 value: "true".to_string(),
                 var_type: EnvironmentVariableType::Plain,
                 target_resources: None,
             });
             vars.push(EnvironmentVariable {
-                name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
                 value: commands_base,
                 var_type: EnvironmentVariableType::Plain,
                 target_resources: None,
@@ -566,7 +568,7 @@ impl DeploymentLoop {
             // The manager is the sole injector of ALIEN_COMMANDS_TOKEN.
             if let Some(ref token) = deployment.deployment_token {
                 vars.push(EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
                     value: token.clone(),
                     var_type: EnvironmentVariableType::Secret,
                     target_resources: None,

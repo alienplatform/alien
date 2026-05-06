@@ -184,6 +184,28 @@ impl TfEmitter for AwsBuildEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let build = downcast::<Build>(ctx, Build::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let env: Vec<(String, Expression)> = build
+            .environment
+            .iter()
+            .map(|(key, value)| (key.clone(), Expression::String(value.clone())))
+            .collect();
+        Ok(Some(expr::object([
+            ("service", Expression::String("codebuild".to_string())),
+            (
+                "projectName",
+                expr::traversal(["aws_codebuild_project", label, "name"]),
+            ),
+            (
+                "buildEnvVars",
+                expr::object(env.iter().map(|(k, v)| (k.as_str(), v.clone()))),
+            ),
+            ("monitoring", Expression::Null),
+        ])))
+    }
 }
 
 fn logs_policy() -> Expression {

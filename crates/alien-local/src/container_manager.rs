@@ -11,6 +11,7 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
+use alien_core::ENV_ALIEN_COMMANDS_POLLING_URL;
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -482,7 +483,7 @@ impl LocalContainerManager {
         // Don't rewrite user-provided env vars (they might intentionally use localhost)
         const DEV_SERVER_VARS: &[&str] = &[
             "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-            "ALIEN_COMMANDS_POLLING_URL",
+            ENV_ALIEN_COMMANDS_POLLING_URL,
         ];
 
         for key in DEV_SERVER_VARS {
@@ -493,10 +494,12 @@ impl LocalContainerManager {
             }
         }
 
-        // Inject the current container binding so the container can discover its own URLs
-        // This follows the same pattern as ALIEN_CURRENT_FUNCTION_BINDING_NAME for functions
+        // Inject the current container binding so the container can discover its own URLs.
         {
-            use alien_core::bindings::{binding_env_var_name, BindingValue, ContainerBinding};
+            use alien_core::{
+                bindings::{serialize_binding_as_env_var, BindingValue, ContainerBinding},
+                ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
+            };
 
             // Internal URL uses Docker network DNS with first port
             let internal_dns = format!("{}.svc", container_id);
@@ -519,17 +522,18 @@ impl LocalContainerManager {
                 )
             };
 
-            // Set ALIEN_CURRENT_CONTAINER_BINDING_NAME so AlienContext.get_current_container() works
             env_vars.insert(
-                "ALIEN_CURRENT_CONTAINER_BINDING_NAME".to_string(),
+                ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME.to_string(),
                 container_id.to_string(),
             );
 
-            // Set the binding itself as ALIEN_{CONTAINER_ID}_BINDING
-            if let Ok(binding_json) = serde_json::to_string(&binding) {
-                let binding_key = binding_env_var_name(container_id);
-                env_vars.insert(binding_key, binding_json);
-            }
+            let binding_env_vars =
+                serialize_binding_as_env_var(container_id, &binding).map_err(|err| {
+                    AlienError::new(ErrorData::Other {
+                        message: err.to_string(),
+                    })
+                })?;
+            env_vars.extend(binding_env_vars);
         }
 
         // Command polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*)

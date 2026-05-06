@@ -131,4 +131,25 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        let pull = format!("{label}_pull");
+        let push = format!("{label}_push");
+        Ok(Some(expr::object([
+            ("service", Expression::String("gar".to_string())),
+            (
+                "repositoryName",
+                expr::traversal(["google_artifact_registry_repository", label, "id"]),
+            ),
+            (
+                "pullServiceAccountEmail",
+                expr::traversal(["google_service_account", &pull, "email"]),
+            ),
+            (
+                "pushServiceAccountEmail",
+                expr::traversal(["google_service_account", &push, "email"]),
+            ),
+        ])))
+    }
 }

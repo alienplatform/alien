@@ -99,6 +99,8 @@ Resources:
   Data:
     Type: AWS::S3::Bucket
     Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-data
       BucketEncryption:
         ServerSideEncryptionConfiguration:
         - ServerSideEncryptionByDefault:

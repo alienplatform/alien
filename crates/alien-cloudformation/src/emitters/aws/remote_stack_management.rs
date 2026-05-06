@@ -1,16 +1,14 @@
 //! AWS RemoteStackManagement — cross-account IAM role.
 //!
 //! The role's trust policy allows the manager's IAM identity (passed via
-//! `ManagingRoleArn` parameter) to assume it, gated on `sts:ExternalId`
-//! matching the deployment-group token. The inline policy is auto-derived
+//! `ManagingRoleArn` parameter) to assume it. The inline policy is auto-derived
 //! from the stack's management permission profile.
 
 use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, tags, PARAM_DEPLOYMENT_GROUP_TOKEN,
-            PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, required_logical_id, resource_config, tags, PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -88,22 +86,13 @@ fn remote_management_trust_policy() -> CfExpression {
                 ("Action", CfExpression::from("sts:AssumeRole")),
                 (
                     "Condition",
-                    CfExpression::object([
-                        (
-                            "StringEquals",
-                            CfExpression::object([(
-                                "aws:PrincipalArn",
-                                CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-                            )]),
-                        ),
-                        (
-                            "ForAnyValue:StringEquals",
-                            CfExpression::object([(
-                                "sts:ExternalId",
-                                CfExpression::ref_(PARAM_DEPLOYMENT_GROUP_TOKEN),
-                            )]),
-                        ),
-                    ]),
+                    CfExpression::object([(
+                        "StringEquals",
+                        CfExpression::object([(
+                            "aws:PrincipalArn",
+                            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+                        )]),
+                    )]),
                 ),
             ])]),
         ),

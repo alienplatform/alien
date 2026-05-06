@@ -81,4 +81,16 @@ impl TfEmitter for AwsKvEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("dynamodb".to_string())),
+            (
+                "tableName",
+                expr::traversal(["aws_dynamodb_table", label, "name"]),
+            ),
+            ("region", expr::raw("data.aws_region.current.region")),
+        ])))
+    }
 }

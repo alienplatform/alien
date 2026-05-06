@@ -86,6 +86,18 @@ impl TfEmitter for AzureVaultEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let _ = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("key-vault".to_string())),
+            (
+                "vaultName",
+                expr::traversal(["azurerm_key_vault", label, "name"]),
+            ),
+        ])))
+    }
 }
 
 /// Key Vault names are 3-24 alphanumeric-or-dash characters, globally

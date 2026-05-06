@@ -25,6 +25,15 @@ pub fn raw(text: impl AsRef<str>) -> Expression {
     parse(text.as_ref()).unwrap_or_else(|_| Expression::String(text.as_ref().to_string()))
 }
 
+/// `jsonencode(...)` HCL function call.
+pub fn jsonencode(value: Expression) -> Expression {
+    Expression::FuncCall(Box::new(
+        hcl::expr::FuncCall::builder(Identifier::sanitized("jsonencode"))
+            .arg(value)
+            .build(),
+    ))
+}
+
 /// Parse a raw HCL expression and bubble up parse failures as a typed error.
 pub fn parse(text: &str) -> Result<Expression> {
     Expression::from_str(text).map_err(|err| {

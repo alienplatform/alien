@@ -13,15 +13,15 @@
 //! Public ingress maps to `INGRESS_TRAFFIC_ALL`; private maps to
 //! `INGRESS_TRAFFIC_INTERNAL_ONLY`.
 
-use std::collections::BTreeMap;
-
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::function_environment::{function_environment, GcpFunctionEnvironmentRenderer},
     emitters::gcp::helpers::{
         downcast, label_for_ref, labels, required_label, service_account_email,
     },
     expr,
+    registry::TfRegistry,
 };
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Function,
@@ -35,6 +35,15 @@ pub struct GcpFunctionEmitter;
 
 impl TfEmitter for GcpFunctionEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let registry = TfRegistry::built_in();
+        self.emit_with_registry(ctx, &registry)
+    }
+
+    fn emit_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        registry: &TfRegistry,
+    ) -> Result<TfFragment> {
         let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
         let FunctionCode::Image { image } = &function.code else {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -76,13 +85,15 @@ impl TfEmitter for GcpFunctionEmitter {
         ];
 
         let mut env_blocks: Vec<hcl::structure::Structure> = Vec::new();
-        for (k, v) in function_environment(function) {
+        let env_renderer = GcpFunctionEnvironmentRenderer {
+            ctx,
+            registry,
+            function_id: &function.id,
+        };
+        for (k, v) in function_environment(function, alien_core::Platform::Gcp, &env_renderer)? {
             env_blocks.push(nested(block(
                 "env",
-                [
-                    attr("name", Expression::String(k)),
-                    attr("value", Expression::String(v)),
-                ],
+                [attr("name", Expression::String(k)), attr("value", v)],
             )));
         }
 
@@ -349,15 +360,31 @@ impl TfEmitter for GcpFunctionEmitter {
             ("eventarcTriggerNames", Expression::Array(eventarc_names)),
         ]))
     }
-}
 
-fn function_environment(function: &Function) -> BTreeMap<String, String> {
-    let mut env = function
-        .environment
-        .clone()
-        .into_iter()
-        .collect::<BTreeMap<_, _>>();
-    env.insert("ALIEN_TRANSPORT".to_string(), "cloud-run".to_string());
-    env.insert("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string());
-    env
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let service_url = expr::traversal(["google_cloud_run_v2_service", label, "uri"]);
+        let mut fields = vec![
+            (
+                "service".to_string(),
+                Expression::String("cloudrun".to_string()),
+            ),
+            ("projectId".to_string(), expr::raw("var.gcp_project")),
+            (
+                "serviceName".to_string(),
+                expr::traversal(["google_cloud_run_v2_service", label, "name"]),
+            ),
+            ("location".to_string(), expr::raw("var.gcp_region")),
+            ("privateUrl".to_string(), service_url.clone()),
+        ];
+        if matches!(function.ingress, Ingress::Public) {
+            fields.push(("publicUrl".to_string(), service_url));
+        }
+        Ok(Some(expr::object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone())),
+        )))
+    }
 }

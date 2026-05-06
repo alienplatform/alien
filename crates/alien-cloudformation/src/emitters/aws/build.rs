@@ -121,6 +121,26 @@ impl CfEmitter for AwsBuildEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let build = resource_config::<Build>(ctx, Build::RESOURCE_TYPE)?;
+        let logical_id = required_logical_id(ctx)?;
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("codebuild")),
+            ("projectName", CfExpression::ref_(logical_id)),
+            (
+                "buildEnvVars",
+                CfExpression::Object(
+                    build
+                        .environment
+                        .iter()
+                        .map(|(key, value)| (key.clone(), CfExpression::from(value.clone())))
+                        .collect(),
+                ),
+            ),
+            ("monitoring", CfExpression::Null),
+        ])))
+    }
 }
 
 fn codebuild_fallback_policy() -> CfExpression {

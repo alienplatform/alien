@@ -137,6 +137,21 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("acr".to_string())),
+            (
+                "registryName",
+                expr::traversal(["azurerm_container_registry", label, "name"]),
+            ),
+            (
+                "resourceGroupName",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+        ])))
+    }
 }
 
 /// ACR names are 5-50 alphanumeric characters (no dashes!), globally

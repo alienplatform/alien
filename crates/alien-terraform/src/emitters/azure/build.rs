@@ -107,6 +107,34 @@ impl TfEmitter for AzureBuildEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let build = downcast::<Build>(ctx, Build::RESOURCE_TYPE)?;
+        let registry_label = parent_registry_label(ctx)?.to_string();
+        let env_pairs: Vec<(String, Expression)> = build
+            .environment
+            .iter()
+            .map(|(k, v)| (k.clone(), Expression::String(v.clone())))
+            .collect();
+        Ok(Some(expr::object([
+            ("service", Expression::String("aca".to_string())),
+            ("managedEnvironmentId", Expression::String(String::new())),
+            (
+                "resourceGroupName",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            (
+                "buildEnvVars",
+                expr::object(env_pairs.iter().map(|(k, v)| (k.as_str(), v.clone()))),
+            ),
+            ("managedIdentityId", Expression::Null),
+            (
+                "resourcePrefix",
+                expr::traversal(["azurerm_container_registry", &registry_label, "name"]),
+            ),
+            ("monitoring", Expression::Null),
+        ])))
+    }
 }
 
 /// Look up the first `ArtifactRegistry` resource in the stack and

@@ -65,7 +65,9 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             [
                 attr(
                     "name",
-                    expr::template(format!("${{var.stack_name}}-{label}")),
+                    expr::raw(format!(
+                        "replace(lower(\"${{var.stack_name}}-{label}\"), \"_\", \"-\")"
+                    )),
                 ),
                 attr(
                     "resource_group_name",
@@ -97,5 +99,27 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 expr::traversal(["azurerm_container_app_environment", label, "default_domain"]),
             ),
         ]))
+    }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            (
+                "environmentName",
+                expr::traversal(["azurerm_container_app_environment", label, "name"]),
+            ),
+            (
+                "resourceId",
+                expr::traversal(["azurerm_container_app_environment", label, "id"]),
+            ),
+            (
+                "resourceGroupName",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            (
+                "defaultDomain",
+                expr::traversal(["azurerm_container_app_environment", label, "default_domain"]),
+            ),
+        ])))
     }
 }

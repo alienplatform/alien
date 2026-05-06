@@ -8,7 +8,7 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        required_logical_id, resource_config, storage_notification_configuration,
+        required_logical_id, resource_config, stack_name, storage_notification_configuration,
         storage_notification_dependencies, tags,
     },
     template::{CfExpression, CfResource},
@@ -25,6 +25,9 @@ impl CfEmitter for AwsStorageEmitter {
         let bucket_id = required_logical_id(ctx)?;
 
         let mut bucket = CfResource::new(bucket_id.to_string(), "AWS::S3::Bucket".to_string());
+        bucket
+            .properties
+            .insert("BucketName".to_string(), stack_name(storage.id()));
         bucket.properties.insert(
             "BucketEncryption".to_string(),
             CfExpression::object([(
@@ -119,6 +122,14 @@ impl CfEmitter for AwsStorageEmitter {
             ("bucketName", CfExpression::ref_(bucket_id)),
             ("bucketArn", CfExpression::get_att(bucket_id, "Arn")),
         ]))
+    }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let storage = resource_config::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
+        Ok(Some(CfExpression::object([
+            ("service", CfExpression::from("s3")),
+            ("bucketName", stack_name(storage.id())),
+        ])))
     }
 }
 

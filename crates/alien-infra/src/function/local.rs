@@ -127,18 +127,10 @@ impl LocalFunctionController {
         // - OTLP configuration (OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, etc.) from deployment loop
         // - ALIEN_AGENT_ID from deployment loop
         //
-        // Note: We DON'T add ALIEN_RUNTIME_SEND_OTLP here because:
-        // - For local functions, alien-runtime runs embedded (tokio task)
-        // - It uses RuntimeConfig.send_otlp (set by LocalFunctionManager), not env vars
-        // - The env vars here go to the child process (the app), not alien-runtime itself
-        //
-        // For cloud platforms (AWS/GCP/Azure/Kubernetes):
-        // - alien-runtime runs standalone (PID 1)
-        // - It reads config from CLI args + env vars
-        // - So cloud controllers DO add ALIEN_RUNTIME_SEND_OTLP=true to env vars
-        let env_vars = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
+        // Runtime-owned names are added from the same core contract used by
+        // cloud controllers and IaC renderers.
+        let env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_function_runtime_env_vars(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();

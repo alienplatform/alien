@@ -7,6 +7,9 @@ pub use permissions::*;
 mod platform;
 pub use platform::*;
 
+pub mod runtime_environment;
+pub use runtime_environment::*;
+
 mod build_targets;
 pub use build_targets::*;
 

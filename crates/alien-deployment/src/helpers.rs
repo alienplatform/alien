@@ -5,7 +5,7 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeBackend, ContainerCluster,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceStatus, Stack, StackState, TemplateInputs, TestEnvironmentInfo,
+    ResourceStatus, Stack, StackState, TemplateInputs, TestEnvironmentInfo, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -432,7 +432,7 @@ fn inject_into_compute_resource(
                 message: "Failed to serialize ALIEN_SECRETS config".to_string(),
             })?;
 
-        environment.insert("ALIEN_SECRETS".to_string(), alien_secrets_json);
+        environment.insert(ENV_ALIEN_SECRETS.to_string(), alien_secrets_json);
 
         let resource_type = if is_function { "function" } else { "container" };
         debug!(
@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(func.environment.get("PLAIN_VAR").unwrap(), "pv");
 
         // ALIEN_SECRETS present with both secret keys
-        let alien_secrets_raw = func.environment.get("ALIEN_SECRETS").unwrap();
+        let alien_secrets_raw = func.environment.get(ENV_ALIEN_SECRETS).unwrap();
         let parsed: AlienSecretsConfig = serde_json::from_str(alien_secrets_raw).unwrap();
         assert!(parsed.keys.contains(&"SECRET_TOKEN".to_string()));
         assert!(parsed.keys.contains(&"SECRET_KEY".to_string()));
@@ -831,7 +831,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(func.environment.get("APP_ENV").unwrap(), "prod");
-        assert!(func.environment.get("ALIEN_SECRETS").is_none());
+        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
     }
 
     #[test]
@@ -857,6 +857,6 @@ mod tests {
             .unwrap();
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
-        assert!(func.environment.get("ALIEN_SECRETS").is_none());
+        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
     }
 }

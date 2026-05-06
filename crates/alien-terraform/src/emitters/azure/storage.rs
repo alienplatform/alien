@@ -91,6 +91,23 @@ impl TfEmitter for AzureStorageEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let _ = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let parent_label = parent_storage_account_label(ctx)?.to_string();
+        Ok(Some(expr::object([
+            ("service", Expression::String("blob".to_string())),
+            (
+                "accountName",
+                expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
+            ),
+            (
+                "containerName",
+                expr::traversal(["azurerm_storage_container", label, "name"]),
+            ),
+        ])))
+    }
 }
 
 /// Find the auxiliary `azure_storage_account` resource in the stack and

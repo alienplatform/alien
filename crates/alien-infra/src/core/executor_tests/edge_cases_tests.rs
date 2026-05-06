@@ -1,8 +1,32 @@
 //! Tests for edge cases and special state handling.
 
 use super::helpers::*;
+use crate::core::StackExecutor;
 use crate::error::Result;
-use alien_core::{Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage};
+use alien_core::{
+    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBinding,
+    ExternalBindings, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
+    StackSettings, Storage, StorageBinding,
+};
+
+fn external_storage_config(resource_id: &str) -> DeploymentConfig {
+    let mut external_bindings = ExternalBindings::new();
+    external_bindings.insert(
+        resource_id,
+        ExternalBinding::Storage(StorageBinding::s3("external-test-bucket")),
+    );
+
+    DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(external_bindings)
+        .allow_frozen_changes(false)
+        .build()
+}
 
 async fn assert_best_effort_delete_error_marks_deleted(flag: &str) -> Result<()> {
     let mut func1 = test_function("func1");
@@ -480,24 +504,20 @@ async fn test_external_binding_survives_multiple_provisioning_steps() -> Result<
 /// This prevents over-correction from the lifecycle filter fix.
 #[tokio::test]
 async fn test_absent_resource_deleted_when_genuinely_absent_from_stack() -> Result<()> {
-    // Stack has only live-func, NO infra-resource
+    // Current state has both resources running from an earlier stack version.
     let live_func = test_function("live-func");
+    let orphan_func = test_function("orphan-resource");
+    let initial_stack = Stack::new("genuine-removal-test".to_owned())
+        .add(orphan_func.clone(), ResourceLifecycle::Frozen)
+        .add(live_func.clone(), ResourceLifecycle::Live)
+        .build();
+    let initial_executor = new_executor(&initial_stack)?;
+    let state = run_to_synced(&initial_executor, new_test_state()).await?;
+
+    // Desired stack has only live-func, so orphan-resource should enter delete.
     let stack = Stack::new("genuine-removal-test".to_owned())
         .add(live_func.clone(), ResourceLifecycle::Live)
         .build();
-
-    // State has a resource that's NOT in the stack at all
-    let mut state = new_test_state();
-    let mut orphan_state = create_running_function_state("orphan-external", "n/a");
-    orphan_state.lifecycle = Some(ResourceLifecycle::Frozen);
-    state
-        .resources
-        .insert("orphan-external".to_string(), orphan_state);
-
-    state.resources.insert(
-        "live-func".to_string(),
-        create_running_function_state("live-func", "test-image-live-func"),
-    );
 
     // No lifecycle filter — executor sees the full stack
     let executor = new_executor(&stack)?;
@@ -505,10 +525,72 @@ async fn test_absent_resource_deleted_when_genuinely_absent_from_stack() -> Resu
 
     assert!(
         matches!(
-            get_status(&step_result.next_state, "orphan-external"),
+            get_status(&step_result.next_state, "orphan-resource"),
             Some(ResourceStatus::Deleting | ResourceStatus::Deleted)
         ),
         "Genuinely absent resource should enter delete flow"
+    );
+
+    Ok(())
+}
+
+/// External bindings are state-only resources. They are Running while desired
+/// even though they do not have controller state.
+#[tokio::test]
+async fn test_external_binding_resource_syncs_without_controller() -> Result<()> {
+    let storage = test_storage("external-store");
+    let stack = Stack::new("external-binding-sync-test".to_owned())
+        .add(storage.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_storage_config("external-store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+
+    let state = run_to_synced(&executor, new_test_state()).await?;
+    let external_state = state.resources.get("external-store").unwrap();
+
+    assert_eq!(external_state.status, ResourceStatus::Running);
+    assert!(
+        external_state.internal_state.is_none(),
+        "External binding resources should not require controller state"
+    );
+    assert!(
+        executor.is_synced(&state),
+        "Desired external binding should be considered synced while Running"
+    );
+
+    Ok(())
+}
+
+/// Full-stack deletion should mark controllerless external bindings deleted
+/// instead of looping forever waiting for a controller that intentionally
+/// does not exist.
+#[tokio::test]
+async fn test_external_binding_resource_deletes_without_controller() -> Result<()> {
+    let storage = test_storage("external-store");
+    let stack = Stack::new("external-binding-delete-test".to_owned())
+        .add(storage.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_storage_config("external-store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+    let state = run_to_synced(&executor, new_test_state()).await?;
+
+    let deletion_executor =
+        StackExecutor::for_deletion(ClientConfig::Test, &deployment_config, None)?;
+    let deleted_state = run_to_synced(&deletion_executor, state).await?;
+    let external_state = deleted_state.resources.get("external-store").unwrap();
+
+    assert_eq!(external_state.status, ResourceStatus::Deleted);
+    assert!(
+        external_state.internal_state.is_none(),
+        "Deleting an external binding should not synthesize controller state"
+    );
+    assert!(
+        deletion_executor.is_synced(&deleted_state),
+        "Deleted external binding should be considered synced"
     );
 
     Ok(())

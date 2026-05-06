@@ -18,19 +18,34 @@ use crate::{
         required_logical_id, resource_config, role_for_profile_or_fallback,
         security_group_ids_expr, stack_name, tags,
     },
+    registry::CfRegistry,
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Function,
-    FunctionCode, FunctionTrigger, Ingress, NetworkSettings, Result, Storage,
+    crontab_to_eventbridge::crontab_to_eventbridge, function_runtime_environment_contract,
+    import::EmitContext, render_runtime_environment_plan, validate_runtime_environment_user_map,
+    ErrorData, Function, FunctionCode, FunctionTrigger, Ingress, NetworkSettings, Platform, Result,
+    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer,
+    RuntimeEnvironmentValue, Storage,
 };
 use alien_error::AlienError;
+use indexmap::IndexMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsFunctionEmitter;
 
 impl CfEmitter for AwsFunctionEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
+        let registry = CfRegistry::built_in();
+        self.emit_resources_with_registry(ctx, &registry)
+    }
+
+    fn emit_resources_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        registry: &CfRegistry,
+    ) -> Result<Vec<CfResource>> {
         let function = resource_config::<Function>(ctx, Function::RESOURCE_TYPE)?;
         let FunctionCode::Image { image } = &function.code else {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -87,21 +102,13 @@ impl CfEmitter for AwsFunctionEmitter {
             "Timeout".to_string(),
             CfExpression::from(function.timeout_seconds),
         );
-        if !function.environment.is_empty() {
-            lambda.properties.insert(
-                "Environment".to_string(),
-                CfExpression::object([(
-                    "Variables",
-                    CfExpression::Object(
-                        function
-                            .environment
-                            .iter()
-                            .map(|(key, value)| (key.clone(), CfExpression::from(value.clone())))
-                            .collect(),
-                    ),
-                )]),
-            );
-        }
+        lambda.properties.insert(
+            "Environment".to_string(),
+            CfExpression::object([(
+                "Variables",
+                CfExpression::Object(function_environment(ctx, registry, function)?),
+            )]),
+        );
         if let Some(vpc_config) = lambda_vpc_config(ctx) {
             lambda
                 .properties
@@ -168,6 +175,138 @@ impl CfEmitter for AwsFunctionEmitter {
         }
 
         Ok(CfExpression::object(fields))
+    }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
+        let function = resource_config::<Function>(ctx, Function::RESOURCE_TYPE)?;
+        let logical_id = required_logical_id(ctx)?;
+        let mut fields = vec![
+            ("service", CfExpression::from("lambda")),
+            ("functionName", CfExpression::ref_(logical_id)),
+            ("region", CfExpression::ref_("AWS::Region")),
+        ];
+        if function.ingress == Ingress::Public {
+            fields.push((
+                "url",
+                CfExpression::sub(format!(
+                    "https://${{{logical_id}Api}}.execute-api.${{AWS::Region}}.${{AWS::URLSuffix}}"
+                )),
+            ));
+        }
+
+        Ok(Some(CfExpression::object(fields)))
+    }
+}
+
+struct AwsFunctionEnvironmentRenderer<'a> {
+    ctx: &'a EmitContext<'a>,
+    registry: &'a CfRegistry,
+    function_id: &'a str,
+}
+
+impl RuntimeEnvironmentRenderer for AwsFunctionEnvironmentRenderer<'_> {
+    type Value = CfExpression;
+
+    fn render_runtime_environment_value(
+        &self,
+        value: RuntimeEnvironmentValue,
+    ) -> Result<Option<Self::Value>> {
+        match value {
+            RuntimeEnvironmentValue::Literal(value) => {
+                Ok(Some(CfExpression::from(value.to_string())))
+            }
+            RuntimeEnvironmentValue::AwsAccountId => Ok(Some(CfExpression::ref_("AWS::AccountId"))),
+            RuntimeEnvironmentValue::CurrentFunctionBindingName => {
+                Ok(Some(CfExpression::from(self.function_id.to_string())))
+            }
+            RuntimeEnvironmentValue::AzureClientId
+            | RuntimeEnvironmentValue::AzureRegion
+            | RuntimeEnvironmentValue::AzureSubscriptionId
+            | RuntimeEnvironmentValue::AzureTenantId
+            | RuntimeEnvironmentValue::CurrentContainerBindingName
+            | RuntimeEnvironmentValue::GcpProjectId
+            | RuntimeEnvironmentValue::GcpRegion => Ok(None),
+        }
+    }
+
+    fn render_runtime_environment_binding(
+        &self,
+        entry: &RuntimeEnvironmentBindingEntry,
+    ) -> Result<Option<Self::Value>> {
+        render_linked_binding(self.ctx, self.registry, entry)
+    }
+}
+
+fn function_environment(
+    ctx: &EmitContext<'_>,
+    registry: &CfRegistry,
+    function: &Function,
+) -> Result<IndexMap<String, CfExpression>> {
+    validate_runtime_environment_user_map(&function.environment)?;
+    let renderer = AwsFunctionEnvironmentRenderer {
+        ctx,
+        registry,
+        function_id: &function.id,
+    };
+    let plan = function_runtime_environment_contract(Platform::Aws, &function.id, &function.links);
+    let mut env = render_runtime_environment_plan(&plan, &renderer)?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+
+    for (key, value) in &function.environment {
+        env.insert(key.clone(), CfExpression::from(value.clone()));
+    }
+
+    Ok(env.into_iter().collect())
+}
+
+fn render_linked_binding(
+    ctx: &EmitContext<'_>,
+    registry: &CfRegistry,
+    entry: &RuntimeEnvironmentBindingEntry,
+) -> Result<Option<CfExpression>> {
+    match &entry.source {
+        RuntimeEnvironmentBindingSource::CurrentContainer
+        | RuntimeEnvironmentBindingSource::CurrentFunction => Ok(None),
+        RuntimeEnvironmentBindingSource::LinkedResource(link) => {
+            let resource = ctx.stack.resources.get(link.id()).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "function '{}' links to missing resource '{}'",
+                        ctx.resource_id,
+                        link.id()
+                    ),
+                })
+            })?;
+            let actual_type = resource.config.resource_type();
+            if actual_type != link.resource_type {
+                return Err(AlienError::new(ErrorData::UnexpectedResourceType {
+                    resource_id: link.id().to_string(),
+                    expected: link.resource_type.clone(),
+                    actual: actual_type,
+                }));
+            }
+
+            let linked_ctx = EmitContext {
+                stack: ctx.stack,
+                resource,
+                resource_id: link.id(),
+                platform: ctx.platform,
+                stack_settings: ctx.stack_settings,
+                names: ctx.names,
+            };
+            let emitter = registry.require(&link.resource_type, ctx.platform)?;
+            let binding_ref = emitter.emit_binding_ref(&linked_ctx)?.ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "CloudFormation emitter for resource '{}' ({}) does not provide a runtime binding",
+                        link.id(),
+                        link.resource_type
+                    ),
+                })
+            })?;
+            Ok(Some(CfExpression::to_json_string(binding_ref)))
+        }
     }
 }
 

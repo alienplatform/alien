@@ -120,6 +120,24 @@ impl TfEmitter for GcpBuildEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let build = downcast::<Build>(ctx, Build::RESOURCE_TYPE)?;
+        let env_pairs: Vec<(String, Expression)> = build
+            .environment
+            .iter()
+            .map(|(k, v)| (k.clone(), Expression::String(v.clone())))
+            .collect();
+        Ok(Some(expr::object([
+            ("service", Expression::String("cloudbuild".to_string())),
+            (
+                "buildEnvVars",
+                expr::object(env_pairs.iter().map(|(k, v)| (k.as_str(), v.clone()))),
+            ),
+            ("serviceAccount", Expression::String(String::new())),
+            ("monitoring", Expression::Null),
+        ])))
+    }
 }
 
 fn sanitize_substitution_key(input: &str) -> String {

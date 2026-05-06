@@ -9,11 +9,14 @@ use crate::{
         security_group_ids_expr, service_account_role_arn, service_assume_role_policy,
         stack_name_template, tags,
     },
+    emitters::function_environment::{function_environment, AwsFunctionEnvironmentRenderer},
     expr,
+    registry::TfRegistry,
 };
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Function,
-    FunctionCode, FunctionTrigger, Ingress, NetworkSettings, ResourceRef, Result, Storage, Vault,
+    FunctionCode, FunctionTrigger, Ingress, NetworkSettings, Platform, ResourceRef, Result,
+    Storage, Vault,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -23,6 +26,15 @@ pub struct AwsFunctionEmitter;
 
 impl TfEmitter for AwsFunctionEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let registry = TfRegistry::built_in();
+        self.emit_with_registry(ctx, &registry)
+    }
+
+    fn emit_with_registry(
+        &self,
+        ctx: &EmitContext<'_>,
+        registry: &TfRegistry,
+    ) -> Result<TfFragment> {
         let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
         let FunctionCode::Image { image } = &function.code else {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -99,20 +111,23 @@ impl TfEmitter for AwsFunctionEmitter {
                 Expression::Number(hcl::Number::from(i64::from(function.timeout_seconds))),
             ),
         ];
-        if !function.environment.is_empty() {
-            function_body.push(nested_block(
-                "environment",
-                vec![attr(
-                    "variables",
-                    expr::object(
-                        function
-                            .environment
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), Expression::String(v.clone()))),
-                    ),
-                )],
-            ));
-        }
+        let env_renderer = AwsFunctionEnvironmentRenderer {
+            ctx,
+            registry,
+            function_id: &function.id,
+        };
+        let environment_variables = function_environment(function, Platform::Aws, &env_renderer)?;
+        function_body.push(nested_block(
+            "environment",
+            vec![attr(
+                "variables",
+                expr::object(
+                    environment_variables
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.clone())),
+                ),
+            )],
+        ));
         if let Some((subnets, sgs)) = lambda_vpc_config(ctx) {
             function_body.push(nested_block(
                 "vpc_config",
@@ -198,6 +213,36 @@ impl TfEmitter for AwsFunctionEmitter {
         Ok(expr::object(
             fields.iter().map(|(k, v)| (k.as_str(), v.clone())),
         ))
+    }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let mut fields: Vec<(String, Expression)> = vec![
+            (
+                "service".to_string(),
+                Expression::String("lambda".to_string()),
+            ),
+            (
+                "functionName".to_string(),
+                expr::traversal(["aws_lambda_function", label, "function_name"]),
+            ),
+            (
+                "region".to_string(),
+                expr::raw("data.aws_region.current.region"),
+            ),
+        ];
+        if function.ingress == Ingress::Public {
+            fields.push((
+                "url".to_string(),
+                expr::traversal(["aws_apigatewayv2_api", label, "api_endpoint"]),
+            ));
+        }
+        Ok(Some(expr::object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone())),
+        )))
     }
 }
 

@@ -55,6 +55,17 @@ impl TfEmitter for AwsStorageEmitter {
             ),
         ]))
     }
+
+    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        let label = required_label(ctx)?;
+        Ok(Some(expr::object([
+            ("service", Expression::String("s3".to_string())),
+            (
+                "bucketName",
+                expr::traversal(["aws_s3_bucket", label, "bucket"]),
+            ),
+        ])))
+    }
 }
 
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structure::Block {

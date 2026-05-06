@@ -335,7 +335,7 @@ resource "azurerm_log_analytics_workspace" "default_container_apps_environment_l
 }
 
 resource "azurerm_container_app_environment" "default_container_apps_environment" {
-  name                       = "${var.stack_name}-default_container_apps_environment"
+  name                       = replace(lower("${var.stack_name}-default_container_apps_environment"), "_", "-")
   resource_group_name        = var.azure_resource_group_name
   location                   = var.azure_location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
@@ -756,6 +756,8 @@ resource "azurerm_container_registry_task" "builder" {
 }
 
 === public_api.tf ===
+data "azurerm_client_config" "public_api_current" {}
+
 resource "azurerm_container_app" "public_api" {
   name                         = "${var.stack_name}-public-api"
   resource_group_name          = var.azure_resource_group_name
@@ -773,13 +775,58 @@ resource "azurerm_container_app" "public_api" {
       memory = "512Mi"
 
       env {
+        name  = "ALIEN_ASSETS_BINDING"
+        value = jsonencode({ service = "blob", accountName = azurerm_storage_account.default_storage_account.name, containerName = azurerm_storage_container.assets.name })
+      }
+
+      env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "public-api"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "azure"
+      }
+
+      env {
+        name  = "ALIEN_METADATA_BINDING"
+        value = jsonencode({ service = "tablestorage", resourceGroupName = var.azure_resource_group_name, accountName = azurerm_cosmosdb_account.metadata.name, tableName = azurerm_cosmosdb_sql_container.metadata_container.name })
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
 
       env {
+        name  = "ALIEN_SECRETS_BINDING"
+        value = jsonencode({ service = "key-vault", vaultName = azurerm_key_vault.secrets.name })
+      }
+
+      env {
         name  = "ALIEN_TRANSPORT"
         value = "container-app"
+      }
+
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.execution_sa.client_id
+      }
+
+      env {
+        name  = "AZURE_REGION"
+        value = var.azure_location
+      }
+
+      env {
+        name  = "AZURE_SUBSCRIPTION_ID"
+        value = var.azure_subscription_id
+      }
+
+      env {
+        name  = "AZURE_TENANT_ID"
+        value = data.azurerm_client_config.public_api_current.tenant_id
       }
 
       env {
@@ -821,6 +868,8 @@ resource "azurerm_container_app" "public_api" {
 }
 
 === worker.tf ===
+data "azurerm_client_config" "worker_current" {}
+
 resource "azurerm_container_app" "worker" {
   name                         = "${var.stack_name}-worker"
   resource_group_name          = var.azure_resource_group_name
@@ -838,6 +887,16 @@ resource "azurerm_container_app" "worker" {
       memory = "256Mi"
 
       env {
+        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
+        value = "worker"
+      }
+
+      env {
+        name  = "ALIEN_DEPLOYMENT_TYPE"
+        value = "azure"
+      }
+
+      env {
         name  = "ALIEN_RUNTIME_SEND_OTLP"
         value = "true"
       }
@@ -845,6 +904,26 @@ resource "azurerm_container_app" "worker" {
       env {
         name  = "ALIEN_TRANSPORT"
         value = "container-app"
+      }
+
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.execution_sa.client_id
+      }
+
+      env {
+        name  = "AZURE_REGION"
+        value = var.azure_location
+      }
+
+      env {
+        name  = "AZURE_SUBSCRIPTION_ID"
+        value = var.azure_subscription_id
+      }
+
+      env {
+        name  = "AZURE_TENANT_ID"
+        value = data.azurerm_client_config.worker_current.tenant_id
       }
     }
   }

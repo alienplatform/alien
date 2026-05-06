@@ -704,10 +704,8 @@ impl KubernetesFunctionController {
         // Build environment variables
         // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
         use crate::core::ResourceController;
-        let env_builder = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
-            .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
+        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_function_runtime_env_vars(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .add_self_function_binding(&config.id, self.get_binding_params()?.as_ref())?;

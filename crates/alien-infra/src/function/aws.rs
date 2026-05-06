@@ -2964,10 +2964,8 @@ impl AwsFunctionController {
         // Get the function's own binding params (may be None during initial creation)
         let self_binding_params = self.get_binding_params()?;
 
-        let env_vars = EnvironmentVariableBuilder::new(initial_env)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
-            .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
+        let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
+            .add_function_runtime_env_vars(ctx, &function_config.id)?
             .add_linked_resources(links, ctx, function_name_for_error_logging)
             .await?
             .add_self_function_binding(&function_config.id, self_binding_params.as_ref())?

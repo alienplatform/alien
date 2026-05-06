@@ -37,6 +37,8 @@ impl ResourceImporter for AzureServiceAccountImporter {
             custom_role_definition_ids: Vec::new(),
             role_assignment_ids: Vec::new(),
             stack_permissions_applied: data.stack_permissions_applied,
+            managed_identity_wait_until_epoch_secs: None,
+            role_assignment_wait_until_epoch_secs: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
