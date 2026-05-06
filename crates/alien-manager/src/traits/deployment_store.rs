@@ -105,6 +105,7 @@ pub struct CreateImportedDeploymentParams {
     pub platform: Platform,
     pub stack_settings: StackSettings,
     pub stack_state: StackState,
+    pub runtime_metadata: RuntimeMetadata,
     /// Initial status — imported deployments normally start at
     /// `"provisioning"` so the manager can complete layer-3 runtime work.
     pub status: String,
@@ -211,14 +212,16 @@ pub trait DeploymentStore: Send + Sync {
     /// re-imports a deployment that was created by an earlier call —
     /// CloudFormation Update events, Terraform refresh+apply cycles, and Helm
     /// upgrades all fire this path. Implementations must overwrite
-    /// `stack_state` wholesale (the import payload is the source of truth)
-    /// and leave fields outside the import contract (status, deployment
-    /// token, environment variables, runtime metadata, …) untouched.
+    /// `stack_state` and `runtime_metadata` wholesale (the import payload and
+    /// release stack are the source of truth) and leave fields outside the
+    /// import contract (status, deployment token, environment variables, …)
+    /// untouched.
     async fn update_imported_stack_state(
         &self,
         caller: &crate::auth::Subject,
         deployment_id: &str,
         stack_state: StackState,
+        runtime_metadata: RuntimeMetadata,
         current_release_id: Option<String>,
     ) -> Result<DeploymentRecord, AlienError>;
 

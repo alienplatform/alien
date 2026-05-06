@@ -146,18 +146,7 @@ resource "google_cloud_run_v2_service" "public_api" {
     }
   }
 
-  lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
-  }
-}
-
-resource "google_cloud_run_v2_service_iam_member" "public_api_public_invoker" {
-  project  = var.gcp_project
-  location = google_cloud_run_v2_service.public_api.location
-  name     = google_cloud_run_v2_service.public_api.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
+  invoker_iam_disabled = true
 
   lifecycle {
     ignore_changes  = all

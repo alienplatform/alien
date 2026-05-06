@@ -122,33 +122,15 @@ impl TfEmitter for GcpFunctionEmitter {
             attr("labels", labels(ctx, "function")),
             nested(block("template", template_body)),
         ];
-        let _ = &mut service_body;
+        if matches!(function.ingress, Ingress::Public) {
+            service_body.push(attr("invoker_iam_disabled", Expression::Bool(true)));
+        }
 
         fragment.resource_blocks.push(resource_block(
             "google_cloud_run_v2_service",
             label,
             service_body,
         ));
-
-        if matches!(function.ingress, Ingress::Public) {
-            fragment.resource_blocks.push(resource_block(
-                "google_cloud_run_v2_service_iam_member",
-                &format!("{label}_public_invoker"),
-                [
-                    attr("project", expr::raw("var.gcp_project")),
-                    attr(
-                        "location",
-                        expr::traversal(["google_cloud_run_v2_service", label, "location"]),
-                    ),
-                    attr(
-                        "name",
-                        expr::traversal(["google_cloud_run_v2_service", label, "name"]),
-                    ),
-                    attr("role", Expression::String("roles/run.invoker".to_string())),
-                    attr("member", Expression::String("allUsers".to_string())),
-                ],
-            ));
-        }
 
         for (index, trigger) in function.triggers.iter().enumerate() {
             match trigger {

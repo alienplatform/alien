@@ -342,6 +342,19 @@ async fn happy_path_creates_imported_deployment() {
         persisted.stack_state.is_some(),
         "stack_state must round-trip through SQLite"
     );
+    let runtime_metadata = persisted
+        .runtime_metadata
+        .as_ref()
+        .expect("runtime_metadata must be persisted");
+    let prepared_stack = runtime_metadata
+        .prepared_stack
+        .as_ref()
+        .expect("prepared_stack must be persisted for imported provisioning");
+    assert_eq!(prepared_stack.id, "imported");
+    assert!(
+        prepared_stack.resources.contains_key("assets"),
+        "prepared_stack must come from the release stack used for import"
+    );
     assert_eq!(persisted.deployment_group_id, fixture.deployment_group_id);
     assert!(
         persisted.current_release_id.is_some(),

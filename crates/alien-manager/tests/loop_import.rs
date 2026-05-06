@@ -14,7 +14,7 @@ use alien_core::import::ImportContext;
 use alien_core::import::ImportSourceKind;
 use alien_core::{
     AwsManagementConfig, ManagementConfig, Platform, Resource, ResourceEntry, ResourceLifecycle,
-    ResourceStatus, StackSettings, StackState, Storage,
+    ResourceStatus, RuntimeMetadata, StackSettings, StackState, Storage,
 };
 use alien_infra::ResourceImporter;
 
@@ -126,6 +126,7 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state: stack_state.clone(),
+                runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
@@ -172,6 +173,7 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state,
+                runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
@@ -223,6 +225,7 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state,
+                runtime_metadata: RuntimeMetadata::default(),
                 // Force into update-pending to mirror the post-release-roll state.
                 status: "update-pending".to_string(),
                 current_release_id: None,

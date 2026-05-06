@@ -34,7 +34,7 @@ use axum::{
 
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
-    Stack, StackResourceState, StackState,
+    RuntimeMetadata, Stack, StackResourceState, StackState,
 };
 use alien_error::AlienError;
 
@@ -150,6 +150,7 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let runtime_metadata = import_runtime_metadata(stack);
 
     match state
         .deployment_store
@@ -174,6 +175,7 @@ pub async fn stack_import(
                     &subject,
                     &existing.id,
                     stack_state.clone(),
+                    runtime_metadata.clone(),
                     Some(release.id.clone()),
                 )
                 .await
@@ -219,6 +221,7 @@ pub async fn stack_import(
         platform: req.platform,
         stack_settings: req.stack_settings.clone(),
         stack_state: stack_state.clone(),
+        runtime_metadata,
         status: "provisioning".to_string(),
         current_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
@@ -244,6 +247,13 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
+    RuntimeMetadata {
+        prepared_stack: Some(stack.clone()),
+        ..RuntimeMetadata::default()
+    }
 }
 
 /// Look up the stack for the platform being imported. Releases carry
