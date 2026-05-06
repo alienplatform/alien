@@ -307,7 +307,7 @@ resource "azurerm_storage_account" "default_storage_account" {
 
 === default_service_bus_namespace.tf ===
 resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
-  name                = substr(lower("${var.stack_name}-sb"), 0, 50)
+  name                = format("%s-bus-%s", trim(substr(lower("a-${var.stack_name}"), 0, 37), "-"), substr(sha1(var.stack_name), 0, 8))
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "Standard"
@@ -321,7 +321,7 @@ resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
 
 === default_container_apps_environment.tf ===
 resource "azurerm_log_analytics_workspace" "default_container_apps_environment_logs" {
-  name                = "${var.stack_name}-default_container_apps_environment-logs"
+  name                = replace(lower("${var.stack_name}-default_container_apps_environment-logs"), "_", "-")
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "PerGB2018"
@@ -773,6 +773,16 @@ resource "azurerm_container_app" "public_api" {
       memory = "512Mi"
 
       env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "container-app"
+      }
+
+      env {
         name  = "RUST_LOG"
         value = "info"
       }
@@ -826,6 +836,16 @@ resource "azurerm_container_app" "worker" {
       image  = "acmeprod.azurecr.io/worker:1.2.3"
       cpu    = 0.5
       memory = "256Mi"
+
+      env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "container-app"
+      }
     }
   }
 

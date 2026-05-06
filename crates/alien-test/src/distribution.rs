@@ -8,8 +8,9 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use alien_core::{
     import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
-    DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBindings, Function, FunctionCode, ManagementConfig, Platform, Stack, StackSettings,
+    AwsManagementConfig, AzureManagementConfig, DeploymentConfig,
+    DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
+    Function, FunctionCode, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState,
 };
 use anyhow::Context;
@@ -303,6 +304,31 @@ fn stack_settings_for_flow(model: DeploymentModel) -> StackSettings {
     settings
 }
 
+fn render_management_config(
+    platform: Platform,
+    stack_settings: &StackSettings,
+) -> Option<ManagementConfig> {
+    if stack_settings.deployment_model != StackDeploymentModel::Push {
+        return None;
+    }
+
+    match platform {
+        Platform::Aws => Some(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: String::new(),
+        })),
+        Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            service_account_email: String::new(),
+        })),
+        Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: String::new(),
+            oidc_issuer: None,
+            oidc_subject: None,
+            management_principal_id: None,
+        })),
+        Platform::Kubernetes | Platform::Local | Platform::Test => None,
+    }
+}
+
 async fn apply_render_mutations(
     stack: Stack,
     platform: Platform,
@@ -314,7 +340,7 @@ async fn apply_render_mutations(
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
         stack_settings: stack_settings.clone(),
-        management_config: None,
+        management_config: render_management_config(platform, stack_settings),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),

@@ -262,14 +262,14 @@ resource "google_compute_firewall" "default_network_internal" {
 === execution_sa.tf ===
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-execution_sa"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien execution-sa service account"
   description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
 }
 
 resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
   project     = var.gcp_project
-  role_id     = "storageDataRead"
+  role_id     = format("%s_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageDataRead", var.stack_name)), 0, 8))
   title       = "Storage Data Read"
   description = "Allows reading data from storage buckets and containers"
   stage       = "GA"
@@ -293,7 +293,7 @@ resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
 
 resource "google_project_iam_custom_role" "execution_sa_queuedatawrite" {
   project     = var.gcp_project
-  role_id     = "queueDataWrite"
+  role_id     = format("%s_queueDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-queueDataWrite", var.stack_name)), 0, 8))
   title       = "Queue Data Write"
   description = "Allows sending messages to queues and acknowledging received messages"
   stage       = "GA"
@@ -313,14 +313,14 @@ resource "google_project_iam_member" "execution_sa_queuedatawrite_binding_0" {
 === management.tf ===
 resource "google_service_account" "management" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-management"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien stack management identity"
   description  = "${var.stack_name} cross-account management service account"
 }
 
 resource "google_project_iam_custom_role" "management_functionmanagement" {
   project     = var.gcp_project
-  role_id     = "functionManagement"
+  role_id     = format("%s_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-functionManagement", var.stack_name)), 0, 8))
   title       = "Function Management"
   description = "Allows managing function configuration, versions, aliases, and monitoring"
   stage       = "GA"
@@ -394,7 +394,7 @@ resource "google_project_iam_member" "management_functionmanagement_binding_0" {
 
 resource "google_project_iam_custom_role" "management_storageheartbeat" {
   project     = var.gcp_project
-  role_id     = "storageHeartbeat"
+  role_id     = format("%s_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageHeartbeat", var.stack_name)), 0, 8))
   title       = "Storage Heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources"
   stage       = "GA"
@@ -419,7 +419,7 @@ resource "google_project_iam_member" "management_storageheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_queueheartbeat" {
   project     = var.gcp_project
-  role_id     = "queueHeartbeat"
+  role_id     = format("%s_queueHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-queueHeartbeat", var.stack_name)), 0, 8))
   title       = "Queue Heartbeat"
   description = "Allows readonly monitoring and health checks for queue resources"
   stage       = "GA"
@@ -439,7 +439,7 @@ resource "google_project_iam_member" "management_queueheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_kvheartbeat" {
   project     = var.gcp_project
-  role_id     = "kvHeartbeat"
+  role_id     = format("%s_kvHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-kvHeartbeat", var.stack_name)), 0, 8))
   title       = "Kv Heartbeat"
   description = "Allows readonly monitoring and health checks for kv resources"
   stage       = "GA"
@@ -461,7 +461,7 @@ resource "google_project_iam_member" "management_kvheartbeat_binding_0" {
 
 resource "google_project_iam_custom_role" "management_vaultdatawrite" {
   project     = var.gcp_project
-  role_id     = "vaultDataWrite"
+  role_id     = format("%s_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-vaultDataWrite", var.stack_name)), 0, 8))
   title       = "Vault Data Write"
   description = "Allows creating, updating, and deleting individual secrets within vault"
   stage       = "GA"
@@ -576,7 +576,7 @@ resource "google_artifact_registry_repository" "registry" {
 
 resource "google_service_account" "registry_pull" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-pull"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-pull", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-pull", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien registry artifact registry pull identity"
 }
 
@@ -590,7 +590,7 @@ resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
 
 resource "google_service_account" "registry_push" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-push"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-push", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-push", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien registry artifact registry push identity"
 }
 
@@ -663,6 +663,16 @@ resource "google_cloud_run_v2_service" "public_api" {
       }
 
       env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "cloud-run"
+      }
+
+      env {
         name  = "RUST_LOG"
         value = "info"
       }
@@ -715,6 +725,16 @@ resource "google_cloud_run_v2_service" "worker" {
           memory = "256Mi"
         }
         cpu_idle = true
+      }
+
+      env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "cloud-run"
       }
     }
 

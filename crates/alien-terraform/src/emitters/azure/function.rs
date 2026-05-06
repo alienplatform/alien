@@ -13,6 +13,8 @@
 //!   when a `<profile>-sa` exists in the stack — the helper resolves
 //!   the principal via [`super::helpers::service_account_principal_id`].
 
+use std::collections::BTreeMap;
+
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
@@ -53,15 +55,14 @@ impl TfEmitter for AzureFunctionEmitter {
         let principal_id_expr = service_account_principal_id(ctx, &function.permissions);
 
         // Container env-var blocks (one per K/V pair).
-        let env_blocks: Vec<Structure> = function
-            .environment
-            .iter()
+        let env_blocks: Vec<Structure> = function_environment(function)
+            .into_iter()
             .map(|(k, v)| {
                 nested(block(
                     "env",
                     [
-                        attr("name", Expression::String(k.clone())),
-                        attr("value", Expression::String(v.clone())),
+                        attr("name", Expression::String(k)),
+                        attr("value", Expression::String(v)),
                     ],
                 ))
             })
@@ -205,6 +206,17 @@ fn parent_environment_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
 fn sa_label_for(ctx: &EmitContext<'_>, profile_name: &str) -> Option<String> {
     let service_account_id = format!("{profile_name}-sa");
     ctx.name_for(&service_account_id).map(|s| s.to_string())
+}
+
+fn function_environment(function: &Function) -> BTreeMap<String, String> {
+    let mut env = function
+        .environment
+        .clone()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    env.insert("ALIEN_TRANSPORT".to_string(), "container-app".to_string());
+    env.insert("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string());
+    env
 }
 
 /// Container Apps container names must be lowercase alphanumeric +

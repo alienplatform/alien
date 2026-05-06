@@ -79,16 +79,16 @@ Parameters:
     Description: Telemetry collection behavior.
     Default: auto
     AllowedValues:
-    - off
+    - "off"
     - auto
     - approval-required
   HeartbeatsMode:
     Type: String
     Description: Heartbeat health-check behavior.
-    Default: on
+    Default: "on"
     AllowedValues:
-    - off
-    - on
+    - "off"
+    - "on"
 Conditions:
   HasDomainName:
     Fn::Not:

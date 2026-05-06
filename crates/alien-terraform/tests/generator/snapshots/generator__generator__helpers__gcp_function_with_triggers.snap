@@ -184,6 +184,16 @@ resource "google_cloud_run_v2_service" "worker" {
         }
         cpu_idle = true
       }
+
+      env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "cloud-run"
+      }
     }
   }
 

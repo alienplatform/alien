@@ -100,16 +100,16 @@ Parameters:
     Description: Telemetry collection behavior.
     Default: auto
     AllowedValues:
-    - off
+    - "off"
     - auto
     - approval-required
   HeartbeatsMode:
     Type: String
     Description: Heartbeat health-check behavior.
-    Default: on
+    Default: "on"
     AllowedValues:
-    - off
-    - on
+    - "off"
+    - "on"
 Conditions:
   NetworkCreateUseAz2:
     Fn::Not:
@@ -605,6 +605,32 @@ Resources:
                     - ':'
                     - Ref: ManagingRoleArn
             Sid: FunctionManagement4
+          - Action:
+            - acm:DeleteCertificate
+            - acm:DescribeCertificate
+            - acm:ImportCertificate
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+            Sid: FunctionManagement5
+          - Action:
+            - apigateway:POST
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
+            Sid: FunctionManagement6
+          - Action:
+            - apigateway:DELETE
+            - apigateway:GET
+            - apigateway:PATCH
+            - apigateway:PUT
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+            Sid: FunctionManagement7
           - Action:
             - s3:GetBucketAcl
             - s3:GetBucketLocation

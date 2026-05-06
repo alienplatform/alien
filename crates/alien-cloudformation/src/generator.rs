@@ -164,12 +164,43 @@ pub fn generate_cloudformation_template(
 
 /// Serialize a CloudFormation template to YAML.
 pub fn to_yaml(template: &CfTemplate) -> Result<String> {
-    serde_yaml::to_string(template).map_err(|error| {
+    let yaml = serde_yaml::to_string(template).map_err(|error| {
         AlienError::new(ErrorData::TemplateSerializationFailed {
             format: "CloudFormation YAML".to_string(),
             reason: error.to_string(),
         })
-    })
+    })?;
+
+    Ok(quote_yaml_1_1_mode_scalars(&yaml))
+}
+
+fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
+    let mut quoted = String::with_capacity(yaml.len());
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
+        let replacement = match trimmed {
+            "Default: on" => Some("Default: \"on\""),
+            "Default: off" => Some("Default: \"off\""),
+            "- on" => Some("- \"on\""),
+            "- off" => Some("- \"off\""),
+            _ => None,
+        };
+
+        if let Some(replacement) = replacement {
+            quoted.push_str(indent);
+            quoted.push_str(replacement);
+        } else {
+            quoted.push_str(line);
+        }
+        quoted.push('\n');
+    }
+
+    if !yaml.ends_with('\n') {
+        quoted.pop();
+    }
+
+    quoted
 }
 
 /// Generate a CloudFormation stack policy that prevents stack updates from

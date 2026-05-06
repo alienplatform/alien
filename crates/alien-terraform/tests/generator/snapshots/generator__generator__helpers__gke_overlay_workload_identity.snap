@@ -128,14 +128,14 @@ resource "google_storage_bucket" "data" {
 === execution_sa.tf ===
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-execution_sa"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien execution-sa service account"
   description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
 }
 
 resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
   project     = var.gcp_project
-  role_id     = "storageDataRead"
+  role_id     = format("%s_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageDataRead", var.stack_name)), 0, 8))
   title       = "Storage Data Read"
   description = "Allows reading data from storage buckets and containers"
   stage       = "GA"

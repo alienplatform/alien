@@ -99,7 +99,7 @@ resource "google_artifact_registry_repository" "registry" {
 
 resource "google_service_account" "registry_pull" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-pull"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-pull", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-pull", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien registry artifact registry pull identity"
 }
 
@@ -113,7 +113,7 @@ resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
 
 resource "google_service_account" "registry_push" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-registry-push"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-push", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-push", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien registry artifact registry push identity"
 }
 

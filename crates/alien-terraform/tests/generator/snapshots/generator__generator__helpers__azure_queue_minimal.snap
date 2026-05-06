@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 53
 expression: buf
 ---
 === versions.tf ===
@@ -137,7 +136,7 @@ resource "azurerm_resource_group" "default_resource_group" {
 
 === default_service_bus_namespace.tf ===
 resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
-  name                = substr(lower("${var.stack_name}-sb"), 0, 50)
+  name                = format("%s-bus-%s", trim(substr(lower("a-${var.stack_name}"), 0, 37), "-"), substr(sha1(var.stack_name), 0, 8))
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "Standard"

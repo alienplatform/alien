@@ -62,8 +62,11 @@ impl TfEmitter for AzureServiceBusNamespaceEmitter {
 }
 
 /// Service Bus namespace names must be globally unique, 6-50 alphanumeric
-/// or hyphen characters. `${var.stack_name}-sb` lower-cased keeps us
-/// well within the limit while still being recognisable in the portal.
+/// or hyphen characters, and Azure rejects names ending in `-sb`/`-mgmt`.
+/// Keep a readable prefix and append a short hash so truncation cannot leave
+/// a trailing hyphen or a reserved suffix.
 fn namespace_name_expr() -> Expression {
-    expr::raw("substr(lower(\"${var.stack_name}-sb\"), 0, 50)")
+    expr::raw(
+        "format(\"%s-bus-%s\", trim(substr(lower(\"a-${var.stack_name}\"), 0, 37), \"-\"), substr(sha1(var.stack_name), 0, 8))",
+    )
 }

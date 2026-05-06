@@ -82,14 +82,14 @@ locals {
 === management.tf ===
 resource "google_service_account" "management" {
   project      = var.gcp_project
-  account_id   = trim(substr(replace(lower("${var.stack_name}-management"), "_", "-"), 0, 30), "-")
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", var.stack_name)), "_", "-")), 0, 8))
   display_name = "Alien stack management identity"
   description  = "${var.stack_name} cross-account management service account"
 }
 
 resource "google_project_iam_custom_role" "management_functionmanagement" {
   project     = var.gcp_project
-  role_id     = "functionManagement"
+  role_id     = format("%s_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-functionManagement", var.stack_name)), 0, 8))
   title       = "Function Management"
   description = "Allows managing function configuration, versions, aliases, and monitoring"
   stage       = "GA"
@@ -163,7 +163,7 @@ resource "google_project_iam_member" "management_functionmanagement_binding_0" {
 
 resource "google_project_iam_custom_role" "management_storageheartbeat" {
   project     = var.gcp_project
-  role_id     = "storageHeartbeat"
+  role_id     = format("%s_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 20), substr(sha1(format("%s-storageHeartbeat", var.stack_name)), 0, 8))
   title       = "Storage Heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources"
   stage       = "GA"

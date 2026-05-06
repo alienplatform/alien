@@ -136,7 +136,7 @@ resource "azurerm_resource_group" "default_resource_group" {
 
 === default_container_apps_environment.tf ===
 resource "azurerm_log_analytics_workspace" "default_container_apps_environment_logs" {
-  name                = "${var.stack_name}-default_container_apps_environment-logs"
+  name                = replace(lower("${var.stack_name}-default_container_apps_environment-logs"), "_", "-")
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "PerGB2018"
@@ -178,6 +178,16 @@ resource "azurerm_container_app" "api" {
       image  = "acmeprod.azurecr.io/api:1"
       cpu    = 0.5
       memory = "256Mi"
+
+      env {
+        name  = "ALIEN_RUNTIME_SEND_OTLP"
+        value = "true"
+      }
+
+      env {
+        name  = "ALIEN_TRANSPORT"
+        value = "container-app"
+      }
     }
   }
 

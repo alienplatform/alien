@@ -70,12 +70,25 @@ pub fn stack_name_template(suffix: &str) -> Expression {
     expr::template(format!("${{var.stack_name}}-{suffix}"))
 }
 
-/// GCP service-account IDs are capped at 30 chars and must end in an
-/// alphanumeric character. Truncating a long stack/resource name can leave a
-/// trailing dash, so trim dashes after truncation.
+/// GCP service-account IDs are capped at 30 chars and must start with a
+/// letter and end with an alphanumeric character. Keep a readable prefix and
+/// append an 8-char hash of the full stack/resource identity so long resource
+/// ids like `artifact-registry-pull` and `artifact-registry-push` do not
+/// collide after truncation.
 pub fn service_account_id_template(suffix: &str) -> Expression {
     expr::raw(format!(
-        "trim(substr(replace(lower(\"${{var.stack_name}}-{suffix}\"), \"_\", \"-\"), 0, 30), \"-\")"
+        "format(\"%s-%s\", trim(substr(replace(lower(format(\"a-%s-{suffix}\", var.stack_name)), \"_\", \"-\"), 0, 21), \"-\"), substr(sha1(replace(lower(format(\"%s-{suffix}\", var.stack_name)), \"_\", \"-\")), 0, 8))"
+    ))
+}
+
+/// GCP custom role ids are project-global. Scope every generated role id to
+/// the stack name so parallel distribution tests and repeated applies do not
+/// try to create the same `storageDataRead`/`functionExecute` role in the
+/// target project.
+fn custom_role_id_template(role_id: &str) -> Expression {
+    let role_id_prefix = role_id.chars().take(32).collect::<String>();
+    expr::raw(format!(
+        "format(\"%s_{role_id_prefix}_%s\", substr(replace(var.stack_name, \"-\", \"_\"), 0, 20), substr(sha1(format(\"%s-{role_id}\", var.stack_name)), 0, 8))"
     ))
 }
 
@@ -234,7 +247,7 @@ pub fn emit_custom_role_and_bindings(
         &role_label,
         [
             attr("project", expr::raw("var.gcp_project")),
-            attr("role_id", Expression::String(role_id.clone())),
+            attr("role_id", custom_role_id_template(&role_id)),
             attr("title", Expression::String(custom_role.title.clone())),
             attr(
                 "description",

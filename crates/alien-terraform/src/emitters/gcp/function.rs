@@ -13,6 +13,8 @@
 //! Public ingress maps to `INGRESS_TRAFFIC_ALL`; private maps to
 //! `INGRESS_TRAFFIC_INTERNAL_ONLY`.
 
+use std::collections::BTreeMap;
+
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
@@ -53,18 +55,6 @@ impl TfEmitter for GcpFunctionEmitter {
             Ingress::Private => "INGRESS_TRAFFIC_INTERNAL_ONLY",
         };
 
-        let mut env_attrs: Vec<Expression> = function
-            .environment
-            .iter()
-            .map(|(k, v)| {
-                expr::object([
-                    ("name", Expression::String(k.clone())),
-                    ("value", Expression::String(v.clone())),
-                ])
-            })
-            .collect();
-        let _ = &mut env_attrs;
-
         let container_attrs: Vec<hcl::structure::Structure> = vec![
             attr("image", Expression::String(image.clone())),
             nested(block(
@@ -86,12 +76,12 @@ impl TfEmitter for GcpFunctionEmitter {
         ];
 
         let mut env_blocks: Vec<hcl::structure::Structure> = Vec::new();
-        for (k, v) in &function.environment {
+        for (k, v) in function_environment(function) {
             env_blocks.push(nested(block(
                 "env",
                 [
-                    attr("name", Expression::String(k.clone())),
-                    attr("value", Expression::String(v.clone())),
+                    attr("name", Expression::String(k)),
+                    attr("value", Expression::String(v)),
                 ],
             )));
         }
@@ -359,4 +349,15 @@ impl TfEmitter for GcpFunctionEmitter {
             ("eventarcTriggerNames", Expression::Array(eventarc_names)),
         ]))
     }
+}
+
+fn function_environment(function: &Function) -> BTreeMap<String, String> {
+    let mut env = function
+        .environment
+        .clone()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    env.insert("ALIEN_TRANSPORT".to_string(), "cloud-run".to_string());
+    env.insert("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string());
+    env
 }
