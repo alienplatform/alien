@@ -15,12 +15,12 @@
 //! 4. Persists or replaces an imported deployment's stack state. New imports
 //!    start at `provisioning` so the manager can complete layer-3 work.
 //!
-//! Naming. The caller supplies `deploymentName` in the request body — each
-//! distribution adapter picks a natural source (CFN stack name, Helm
-//! `{namespace}/{release}`, an explicit `name` attribute on the Terraform
-//! `alien_deployment` resource). If a deployment with that name already
-//! exists in the deployment group and was also imported, the handler replaces
-//! its imported stack state. A collision with a native deployment returns 409.
+//! Naming. The caller supplies `deploymentName` for the deployment row and
+//! `stackPrefix` for physical resource names. Distribution adapters typically
+//! use the same value, but the manager treats them as separate contracts. If a
+//! deployment with that name already exists in the deployment group and was
+//! also imported, the handler replaces its imported stack state. A collision
+//! with a native deployment returns 409.
 
 use std::collections::HashMap;
 
@@ -110,6 +110,10 @@ pub async fn stack_import(
             "Stack import payload must include a non-empty deploymentName",
         )
         .into_response();
+    }
+    if req.stack_prefix.trim().is_empty() {
+        return ErrorData::bad_request("Stack import payload must include a non-empty stackPrefix")
+            .into_response();
     }
 
     let dg = match state
@@ -333,7 +337,8 @@ fn build_stack_state(
         resources.insert(imported.id.clone(), resource_state);
     }
 
-    let mut stack_state = StackState::new(req.platform);
+    let mut stack_state =
+        StackState::with_resource_prefix(req.platform, req.stack_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
 }

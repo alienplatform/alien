@@ -14,7 +14,7 @@
 //!
 //! 1. The federated trust binding (IAM role-policy / IAM binding /
 //!    federated identity credential).
-//! 2. `alien_helm_values` data that carries service-account annotations
+//! 2. `helm_values` output data that carries service-account annotations
 //!    and labels for the generated chart. Terraform intentionally does not
 //!    create Kubernetes runtime objects; Helm owns those resources.
 
@@ -80,7 +80,7 @@ pub(crate) fn overlay_per_resource(
         );
     }
     shared_locals.insert(
-        "alien_helm_service_accounts".to_string(),
+        "helm_service_accounts".to_string(),
         expr::object(helm_service_accounts),
     );
 

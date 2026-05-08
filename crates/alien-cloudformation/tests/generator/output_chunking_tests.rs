@@ -1,7 +1,7 @@
 //! CFN Outputs chunking + source-function rejection.
 //!
 //! `AWS::CloudFormation::Output` values cap at 4 KB; the generator
-//! splits the resolved import payload into `AlienResources0` / `…1` /
+//! splits the resolved import payload into `DeploymentResources0` / `...1` /
 //! `…N` chunks once the assembled JSON exceeds a budget. Reviewers see
 //! the chunk shape via these tests, not via a full template snapshot
 //! (which would include 80+ buckets — not useful to read).
@@ -15,7 +15,7 @@ use alien_core::{
     Function, FunctionCode, ResourceLifecycle, Stack, StackSettings, ToolchainConfig,
 };
 
-const OUTPUT_RESOURCES: &str = "AlienResources";
+const OUTPUT_RESOURCES: &str = "DeploymentResources";
 
 #[test]
 fn outputs_fallback_chunks_large_resource_payload() {
@@ -44,7 +44,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
     );
     assert!(
         !template.outputs.contains_key(OUTPUT_RESOURCES),
-        "base AlienResources output should be replaced by chunked outputs"
+        "base DeploymentResources output should be replaced by chunked outputs"
     );
     for (index, key) in chunk_keys.iter().enumerate() {
         assert_eq!(key, &format!("{OUTPUT_RESOURCES}{index}"));
@@ -76,13 +76,13 @@ fn small_payload_emits_single_resources_output() {
 
     assert!(
         template.outputs.contains_key(OUTPUT_RESOURCES),
-        "small payloads should keep a single AlienResources output"
+        "small payloads should keep a single DeploymentResources output"
     );
     assert!(
         !template
             .outputs
             .keys()
-            .any(|key| key.starts_with("AlienResources0")),
+            .any(|key| key.starts_with("DeploymentResources0")),
         "small payloads should not chunk"
     );
 }

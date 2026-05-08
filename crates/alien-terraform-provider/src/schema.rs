@@ -87,6 +87,7 @@ pub fn provider_schema() -> Schema {
 ///   manager_url            = "https://manager.example.com"
 ///   deployment_group_token = var.alien_dg_token
 ///   name                   = "acme-prod"
+///   stack_prefix           = module.stack.alien_stack_prefix
 ///   platform               = module.stack.alien_platform
 ///   region                 = module.stack.alien_region
 ///   management_config      = jsondecode(module.stack.alien_management_config)
@@ -123,6 +124,15 @@ pub fn resource_schema() -> Schema {
             attr(
                 "name",
                 "Deployment name. Required and unique within the deployment group — the manager returns 409 on collision.",
+                AttributeKind::String,
+                true,
+                false,
+                false,
+                false,
+            ),
+            attr(
+                "stack_prefix",
+                "Physical stack prefix used by the generated module. Pass `module.x.alien_stack_prefix`.",
                 AttributeKind::String,
                 true,
                 false,
@@ -223,6 +233,7 @@ mod tests {
             vec![
                 "deployment_group_token",
                 "name",
+                "stack_prefix",
                 "platform",
                 "region",
                 "management_config",

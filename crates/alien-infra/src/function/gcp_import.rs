@@ -2,7 +2,7 @@
 
 use alien_core::{
     import::{data::GcpFunctionImportData, ImportContext},
-    Function, Ingress, Result, StackResourceState,
+    Result, StackResourceState,
 };
 
 use crate::function::{GcpFunctionController, GcpFunctionState};
@@ -31,19 +31,8 @@ impl ResourceImporter for GcpFunctionImporter {
         // names; the topic and notification IDs are reconstructed at first
         // reconcile so we leave the corresponding fields empty.
         let _ = data.eventarc_trigger_names;
-        let is_public = ctx
-            .resource
-            .config
-            .downcast_ref::<Function>()
-            .map(|function| function.ingress == Ingress::Public)
-            .unwrap_or_else(|| data.url.is_some());
-
         let controller = GcpFunctionController {
-            state: if is_public {
-                GcpFunctionState::WaitingForCertificate
-            } else {
-                GcpFunctionState::Ready
-            },
+            state: GcpFunctionState::Ready,
             service_name: Some(data.service_name),
             url: data.url,
             operation_name: None,
@@ -64,8 +53,8 @@ impl ResourceImporter for GcpFunctionImporter {
             forwarding_rule_name: None,
             project_id: Some(data.project_id),
             region: Some(data.region),
-            commands_topic_name: None,
-            commands_subscription_name: None,
+            commands_topic_name: data.commands_topic_name,
+            commands_subscription_name: data.commands_subscription_name,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

@@ -85,7 +85,7 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
     let deployment_name = args.name.clone().unwrap_or_else(|| stack_name.clone());
 
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
-    let request = build_import_request(&outputs, &args.token, &deployment_name)?;
+    let request = build_import_request(&outputs, &args.token, &deployment_name, &stack_name)?;
 
     if args.dry_run {
         let json = serde_json::to_string_pretty(&request)
@@ -146,6 +146,7 @@ struct CfnOutputs {
     source_kind: Option<String>,
     platform: Option<String>,
     region: Option<String>,
+    stack_prefix: Option<String>,
     management_config: Option<JsonValue>,
     stack_settings: Option<JsonValue>,
     /// Resources may be split across `AlienResources0`..`AlienResourcesN`
@@ -198,6 +199,9 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
             };
             match key {
                 "AlienSourceKind" => outputs.source_kind = Some(value.to_string()),
+                "AlienStackPrefix" | "DeploymentStackPrefix" => {
+                    outputs.stack_prefix = Some(value.to_string());
+                }
                 "AlienPlatform" => outputs.platform = Some(value.to_string()),
                 "AlienRegion" => outputs.region = Some(value.to_string()),
                 "AlienManagementConfig" => {
@@ -237,6 +241,7 @@ fn build_import_request(
     outputs: &CfnOutputs,
     token: &str,
     deployment_name: &str,
+    fallback_stack_prefix: &str,
 ) -> Result<StackImportRequest> {
     let source_kind: ImportSourceKind = match outputs.source_kind.as_deref() {
         Some("cloudformation") => ImportSourceKind::CloudFormation,
@@ -262,6 +267,10 @@ fn build_import_request(
             message: "AlienRegion output not found in stack".to_string(),
         })
     })?;
+    let stack_prefix = outputs
+        .stack_prefix
+        .clone()
+        .unwrap_or_else(|| fallback_stack_prefix.to_string());
 
     let management_config_value = outputs.management_config.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
@@ -312,6 +321,7 @@ fn build_import_request(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: deployment_name.to_string(),
+        stack_prefix,
         source_kind: Some(source_kind),
         release_id: None,
         platform,

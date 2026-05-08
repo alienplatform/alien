@@ -102,24 +102,28 @@ Resources:
       BucketName:
         Fn::Sub: ${AWS::StackName}-logs-bucket
 Outputs:
-  AlienSourceKind:
+  DeploymentSourceKind:
     Value: cloudformation
     Description: Distribution source kind.
-  AlienPlatform:
+  DeploymentStackPrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Physical stack prefix.
+  DeploymentPlatform:
     Value: aws
     Description: Target platform.
-  AlienRegion:
+  DeploymentRegion:
     Value:
       Ref: AWS::Region
     Description: AWS region.
-  AlienManagementConfig:
+  DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
         platform: aws
         managingRoleArn:
           Ref: ManagingRoleArn
     Description: Manager import ManagementConfig JSON.
-  AlienStackSettings:
+  DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
         deploymentModel: push
@@ -144,7 +148,7 @@ Outputs:
                       Ref: CertificateArn
           - Ref: AWS::NoValue
     Description: Manager import StackSettings JSON.
-  AlienResources:
+  DeploymentResources:
     Value:
       Fn::ToJsonString:
       - id: logs-bucket

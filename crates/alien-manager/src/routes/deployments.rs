@@ -614,7 +614,7 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    if query.force {
+    if query.force || deployment.import_source.is_some() {
         if let Err(e) = state
             .deployment_store
             .delete_deployment(&subject, &id)

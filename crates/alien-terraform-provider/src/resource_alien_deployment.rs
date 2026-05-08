@@ -25,6 +25,8 @@ pub struct AlienDeploymentInput {
     pub deployment_group_token: String,
     /// Deployment name. Required, unique within the deployment group.
     pub name: String,
+    /// Physical stack prefix used by the generated module.
+    pub stack_prefix: String,
     pub platform: Platform,
     pub region: String,
     pub management_config: ManagementConfig,
@@ -129,6 +131,9 @@ fn build_request(input: &AlienDeploymentInput) -> Result<StackImportRequest, Cru
     if input.name.trim().is_empty() {
         return Err(CrudError::Validation("name is required".into()));
     }
+    if input.stack_prefix.trim().is_empty() {
+        return Err(CrudError::Validation("stack_prefix is required".into()));
+    }
     if input.region.is_empty() {
         return Err(CrudError::Validation("region is required".into()));
     }
@@ -140,6 +145,7 @@ fn build_request(input: &AlienDeploymentInput) -> Result<StackImportRequest, Cru
     Ok(StackImportRequest {
         deployment_group_token: input.deployment_group_token.clone(),
         deployment_name: input.name.clone(),
+        stack_prefix: input.stack_prefix.clone(),
         management_config: input.management_config.clone(),
         platform: input.platform,
         region: input.region.clone(),
@@ -197,6 +203,7 @@ mod tests {
             manager_url: Some("http://localhost:0".into()),
             deployment_group_token: "tok".into(),
             name: "acme-prod".into(),
+            stack_prefix: "acme-stack".into(),
             platform: Platform::Aws,
             region: "us-east-1".into(),
             management_config: mc,
@@ -226,6 +233,13 @@ mod tests {
         let input = dummy_input();
         let req = build_request(&input).unwrap();
         assert_eq!(req.deployment_name, "acme-prod");
+    }
+
+    #[test]
+    fn build_request_propagates_stack_prefix() {
+        let input = dummy_input();
+        let req = build_request(&input).unwrap();
+        assert_eq!(req.stack_prefix, "acme-stack");
     }
 
     #[test]

@@ -290,6 +290,65 @@ impl TfEmitter for GcpFunctionEmitter {
             }
         }
 
+        if function.commands_enabled {
+            let topic_label = format!("{label}_commands");
+            let subscription_label = format!("{label}_commands");
+            fragment.resource_blocks.push(resource_block(
+                "google_pubsub_topic",
+                &topic_label,
+                [
+                    attr(
+                        "name",
+                        expr::template(format!("${{var.stack_name}}-{}-rq", function.id)),
+                    ),
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr("labels", labels(ctx, "function-commands")),
+                ],
+            ));
+
+            let mut push_body: Vec<hcl::structure::Structure> = vec![attr(
+                "push_endpoint",
+                expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
+            )];
+            if !matches!(function.ingress, Ingress::Public) {
+                if let Some(sa) = &service_account {
+                    push_body.push(nested(block(
+                        "oidc_token",
+                        [
+                            attr("service_account_email", sa.clone()),
+                            attr(
+                                "audience",
+                                expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
+                            ),
+                        ],
+                    )));
+                }
+            }
+
+            fragment.resource_blocks.push(resource_block(
+                "google_pubsub_subscription",
+                &subscription_label,
+                [
+                    attr(
+                        "name",
+                        expr::template(format!("${{var.stack_name}}-{}-rq-sub", function.id)),
+                    ),
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "topic",
+                        expr::traversal(["google_pubsub_topic", &topic_label, "id"]),
+                    ),
+                    attr(
+                        "ack_deadline_seconds",
+                        Expression::Number(hcl::Number::from(i64::from(
+                            function.timeout_seconds.clamp(10, 600),
+                        ))),
+                    ),
+                    nested(block("push_config", push_body)),
+                ],
+            ));
+        }
+
         Ok(fragment)
     }
 
@@ -340,6 +399,30 @@ impl TfEmitter for GcpFunctionEmitter {
             ),
             ("schedulerJobNames", Expression::Array(scheduler_names)),
             ("eventarcTriggerNames", Expression::Array(eventarc_names)),
+            (
+                "commandsTopicName",
+                if function.commands_enabled {
+                    expr::traversal([
+                        "google_pubsub_topic",
+                        &format!("{label}_commands"),
+                        "name",
+                    ])
+                } else {
+                    Expression::Null
+                },
+            ),
+            (
+                "commandsSubscriptionName",
+                if function.commands_enabled {
+                    expr::traversal([
+                        "google_pubsub_subscription",
+                        &format!("{label}_commands"),
+                        "name",
+                    ])
+                } else {
+                    Expression::Null
+                },
+            ),
         ]))
     }
 

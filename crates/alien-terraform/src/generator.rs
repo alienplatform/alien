@@ -67,16 +67,28 @@ pub struct TerraformOptions<'a> {
     pub registry: &'a TfRegistry,
     pub stack_settings: StackSettings,
     /// Optional self-registration settings. When present, the generated module
-    /// requires the `alien` provider and creates `alien_deployment.this` after
-    /// raw infrastructure is resolved.
+    /// requires the configured provider and creates its registration resource
+    /// after raw infrastructure is resolved.
     pub registration: Option<TerraformRegistration>,
 }
 
 /// Terraform provider dependency used by self-registering modules.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerraformRegistration {
+    /// Local Terraform provider name, used in `required_providers`.
+    pub provider_name: String,
     pub provider_source: String,
     pub provider_version: String,
+    /// Resource suffix exposed by the provider. Combined with
+    /// `provider_name` to form the full Terraform type, e.g.
+    /// `<provider_name>_<resource_type>`.
+    pub resource_type: String,
+}
+
+impl TerraformRegistration {
+    fn provider_resource_type(&self) -> String {
+        format!("{}_{}", self.provider_name, self.resource_type)
+    }
 }
 
 /// Per-network-resource extra variables (e.g. BYO VPC ids for AWS).
@@ -199,6 +211,9 @@ pub fn generate_terraform_module(
         )?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
+    if matches!(platform, alien_core::Platform::Azure) {
+        apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
+    }
 
     let network_vars = network_extra_variables(stack, &labels);
 
@@ -239,9 +254,12 @@ pub fn generate_terraform_module(
     );
     files.insert(
         "outputs.tf".to_string(),
-        render_body(outputs_body(target, options.registration.is_some()))?,
+        render_body(outputs_body(target, options.registration.as_ref()))?,
     );
-    files.insert("README.md".to_string(), readme_md(stack, target));
+    files.insert(
+        "README.md".to_string(),
+        readme_md(stack, target, options.registration.as_ref()),
+    );
 
     let mut module = ModuleFiles { files };
 
@@ -309,6 +327,38 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
 
         for resource in &mut fragment.resource_blocks {
             upsert_depends_on(resource, &depends_on);
+        }
+    }
+}
+
+fn apply_azure_resource_group_dependency(
+    stack: &Stack,
+    labels: &IndexMap<String, String>,
+    per_resource: &mut IndexMap<String, TfFragment>,
+) {
+    let Some((resource_group_id, resource_group_label)) =
+        stack.resources().find_map(|(resource_id, entry)| {
+            if entry.config.resource_type().as_ref() != "azure_resource_group" {
+                return None;
+            }
+            Some((resource_id.as_str(), labels.get(resource_id)?.as_str()))
+        })
+    else {
+        return;
+    };
+
+    let dependency = expr::traversal(["azurerm_resource_group", resource_group_label]);
+    for (resource_id, entry) in stack.resources() {
+        if resource_id == resource_group_id
+            || entry.config.resource_type().as_ref() == "service_activation"
+        {
+            continue;
+        }
+        let Some(fragment) = per_resource.get_mut(resource_id) else {
+            continue;
+        };
+        for resource in &mut fragment.resource_blocks {
+            upsert_depends_on(resource, std::slice::from_ref(&dependency));
         }
     }
 }
@@ -469,7 +519,7 @@ fn versions_body(target: TerraformTarget, registration: Option<&TerraformRegistr
     }
     if let Some(registration) = registration {
         provider_attrs.push(attr(
-            "alien",
+            &registration.provider_name,
             provider_decl_attr(
                 &registration.provider_source,
                 &format!("= {}", registration.provider_version),
@@ -726,7 +776,13 @@ fn providers_body(target: TerraformTarget) -> Body {
             structures.push(Structure::Block(Block {
                 identifier: Identifier::sanitized("provider"),
                 labels: vec![BlockLabel::String("azurerm".to_string())],
-                body: Body::from(vec![Structure::Block(block("features", []))]),
+                body: Body::from(vec![
+                    attr(
+                        "resource_provider_registrations",
+                        Expression::String("none".to_string()),
+                    ),
+                    Structure::Block(block("features", [])),
+                ]),
             }));
         }
         _ => {}
@@ -743,24 +799,24 @@ fn locals_body(
     let mut body: Vec<Structure> = Vec::new();
 
     body.push(attr(
-        "alien_platform",
+        "deployment_platform",
         Expression::String(target.platform().as_str().to_string()),
     ));
     body.push(attr(
-        "alien_target",
+        "deployment_target",
         Expression::String(target.name().to_string()),
     ));
-    body.push(attr("alien_region", region_expression(target)));
+    body.push(attr("deployment_region", region_expression(target)));
     body.push(attr(
-        "alien_management_config",
+        "deployment_management_config",
         management_config_expression(target),
     ));
     body.push(attr(
-        "alien_stack_settings",
+        "deployment_stack_settings",
         stack_settings_expression(stack_settings)?,
     ));
     body.push(attr(
-        "alien_resources",
+        "deployment_resources",
         Expression::Array(imported_resources),
     ));
 
@@ -769,13 +825,13 @@ fn locals_body(
     }
     if target.is_kubernetes() {
         body.push(attr(
-            "alien_helm_values",
+            "helm_values",
             expr::object([
+                ("serviceAccounts", expr::raw("local.helm_service_accounts")),
                 (
-                    "serviceAccounts",
-                    expr::raw("local.alien_helm_service_accounts"),
+                    "stackSettings",
+                    expr::raw("local.deployment_stack_settings"),
                 ),
-                ("stackSettings", expr::raw("local.alien_stack_settings")),
             ]),
         ));
     }
@@ -877,9 +933,9 @@ fn json_to_expression(value: &serde_json::Value) -> Expression {
 }
 
 fn import_body(registration: Option<&TerraformRegistration>) -> Body {
-    if registration.is_some() {
+    if let Some(registration) = registration {
         return Body::from(vec![Structure::Block(resource_block(
-            "alien_deployment",
+            &registration.provider_resource_type(),
             "this",
             [
                 attr(
@@ -890,86 +946,106 @@ fn import_body(registration: Option<&TerraformRegistration>) -> Body {
                     "name",
                     expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
                 ),
-                attr("platform", expr::raw("local.alien_platform")),
-                attr("region", expr::raw("local.alien_region")),
+                attr("stack_prefix", expr::raw("var.stack_name")),
+                attr("platform", expr::raw("local.deployment_platform")),
+                attr("region", expr::raw("local.deployment_region")),
                 attr("manager_url", expr::raw("var.manager_url")),
                 attr(
                     "management_config",
-                    expr::raw("local.alien_management_config"),
+                    expr::raw("local.deployment_management_config"),
                 ),
-                attr("stack_settings", expr::raw("local.alien_stack_settings")),
-                attr("resources", expr::raw("local.alien_resources")),
+                attr(
+                    "stack_settings",
+                    expr::raw("local.deployment_stack_settings"),
+                ),
+                attr("resources", expr::raw("local.deployment_resources")),
             ],
         ))]);
     }
 
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
-        "alien_stack_import",
+        "deployment_stack_import",
         [attr(
             "input",
             expr::object([
-                ("platform", expr::raw("local.alien_platform")),
+                ("platform", expr::raw("local.deployment_platform")),
                 (
                     "deployment_group_token",
                     expr::raw("var.deployment_group_token"),
                 ),
+                (
+                    "deployment_name",
+                    expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
+                ),
+                ("stack_prefix", expr::raw("var.stack_name")),
                 ("manager_url", expr::raw("var.manager_url")),
                 (
                     "management_config",
-                    expr::raw("local.alien_management_config"),
+                    expr::raw("local.deployment_management_config"),
                 ),
-                ("stack_settings", expr::raw("local.alien_stack_settings")),
-                ("resources", expr::raw("local.alien_resources")),
+                (
+                    "stack_settings",
+                    expr::raw("local.deployment_stack_settings"),
+                ),
+                ("resources", expr::raw("local.deployment_resources")),
             ]),
         )],
     ))])
 }
 
-fn outputs_body(target: TerraformTarget, self_registering: bool) -> Body {
+fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistration>) -> Body {
     let mut outputs = vec![
         (
-            "alien_target",
+            "deployment_target",
             Expression::String(target.name().to_string()),
             "Terraform module target.",
         ),
         (
-            "alien_platform",
-            expr::raw("local.alien_platform"),
+            "deployment_stack_prefix",
+            expr::raw("var.stack_name"),
+            "Physical stack prefix.",
+        ),
+        (
+            "deployment_platform",
+            expr::raw("local.deployment_platform"),
             "Target platform.",
         ),
         (
-            "alien_region",
-            expr::raw("local.alien_region"),
+            "deployment_region",
+            expr::raw("local.deployment_region"),
             "Target cloud region or location.",
         ),
         (
-            "alien_management_config",
-            expr::raw("jsonencode(local.alien_management_config)"),
+            "deployment_management_config",
+            expr::raw("jsonencode(local.deployment_management_config)"),
             "Manager import ManagementConfig JSON.",
         ),
         (
-            "alien_stack_settings",
-            expr::raw("jsonencode(local.alien_stack_settings)"),
+            "deployment_stack_settings",
+            expr::raw("jsonencode(local.deployment_stack_settings)"),
             "Manager import StackSettings JSON.",
         ),
         (
-            "alien_resources",
-            expr::raw("jsonencode(local.alien_resources)"),
+            "deployment_resources",
+            expr::raw("jsonencode(local.deployment_resources)"),
             "Manager import resources JSON.",
         ),
     ];
-    if self_registering {
+    if let Some(registration) = registration {
         outputs.push((
-            "alien_deployment_id",
-            expr::raw("alien_deployment.this.deployment_id"),
+            "deployment_id",
+            expr::raw(format!(
+                "{}.this.deployment_id",
+                registration.provider_resource_type()
+            )),
             "Manager deployment id assigned by the Terraform registration provider.",
         ));
     }
     if target.is_kubernetes() {
         outputs.push((
-            "alien_helm_values",
-            expr::raw("jsonencode(local.alien_helm_values)"),
+            "helm_values",
+            expr::raw("jsonencode(local.helm_values)"),
             "Helm values JSON for the manager-fetch Kubernetes install.",
         ));
     }
@@ -991,15 +1067,59 @@ fn outputs_body(target: TerraformTarget, self_registering: bool) -> Body {
     Body::from(blocks)
 }
 
-fn readme_md(stack: &Stack, target: TerraformTarget) -> String {
+fn readme_md(
+    stack: &Stack,
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+) -> String {
+    let registration_note = registration
+        .map(|registration| {
+            format!(
+                "Self-registering distributions create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
+                registration.provider_resource_type()
+            )
+        })
+        .unwrap_or_else(|| {
+            "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
+        });
+
     format!(
         "# Terraform module - {}\n\n\
 Target: `{}`.\n\n\
 Run:\n\n\
 ```bash\nterraform init -backend=false\nterraform validate\nterraform apply -var='stack_name={}' -var='deployment_group_token=...'\n```\n\n\
-Self-registering distributions create `alien_deployment.this`; other renderers can use `alien_management_config` / `alien_stack_settings` / `alien_resources` with their own registration flow.\n",
+{}",
         stack.id(),
         target.name(),
-        stack.id()
+        stack.id(),
+        registration_note
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registration_uses_configured_provider_identity() {
+        let registration = TerraformRegistration {
+            provider_name: "example_app".to_string(),
+            provider_source: "registry.example.com/acme/example-app".to_string(),
+            provider_version: "1.0.2".to_string(),
+            resource_type: "deployment".to_string(),
+        };
+
+        let versions = render_body(versions_body(TerraformTarget::Aws, Some(&registration)))
+            .expect("versions render");
+        assert!(versions.contains("example_app ="));
+        assert!(versions.contains("registry.example.com/acme/example-app"));
+
+        let import =
+            render_body(import_body(Some(&registration))).expect("registration import render");
+        assert!(import.contains("resource \"example_app_deployment\" \"this\""));
+
+        let outputs =
+            render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
+        assert!(outputs.contains("example_app_deployment.this.deployment_id"));
+    }
 }

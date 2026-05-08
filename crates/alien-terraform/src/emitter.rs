@@ -80,7 +80,7 @@ pub trait TfEmitter: Send + Sync {
     }
 
     /// Apply-time expression that resolves to this resource's typed
-    /// `ImportData`. Embedded in the module's `alien_resources` local + a
+    /// `ImportData`. Embedded in the module's `deployment_resources` local + a
     /// per-resource output. Typically an HCL object built from `aws_x.y.z`
     /// references.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression>;

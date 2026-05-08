@@ -61,6 +61,7 @@ mod tests {
         let request = StackImportRequest {
             deployment_group_token: "dg_test".to_string(),
             deployment_name: "acme-prod".to_string(),
+            stack_prefix: "acme-stack".to_string(),
             source_kind: Some(ImportSourceKind::Terraform),
             release_id: None,
             platform: Platform::Aws,

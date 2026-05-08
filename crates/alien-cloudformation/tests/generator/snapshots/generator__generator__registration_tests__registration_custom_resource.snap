@@ -101,13 +101,15 @@ Resources:
     Properties:
       BucketName:
         Fn::Sub: ${AWS::StackName}-logs-bucket
-  AlienStackImport:
+  DeploymentStackImport:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
       DeploymentGroupToken:
         Ref: DeploymentGroupToken
       DeploymentName:
+        Ref: AWS::StackName
+      StackPrefix:
         Ref: AWS::StackName
       SourceKind: cloudformation
       Platform: aws

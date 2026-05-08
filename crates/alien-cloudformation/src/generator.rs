@@ -36,14 +36,15 @@ const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
 
-const OUTPUT_SOURCE_KIND: &str = "AlienSourceKind";
-const OUTPUT_PLATFORM: &str = "AlienPlatform";
-const OUTPUT_REGION: &str = "AlienRegion";
-const OUTPUT_MANAGEMENT_CONFIG: &str = "AlienManagementConfig";
-const OUTPUT_STACK_SETTINGS: &str = "AlienStackSettings";
-const OUTPUT_RESOURCES: &str = "AlienResources";
+const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
+const OUTPUT_STACK_PREFIX: &str = "DeploymentStackPrefix";
+const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
+const OUTPUT_REGION: &str = "DeploymentRegion";
+const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
+const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
+const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
-const STANDARD_OUTPUT_COUNT: usize = 5;
+const STANDARD_OUTPUT_COUNT: usize = 6;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 
 /// Registration behavior for the generated CloudFormation template.
@@ -100,7 +101,7 @@ pub fn generate_cloudformation_template(
             options
                 .description
                 .clone()
-                .unwrap_or_else(|| format!("Alien deployment stack for {}", stack.id())),
+                .unwrap_or_else(|| format!("Deployment stack for {}", stack.id())),
         ),
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
@@ -115,6 +116,7 @@ pub fn generate_cloudformation_template(
     add_console_interface_metadata(&mut template, &options.stack_settings);
 
     let mut imported_resources = Vec::new();
+    let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -132,7 +134,16 @@ pub fn generate_cloudformation_template(
             names: &names,
         };
 
-        for emitted in emitter.emit_resources_with_registry(&ctx, options.registry)? {
+        let emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
+        emitted_resource_ids.insert(
+            resource_id.clone(),
+            emitted_resources
+                .iter()
+                .map(|resource| resource.logical_id.clone())
+                .collect(),
+        );
+
+        for emitted in emitted_resources {
             insert_resource(&mut template, emitted)?;
         }
 
@@ -147,6 +158,8 @@ pub fn generate_cloudformation_template(
     let management_config = management_config_expression();
     let stack_settings = stack_settings_expression(&options.stack_settings);
     let resources = CfExpression::list(imported_resources);
+
+    apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
     if let Some(lambda_arn) = options.registration.lambda_arn() {
         add_custom_resource(
@@ -342,6 +355,64 @@ fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()
         .resources
         .insert(resource.logical_id.clone(), resource);
     Ok(())
+}
+
+fn apply_resource_dependencies(
+    stack: &Stack,
+    emitted_resource_ids: &IndexMap<String, Vec<String>>,
+    template: &mut CfTemplate,
+) {
+    let dependency_targets: IndexMap<String, Vec<String>> = emitted_resource_ids
+        .iter()
+        .map(|(resource_id, logical_ids)| {
+            let targets = logical_ids
+                .iter()
+                .filter(|logical_id| {
+                    template
+                        .resources
+                        .get(*logical_id)
+                        .is_some_and(|resource| resource.condition.is_none())
+                })
+                .cloned()
+                .collect();
+            (resource_id.clone(), targets)
+        })
+        .collect();
+
+    for (resource_id, entry) in stack.resources() {
+        let Some(resource_logical_ids) = emitted_resource_ids.get(resource_id) else {
+            continue;
+        };
+
+        let mut depends_on = Vec::new();
+        for dependency in &entry.dependencies {
+            if dependency.id() == resource_id {
+                continue;
+            }
+            if let Some(targets) = dependency_targets.get(dependency.id()) {
+                for target in targets {
+                    if !depends_on.contains(target) {
+                        depends_on.push(target.clone());
+                    }
+                }
+            }
+        }
+
+        if depends_on.is_empty() {
+            continue;
+        }
+
+        for logical_id in resource_logical_ids {
+            let Some(resource) = template.resources.get_mut(logical_id) else {
+                continue;
+            };
+            for dependency in &depends_on {
+                if !resource.depends_on.contains(dependency) {
+                    resource.depends_on.push(dependency.clone());
+                }
+            }
+        }
+    }
 }
 
 fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) {
@@ -645,7 +716,7 @@ fn add_custom_resource(
         })
         .collect();
     let mut resource = CfResource::new(
-        "AlienStackImport".to_string(),
+        "DeploymentStackImport".to_string(),
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;
@@ -659,6 +730,7 @@ fn add_custom_resource(
         "ServiceToken".to_string() => CfExpression::from(lambda_arn),
         "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_DEPLOYMENT_GROUP_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
+        "StackPrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
         "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
@@ -682,6 +754,13 @@ fn add_outputs(
         output(
             "Distribution source kind.",
             CfExpression::from("cloudformation"),
+        ),
+    );
+    template.outputs.insert(
+        OUTPUT_STACK_PREFIX.to_string(),
+        output(
+            "Physical stack prefix.",
+            CfExpression::ref_("AWS::StackName"),
         ),
     );
     template.outputs.insert(

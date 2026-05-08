@@ -63,16 +63,16 @@ provider "google" {
 
 === locals.tf ===
 locals {
-  alien_platform = "gcp"
-  alien_target   = "gcp"
-  alien_region   = var.gcp_region
-  alien_management_config = {
+  deployment_platform = "gcp"
+  deployment_target   = "gcp"
+  deployment_region   = var.gcp_region
+  deployment_management_config = {
     platform            = "gcp"
     projectId           = var.gcp_project
     serviceAccountEmail = var.managing_service_account_email
   }
-  alien_stack_settings = {}
-  alien_resources = [
+  deployment_stack_settings = {}
+  deployment_resources = [
     {
       id   = "secrets"
       type = "vault"
@@ -85,45 +85,52 @@ locals {
 }
 
 === import.tf ===
-resource "terraform_data" "alien_stack_import" {
+resource "terraform_data" "deployment_stack_import" {
   input = {
-    platform               = local.alien_platform
+    platform               = local.deployment_platform
     deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
     manager_url            = var.manager_url
-    management_config      = local.alien_management_config
-    stack_settings         = local.alien_stack_settings
-    resources              = local.alien_resources
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
   }
 }
 
 === outputs.tf ===
-output "alien_target" {
+output "deployment_target" {
   value       = "gcp"
   description = "Terraform module target."
 }
 
-output "alien_platform" {
-  value       = local.alien_platform
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
   description = "Target platform."
 }
 
-output "alien_region" {
-  value       = local.alien_region
+output "deployment_region" {
+  value       = local.deployment_region
   description = "Target cloud region or location."
 }
 
-output "alien_management_config" {
-  value       = jsonencode(local.alien_management_config)
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
-output "alien_stack_settings" {
-  value       = jsonencode(local.alien_stack_settings)
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
 }
 
-output "alien_resources" {
-  value       = jsonencode(local.alien_resources)
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
   description = "Manager import resources JSON."
 }
 
@@ -140,4 +147,4 @@ terraform validate
 terraform apply -var='stack_name=acme-vault' -var='deployment_group_token=...'
 ```
 
-Self-registering distributions create `alien_deployment.this`; other renderers can use `alien_management_config` / `alien_stack_settings` / `alien_resources` with their own registration flow.
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

@@ -2,7 +2,7 @@
 
 use alien_core::{
     import::{data::AwsFunctionImportData, ImportContext},
-    Function, Ingress, Result, StackResourceState,
+    Result, StackResourceState,
 };
 
 use crate::function::{AwsFunctionController, AwsFunctionState};
@@ -28,18 +28,8 @@ impl ResourceImporter for AwsFunctionImporter {
         data: AwsFunctionImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        let is_public = ctx
-            .resource
-            .config
-            .downcast_ref::<Function>()
-            .map(|function| function.ingress == Ingress::Public)
-            .unwrap_or_else(|| data.api_id.is_some() || data.url.is_some());
         let controller = AwsFunctionController {
-            state: if is_public {
-                AwsFunctionState::WaitingForCertificate
-            } else {
-                AwsFunctionState::Ready
-            },
+            state: AwsFunctionState::Ready,
             arn: Some(data.function_arn),
             url: data.url,
             function_name: Some(data.function_name),

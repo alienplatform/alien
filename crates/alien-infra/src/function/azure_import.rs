@@ -2,7 +2,7 @@
 
 use alien_core::{
     import::{data::AzureFunctionImportData, ImportContext},
-    Function, Ingress, Result, StackResourceState,
+    Result, StackResourceState,
 };
 
 use crate::function::{AzureFunctionController, AzureFunctionState};
@@ -26,19 +26,9 @@ impl ResourceImporter for AzureFunctionImporter {
         data: AzureFunctionImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        let is_public = ctx
-            .resource
-            .config
-            .downcast_ref::<Function>()
-            .map(|function| function.ingress == Ingress::Public)
-            .unwrap_or_else(|| data.fqdn.is_some());
         let _ = (data.subscription_id, data.resource_group);
         let controller = AzureFunctionController {
-            state: if is_public {
-                AzureFunctionState::WaitingForCertificate
-            } else {
-                AzureFunctionState::Ready
-            },
+            state: AzureFunctionState::Ready,
             container_app_name: Some(data.container_app_name),
             resource_id: None,
             url: data.fqdn.as_ref().map(|f| format!("https://{}", f)),

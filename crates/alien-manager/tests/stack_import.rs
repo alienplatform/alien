@@ -233,6 +233,7 @@ fn aws_s3_import_request(
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
+        stack_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform: Platform::Aws,

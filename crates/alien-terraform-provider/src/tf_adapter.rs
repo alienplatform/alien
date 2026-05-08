@@ -22,6 +22,7 @@ use crate::resource_alien_deployment::{build_client, create, delete, read, Alien
 pub struct ProviderOptions {
     pub provider_name: String,
     pub resource_type: String,
+    pub display_name: String,
     pub default_manager_url: Option<String>,
 }
 
@@ -30,6 +31,7 @@ impl Default for ProviderOptions {
         Self {
             provider_name: "alien".to_string(),
             resource_type: "deployment".to_string(),
+            display_name: "Alien".to_string(),
             default_manager_url: None,
         }
     }
@@ -60,7 +62,10 @@ impl Provider for AlienProvider {
             version: 1,
             block: Block {
                 version: 1,
-                description: Description::plain("Alien deployment registration provider"),
+                description: Description::plain(format!(
+                    "{} deployment registration provider",
+                    self.options.display_name
+                )),
                 attributes: HashMap::default(),
                 ..Default::default()
             },
@@ -82,6 +87,7 @@ impl Provider for AlienProvider {
     ) -> Option<HashMap<String, Box<dyn tf_provider::DynamicResource>>> {
         Some(map! {
             self.options.resource_type.as_str() => AlienDeploymentResource {
+                display_name: self.options.display_name.clone(),
                 default_manager_url: self.options.default_manager_url.clone(),
             },
         })
@@ -90,6 +96,7 @@ impl Provider for AlienProvider {
 
 #[derive(Debug, Clone)]
 struct AlienDeploymentResource {
+    display_name: String,
     default_manager_url: Option<String>,
 }
 
@@ -110,6 +117,8 @@ struct TerraformDeploymentState<'a> {
     deployment_group_token: ValueString<'a>,
     #[serde(borrow = "'a")]
     name: ValueString<'a>,
+    #[serde(borrow = "'a")]
+    stack_prefix: ValueString<'a>,
     #[serde(borrow = "'a")]
     platform: ValueString<'a>,
     #[serde(borrow = "'a")]
@@ -135,11 +144,14 @@ impl Resource for AlienDeploymentResource {
             version: 1,
             block: Block {
                 version: 1,
-                description: Description::plain("Registers resolved Alien stack import data"),
+                description: Description::plain(format!(
+                    "Registers resolved {} stack import data",
+                    self.display_name
+                )),
                 attributes: map! {
                     "manager_url" => Attribute {
                         attr_type: AttributeType::String,
-                        description: Description::plain("Alien Manager URL. Optional when the provider binary has a baked-in default."),
+                        description: Description::plain("Manager URL. Optional when the provider binary has a baked-in default."),
                         constraint: AttributeConstraint::Optional,
                         ..Default::default()
                     },
@@ -156,6 +168,12 @@ impl Resource for AlienDeploymentResource {
                             "Deployment name. Required and unique within the deployment group — \
                              the manager returns 409 on collision.",
                         ),
+                        constraint: AttributeConstraint::Required,
+                        ..Default::default()
+                    },
+                    "stack_prefix" => Attribute {
+                        attr_type: AttributeType::String,
+                        description: Description::plain("Physical stack prefix used by the generated module."),
                         constraint: AttributeConstraint::Required,
                         ..Default::default()
                     },
@@ -396,6 +414,7 @@ impl AlienDeploymentResource {
                 "deployment_group_token",
             )?,
             name: known_string(&state.name, "name")?,
+            stack_prefix: known_string(&state.stack_prefix, "stack_prefix")?,
             platform: parse_string(&state.platform, "platform")?,
             region: known_string(&state.region, "region")?,
             management_config: decode_value_any(&state.management_config, "management_config")?,
@@ -536,6 +555,7 @@ mod tests {
             manager_url,
             deployment_group_token: value_string("dg_test".to_string()),
             name: value_string("acme-prod".to_string()),
+            stack_prefix: value_string("acme-stack".to_string()),
             platform: value_string("aws".to_string()),
             region: value_string("us-east-1".to_string()),
             management_config: any_map([
@@ -564,6 +584,7 @@ mod tests {
     #[test]
     fn to_input_uses_default_manager_url_when_resource_value_is_null() {
         let resource = AlienDeploymentResource {
+            display_name: "Alien".to_string(),
             default_manager_url: Some("https://manager.example.com".to_string()),
         };
 
@@ -594,6 +615,7 @@ mod tests {
     #[test]
     fn to_input_prefers_explicit_manager_url_over_default() {
         let resource = AlienDeploymentResource {
+            display_name: "Alien".to_string(),
             default_manager_url: Some("https://default.example.com".to_string()),
         };
 
@@ -612,6 +634,7 @@ mod tests {
     #[test]
     fn to_input_rejects_unknown_values_before_create() {
         let resource = AlienDeploymentResource {
+            display_name: "Alien".to_string(),
             default_manager_url: None,
         };
         let mut state =
@@ -629,6 +652,7 @@ mod tests {
     fn provider_options_register_terraform_resource_suffix() {
         assert_eq!(ProviderOptions::default().provider_name, "alien");
         assert_eq!(ProviderOptions::default().resource_type, "deployment");
+        assert_eq!(ProviderOptions::default().display_name, "Alien");
     }
 
     #[test]

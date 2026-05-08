@@ -993,6 +993,11 @@ async fn cloudformation_import_request(
         .transpose()
         .map_err(|error| anyhow::anyhow!("Invalid AlienPlatform output: {error}"))?
         .unwrap_or(Platform::Aws);
+    let stack_prefix = values
+        .get("AlienStackPrefix")
+        .or_else(|| values.get("DeploymentStackPrefix"))
+        .cloned()
+        .unwrap_or_else(|| stack_name.to_string());
     let region = values
         .get("AlienRegion")
         .cloned()
@@ -1005,6 +1010,7 @@ async fn cloudformation_import_request(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: stack_name.to_string(),
+        stack_prefix,
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform,
@@ -1056,6 +1062,8 @@ fn terraform_import_request_from_outputs(
     let platform: Platform = terraform_output_string(output, "alien_platform")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid alien_platform output: {error}"))?;
+    let stack_prefix = terraform_output_string(output, "alien_stack_prefix")
+        .or_else(|_| terraform_output_string(output, "deployment_stack_prefix"))?;
     let region = terraform_region(&output, platform)?;
     let management_config: ManagementConfig =
         serde_json::from_str(&terraform_output_string(output, "alien_management_config")?)?;
@@ -1067,6 +1075,7 @@ fn terraform_import_request_from_outputs(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        stack_prefix,
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform,

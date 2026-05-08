@@ -66,6 +66,16 @@ impl StackState {
         }
     }
 
+    /// Creates an empty StackState for resources whose physical prefix was
+    /// already chosen by an external distribution artifact.
+    pub fn with_resource_prefix(platform: Platform, resource_prefix: String) -> Self {
+        StackState {
+            platform,
+            resources: HashMap::new(),
+            resource_prefix,
+        }
+    }
+
     /// Returns a reference to the state of a specific resource if it exists.
     pub fn resource(&self, id: &str) -> Option<&StackResourceState> {
         self.resources.get(id)

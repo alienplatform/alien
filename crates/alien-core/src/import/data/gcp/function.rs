@@ -20,4 +20,8 @@ pub struct GcpFunctionImportData {
     pub scheduler_job_names: Vec<String>,
     /// Eventarc trigger names created for storage triggers.
     pub eventarc_trigger_names: Vec<String>,
+    /// Pub/Sub topic short name created for commands delivery.
+    pub commands_topic_name: Option<String>,
+    /// Pub/Sub push-subscription name created for commands delivery.
+    pub commands_subscription_name: Option<String>,
 }

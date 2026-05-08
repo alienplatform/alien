@@ -3180,6 +3180,7 @@
         "required": [
           "deploymentGroupToken",
           "deploymentName",
+          "stackPrefix",
           "platform",
           "region",
           "stackSettings",
@@ -3231,6 +3232,10 @@
                 "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which distribution artifact emitted the payload."
               }
             ]
+          },
+          "stackPrefix": {
+            "type": "string",
+            "description": "Stable physical-name prefix used by the distribution artifact for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
