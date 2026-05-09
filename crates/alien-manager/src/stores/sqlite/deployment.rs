@@ -7,7 +7,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, EnvironmentVariable, Platform, RuntimeMetadata, StackState,
+    import::ImportSourceKind, EnvironmentInfo, EnvironmentVariable, Platform, RuntimeMetadata,
+    StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -272,6 +273,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to serialize imported runtime_metadata".to_string(),
             })?;
+        let environment_info_json: Option<String> = params
+            .environment_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported environment_info".to_string(),
+            })?;
 
         let sql = {
             let mut columns = vec![
@@ -302,6 +312,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(ref release_id) = params.current_release_id {
                 columns.push(Deployments::CurrentReleaseId);
                 values.push(release_id.clone().into());
+            }
+
+            if let Some(ref env_info_json) = environment_info_json {
+                columns.push(Deployments::EnvironmentInfo);
+                values.push(env_info_json.clone().into());
             }
 
             if let Some(ref import_source) = params.import_source {
@@ -339,7 +354,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             status: params.status,
             stack_settings: params.stack_settings,
             stack_state: Some(params.stack_state),
-            environment_info: None,
+            environment_info: params.environment_info,
             runtime_metadata: Some(params.runtime_metadata),
             current_release_id: params.current_release_id,
             desired_release_id: None,
@@ -361,6 +376,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         stack_state: StackState,
+        environment_info: Option<EnvironmentInfo>,
         runtime_metadata: RuntimeMetadata,
         current_release_id: Option<String>,
     ) -> Result<DeploymentRecord, AlienError> {
@@ -374,6 +390,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to serialize imported runtime_metadata".to_string(),
             })?;
+        let environment_info_json: Option<String> = environment_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported environment_info".to_string(),
+            })?;
 
         let now = Utc::now();
 
@@ -382,6 +406,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             update
                 .table(Deployments::Table)
                 .value(Deployments::StackState, stack_state_json)
+                .value(Deployments::EnvironmentInfo, environment_info_json)
                 .value(Deployments::RuntimeMetadata, runtime_metadata_json)
                 .value(Deployments::UpdatedAt, now.to_rfc3339())
                 .and_where(Expr::col(Deployments::Id).eq(deployment_id));

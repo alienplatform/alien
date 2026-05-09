@@ -197,7 +197,7 @@ pub fn generate_terraform_module(
         imported_resources.push(expr::object([
             ("id", Expression::String(resource_id.to_string())),
             ("type", Expression::String(resource_type.to_string())),
-            ("import_data", import_ref),
+            ("importData", import_ref),
         ]));
     }
 

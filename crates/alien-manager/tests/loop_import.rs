@@ -126,6 +126,7 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state: stack_state.clone(),
+                environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
@@ -173,6 +174,7 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state,
+                environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
@@ -225,6 +227,7 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 platform: Platform::Aws,
                 stack_settings: StackSettings::default(),
                 stack_state,
+                environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
                 // Force into update-pending to mirror the post-release-roll state.
                 status: "update-pending".to_string(),

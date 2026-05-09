@@ -109,7 +109,7 @@ locals {
     {
       id   = "default-resource-group"
       type = "azure_resource_group"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = azurerm_resource_group.default_resource_group.name
         location       = azurerm_resource_group.default_resource_group.location
@@ -118,7 +118,7 @@ locals {
     {
       id   = "default-storage-account"
       type = "azure_storage_account"
-      import_data = {
+      importData = {
         subscriptionId     = var.azure_subscription_id
         resourceGroup      = var.azure_resource_group_name
         storageAccountName = azurerm_storage_account.default_storage_account.name
@@ -129,7 +129,7 @@ locals {
     {
       id   = "default-service-bus-namespace"
       type = "azure_service_bus_namespace"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
@@ -139,7 +139,7 @@ locals {
     {
       id   = "default-container-apps-environment"
       type = "azure_container_apps_environment"
-      import_data = {
+      importData = {
         subscriptionId  = var.azure_subscription_id
         resourceGroup   = var.azure_resource_group_name
         environmentName = azurerm_container_app_environment.default_container_apps_environment.name
@@ -149,7 +149,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         vnetId         = azurerm_virtual_network.default_network.id
@@ -166,7 +166,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      import_data = {
+      importData = {
         subscriptionId          = var.azure_subscription_id
         resourceGroup           = var.azure_resource_group_name
         identityId              = azurerm_user_assigned_identity.execution_sa.id
@@ -178,7 +178,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      import_data = {
+      importData = {
         subscriptionId               = var.azure_subscription_id
         resourceGroup                = var.azure_resource_group_name
         identityId                   = azurerm_user_assigned_identity.management.id
@@ -190,7 +190,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      import_data = {
+      importData = {
         subscriptionId     = var.azure_subscription_id
         resourceGroup      = var.azure_resource_group_name
         storageAccountName = azurerm_storage_account.default_storage_account.name
@@ -200,7 +200,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
@@ -210,7 +210,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         accountName    = azurerm_cosmosdb_account.metadata.name
@@ -222,7 +222,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         vaultName      = azurerm_key_vault.secrets.name
@@ -232,7 +232,7 @@ locals {
     {
       id   = "registry"
       type = "artifact-registry"
-      import_data = {
+      importData = {
         subscriptionId  = var.azure_subscription_id
         resourceGroup   = var.azure_resource_group_name
         registryName    = azurerm_container_registry.registry.name
@@ -244,7 +244,7 @@ locals {
     {
       id   = "builder"
       type = "build"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         registryName   = azurerm_container_registry.registry.name
@@ -257,7 +257,7 @@ locals {
     {
       id   = "public-api"
       type = "function"
-      import_data = {
+      importData = {
         subscriptionId   = var.azure_subscription_id
         resourceGroup    = var.azure_resource_group_name
         containerAppName = azurerm_container_app.public_api.name
@@ -267,7 +267,7 @@ locals {
     {
       id   = "worker"
       type = "function"
-      import_data = {
+      importData = {
         subscriptionId   = var.azure_subscription_id
         resourceGroup    = var.azure_resource_group_name
         containerAppName = azurerm_container_app.worker.name

@@ -13,9 +13,9 @@ use tf_provider::schema::{
     Attribute, AttributeConstraint, AttributeType, Block, Description, Schema,
 };
 use tf_provider::value::{ValueAny, ValueEmpty, ValueList, ValueString};
-use tf_provider::{map, serve, Diagnostics, Provider, Resource};
+use tf_provider::{Diagnostics, Provider, Resource, map, serve};
 
-use crate::resource_alien_deployment::{build_client, create, delete, read, AlienDeploymentInput};
+use crate::resource_alien_deployment::{AlienDeploymentInput, build_client, create, delete, read};
 
 /// Runtime defaults supplied by the binary embedding this provider.
 #[derive(Debug, Clone)]
@@ -106,6 +106,7 @@ struct TerraformImportedResource<'a> {
     id: ValueString<'a>,
     #[serde(rename = "type", borrow = "'a")]
     type_: ValueString<'a>,
+    #[serde(rename = "importData")]
     import_data: ValueAny,
 }
 
@@ -205,7 +206,7 @@ impl Resource for AlienDeploymentResource {
                         attr_type: AttributeType::List(Box::new(AttributeType::Object(map! {
                             "id" => AttributeType::String,
                             "type" => AttributeType::String,
-                            "import_data" => AttributeType::Any,
+                            "importData" => AttributeType::Any,
                         }))),
                         description: Description::plain("Resolved imported resources emitted by the distribution artifact."),
                         constraint: AttributeConstraint::Required,
@@ -483,7 +484,7 @@ fn decode_resources(
         .map(|resource| {
             let import_data = match value_any_to_json(&resource.import_data) {
                 serde_json::Value::Object(map) => map,
-                _ => return Err("resources.import_data must be an object".to_string()),
+                _ => return Err("resources.importData must be an object".to_string()),
             };
 
             Ok(ImportedResource {

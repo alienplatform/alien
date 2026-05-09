@@ -76,7 +76,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName     = google_storage_bucket.assets.name
         bucketSelfLink = google_storage_bucket.assets.self_link
         projectId      = var.gcp_project

@@ -79,7 +79,7 @@ locals {
     {
       id   = "data"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName = aws_s3_bucket.data.bucket
         bucketArn  = aws_s3_bucket.data.arn
       }

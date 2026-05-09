@@ -85,7 +85,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         vpcId               = aws_vpc.default_network.id
         cidrBlock           = aws_vpc.default_network.cidr_block
         internetGatewayId   = aws_internet_gateway.default_network.id

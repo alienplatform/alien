@@ -76,7 +76,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      import_data = {
+      importData = {
         projectId    = var.gcp_project
         secretPrefix = "${var.stack_name}-secrets"
       }

@@ -85,7 +85,7 @@ locals {
     {
       id   = "data"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName = aws_s3_bucket.data.bucket
         bucketArn  = aws_s3_bucket.data.arn
       }
@@ -93,7 +93,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      import_data = {
+      importData = {
         roleName                = aws_iam_role.execution_sa.name
         roleArn                 = aws_iam_role.execution_sa.arn
         stackPermissionsApplied = true

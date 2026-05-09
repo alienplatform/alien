@@ -34,7 +34,8 @@ use axum::{
 
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
-    RuntimeMetadata, Stack, StackResourceState, StackState,
+    AwsEnvironmentInfo, EnvironmentInfo, Platform, RuntimeMetadata, Stack, StackResourceState,
+    StackState,
 };
 use alien_error::AlienError;
 
@@ -154,6 +155,7 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let environment_info = infer_import_environment_info(&req);
     let runtime_metadata = import_runtime_metadata(stack);
 
     match state
@@ -179,6 +181,7 @@ pub async fn stack_import(
                     &subject,
                     &existing.id,
                     stack_state.clone(),
+                    environment_info.clone(),
                     runtime_metadata.clone(),
                     Some(release.id.clone()),
                 )
@@ -225,6 +228,7 @@ pub async fn stack_import(
         platform: req.platform,
         stack_settings: req.stack_settings.clone(),
         stack_state: stack_state.clone(),
+        environment_info,
         runtime_metadata,
         status: "provisioning".to_string(),
         current_release_id: Some(release.id.clone()),
@@ -257,6 +261,62 @@ fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
     RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
         ..RuntimeMetadata::default()
+    }
+}
+
+fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
+    match req.platform {
+        Platform::Aws => infer_aws_account_id(req).map(|account_id| {
+            EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                account_id,
+                region: req.region.clone(),
+            })
+        }),
+        _ => None,
+    }
+}
+
+fn infer_aws_account_id(req: &StackImportRequest) -> Option<String> {
+    req.resources
+        .iter()
+        .find_map(|resource| string_field(&resource.import_data, "accountId"))
+        .or_else(|| {
+            req.resources
+                .iter()
+                .find_map(|resource| find_aws_account_id_in_value(&resource.import_data))
+        })
+}
+
+fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn find_aws_account_id_in_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => parse_aws_account_id_from_arn(value),
+        serde_json::Value::Array(items) => items.iter().find_map(find_aws_account_id_in_value),
+        serde_json::Value::Object(map) => map.values().find_map(find_aws_account_id_in_value),
+        _ => None,
+    }
+}
+
+fn parse_aws_account_id_from_arn(value: &str) -> Option<String> {
+    let mut parts = value.split(':');
+    if parts.next()? != "arn" {
+        return None;
+    }
+    parts.next()?;
+    parts.next()?;
+    parts.next()?;
+    let account_id = parts.next()?;
+    if account_id.len() == 12 && account_id.chars().all(|ch| ch.is_ascii_digit()) {
+        Some(account_id.to_string())
+    } else {
+        None
     }
 }
 

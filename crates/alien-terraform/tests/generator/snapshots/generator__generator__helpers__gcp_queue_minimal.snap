@@ -76,7 +76,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         projectId        = var.gcp_project
         topicId          = google_pubsub_topic.jobs.name
         topicName        = google_pubsub_topic.jobs.id

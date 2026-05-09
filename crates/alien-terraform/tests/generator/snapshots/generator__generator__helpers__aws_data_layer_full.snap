@@ -79,7 +79,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName = aws_s3_bucket.assets.bucket
         bucketArn  = aws_s3_bucket.assets.arn
       }
@@ -87,7 +87,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         queueName = aws_sqs_queue.jobs.name
         queueUrl  = aws_sqs_queue.jobs.url
         queueArn  = aws_sqs_queue.jobs.arn
@@ -96,7 +96,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         tableName = aws_dynamodb_table.metadata.name
         tableArn  = aws_dynamodb_table.metadata.arn
       }
@@ -104,7 +104,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      import_data = {
+      importData = {
         accountId       = data.aws_caller_identity.current.account_id
         region          = data.aws_region.current.region
         parameterPrefix = "${var.stack_name}-secrets"

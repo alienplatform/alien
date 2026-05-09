@@ -83,7 +83,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         projectId   = var.gcp_project
         vpcSelfLink = data.google_compute_network.default_network.self_link
         vpcName     = data.google_compute_network.default_network.name

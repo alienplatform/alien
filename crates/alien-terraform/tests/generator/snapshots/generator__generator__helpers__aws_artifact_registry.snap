@@ -79,7 +79,7 @@ locals {
     {
       id   = "registry"
       type = "artifact-registry"
-      import_data = {
+      importData = {
         accountId        = data.aws_caller_identity.current.account_id
         region           = data.aws_region.current.region
         registryId       = "${data.aws_caller_identity.current.account_id}:${data.aws_region.current.region}"

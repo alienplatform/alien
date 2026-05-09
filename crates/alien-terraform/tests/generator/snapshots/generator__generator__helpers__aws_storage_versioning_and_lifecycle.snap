@@ -79,7 +79,7 @@ locals {
     {
       id   = "audit"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName = aws_s3_bucket.audit.bucket
         bucketArn  = aws_s3_bucket.audit.arn
       }

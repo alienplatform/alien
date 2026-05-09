@@ -79,7 +79,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         tableName = aws_dynamodb_table.metadata.name
         tableArn  = aws_dynamodb_table.metadata.arn
       }

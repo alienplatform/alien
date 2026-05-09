@@ -76,7 +76,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      import_data = {
+      importData = {
         projectId                    = var.gcp_project
         serviceAccountEmail          = google_service_account.management.email
         serviceAccountUniqueId       = google_service_account.management.unique_id

@@ -79,7 +79,7 @@ locals {
     {
       id   = "builder"
       type = "build"
-      import_data = {
+      importData = {
         projectName = aws_codebuild_project.builder.name
         projectArn  = aws_codebuild_project.builder.arn
         buildEnvVars = {

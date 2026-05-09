@@ -16,7 +16,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::function_environment::{function_environment, GcpFunctionEnvironmentRenderer},
+    emitters::function_environment::{GcpFunctionEnvironmentRenderer, function_environment},
     emitters::gcp::helpers::{
         downcast, label_for_ref, labels, required_label, service_account_email,
     },
@@ -24,8 +24,8 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Function,
-    FunctionCode, FunctionTrigger, Ingress, Result,
+    ErrorData, Function, FunctionCode, FunctionTrigger, Ingress, Result,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -120,6 +120,7 @@ impl TfEmitter for GcpFunctionEmitter {
             attr("location", expr::raw("var.gcp_region")),
             attr("ingress", Expression::String(ingress.to_string())),
             attr("labels", labels(ctx, "function")),
+            attr("deletion_protection", Expression::Bool(false)),
             nested(block("template", template_body)),
         ];
         if matches!(function.ingress, Ingress::Public) {
@@ -402,11 +403,7 @@ impl TfEmitter for GcpFunctionEmitter {
             (
                 "commandsTopicName",
                 if function.commands_enabled {
-                    expr::traversal([
-                        "google_pubsub_topic",
-                        &format!("{label}_commands"),
-                        "name",
-                    ])
+                    expr::traversal(["google_pubsub_topic", &format!("{label}_commands"), "name"])
                 } else {
                     Expression::Null
                 },

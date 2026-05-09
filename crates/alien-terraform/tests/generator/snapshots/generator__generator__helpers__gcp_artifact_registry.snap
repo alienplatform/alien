@@ -76,7 +76,7 @@ locals {
     {
       id   = "registry"
       type = "artifact-registry"
-      import_data = {
+      importData = {
         projectId               = var.gcp_project
         region                  = var.gcp_region
         repositoryId            = google_artifact_registry_repository.registry.name

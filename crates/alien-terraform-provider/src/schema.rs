@@ -177,7 +177,7 @@ pub fn resource_schema() -> Schema {
             ),
             attr(
                 "resources",
-                "List of imported resources, each with `id`, `type`, and typed `import_data`.",
+                "List of imported resources, each with `id`, `type`, and typed `importData`.",
                 AttributeKind::List(Box::new(AttributeKind::Object(vec![
                     NamedKind {
                         name: "id".to_string(),
@@ -188,7 +188,7 @@ pub fn resource_schema() -> Schema {
                         kind: AttributeKind::String,
                     },
                     NamedKind {
-                        name: "import_data".to_string(),
+                        name: "importData".to_string(),
                         kind: AttributeKind::Dynamic,
                     },
                 ]))),

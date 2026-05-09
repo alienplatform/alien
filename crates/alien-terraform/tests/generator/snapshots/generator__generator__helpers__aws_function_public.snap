@@ -79,7 +79,7 @@ locals {
     {
       id   = "public-api"
       type = "function"
-      import_data = {
+      importData = {
         functionName                      = aws_lambda_function.public_api.function_name
         functionArn                       = aws_lambda_function.public_api.arn
         eventSourceMappings               = []

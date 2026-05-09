@@ -105,6 +105,7 @@ pub struct CreateImportedDeploymentParams {
     pub platform: Platform,
     pub stack_settings: StackSettings,
     pub stack_state: StackState,
+    pub environment_info: Option<EnvironmentInfo>,
     pub runtime_metadata: RuntimeMetadata,
     /// Initial status — imported deployments normally start at
     /// `"provisioning"` so the manager can complete layer-3 runtime work.
@@ -221,6 +222,7 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         stack_state: StackState,
+        environment_info: Option<EnvironmentInfo>,
         runtime_metadata: RuntimeMetadata,
         current_release_id: Option<String>,
     ) -> Result<DeploymentRecord, AlienError>;

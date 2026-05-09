@@ -76,7 +76,7 @@ locals {
     {
       id   = "public-api"
       type = "function"
-      import_data = {
+      importData = {
         projectId                = var.gcp_project
         region                   = var.gcp_region
         serviceName              = google_cloud_run_v2_service.public_api.name
@@ -103,6 +103,7 @@ resource "google_cloud_run_v2_service" "public_api" {
     "alien-resource-id"   = "public-api"
     "alien-resource-type" = "function"
   }
+  deletion_protection = false
 
   template {
     timeout = "60s"

@@ -76,7 +76,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         projectId  = var.gcp_project
         databaseId = google_firestore_database.metadata.name
         location   = google_firestore_database.metadata.location_id

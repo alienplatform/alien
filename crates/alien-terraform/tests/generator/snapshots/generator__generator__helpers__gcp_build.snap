@@ -76,7 +76,7 @@ locals {
     {
       id   = "builder"
       type = "build"
-      import_data = {
+      importData = {
         projectId   = var.gcp_project
         region      = var.gcp_region
         triggerId   = google_cloudbuild_trigger.builder.trigger_id

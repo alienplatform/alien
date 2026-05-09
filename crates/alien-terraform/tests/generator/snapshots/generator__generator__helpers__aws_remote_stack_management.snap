@@ -79,7 +79,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      import_data = {
+      importData = {
         roleName                     = aws_iam_role.management.name
         roleArn                      = aws_iam_role.management.arn
         managementPermissionsApplied = true

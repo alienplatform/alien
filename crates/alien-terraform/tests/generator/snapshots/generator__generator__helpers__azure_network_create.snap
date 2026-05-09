@@ -108,7 +108,7 @@ locals {
     {
       id   = "default-resource-group"
       type = "azure_resource_group"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = azurerm_resource_group.default_resource_group.name
         location       = azurerm_resource_group.default_resource_group.location
@@ -117,7 +117,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = var.azure_resource_group_name
         vnetId         = azurerm_virtual_network.default_network.id

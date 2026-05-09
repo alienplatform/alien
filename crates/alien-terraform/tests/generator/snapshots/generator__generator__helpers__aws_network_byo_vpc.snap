@@ -123,7 +123,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         vpcId               = var.default_network_vpc_id
         cidrBlock           = null
         internetGatewayId   = null

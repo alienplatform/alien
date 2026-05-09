@@ -76,7 +76,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName     = google_storage_bucket.assets.name
         bucketSelfLink = google_storage_bucket.assets.self_link
         projectId      = var.gcp_project
@@ -86,7 +86,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         projectId        = var.gcp_project
         topicId          = google_pubsub_topic.jobs.name
         topicName        = google_pubsub_topic.jobs.id
@@ -97,7 +97,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         projectId  = var.gcp_project
         databaseId = google_firestore_database.metadata.name
         location   = google_firestore_database.metadata.location_id
@@ -106,7 +106,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      import_data = {
+      importData = {
         projectId    = var.gcp_project
         secretPrefix = "${var.stack_name}-secrets"
       }

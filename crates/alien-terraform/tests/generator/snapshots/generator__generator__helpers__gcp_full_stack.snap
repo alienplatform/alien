@@ -83,7 +83,7 @@ locals {
     {
       id   = "default-network"
       type = "network"
-      import_data = {
+      importData = {
         projectId   = var.gcp_project
         vpcSelfLink = google_compute_network.default_network.self_link
         vpcName     = google_compute_network.default_network.name
@@ -98,7 +98,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      import_data = {
+      importData = {
         projectId               = var.gcp_project
         serviceAccountEmail     = google_service_account.execution_sa.email
         serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
@@ -108,7 +108,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      import_data = {
+      importData = {
         projectId                    = var.gcp_project
         serviceAccountEmail          = google_service_account.management.email
         serviceAccountUniqueId       = google_service_account.management.unique_id
@@ -118,7 +118,7 @@ locals {
     {
       id   = "assets"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName     = google_storage_bucket.assets.name
         bucketSelfLink = google_storage_bucket.assets.self_link
         projectId      = var.gcp_project
@@ -128,7 +128,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         projectId        = var.gcp_project
         topicId          = google_pubsub_topic.jobs.name
         topicName        = google_pubsub_topic.jobs.id
@@ -139,7 +139,7 @@ locals {
     {
       id   = "metadata"
       type = "kv"
-      import_data = {
+      importData = {
         projectId  = var.gcp_project
         databaseId = google_firestore_database.metadata.name
         location   = google_firestore_database.metadata.location_id
@@ -148,7 +148,7 @@ locals {
     {
       id   = "secrets"
       type = "vault"
-      import_data = {
+      importData = {
         projectId    = var.gcp_project
         secretPrefix = "${var.stack_name}-secrets"
       }
@@ -156,7 +156,7 @@ locals {
     {
       id   = "registry"
       type = "artifact-registry"
-      import_data = {
+      importData = {
         projectId               = var.gcp_project
         region                  = var.gcp_region
         repositoryId            = google_artifact_registry_repository.registry.name
@@ -169,7 +169,7 @@ locals {
     {
       id   = "builder"
       type = "build"
-      import_data = {
+      importData = {
         projectId   = var.gcp_project
         region      = var.gcp_region
         triggerId   = google_cloudbuild_trigger.builder.trigger_id
@@ -182,7 +182,7 @@ locals {
     {
       id   = "public-api"
       type = "function"
-      import_data = {
+      importData = {
         projectId                = var.gcp_project
         region                   = var.gcp_region
         serviceName              = google_cloud_run_v2_service.public_api.name
@@ -197,7 +197,7 @@ locals {
     {
       id   = "worker"
       type = "function"
-      import_data = {
+      importData = {
         projectId   = var.gcp_project
         region      = var.gcp_region
         serviceName = google_cloud_run_v2_service.worker.name
@@ -664,6 +664,7 @@ resource "google_cloud_run_v2_service" "public_api" {
     "alien-resource-id"   = "public-api"
     "alien-resource-type" = "function"
   }
+  deletion_protection = false
 
   template {
     timeout = "60s"
@@ -757,6 +758,7 @@ resource "google_cloud_run_v2_service" "worker" {
     "alien-resource-id"   = "worker"
     "alien-resource-type" = "function"
   }
+  deletion_protection = false
 
   template {
     timeout = "180s"

@@ -102,7 +102,7 @@ locals {
     {
       id   = "default-resource-group"
       type = "azure_resource_group"
-      import_data = {
+      importData = {
         subscriptionId = var.azure_subscription_id
         resourceGroup  = azurerm_resource_group.default_resource_group.name
         location       = azurerm_resource_group.default_resource_group.location
@@ -111,7 +111,7 @@ locals {
     {
       id   = "management"
       type = "remote-stack-management"
-      import_data = {
+      importData = {
         subscriptionId               = var.azure_subscription_id
         resourceGroup                = var.azure_resource_group_name
         identityId                   = azurerm_user_assigned_identity.management.id

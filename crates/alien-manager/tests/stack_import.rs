@@ -26,8 +26,9 @@ use alien_core::import::{
     ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse,
 };
 use alien_core::{
-    AwsManagementConfig, AwsStorageImportData, ManagementConfig, Platform, ResourceLifecycle,
-    ResourceStatus, Stack, StackSettings, Storage,
+    AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
+    AwsStorageImportData, EnvironmentInfo, ManagementConfig, Platform, RemoteStackManagement,
+    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -264,6 +265,46 @@ fn stack_with_storage(resource_id: &str) -> Stack {
         .build()
 }
 
+fn stack_with_remote_management(resource_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .add(
+            RemoteStackManagement::new(resource_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build()
+}
+
+fn aws_remote_management_import_request(
+    deployment_name: &str,
+    region: &str,
+    resource_id: &str,
+    account_id: &str,
+) -> StackImportRequest {
+    StackImportRequest {
+        deployment_group_token: "ignored".to_string(),
+        deployment_name: deployment_name.to_string(),
+        stack_prefix: deployment_name.to_string(),
+        source_kind: Some(ImportSourceKind::CloudFormation),
+        release_id: None,
+        platform: Platform::Aws,
+        region: region.to_string(),
+        stack_settings: StackSettings::default(),
+        management_config: ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
+        }),
+        resources: vec![ImportedResource {
+            id: resource_id.to_string(),
+            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
+                role_name: format!("{deployment_name}-management"),
+                role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
+                management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
+    }
+}
+
 async fn post_import(
     fixture: &Fixture,
     bearer: Option<&str>,
@@ -360,6 +401,42 @@ async fn happy_path_creates_imported_deployment() {
     assert!(
         persisted.current_release_id.is_some(),
         "imported deployment must pin the release that produced it"
+    );
+}
+
+#[tokio::test]
+async fn aws_import_persists_target_environment_info() {
+    let fixture = make_fixture(Some(stack_with_remote_management(
+        "remote-stack-management",
+    )))
+    .await;
+    let body = aws_remote_management_import_request(
+        "acme-prod",
+        "us-west-2",
+        "remote-stack-management",
+        "210987654321",
+    );
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    assert_eq!(
+        persisted.environment_info,
+        Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "210987654321".to_string(),
+            region: "us-west-2".to_string(),
+        }))
     );
 }
 

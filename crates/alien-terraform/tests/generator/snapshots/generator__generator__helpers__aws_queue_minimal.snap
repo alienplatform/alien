@@ -79,7 +79,7 @@ locals {
     {
       id   = "jobs"
       type = "queue"
-      import_data = {
+      importData = {
         queueName = aws_sqs_queue.jobs.name
         queueUrl  = aws_sqs_queue.jobs.url
         queueArn  = aws_sqs_queue.jobs.arn

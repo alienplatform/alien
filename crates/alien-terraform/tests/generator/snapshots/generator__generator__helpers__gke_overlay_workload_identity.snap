@@ -82,7 +82,7 @@ locals {
     {
       id   = "data"
       type = "storage"
-      import_data = {
+      importData = {
         bucketName     = google_storage_bucket.data.name
         bucketSelfLink = google_storage_bucket.data.self_link
         projectId      = var.gcp_project
@@ -92,7 +92,7 @@ locals {
     {
       id   = "execution-sa"
       type = "service-account"
-      import_data = {
+      importData = {
         projectId               = var.gcp_project
         serviceAccountEmail     = google_service_account.execution_sa.email
         serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
