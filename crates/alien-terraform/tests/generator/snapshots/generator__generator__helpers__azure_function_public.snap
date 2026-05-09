@@ -193,8 +193,8 @@ resource "azurerm_container_app" "public_api" {
     container {
       name   = "public-api"
       image  = "acmeprod.azurecr.io/api:1"
-      cpu    = 0.5
-      memory = "512Mi"
+      cpu    = 0.25
+      memory = "0.5Gi"
 
       env {
         name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
@@ -252,8 +252,7 @@ resource "azurerm_container_app" "public_api" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 
   depends_on = [

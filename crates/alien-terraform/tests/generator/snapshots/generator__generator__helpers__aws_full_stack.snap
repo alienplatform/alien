@@ -614,8 +614,7 @@ resource "aws_cloudwatch_log_group" "builder_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -660,8 +659,7 @@ resource "aws_codebuild_project" "builder" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -677,8 +675,7 @@ resource "aws_cloudwatch_log_group" "public_api_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -720,8 +717,7 @@ resource "aws_lambda_function" "public_api" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -733,8 +729,7 @@ resource "aws_lambda_permission" "public_api_storage_assets" {
   source_account = data.aws_caller_identity.current.account_id
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -743,8 +738,7 @@ resource "aws_apigatewayv2_api" "public_api" {
   protocol_type = "HTTP"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -756,8 +750,7 @@ resource "aws_apigatewayv2_integration" "public_api" {
   payload_format_version = "2.0"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -767,8 +760,7 @@ resource "aws_apigatewayv2_route" "public_api" {
   target    = "integrations/${aws_apigatewayv2_integration.public_api.id}"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -778,8 +770,7 @@ resource "aws_apigatewayv2_stage" "public_api" {
   auto_deploy = true
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -791,8 +782,7 @@ resource "aws_lambda_permission" "public_api_api" {
   source_arn    = "${aws_apigatewayv2_api.public_api.execution_arn}/*/*"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -808,8 +798,7 @@ resource "aws_cloudwatch_log_group" "worker_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -847,8 +836,7 @@ resource "aws_lambda_function" "worker" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -859,8 +847,7 @@ resource "aws_lambda_event_source_mapping" "worker_queue_0" {
   enabled          = true
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -873,8 +860,7 @@ resource "aws_cloudwatch_event_rule" "worker_schedule_0" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -884,8 +870,7 @@ resource "aws_cloudwatch_event_target" "worker_schedule_target_0" {
   arn       = aws_lambda_function.worker.arn
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -897,8 +882,7 @@ resource "aws_lambda_permission" "worker_schedule_perm_0" {
   source_arn    = aws_cloudwatch_event_rule.worker_schedule_0.arn
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

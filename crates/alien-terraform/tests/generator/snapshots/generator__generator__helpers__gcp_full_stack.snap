@@ -648,8 +648,7 @@ resource "google_cloudbuild_trigger" "builder" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -742,8 +741,7 @@ resource "google_cloud_run_v2_service" "public_api" {
   invoker_iam_disabled = true
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -814,8 +812,7 @@ resource "google_cloud_run_v2_service" "worker" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -835,8 +832,7 @@ resource "google_pubsub_subscription" "worker_queue_0" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -858,8 +854,7 @@ resource "google_cloud_scheduler_job" "worker_schedule_1" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -888,8 +883,7 @@ resource "google_eventarc_trigger" "worker_storage_2" {
   service_account = google_service_account.execution_sa.email
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

@@ -7,11 +7,11 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use alien_core::{
-    import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig,
     DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
     Function, FunctionCode, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState,
+    import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
 };
 use anyhow::Context;
 use serde_json::Value;
@@ -987,24 +987,22 @@ async fn cloudformation_import_request(
         }
     }
 
-    let platform = values
-        .get("AlienPlatform")
-        .map(|value| value.parse())
-        .transpose()
-        .map_err(|error| anyhow::anyhow!("Invalid AlienPlatform output: {error}"))?
-        .unwrap_or(Platform::Aws);
+    let platform: Platform = values
+        .get("DeploymentPlatform")
+        .context("DeploymentPlatform output missing")?
+        .parse()
+        .map_err(|error| anyhow::anyhow!("Invalid DeploymentPlatform output: {error}"))?;
     let stack_prefix = values
-        .get("AlienStackPrefix")
-        .or_else(|| values.get("DeploymentStackPrefix"))
+        .get("DeploymentStackPrefix")
         .cloned()
-        .unwrap_or_else(|| stack_name.to_string());
+        .context("DeploymentStackPrefix output missing")?;
     let region = values
-        .get("AlienRegion")
+        .get("DeploymentRegion")
         .cloned()
-        .context("AlienRegion output missing")?;
+        .context("DeploymentRegion output missing")?;
     let management_config =
-        parse_json_output::<ManagementConfig>(&values, "AlienManagementConfig")?;
-    let stack_settings = parse_json_output::<StackSettings>(&values, "AlienStackSettings")?;
+        parse_json_output::<ManagementConfig>(&values, "DeploymentManagementConfig")?;
+    let stack_settings = parse_json_output::<StackSettings>(&values, "DeploymentStackSettings")?;
     let resources = parse_cfn_resources(&values)?;
 
     Ok(StackImportRequest {
@@ -1022,14 +1020,14 @@ async fn cloudformation_import_request(
 }
 
 fn parse_cfn_resources(values: &BTreeMap<String, String>) -> anyhow::Result<Vec<ImportedResource>> {
-    if let Some(resources) = values.get("AlienResources") {
-        return serde_json::from_str(resources).context("Failed to parse AlienResources");
+    if let Some(resources) = values.get("DeploymentResources") {
+        return serde_json::from_str(resources).context("Failed to parse DeploymentResources");
     }
 
     let mut chunks = values
         .iter()
         .filter_map(|(key, value)| {
-            let suffix = key.strip_prefix("AlienResources")?;
+            let suffix = key.strip_prefix("DeploymentResources")?;
             let index = suffix.parse::<usize>().ok()?;
             Some((index, value))
         })
@@ -1039,7 +1037,7 @@ fn parse_cfn_resources(values: &BTreeMap<String, String>) -> anyhow::Result<Vec<
     let mut resources = Vec::new();
     for (_index, chunk) in chunks {
         let mut parsed: Vec<ImportedResource> =
-            serde_json::from_str(chunk).context("Failed to parse AlienResources chunk")?;
+            serde_json::from_str(chunk).context("Failed to parse DeploymentResources chunk")?;
         resources.append(&mut parsed);
     }
     Ok(resources)
@@ -1059,18 +1057,21 @@ fn terraform_import_request_from_outputs(
     output: &Value,
     token: &str,
 ) -> anyhow::Result<StackImportRequest> {
-    let platform: Platform = terraform_output_string(output, "alien_platform")?
+    let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
-        .map_err(|error| anyhow::anyhow!("Invalid alien_platform output: {error}"))?;
-    let stack_prefix = terraform_output_string(output, "alien_stack_prefix")
-        .or_else(|_| terraform_output_string(output, "deployment_stack_prefix"))?;
-    let region = terraform_region(&output, platform)?;
-    let management_config: ManagementConfig =
-        serde_json::from_str(&terraform_output_string(output, "alien_management_config")?)?;
-    let stack_settings: StackSettings =
-        serde_json::from_str(&terraform_output_string(output, "alien_stack_settings")?)?;
+        .map_err(|error| anyhow::anyhow!("Invalid deployment_platform output: {error}"))?;
+    let stack_prefix = terraform_output_string(output, "deployment_stack_prefix")?;
+    let region = terraform_output_string(output, "deployment_region")?;
+    let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
+        output,
+        "deployment_management_config",
+    )?)?;
+    let stack_settings: StackSettings = serde_json::from_str(&terraform_output_string(
+        output,
+        "deployment_stack_settings",
+    )?)?;
     let resources: Vec<ImportedResource> =
-        serde_json::from_str(&terraform_output_string(output, "alien_resources")?)?;
+        serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
 
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
@@ -1101,21 +1102,6 @@ fn terraform_output_string(outputs: &Value, key: &str) -> anyhow::Result<String>
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .with_context(|| format!("terraform output {key} missing or not a string"))
-}
-
-fn terraform_region(outputs: &Value, platform: Platform) -> anyhow::Result<String> {
-    match platform {
-        Platform::Aws => {
-            Ok(std::env::var("AWS_TARGET_REGION").unwrap_or_else(|_| "us-east-1".to_string()))
-        }
-        Platform::Gcp => {
-            Ok(std::env::var("GCP_TARGET_REGION").unwrap_or_else(|_| "us-central1".to_string()))
-        }
-        Platform::Azure => {
-            Ok(std::env::var("AZURE_TARGET_REGION").unwrap_or_else(|_| "eastus".to_string()))
-        }
-        _ => terraform_output_string(outputs, "alien_target"),
-    }
 }
 
 fn terraform_tfvars(

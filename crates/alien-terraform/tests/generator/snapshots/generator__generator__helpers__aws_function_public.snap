@@ -108,8 +108,7 @@ resource "aws_iam_role" "public_api_role" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -119,8 +118,7 @@ resource "aws_iam_role_policy" "public_api_role_inline" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" }] })
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -135,8 +133,7 @@ resource "aws_cloudwatch_log_group" "public_api_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -167,8 +164,7 @@ resource "aws_lambda_function" "public_api" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -177,8 +173,7 @@ resource "aws_apigatewayv2_api" "public_api" {
   protocol_type = "HTTP"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -190,8 +185,7 @@ resource "aws_apigatewayv2_integration" "public_api" {
   payload_format_version = "2.0"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -201,8 +195,7 @@ resource "aws_apigatewayv2_route" "public_api" {
   target    = "integrations/${aws_apigatewayv2_integration.public_api.id}"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -212,8 +205,7 @@ resource "aws_apigatewayv2_stage" "public_api" {
   auto_deploy = true
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -225,8 +217,7 @@ resource "aws_lambda_permission" "public_api_api" {
   source_arn    = "${aws_apigatewayv2_api.public_api.execution_arn}/*/*"
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

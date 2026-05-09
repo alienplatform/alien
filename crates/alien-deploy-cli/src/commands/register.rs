@@ -11,8 +11,8 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    import::{ImportSourceKind, ImportedResource, StackImportRequest},
     ManagementConfig, Platform, ResourceType, StackSettings,
+    import::{ImportSourceKind, ImportedResource, StackImportRequest},
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
@@ -149,8 +149,8 @@ struct CfnOutputs {
     stack_prefix: Option<String>,
     management_config: Option<JsonValue>,
     stack_settings: Option<JsonValue>,
-    /// Resources may be split across `AlienResources0`..`AlienResourcesN`
-    /// when chunking kicks in, or a single `AlienResources` output when
+    /// Resources may be split across `DeploymentResources0`..`DeploymentResourcesN`
+    /// when chunking kicks in, or a single `DeploymentResources` output when
     /// the payload fits.
     resources_chunks: Vec<JsonValue>,
 }
@@ -198,23 +198,23 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
                 continue;
             };
             match key {
-                "AlienSourceKind" => outputs.source_kind = Some(value.to_string()),
-                "AlienStackPrefix" | "DeploymentStackPrefix" => {
+                "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
+                "DeploymentStackPrefix" => {
                     outputs.stack_prefix = Some(value.to_string());
                 }
-                "AlienPlatform" => outputs.platform = Some(value.to_string()),
-                "AlienRegion" => outputs.region = Some(value.to_string()),
-                "AlienManagementConfig" => {
+                "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
+                "DeploymentRegion" => outputs.region = Some(value.to_string()),
+                "DeploymentManagementConfig" => {
                     outputs.management_config = Some(parse_json_output(key, value)?);
                 }
-                "AlienStackSettings" => {
+                "DeploymentStackSettings" => {
                     outputs.stack_settings = Some(parse_json_output(key, value)?);
                 }
-                "AlienResources" => {
+                "DeploymentResources" => {
                     chunked.push((0, parse_json_output(key, value)?));
                 }
-                other if other.starts_with("AlienResources") => {
-                    let suffix = &other["AlienResources".len()..];
+                other if other.starts_with("DeploymentResources") => {
+                    let suffix = &other["DeploymentResources".len()..];
                     let index: usize = suffix.parse().unwrap_or(usize::MAX);
                     chunked.push((index, parse_json_output(other, value)?));
                 }
@@ -241,13 +241,13 @@ fn build_import_request(
     outputs: &CfnOutputs,
     token: &str,
     deployment_name: &str,
-    fallback_stack_prefix: &str,
+    stack_name: &str,
 ) -> Result<StackImportRequest> {
     let source_kind: ImportSourceKind = match outputs.source_kind.as_deref() {
         Some("cloudformation") => ImportSourceKind::CloudFormation,
         Some(other) => {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: format!("AlienSourceKind output '{other}' is not 'cloudformation'"),
+                message: format!("DeploymentSourceKind output '{other}' is not 'cloudformation'"),
             }));
         }
         None => ImportSourceKind::CloudFormation,
@@ -256,51 +256,56 @@ fn build_import_request(
     let platform: Platform = match outputs.platform.as_deref() {
         Some(p) => p.parse().map_err(|reason| {
             AlienError::new(ErrorData::ConfigurationError {
-                message: format!("AlienPlatform output '{p}' is invalid: {reason}"),
+                message: format!("DeploymentPlatform output '{p}' is invalid: {reason}"),
             })
         })?,
-        None => Platform::Aws,
+        None => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "DeploymentPlatform output not found in stack".to_string(),
+            }));
+        }
     };
 
     let region = outputs.region.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: "AlienRegion output not found in stack".to_string(),
+            message: "DeploymentRegion output not found in stack".to_string(),
         })
     })?;
-    let stack_prefix = outputs
-        .stack_prefix
-        .clone()
-        .unwrap_or_else(|| fallback_stack_prefix.to_string());
+    let stack_prefix = outputs.stack_prefix.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("DeploymentStackPrefix output not found in stack '{stack_name}'"),
+        })
+    })?;
 
     let management_config_value = outputs.management_config.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: "AlienManagementConfig output not found in stack".to_string(),
+            message: "DeploymentManagementConfig output not found in stack".to_string(),
         })
     })?;
     let management_config: ManagementConfig = serde_json::from_value(management_config_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "deserialize ManagementConfig".to_string(),
-            reason: "AlienManagementConfig has unexpected shape".to_string(),
+            reason: "DeploymentManagementConfig has unexpected shape".to_string(),
         })?;
 
     let stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: "AlienStackSettings output not found in stack".to_string(),
+            message: "DeploymentStackSettings output not found in stack".to_string(),
         })
     })?;
     let stack_settings: StackSettings = serde_json::from_value(stack_settings_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "deserialize StackSettings".to_string(),
-            reason: "AlienStackSettings has unexpected shape".to_string(),
+            reason: "DeploymentStackSettings has unexpected shape".to_string(),
         })?;
 
     let mut resources: Vec<ImportedResource> = Vec::new();
     for chunk in &outputs.resources_chunks {
         let JsonValue::Array(items) = chunk else {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "AlienResources chunk is not a JSON array".to_string(),
+                message: "DeploymentResources chunk is not a JSON array".to_string(),
             }));
         };
         for item in items {
@@ -308,7 +313,7 @@ fn build_import_request(
                 .into_alien_error()
                 .context(ErrorData::JsonError {
                     operation: "deserialize ImportedResource".to_string(),
-                    reason: "AlienResources item has unexpected shape".to_string(),
+                    reason: "DeploymentResources item has unexpected shape".to_string(),
                 })?;
             resources.push(ImportedResource {
                 id: imported.id,

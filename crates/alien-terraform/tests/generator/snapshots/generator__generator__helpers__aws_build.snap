@@ -102,8 +102,7 @@ resource "aws_iam_role" "builder_role" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -113,8 +112,7 @@ resource "aws_iam_role_policy" "builder_role_logs" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" }] })
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -129,8 +127,7 @@ resource "aws_cloudwatch_log_group" "builder_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -175,8 +172,7 @@ resource "aws_codebuild_project" "builder" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

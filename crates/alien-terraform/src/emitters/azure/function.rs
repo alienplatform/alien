@@ -16,19 +16,19 @@ use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, required_label, stack_name_template, tags},
-    emitters::function_environment::{function_environment, AzureFunctionEnvironmentRenderer},
+    emitters::function_environment::{AzureFunctionEnvironmentRenderer, function_environment},
     expr,
     registry::TfRegistry,
 };
 use alien_core::{
-    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Function, FunctionCode, Ingress,
-    Result, ServiceAccount,
+    AzureContainerAppsEnvironment, ErrorData, Function, FunctionCode, Ingress, Result,
+    ServiceAccount, import::EmitContext,
 };
 use alien_error::AlienError;
 use hcl::{
+    Identifier,
     expr::Expression,
     structure::{Block, Structure},
-    Identifier,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -87,13 +87,11 @@ impl TfEmitter for AzureFunctionEmitter {
             attr("image", Expression::String(image.clone())),
             attr(
                 "cpu",
-                Expression::Number(
-                    hcl::Number::from_f64(0.5).unwrap_or_else(|| hcl::Number::from(0)),
-                ),
+                Expression::Number(azure_container_app_cpu(function.memory_mb)),
             ),
             attr(
                 "memory",
-                Expression::String(format!("{}Mi", function.memory_mb.max(128))),
+                Expression::String(azure_container_app_memory(function.memory_mb)),
             ),
         ];
         container_body.extend(env_blocks);
@@ -284,4 +282,54 @@ fn sanitize_container_name(input: &str) -> String {
         out.push_str("function");
     }
     out
+}
+
+fn azure_container_app_memory(memory_mb: u32) -> String {
+    let memory_gi = azure_container_app_memory_gi(memory_mb);
+    let rounded = (memory_gi * 100.0).round() / 100.0;
+    if rounded.fract().abs() < f64::EPSILON {
+        format!("{rounded:.0}Gi")
+    } else if (rounded * 10.0).fract().abs() < f64::EPSILON {
+        format!("{rounded:.1}Gi")
+    } else {
+        format!("{rounded:.2}Gi")
+    }
+}
+
+fn azure_container_app_cpu(memory_mb: u32) -> hcl::Number {
+    hcl::Number::from_f64(azure_container_app_memory_gi(memory_mb) / 2.0)
+        .unwrap_or_else(|| hcl::Number::from(0))
+}
+
+fn azure_container_app_memory_gi(memory_mb: u32) -> f64 {
+    f64::from(memory_mb.max(512)) / 1024.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_container_app_resources_from_memory() {
+        assert_eq!(azure_container_app_memory(256), "0.5Gi");
+        assert_eq!(
+            azure_container_app_cpu(256),
+            hcl::Number::from_f64(0.25).unwrap()
+        );
+        assert_eq!(azure_container_app_memory(512), "0.5Gi");
+        assert_eq!(
+            azure_container_app_cpu(512),
+            hcl::Number::from_f64(0.25).unwrap()
+        );
+        assert_eq!(azure_container_app_memory(1536), "1.5Gi");
+        assert_eq!(
+            azure_container_app_cpu(1536),
+            hcl::Number::from_f64(0.75).unwrap()
+        );
+        assert_eq!(azure_container_app_memory(2048), "2Gi");
+        assert_eq!(
+            azure_container_app_cpu(2048),
+            hcl::Number::from_f64(1.0).unwrap()
+        );
+    }
 }

@@ -237,8 +237,7 @@ resource "azurerm_container_registry_task" "builder" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 
   depends_on = [

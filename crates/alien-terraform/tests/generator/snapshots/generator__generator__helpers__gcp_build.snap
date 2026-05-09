@@ -116,8 +116,7 @@ resource "google_cloudbuild_trigger" "builder" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

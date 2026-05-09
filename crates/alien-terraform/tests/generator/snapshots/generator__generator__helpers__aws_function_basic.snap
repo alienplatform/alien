@@ -103,8 +103,7 @@ resource "aws_iam_role" "api_role" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -114,8 +113,7 @@ resource "aws_iam_role_policy" "api_role_inline" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" }] })
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -130,8 +128,7 @@ resource "aws_cloudwatch_log_group" "api_logs" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 
@@ -162,8 +159,7 @@ resource "aws_lambda_function" "api" {
   }
 
   lifecycle {
-    ignore_changes  = all
-    prevent_destroy = true
+    ignore_changes = all
   }
 }
 

@@ -87,12 +87,12 @@ pub fn provider_schema() -> Schema {
 ///   manager_url            = "https://manager.example.com"
 ///   deployment_group_token = var.alien_dg_token
 ///   name                   = "acme-prod"
-///   stack_prefix           = module.stack.alien_stack_prefix
-///   platform               = module.stack.alien_platform
-///   region                 = module.stack.alien_region
-///   management_config      = jsondecode(module.stack.alien_management_config)
-///   stack_settings         = jsondecode(module.stack.alien_stack_settings)
-///   resources              = jsondecode(module.stack.alien_resources)
+///   stack_prefix           = module.stack.deployment_stack_prefix
+///   platform               = module.stack.deployment_platform
+///   region                 = module.stack.deployment_region
+///   management_config      = jsondecode(module.stack.deployment_management_config)
+///   stack_settings         = jsondecode(module.stack.deployment_stack_settings)
+///   resources              = jsondecode(module.stack.deployment_resources)
 /// }
 /// ```
 ///
@@ -132,7 +132,7 @@ pub fn resource_schema() -> Schema {
             ),
             attr(
                 "stack_prefix",
-                "Physical stack prefix used by the generated module. Pass `module.x.alien_stack_prefix`.",
+                "Physical stack prefix used by the generated module. Pass `module.x.deployment_stack_prefix`.",
                 AttributeKind::String,
                 true,
                 false,
@@ -159,7 +159,7 @@ pub fn resource_schema() -> Schema {
             ),
             attr(
                 "management_config",
-                "Platform-derived management configuration (JSON object). Pass `jsondecode(module.x.alien_management_config)`.",
+                "Platform-derived management configuration (JSON object). Pass `jsondecode(module.x.deployment_management_config)`.",
                 AttributeKind::Dynamic,
                 true,
                 false,
@@ -168,7 +168,7 @@ pub fn resource_schema() -> Schema {
             ),
             attr(
                 "stack_settings",
-                "Stack settings supplied by the distribution artifact (JSON object). Pass `jsondecode(module.x.alien_stack_settings)`.",
+                "Stack settings supplied by the distribution artifact (JSON object). Pass `jsondecode(module.x.deployment_stack_settings)`.",
                 AttributeKind::Dynamic,
                 true,
                 false,

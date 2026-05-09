@@ -23,14 +23,14 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, ResourceLifecycle, Result, Stack,
-    StackSettings,
+    ErrorData, Network, NetworkSettings, ResourceLifecycle, Result, Stack, StackSettings,
+    import::EmitContext,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
+    Identifier,
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
-    Identifier,
 };
 use indexmap::IndexMap;
 
@@ -400,14 +400,10 @@ fn add_live_resource_lifecycle(fragment: &mut TfFragment) {
     for resource in &mut fragment.resource_blocks {
         if let Some(lifecycle) = lifecycle_block_mut(resource) {
             upsert_attr(lifecycle, "ignore_changes", expr::raw("all"));
-            upsert_attr(lifecycle, "prevent_destroy", Expression::Bool(true));
         } else {
             resource.body.0.push(nested(block(
                 "lifecycle",
-                [
-                    attr("ignore_changes", expr::raw("all")),
-                    attr("prevent_destroy", Expression::Bool(true)),
-                ],
+                [attr("ignore_changes", expr::raw("all"))],
             )));
         }
     }
