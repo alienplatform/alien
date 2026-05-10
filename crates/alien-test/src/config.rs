@@ -372,9 +372,15 @@ impl TestConfig {
             managed_environment_name: env::var("ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME").ok(),
             registry_name: env::var("ALIEN_TEST_AZURE_REGISTRY_NAME").ok(),
             acr_repository: env::var("ALIEN_TEST_AZURE_ACR_REPOSITORY").ok(),
-            agent_client_id: env::var("AZURE_AGENT_CLIENT_ID").ok(),
-            agent_client_secret: env::var("AZURE_AGENT_CLIENT_SECRET").ok(),
-            agent_object_id: env::var("AZURE_AGENT_OBJECT_ID").ok(),
+            agent_client_id: env::var("AZURE_AGENT_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_client_secret: env::var("AZURE_AGENT_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_object_id: env::var("AZURE_AGENT_OBJECT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
             shared_container_env,
         }
     }

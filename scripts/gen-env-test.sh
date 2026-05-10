@@ -13,6 +13,7 @@ set -euo pipefail
 
 TF=$(cd infra/test && terraform output -json)
 jq_val() { echo "$TF" | jq -r ".$1.value"; }
+jq_val_optional() { echo "$TF" | jq -r "if has(\"$1\") then .$1.value else empty end"; }
 # Like jq_val but compacts JSON values onto a single line.
 #
 # GCP SA keys are pretty-printed JSON with \n escape sequences in the
@@ -80,7 +81,7 @@ azure_management_sp_client_secret=$(jq_val management_azure_sp_client_secret)
 azure_management_sp_object_id=$(jq_val management_azure_sp_object_id)
 azure_agent_client_id=$(jq_val azure_agent_client_id)
 azure_agent_client_secret=$(jq_val azure_agent_client_secret)
-azure_agent_object_id=$(jq_val azure_agent_object_id)
+azure_agent_object_id="${AZURE_AGENT_OBJECT_ID:-${TEST_AZURE_AGENT_OBJECT_ID:-$(jq_val_optional azure_agent_object_id)}}"
 
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)

@@ -167,6 +167,7 @@ jobs:
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          AZURE_AGENT_OBJECT_ID: ${{ secrets.TEST_AZURE_AGENT_OBJECT_ID }}
 
       - name: Mask all .env.test values
         run: |

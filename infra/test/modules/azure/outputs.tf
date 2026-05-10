@@ -84,17 +84,12 @@ output "management_sp_object_id" {
 }
 
 output "agent_client_id" {
-  value     = azuread_service_principal.agent.client_id
+  value     = azuread_application.agent.client_id
   sensitive = true
 }
 
 output "agent_client_secret" {
   value     = azuread_application_password.agent.value
-  sensitive = true
-}
-
-output "agent_object_id" {
-  value     = azuread_service_principal.agent.object_id
   sensitive = true
 }
 

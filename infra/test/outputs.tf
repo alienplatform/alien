@@ -229,11 +229,6 @@ output "azure_agent_client_secret" {
   sensitive = true
 }
 
-output "azure_agent_object_id" {
-  value     = module.azure.agent_object_id
-  sensitive = true
-}
-
 # Azure resources
 output "azure_resource_group" {
   value     = module.azure.resource_group

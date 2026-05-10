@@ -125,10 +125,6 @@ data "azurerm_client_config" "management" {
   provider = azurerm.management
 }
 
-data "azurerm_client_config" "target" {
-  provider = azurerm.target
-}
-
 # ── Management: Service Principal ─────────────────────────────────────────
 # Multi-tenant SP used as a local-dev fallback for cross-tenant client_credentials.
 # In production/CI, OIDC token exchange replaces this SP entirely.
@@ -152,9 +148,9 @@ resource "azuread_application_password" "manager" {
   display_name   = "alien-test"
 }
 
-# Scoped service principal used by pull-mode agent e2e tests. The test
-# harness grants only generated Alien permission-set actions to this identity
-# before starting the agent container.
+# App registration used by pull-mode agent e2e tests. The matching target-tenant
+# enterprise application is intentionally not managed here: creating or reading
+# it requires Microsoft Graph directory privileges in the target tenant.
 resource "azuread_application" "agent" {
   provider         = azuread.management
   display_name     = "alien-test-agent"
@@ -162,16 +158,18 @@ resource "azuread_application" "agent" {
   owners           = [data.azurerm_client_config.management.object_id]
 }
 
-resource "azuread_service_principal" "agent" {
-  provider  = azuread.target
-  client_id = azuread_application.agent.client_id
-  owners    = [data.azurerm_client_config.target.object_id]
-}
-
 resource "azuread_application_password" "agent" {
   provider       = azuread.management
   application_id = azuread_application.agent.id
   display_name   = "alien-test"
+}
+
+removed {
+  from = azuread_service_principal.agent
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # GitHub Actions OIDC federation — lets the Terraform execution SP
