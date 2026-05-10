@@ -1,6 +1,5 @@
 ---
 source: crates/alien-core/src/import/data/mod.rs
-assertion_line: 135
 expression: schemas
 ---
 {
@@ -767,6 +766,10 @@ expression: schemas
       "subscriptionId": {
         "description": "Subscription ID containing the management identity.",
         "type": "string"
+      },
+      "tenantId": {
+        "description": "Tenant ID containing the management identity.",
+        "type": "string"
       }
     },
     "required": [
@@ -775,7 +778,8 @@ expression: schemas
       "managementPermissionsApplied",
       "principalId",
       "resourceGroup",
-      "subscriptionId"
+      "subscriptionId",
+      "tenantId"
     ],
     "title": "AzureRemoteStackManagementImportData",
     "type": "object"

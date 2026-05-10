@@ -355,12 +355,36 @@ impl TestContext {
         }
 
         // 2. Mark the deployment as delete-pending via the manager API.
-        if let Err(e) = self.deployment.destroy().await {
-            tracing::warn!(
-                deployment = %self.deployment.id,
-                error = %e,
-                "cleanup: failed to trigger destroy (may already be destroyed)"
-            );
+        // Distribution flows import setup-owned resources from TF/CF/Helm. In
+        // those flows Alien should delete only Live resources; the setup tool
+        // cleanup below owns Frozen resources.
+        let delete_scope = if self.distribution_cleanups.is_empty() {
+            alien_manager_api::types::DeleteDeploymentDeleteScope::Full
+        } else {
+            alien_manager_api::types::DeleteDeploymentDeleteScope::LiveOnly
+        };
+        let destroy_enqueued = match self.deployment.destroy_with_scope(delete_scope).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    error = %e,
+                    "cleanup: failed to trigger destroy (may already be destroyed)"
+                );
+                false
+            }
+        };
+
+        if !destroy_enqueued {
+            // Still run distribution artifact cleanup below. It is the owner of
+            // setup-created resources and should not depend on manager cleanup.
+            self.deployment.kill_foreground_agent().await;
+
+            for cleanup in self.distribution_cleanups {
+                cleanup.cleanup().await;
+            }
+
+            info!(deployment = %self.deployment.id, "cleanup: complete");
             return;
         }
 

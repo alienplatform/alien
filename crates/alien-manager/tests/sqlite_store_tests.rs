@@ -242,7 +242,7 @@ async fn update_status() {
     assert_eq!(fetched.status, "delete-pending");
     assert_eq!(
         fetched.runtime_metadata.unwrap_or_default().delete_scope,
-        DeleteScope::LiveOnly
+        Some(DeleteScope::LiveOnly)
     );
 
     // set_delete_pending again should fail (already delete-pending)

@@ -1192,17 +1192,19 @@ impl StackExecutor {
                 }
             }
 
-            // When a lifecycle filter is active, skip heartbeat checks for resources
-            // outside the executor's scope. For example, during Provisioning (Live-only),
-            // frozen resources are already Running from InitialSetup and should not be
-            // stepped — they may use different credentials than what the current executor has.
-            // However, resources actively being deleted (Deleting status) must still be
-            // stepped to complete their deletion, even though they're not in the desired stack.
-            if self.lifecycle_filter.is_some()
-                && !self.resources.contains_key(resource_id)
-                && current_resource_view.status != ResourceStatus::Deleting
-            {
-                continue;
+            // When a lifecycle filter is active, only step resources in that scope.
+            // Live-only deletes must not continue a frozen resource delete that was
+            // started by a previous full cleanup attempt; the current credentials may
+            // not have access to that resource.
+            if let Some(filter_set) = &self.lifecycle_filter {
+                let resource_in_scope = self.resources.contains_key(resource_id)
+                    || current_resource_view
+                        .lifecycle
+                        .is_some_and(|lifecycle| filter_set.contains(&lifecycle));
+
+                if !resource_in_scope {
+                    continue;
+                }
             }
 
             // A resource is ready if:

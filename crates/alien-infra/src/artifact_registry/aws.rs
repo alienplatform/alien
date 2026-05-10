@@ -6,7 +6,7 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs,
     ResourceStatus,
@@ -601,68 +601,8 @@ impl AwsArtifactRegistryController {
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
 
-        // Delete all inline policies. Resource-scoped permissions can attach
-        // additional policies to these roles, and IAM refuses to delete a role
-        // while any inline policy remains.
-        match iam_client.list_role_policies(&pull_role_name).await {
-            Ok(response) => {
-                if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                    for policy_name in policy_names.member {
-                        match iam_client
-                            .delete_role_policy(&pull_role_name, &policy_name)
-                            .await
-                        {
-                            Ok(_) => {
-                                info!(
-                                    role_name = %pull_role_name,
-                                    policy_name = %policy_name,
-                                    "Pull role inline policy deleted successfully"
-                                );
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.error,
-                                    Some(
-                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
-                                    )
-                                ) =>
-                            {
-                                info!(
-                                    role_name = %pull_role_name,
-                                    policy_name = %policy_name,
-                                    "Pull role inline policy already deleted"
-                                );
-                            }
-                            Err(e) => {
-                                return Err(e.into_alien_error().context(
-                                    ErrorData::CloudPlatformError {
-                                        message: format!(
-                                            "Failed to delete pull role policy '{}' from '{}'",
-                                            policy_name, pull_role_name
-                                        ),
-                                        resource_id: Some(config.id.clone()),
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                info!(role_name = %pull_role_name, "Pull role already deleted");
-            }
-            Err(e) => {
-                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to list pull role policies '{}'", pull_role_name),
-                    resource_id: Some(config.id.clone()),
-                }));
-            }
-        }
+        self.cleanup_role_policies(&*iam_client, &pull_role_name, "pull", &config.id)
+            .await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingPullRole,
@@ -698,6 +638,21 @@ impl AwsArtifactRegistryController {
             {
                 info!(role_name = %pull_role_name, "Pull role already deleted");
             }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                info!(
+                    role_name = %pull_role_name,
+                    "Pull role still has policies attached; retrying policy cleanup"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: DeletingPullRolePolicy,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
             Err(e) => {
                 return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
                     message: format!("Failed to delete pull role '{}'", pull_role_name),
@@ -729,68 +684,8 @@ impl AwsArtifactRegistryController {
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
 
-        // Delete all inline policies. Resource-scoped permissions can attach
-        // additional policies to these roles, and IAM refuses to delete a role
-        // while any inline policy remains.
-        match iam_client.list_role_policies(&push_role_name).await {
-            Ok(response) => {
-                if let Some(policy_names) = response.list_role_policies_result.policy_names {
-                    for policy_name in policy_names.member {
-                        match iam_client
-                            .delete_role_policy(&push_role_name, &policy_name)
-                            .await
-                        {
-                            Ok(_) => {
-                                info!(
-                                    role_name = %push_role_name,
-                                    policy_name = %policy_name,
-                                    "Push role inline policy deleted successfully"
-                                );
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.error,
-                                    Some(
-                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
-                                    )
-                                ) =>
-                            {
-                                info!(
-                                    role_name = %push_role_name,
-                                    policy_name = %policy_name,
-                                    "Push role inline policy already deleted"
-                                );
-                            }
-                            Err(e) => {
-                                return Err(e.into_alien_error().context(
-                                    ErrorData::CloudPlatformError {
-                                        message: format!(
-                                            "Failed to delete push role policy '{}' from '{}'",
-                                            policy_name, push_role_name
-                                        ),
-                                        resource_id: Some(config.id.clone()),
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                info!(role_name = %push_role_name, "Push role already deleted");
-            }
-            Err(e) => {
-                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to list push role policies '{}'", push_role_name),
-                    resource_id: Some(config.id.clone()),
-                }));
-            }
-        }
+        self.cleanup_role_policies(&*iam_client, &push_role_name, "push", &config.id)
+            .await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingPushRole,
@@ -825,6 +720,21 @@ impl AwsArtifactRegistryController {
                 ) =>
             {
                 info!(role_name = %push_role_name, "Push role already deleted");
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                info!(
+                    role_name = %push_role_name,
+                    "Push role still has policies attached; retrying policy cleanup"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: DeletingPushRolePolicy,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
             }
             Err(e) => {
                 return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
@@ -937,6 +847,141 @@ impl AwsArtifactRegistryController {
 }
 
 impl AwsArtifactRegistryController {
+    async fn cleanup_role_policies(
+        &self,
+        iam_client: &dyn IamApi,
+        role_name: &str,
+        role_label: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        match iam_client.list_attached_role_policies(role_name).await {
+            Ok(response) => {
+                if let Some(attached_policies) = response
+                    .list_attached_role_policies_result
+                    .attached_policies
+                {
+                    for policy in attached_policies.member {
+                        match iam_client
+                            .detach_role_policy(role_name, &policy.policy_arn)
+                            .await
+                        {
+                            Ok(_) => {
+                                info!(
+                                    role_name = %role_name,
+                                    policy_arn = %policy.policy_arn,
+                                    role_label = %role_label,
+                                    "Artifact registry role managed policy detached successfully"
+                                );
+                            }
+                            Err(e)
+                                if matches!(
+                                    e.error,
+                                    Some(
+                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
+                                    )
+                                ) =>
+                            {
+                                info!(
+                                    role_name = %role_name,
+                                    policy_arn = %policy.policy_arn,
+                                    role_label = %role_label,
+                                    "Artifact registry role managed policy already detached"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to detach {} role policy '{}' from '{}'",
+                                            role_label, policy.policy_arn, role_name
+                                        ),
+                                        resource_id: Some(resource_id.to_string()),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                info!(role_name = %role_name, role_label = %role_label, "Artifact registry role already deleted");
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to list attached policies for '{}'", role_name),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+        }
+
+        match iam_client.list_role_policies(role_name).await {
+            Ok(response) => {
+                if let Some(policy_names) = response.list_role_policies_result.policy_names {
+                    for policy_name in policy_names.member {
+                        match iam_client.delete_role_policy(role_name, &policy_name).await {
+                            Ok(_) => {
+                                info!(
+                                    role_name = %role_name,
+                                    policy_name = %policy_name,
+                                    role_label = %role_label,
+                                    "Artifact registry role inline policy deleted successfully"
+                                );
+                            }
+                            Err(e)
+                                if matches!(
+                                    e.error,
+                                    Some(
+                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
+                                    )
+                                ) =>
+                            {
+                                info!(
+                                    role_name = %role_name,
+                                    policy_name = %policy_name,
+                                    role_label = %role_label,
+                                    "Artifact registry role inline policy already deleted"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to delete {} role policy '{}' from '{}'",
+                                            role_label, policy_name, role_name
+                                        ),
+                                        resource_id: Some(resource_id.to_string()),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                info!(role_name = %role_name, role_label = %role_label, "Artifact registry role already deleted");
+            }
+            Err(e) => {
+                return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to list inline policies for '{}'", role_name),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Configure ECR private image replication to the specified destination regions.
     ///
     /// ECR replication is configured at the registry level (per account). This method

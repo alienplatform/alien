@@ -11,6 +11,8 @@ pub struct AzureRemoteStackManagementImportData {
     pub subscription_id: String,
     /// Resource group containing the management identity.
     pub resource_group: String,
+    /// Tenant ID containing the management identity.
+    pub tenant_id: String,
     /// Management UAMI resource id.
     pub identity_id: String,
     /// Management UAMI principal id.

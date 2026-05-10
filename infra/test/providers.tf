@@ -1,10 +1,10 @@
 terraform {
   required_providers {
-    aws     = { source = "hashicorp/aws",     version = "~> 5.0" }
-    google  = { source = "hashicorp/google",  version = "~> 5.0" }
+    aws     = { source = "hashicorp/aws", version = "~> 5.0" }
+    google  = { source = "hashicorp/google", version = "~> 5.0" }
     azurerm = { source = "hashicorp/azurerm", version = "~> 3.0" }
     azuread = { source = "hashicorp/azuread", version = "~> 3.0" }
-    random  = { source = "hashicorp/random",  version = "~> 3.0" }
+    random  = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
 
@@ -12,6 +12,13 @@ provider "azuread" {
   tenant_id     = var.azure_management_tenant_id
   client_id     = var.azure_management_client_id
   client_secret = var.azure_management_client_secret
+}
+
+provider "azuread" {
+  alias         = "target"
+  tenant_id     = var.azure_target_tenant_id
+  client_id     = var.azure_target_client_id
+  client_secret = var.azure_target_client_secret
 }
 
 provider "aws" {

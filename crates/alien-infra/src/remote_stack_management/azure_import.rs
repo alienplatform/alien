@@ -31,10 +31,10 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
             uami_principal_id: Some(data.principal_id),
-            // Tenant id, FIC name, and role-assignment IDs are reconstructed
-            // by the heartbeat path from `ctx.management_config` and the
-            // FIC template emitter.
-            tenant_id: None,
+            tenant_id: Some(data.tenant_id),
+            // FIC name and role-assignment IDs are reconstructed by the
+            // heartbeat path from `ctx.management_config` and the FIC template
+            // emitter.
             fic_name: None,
             role_definition_id: None,
             role_assignment_ids: Vec::new(),

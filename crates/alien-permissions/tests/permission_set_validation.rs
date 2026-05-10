@@ -335,7 +335,7 @@ fn validate_aws_actions(
                 match service_privileges {
                     Some(privileges) => {
                         // Check if this action exists in the service's privileges dataset
-                        if !privileges.contains(action_name) {
+                        if !privileges.contains(action_name) && !is_known_aws_dataset_gap(action) {
                             invalid_actions.push(action.clone());
                         }
                     }
@@ -367,6 +367,13 @@ fn validate_aws_actions(
         permission_set.id
     );
     Ok(())
+}
+
+fn is_known_aws_dataset_gap(action: &str) -> bool {
+    // API Gateway v2 authorizes tagged CreateStage calls through TagResource.
+    // The pinned IAM dataset still models API Gateway mostly through method-like
+    // actions such as POST/PATCH and does not list this action.
+    matches!(action, "apigateway:TagResource")
 }
 
 /// Validate GCP permissions in a permission set

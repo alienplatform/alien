@@ -22,8 +22,9 @@
 use alien_core::import::{
     data::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
-        AwsStorageImportData, AzureResourceGroupImportData, AzureStorageImportData,
-        GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        AwsStorageImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+        AzureStorageImportData, GcpKvImportData, GcpServiceActivationImportData,
+        GcpStorageImportData,
     },
     ImportContext,
 };
@@ -31,8 +32,8 @@ use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment, AzureManagementConfig,
     AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Build, Function,
     GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
-    Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType,
-    ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
+    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -316,6 +317,46 @@ fn azure_resource_group_round_trip() {
     );
     assert_running_with_internal_state(&state);
     assert_eq!(internal_state(&state)["resourceGroupName"], "rg-alien");
+}
+
+#[test]
+fn azure_remote_stack_management_round_trip_includes_access_outputs() {
+    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
+    let data = AzureRemoteStackManagementImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-management".to_string(),
+        client_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
+        tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
+        management_permissions_applied: true,
+    };
+    let state = run_through_registry(
+        &RemoteStackManagement::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+        .expect("Azure remote-stack-management import must produce outputs");
+    assert_eq!(outputs.management_resource_id, data.identity_id);
+
+    let access_config: serde_json::Value =
+        serde_json::from_str(&outputs.access_configuration).unwrap();
+    assert_eq!(
+        access_config,
+        json!({
+            "uamiClientId": data.client_id,
+            "tenantId": data.tenant_id,
+        })
+    );
 }
 
 #[test]

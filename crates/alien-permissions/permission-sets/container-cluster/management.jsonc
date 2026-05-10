@@ -224,8 +224,7 @@
             "autoscaling:DescribeInstanceRefreshes",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
-            "ec2:DescribeTags",
-            "ec2:GetConsoleOutput"
+            "ec2:DescribeTags"
           ]
         },
         "binding": {
@@ -234,6 +233,32 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      // Instance console output can be read only from Alien-tagged workers.
+      {
+        "grant": {
+          "actions": ["ec2:GetConsoleOutput"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }
@@ -246,8 +271,12 @@
             "compute.instanceGroupManagers.update",
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
+            "compute.instanceTemplates.create",
+            "compute.instanceTemplates.delete",
+            "compute.instanceTemplates.get",
             "compute.instances.list",
-            "compute.instances.get"
+            "compute.instances.get",
+            "compute.instances.getSerialPortOutput"
           ]
         },
         "binding": {
@@ -267,7 +296,10 @@
             "Microsoft.Compute/virtualMachineScaleSets/write",
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
-            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read"
+            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
+            "Microsoft.Compute/virtualMachineScaleSets/rollingUpgrades/read",
+            "Microsoft.Compute/virtualMachineScaleSets/osRollingUpgrade/action",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
           ]
         },
         "binding": {

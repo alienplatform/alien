@@ -568,7 +568,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
 
         let mut runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
-        runtime_metadata.delete_scope = delete_scope;
+        runtime_metadata.delete_scope = Some(delete_scope);
         let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
             .into_alien_error()
             .context(GenericError {

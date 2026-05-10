@@ -168,6 +168,41 @@ async fn test_partial_deletion_with_lifecycle_filter() -> Result<()> {
     Ok(())
 }
 
+/// Tests lifecycle-filtered deletion does not continue deleting resources
+/// outside its scope.
+///
+/// This protects imported setup flows: if a prior full cleanup attempt already
+/// moved a frozen resource into Deleting, a later live-only cleanup must leave
+/// that frozen resource to the setup tool that owns it.
+#[tokio::test]
+async fn test_lifecycle_filter_skips_out_of_scope_deleting_resources() -> Result<()> {
+    let mut state = new_test_state();
+
+    let mut frozen_func = create_deleting_function_state("frozen-func");
+    frozen_func.lifecycle = Some(ResourceLifecycle::Frozen);
+    state
+        .resources
+        .insert("frozen-func".to_string(), frozen_func);
+
+    let mut live_func = create_deleted_function_state("live-func");
+    live_func.lifecycle = Some(ResourceLifecycle::Live);
+    state.resources.insert("live-func".to_string(), live_func);
+
+    let live_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
+    let step_result = live_deletion.step(state).await?;
+
+    assert_eq!(
+        get_status(&step_result.next_state, "frozen-func"),
+        Some(ResourceStatus::Deleting)
+    );
+    assert!(
+        live_deletion.is_synced(&step_result.next_state),
+        "live-only deletion should be synced without stepping frozen resources"
+    );
+
+    Ok(())
+}
+
 /// Tests deleting multiple independent resources.
 #[tokio::test]
 async fn test_delete_multiple_independent_resources() -> Result<()> {

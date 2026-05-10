@@ -21,7 +21,7 @@ pub async fn handle_delete_pending(
 
     // Clone current first before moving any fields
     let mut next = current.clone();
-    let delete_scope = delete_scope(&current);
+    let delete_scope = delete_scope(&current)?;
 
     // Stack state is required
     let mut stack_state = current.stack_state.ok_or_else(|| {
@@ -87,7 +87,7 @@ pub async fn handle_deleting(
     // For deletion, we work with stack_state.resources which already contains
     // all deployed resources (including those added by mutations during initial deployment)
 
-    let delete_scope = delete_scope(&current_cloned);
+    let delete_scope = delete_scope(&current_cloned)?;
     let lifecycle_filter = match delete_scope {
         DeleteScope::Full => None,
         DeleteScope::LiveOnly => Some(vec![ResourceLifecycle::Live]),
@@ -202,7 +202,7 @@ pub async fn handle_delete_failed(
     }
 
     info!("Preparing stack for destroy");
-    let delete_scope = delete_scope(&current);
+    let delete_scope = delete_scope(&current)?;
 
     let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -241,12 +241,16 @@ pub async fn handle_delete_failed(
     })
 }
 
-fn delete_scope(state: &DeploymentState) -> DeleteScope {
+fn delete_scope(state: &DeploymentState) -> Result<DeleteScope> {
     state
         .runtime_metadata
         .as_ref()
-        .map(|metadata| metadata.delete_scope)
-        .unwrap_or_default()
+        .and_then(|metadata| metadata.delete_scope)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "deleteScope is required before deleting a deployment".to_string(),
+            })
+        })
 }
 
 fn compute_delete_scope_status(

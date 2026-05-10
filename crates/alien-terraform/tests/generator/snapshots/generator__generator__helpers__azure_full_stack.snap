@@ -181,6 +181,7 @@ locals {
       importData = {
         subscriptionId               = var.azure_subscription_id
         resourceGroup                = var.azure_resource_group_name
+        tenantId                     = data.azurerm_client_config.management_current.tenant_id
         identityId                   = azurerm_user_assigned_identity.management.id
         principalId                  = azurerm_user_assigned_identity.management.principal_id
         clientId                     = azurerm_user_assigned_identity.management.client_id
@@ -554,6 +555,8 @@ resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment" {
 }
 
 === management.tf ===
+data "azurerm_client_config" "management_current" {}
+
 resource "azurerm_user_assigned_identity" "management" {
   name                = "${var.stack_name}-management-identity"
   resource_group_name = var.azure_resource_group_name

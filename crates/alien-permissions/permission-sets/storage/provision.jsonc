@@ -26,15 +26,18 @@
             "s3:GetEncryptionConfiguration",
             "s3:GetBucketPublicAccessBlock",
             "s3:GetBucketTagging",
-            "s3:ListBucketVersions"
+            "s3:ListBucket",
+            "s3:ListBucketVersions",
+            "s3:DeleteObject",
+            "s3:DeleteObjectVersion"
           ]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}"]
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
           }
         }
       }

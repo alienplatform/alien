@@ -15,7 +15,7 @@
 //!    need registry access.
 
 use crate::{
-    block::{attr, block, nested, resource_block},
+    block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, permission_context, required_label, tags},
     expr,
@@ -36,6 +36,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         let _ = downcast::<RemoteStackManagement>(ctx, RemoteStackManagement::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let mut fragment = TfFragment::default();
+
+        fragment.data_blocks.push(data_block(
+            "azurerm_client_config",
+            &format!("{label}_current"),
+            [],
+        ));
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_user_assigned_identity",
@@ -108,6 +114,15 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
+            (
+                "tenantId",
+                expr::traversal([
+                    "data",
+                    "azurerm_client_config",
+                    &format!("{label}_current"),
+                    "tenant_id",
+                ]),
+            ),
             (
                 "identityId",
                 expr::traversal(["azurerm_user_assigned_identity", label, "id"]),

@@ -203,6 +203,43 @@
         }
       },
       {
+        // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        "grant": {
+          "actions": ["apigateway:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
         // API Gateway V2 — manage existing APIs and domain names.
         "grant": {
           "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
@@ -238,7 +275,7 @@
       {
         // EventBridge schedule rules are created with Alien boundary tags.
         "grant": {
-          "actions": ["events:PutRule"]
+          "actions": ["events:PutRule", "events:TagResource"]
         },
         "binding": {
           "stack": {

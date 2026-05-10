@@ -217,6 +217,43 @@
         }
       },
       {
+        // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        "grant": {
+          "actions": ["apigateway:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
         "grant": {
           "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
         },
@@ -238,6 +275,64 @@
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*"
             ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // EventBridge schedule rules are created with Alien boundary tags.
+        "grant": {
+          "actions": ["events:PutRule", "events:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "events:DeleteRule",
+            "events:DescribeRule",
+            "events:PutTargets",
+            "events:RemoveTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

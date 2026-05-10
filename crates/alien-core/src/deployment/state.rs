@@ -13,19 +13,12 @@ use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 /// resources. Live-only deletes are used by setup handoff resources
 /// (Terraform/CloudFormation) so Alien removes only the resources it owns
 /// before setup tears down Frozen resources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum DeleteScope {
-    #[default]
     Full,
     LiveOnly,
-}
-
-impl DeleteScope {
-    pub fn is_full(&self) -> bool {
-        matches!(self, DeleteScope::Full)
-    }
 }
 
 /// Runtime metadata for deployment
@@ -54,8 +47,8 @@ pub struct RuntimeMetadata {
     pub registry_access_granted: bool,
 
     /// Scope selected by the caller that requested deletion.
-    #[serde(default, skip_serializing_if = "DeleteScope::is_full")]
-    pub delete_scope: DeleteScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_scope: Option<DeleteScope>,
 }
 
 /// Deployment state

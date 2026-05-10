@@ -561,15 +561,32 @@ impl AzureClientConfigExt for AzureClientConfig {
                         ),
                     })?;
 
-                let token_response: TokenResponse =
-                    response.json().await.into_alien_error().context(
-                        ErrorData::AuthenticationError {
-                            message: format!(
-                            "Failed to parse Azure service principal token response for scope '{}'",
+                let status = response.status();
+                let response_text = response.text().await.into_alien_error().context(
+                    ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to read Azure service principal token response for scope '{}'",
                             scope
                         ),
-                        },
-                    )?;
+                    },
+                )?;
+                if !status.is_success() {
+                    return Err(AlienError::new(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to get Azure service principal token for scope '{}': HTTP {}: {}",
+                            scope, status, response_text
+                        ),
+                    }));
+                }
+
+                let token_response: TokenResponse = serde_json::from_str(&response_text)
+                    .into_alien_error()
+                    .context(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to parse Azure service principal token response for scope '{}': {}",
+                            scope, response_text
+                        ),
+                    })?;
 
                 Ok(token_response.access_token)
             }
