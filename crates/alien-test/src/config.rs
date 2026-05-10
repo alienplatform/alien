@@ -97,7 +97,7 @@ pub struct AzureTestResources {
     /// ACR repository URL for pushing built images,
     /// e.g. `myregistry.azurecr.io/image`
     pub acr_repository: Option<String>,
-    /// Scoped service principal used by pull-mode agent e2e tests.
+    /// Scoped service principal used by Azure e2e deployment tests.
     pub agent_client_id: Option<String>,
     pub agent_client_secret: Option<String>,
     pub agent_object_id: Option<String>,

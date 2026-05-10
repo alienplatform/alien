@@ -53,6 +53,7 @@ impl DistributionArtifactCleanup {
                 region,
                 env,
             } => {
+                info!(%stack_name, %region, "deleting CloudFormation distribution stack");
                 let mut cmd = Command::new("aws");
                 cmd.args([
                     "cloudformation",
@@ -63,40 +64,81 @@ impl DistributionArtifactCleanup {
                     &region,
                 ]);
                 apply_env(&mut cmd, &env);
-                if let Err(error) = cmd.output().await {
-                    tracing::warn!(%stack_name, %error, "failed to start CloudFormation cleanup");
+                if let Err(error) = run_command(cmd, "aws cloudformation delete-stack").await {
+                    tracing::warn!(%stack_name, %error, "CloudFormation cleanup delete-stack failed");
                     return;
                 }
 
-                let mut wait = Command::new("aws");
-                wait.args([
-                    "cloudformation",
-                    "wait",
-                    "stack-delete-complete",
-                    "--stack-name",
-                    &stack_name,
-                    "--region",
-                    &region,
-                ]);
-                apply_env(&mut wait, &env);
-                if let Err(error) = wait.output().await {
-                    tracing::warn!(%stack_name, %error, "failed to wait for CloudFormation cleanup");
+                for attempt in 1..=3 {
+                    let mut wait = Command::new("aws");
+                    wait.args([
+                        "cloudformation",
+                        "wait",
+                        "stack-delete-complete",
+                        "--stack-name",
+                        &stack_name,
+                        "--region",
+                        &region,
+                    ]);
+                    apply_env(&mut wait, &env);
+                    match run_command(wait, "aws cloudformation wait stack-delete-complete").await {
+                        Ok(()) => {
+                            info!(%stack_name, "CloudFormation distribution stack deleted");
+                            break;
+                        }
+                        Err(error) if attempt < 3 => {
+                            tracing::warn!(
+                                %stack_name,
+                                %attempt,
+                                %error,
+                                "CloudFormation cleanup wait failed; retrying"
+                            );
+                            tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %stack_name,
+                                %error,
+                                "CloudFormation cleanup wait failed"
+                            );
+                        }
+                    }
                 }
             }
             DistributionArtifactCleanup::Terraform { workdir, env } => {
-                let mut cmd = Command::new("terraform");
-                cmd.current_dir(workdir.path())
-                    .args(["destroy", "-auto-approve", "-input=false"]);
-                apply_env(&mut cmd, &env);
-                match cmd.output().await {
-                    Ok(output) if output.status.success() => {}
-                    Ok(output) => {
-                        tracing::warn!(
-                            stderr = %String::from_utf8_lossy(&output.stderr),
-                            "terraform destroy failed during cleanup"
-                        );
+                info!(
+                    workdir = %workdir.path().display(),
+                    "destroying Terraform distribution artifacts"
+                );
+                for attempt in 1..=3 {
+                    let mut cmd = Command::new("terraform");
+                    cmd.current_dir(workdir.path()).args([
+                        "destroy",
+                        "-auto-approve",
+                        "-input=false",
+                        "-lock-timeout=5m",
+                    ]);
+                    apply_env(&mut cmd, &env);
+                    match run_command(cmd, "terraform destroy").await {
+                        Ok(()) => {
+                            info!("Terraform distribution artifacts destroyed");
+                            break;
+                        }
+                        Err(error) if attempt < 3 => {
+                            tracing::warn!(
+                                %attempt,
+                                %error,
+                                "terraform destroy failed during cleanup; retrying"
+                            );
+                            tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                "terraform destroy failed during cleanup"
+                            );
+                        }
                     }
-                    Err(error) => tracing::warn!(%error, "failed to start terraform destroy"),
                 }
             }
             DistributionArtifactCleanup::Helm {
@@ -1338,5 +1380,58 @@ async fn command_output(mut cmd: Command, label: &str) -> anyhow::Result<std::pr
 fn apply_env(cmd: &mut Command, env: &[(String, String)]) {
     for (key, value) in env {
         cmd.env(key, value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::permissions::PermissionProfile;
+    use alien_core::ResourceLifecycle;
+
+    #[tokio::test]
+    async fn gcp_distribution_render_grants_live_function_provision() {
+        let stack = Stack::new("distribution-gcp".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["function/execute"]),
+            )
+            .add(
+                Function::new("alien-rs-fn".to_string())
+                    .permissions("execution".to_string())
+                    .code(FunctionCode::Image {
+                        image: "us-central1-docker.pkg.dev/project/repo/alien-rs-fn:tag"
+                            .to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Push);
+
+        let rendered_stack = apply_render_mutations(stack, Platform::Gcp, &stack_settings)
+            .await
+            .expect("distribution render mutations should succeed");
+        let registry = alien_terraform::TfRegistry::built_in();
+        let module = alien_terraform::generate_terraform_module(
+            &rendered_stack,
+            alien_terraform::TerraformTarget::Gcp,
+            alien_terraform::TerraformOptions {
+                registry: &registry,
+                stack_settings,
+                registration: None,
+            },
+        )
+        .expect("Terraform generation should succeed");
+        let rendered = module
+            .iter()
+            .map(|(_, contents)| contents)
+            .collect::<String>();
+
+        assert!(rendered
+            .contains("google_project_iam_custom_role.remote_stack_management_functionprovision"));
+        assert!(rendered.contains("\"resourcemanager.projects.get\""));
+        assert!(rendered.contains("\"run.services.create\""));
+        assert!(rendered.contains("\"iam.serviceAccounts.actAs\""));
     }
 }

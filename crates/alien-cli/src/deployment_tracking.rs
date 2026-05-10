@@ -7,7 +7,7 @@ use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::SdkResultExt;
 use alien_platform_api::{
-    types::{Subject, SubjectScope},
+    types::{SubjectScope, WhoamiResponse},
     Client as SdkClient,
 };
 use dirs::config_dir;
@@ -171,7 +171,7 @@ pub async fn validate_token(api_key: &str, base_url: &str) -> Result<DeploymentT
 
     // Extract token type and information based on the subject scope
     match subject {
-        Subject::ServiceAccountSubject(sa) => {
+        WhoamiResponse::Variant1(sa) => {
             match sa.scope {
                 // Deployment-scoped token: for existing deployments
                 SubjectScope::Deployment {
@@ -211,7 +211,7 @@ pub async fn validate_token(api_key: &str, base_url: &str) -> Result<DeploymentT
                 })),
             }
         }
-        Subject::UserSubject(_) => Err(AlienError::new(ErrorData::ValidationError {
+        WhoamiResponse::Variant0 { .. } => Err(AlienError::new(ErrorData::ValidationError {
             field: "token".to_string(),
             message: "API key must be for a service account, not a user".to_string(),
         })),

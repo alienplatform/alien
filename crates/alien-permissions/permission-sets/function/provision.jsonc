@@ -105,6 +105,35 @@
         }
       },
       {
+        // Live functions are created by the management role, but their
+        // resource-scoped execution and management policies are attached to
+        // setup-created stack roles after the function exists. Keep this
+        // limited to Alien stack roles by name.
+        "grant": {
+          "actions": ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
         "grant": {
           "actions": ["ecr:GetAuthorizationToken"]
         },

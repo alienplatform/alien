@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
 use crate::error::{ErrorData, Result};
+use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
 use alien_azure_clients::models::resources::ResourceGroup;
 use alien_azure_clients::resources::{AzureResourcesClient, ResourcesApi};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -75,7 +76,12 @@ impl AzureResourceGroupController {
 
         self.resource_group_name = Some(group_name.clone());
         self.location = Some(rg.location.clone());
-        self.resource_id = rg.id.clone();
+        self.resource_id = rg.id.clone().or_else(|| {
+            Some(azure_resource_group_resource_id(
+                &azure_config.subscription_id,
+                &group_name,
+            ))
+        });
 
         info!(group_name=%group_name, "Resource group creation initiated");
 
@@ -115,7 +121,12 @@ impl AzureResourceGroupController {
                         if state == "Succeeded" {
                             info!(group_name=%group_name, "Resource group creation completed");
 
-                            self.resource_id = rg.id.clone();
+                            self.resource_id = rg.id.clone().or_else(|| {
+                                Some(azure_resource_group_resource_id(
+                                    &azure_config.subscription_id,
+                                    group_name,
+                                ))
+                            });
                             self.location = Some(rg.location.clone());
 
                             return Ok(HandlerAction::Continue {

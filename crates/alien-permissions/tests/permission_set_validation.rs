@@ -537,6 +537,58 @@ fn collect_permission_set_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<
     Ok(())
 }
 
+#[test]
+fn test_permission_set_ids_match_file_paths_and_are_unique() -> Result<()> {
+    let permission_sets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("permission-sets");
+    let mut permission_set_files = Vec::new();
+    collect_permission_set_files(&permission_sets_dir, &mut permission_set_files)?;
+
+    let mut seen = HashSet::new();
+    let mut errors = Vec::new();
+    for file_path in permission_set_files {
+        match load_permission_set(&file_path) {
+            Ok(permission_set) => {
+                let relative_path = file_path
+                    .strip_prefix(&permission_sets_dir)
+                    .with_context(|| format!("failed to relativize {}", file_path.display()))?;
+                let expected_id = relative_path
+                    .with_extension("")
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+
+                if permission_set.id != expected_id {
+                    errors.push(format!(
+                        "{}: id '{}' should match path '{}'",
+                        file_path.display(),
+                        permission_set.id,
+                        expected_id
+                    ));
+                }
+
+                if !seen.insert(permission_set.id.clone()) {
+                    errors.push(format!(
+                        "{}: duplicate permission set id '{}'",
+                        file_path.display(),
+                        permission_set.id
+                    ));
+                }
+            }
+            Err(error) => errors.push(format!("{}: {error}", file_path.display())),
+        }
+    }
+
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "Permission set identity validation failed:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    Ok(())
+}
+
 /// Tests all permission sets against the official cloud provider IAM datasets
 #[tokio::test]
 async fn test_permission_sets_against_iam_datasets() -> Result<()> {

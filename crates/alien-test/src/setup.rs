@@ -20,7 +20,7 @@ use alien_permissions::generators::{
 };
 use alien_permissions::{BindingTarget, PermissionContext};
 use anyhow::Context;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
@@ -729,8 +729,7 @@ async fn build_gcp_scoped_config(
     purpose: &str,
 ) -> anyhow::Result<ClientConfig> {
     use alien_gcp_clients::iam::{
-        CreateRoleRequest, CreateServiceAccountRequest, GenerateAccessTokenRequest, Role,
-        RoleLaunchStage, ServiceAccount,
+        CreateRoleRequest, CreateServiceAccountRequest, Role, RoleLaunchStage, ServiceAccount,
     };
     use alien_gcp_clients::resource_manager::GetPolicyOptions;
     use alien_gcp_clients::{IamApi as _, ResourceManagerApi as _};
@@ -871,18 +870,34 @@ async fn build_gcp_scoped_config(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind scoped GCP roles: {e}"))?;
 
+    let bootstrap_service_account_email = gcp_service_account_key_email(&admin_config.credentials)
+        .context("Failed to resolve GCP bootstrap service account email")?;
+    let bootstrap_member = format!("serviceAccount:{bootstrap_service_account_email}");
+    let mut service_account_policy = iam_client
+        .get_service_account_iam_policy(service_account_email.clone())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read scoped GCP service account IAM policy before granting token minting: {e}"
+            )
+        })?;
+    service_account_policy.version = Some(3);
+    add_gcp_iam_binding(
+        &mut service_account_policy,
+        "roles/iam.serviceAccountTokenCreator",
+        &bootstrap_member,
+        None,
+    );
+    iam_client
+        .set_service_account_iam_policy(service_account_email.clone(), service_account_policy)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to grant token minting on scoped GCP service account: {e}")
+        })?;
+
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-    let token = iam_client
-        .generate_access_token(
-            service_account_email.clone(),
-            GenerateAccessTokenRequest::builder()
-                .scope(vec![
-                    "https://www.googleapis.com/auth/cloud-platform".to_string()
-                ])
-                .lifetime("3600s".to_string())
-                .build(),
-        )
+    let token = generate_gcp_access_token_with_retry(&iam_client, service_account_email.clone())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to mint scoped GCP access token: {e}"))?;
 
@@ -895,6 +910,53 @@ async fn build_gcp_scoped_config(
         service_overrides: admin_config.service_overrides,
         project_number: admin_config.project_number,
     })))
+}
+
+async fn generate_gcp_access_token_with_retry(
+    iam_client: &alien_gcp_clients::iam::IamClient,
+    service_account_email: String,
+) -> anyhow::Result<alien_gcp_clients::iam::GenerateAccessTokenResponse> {
+    use alien_gcp_clients::iam::GenerateAccessTokenRequest;
+    use alien_gcp_clients::IamApi as _;
+
+    let request = GenerateAccessTokenRequest::builder()
+        .scope(vec![
+            "https://www.googleapis.com/auth/cloud-platform".to_string()
+        ])
+        .lifetime("3600s".to_string())
+        .build();
+
+    let delays = [
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(20),
+        std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(45),
+    ];
+
+    for (attempt, delay) in delays.iter().enumerate() {
+        match iam_client
+            .generate_access_token(service_account_email.clone(), request.clone())
+            .await
+        {
+            Ok(token) => return Ok(token),
+            Err(error) => {
+                warn!(
+                    service_account_email = %service_account_email,
+                    attempt = attempt + 1,
+                    retry_after_secs = delay.as_secs(),
+                    error = %error,
+                    "Scoped GCP token mint failed; retrying after IAM propagation delay"
+                );
+                tokio::time::sleep(*delay).await;
+            }
+        }
+    }
+
+    iam_client
+        .generate_access_token(service_account_email, request)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn add_gcp_iam_binding(
@@ -924,6 +986,22 @@ fn add_gcp_iam_binding(
         members: vec![member.to_string()],
         condition,
     });
+}
+
+fn gcp_service_account_key_email(
+    credentials: &alien_core::GcpCredentials,
+) -> anyhow::Result<String> {
+    let alien_core::GcpCredentials::ServiceAccountKey { json } = credentials else {
+        anyhow::bail!("GCP scoped e2e bootstrap requires service account key credentials");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(json).context("Failed to parse GCP service account key JSON")?;
+    value
+        .get("client_email")
+        .and_then(|value| value.as_str())
+        .filter(|email| !email.is_empty())
+        .map(ToString::to_string)
+        .context("GCP service account key JSON is missing client_email")
 }
 
 async fn build_azure_scoped_config(

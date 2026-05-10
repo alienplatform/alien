@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_utils::get_resource_group_name;
+use crate::azure_utils::{azure_container_apps_environment_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
@@ -88,7 +88,7 @@ impl AzureContainerAppsEnvironmentController {
         match operation_result {
             OperationResult::Completed(result) => {
                 info!(environment_name=%self.environment_name.as_ref().unwrap(), "Environment creation completed immediately");
-                self.handle_creation_completed(&result);
+                self.handle_creation_completed(&result, azure_config);
                 // Always go to Ready after immediate completion - linear flow
                 Ok(HandlerAction::Continue {
                     state: Ready,
@@ -209,7 +209,7 @@ impl AzureContainerAppsEnvironmentController {
                     match properties.provisioning_state {
                         Some(Succeeded) => {
                             info!(environment_name=%environment_name, "Environment creation completed");
-                            self.handle_creation_completed(&managed_env);
+                            self.handle_creation_completed(&managed_env, azure_config);
 
                             // Always go to ApplyingResourcePermissions next
                             Ok(HandlerAction::Continue {
@@ -670,8 +670,20 @@ impl AzureContainerAppsEnvironmentController {
 // Separate impl block for helper methods
 impl AzureContainerAppsEnvironmentController {
     // ─────────────── HELPER METHODS ────────────────────────────
-    fn handle_creation_completed(&mut self, managed_env: &ManagedEnvironment) {
-        self.resource_id = managed_env.id.clone();
+    fn handle_creation_completed(
+        &mut self,
+        managed_env: &ManagedEnvironment,
+        azure_config: &AzureClientConfig,
+    ) {
+        self.resource_id = managed_env.id.clone().or_else(|| {
+            let resource_group_name = self.resource_group_name.as_ref()?;
+            let environment_name = self.environment_name.as_ref()?;
+            Some(azure_container_apps_environment_resource_id(
+                &azure_config.subscription_id,
+                resource_group_name,
+                environment_name,
+            ))
+        });
         self.default_domain = managed_env
             .properties
             .as_ref()

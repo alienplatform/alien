@@ -609,11 +609,24 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
             Sid: FunctionProvision3
           - Action:
+            - iam:GetRolePolicy
+            - iam:ListRolePolicies
+            - iam:PutRolePolicy
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+            Sid: FunctionProvision4
+          - Action:
             - ecr:GetAuthorizationToken
             Effect: Allow
             Resource:
             - '*'
-            Sid: FunctionProvision4
+            Sid: FunctionProvision5
           - Action:
             - ecr:BatchGetImage
             - ecr:GetDownloadUrlForLayer
@@ -629,7 +642,7 @@ Resources:
                   - Fn::Split:
                     - ':'
                     - Ref: ManagingRoleArn
-            Sid: FunctionProvision5
+            Sid: FunctionProvision6
           - Action:
             - apigateway:POST
             Condition:
@@ -641,7 +654,7 @@ Resources:
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-            Sid: FunctionProvision6
+            Sid: FunctionProvision7
           - Action:
             - apigateway:POST
             Condition:
@@ -652,7 +665,21 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            Sid: FunctionProvision7
+            Sid: FunctionProvision8
+          - Action:
+            - apigateway:TagResource
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+            Sid: FunctionProvision9
           - Action:
             - apigateway:DELETE
             - apigateway:GET
@@ -667,9 +694,10 @@ Resources:
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: FunctionProvision8
+            Sid: FunctionProvision10
           - Action:
             - events:PutRule
+            - events:TagResource
             Condition:
               StringEquals:
                 aws:RequestTag/alien.dev/managed-by: alien
@@ -678,7 +706,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: FunctionProvision9
+            Sid: FunctionProvision11
           - Action:
             - events:DeleteRule
             - events:DescribeRule
@@ -692,7 +720,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: FunctionProvision10
+            Sid: FunctionProvision12
           - Action:
             - s3:GetBucketAcl
             - s3:GetBucketLocation

@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::azure_utils::get_resource_group_name;
+use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::models::storage::{
@@ -135,32 +135,46 @@ impl AzureStorageAccountController {
                                 })?;
 
                             // Extract details from the response
-                            self.resource_id = account_info.id;
+                            self.resource_id = account_info.id.or_else(|| {
+                                Some(azure_storage_account_resource_id(
+                                    &azure_config.subscription_id,
+                                    &resource_group_name,
+                                    account_name,
+                                ))
+                            });
                             let primary_endpoints = properties.and_then(|p| p.primary_endpoints);
-                            self.primary_blob_endpoint =
-                                primary_endpoints.as_ref().and_then(|e| e.blob.clone());
-                            self.primary_file_endpoint =
-                                primary_endpoints.as_ref().and_then(|e| e.file.clone());
-                            self.primary_queue_endpoint =
-                                primary_endpoints.as_ref().and_then(|e| e.queue.clone());
-                            self.primary_table_endpoint =
-                                primary_endpoints.as_ref().and_then(|e| e.table.clone());
+                            self.primary_blob_endpoint = primary_endpoints
+                                .as_ref()
+                                .and_then(|e| e.blob.clone())
+                                .or_else(|| Some(azure_storage_endpoint(account_name, "blob")));
+                            self.primary_file_endpoint = primary_endpoints
+                                .as_ref()
+                                .and_then(|e| e.file.clone())
+                                .or_else(|| Some(azure_storage_endpoint(account_name, "file")));
+                            self.primary_queue_endpoint = primary_endpoints
+                                .as_ref()
+                                .and_then(|e| e.queue.clone())
+                                .or_else(|| Some(azure_storage_endpoint(account_name, "queue")));
+                            self.primary_table_endpoint = primary_endpoints
+                                .as_ref()
+                                .and_then(|e| e.table.clone())
+                                .or_else(|| Some(azure_storage_endpoint(account_name, "table")));
 
                             // Extract primary key
                             self.primary_access_key =
                                 keys.keys.first().and_then(|key| key.value.clone());
 
                             // Generate connection string
-                            self.connection_string = if let (Some(key), Some(_blob_endpoint)) =
-                                (&self.primary_access_key, &self.primary_blob_endpoint)
-                            {
-                                Some(format!(
+                            self.connection_string = Some(match &self.primary_access_key {
+                                Some(key) => format!(
                                     "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net",
                                     account_name, key
-                                ))
-                            } else {
-                                None
-                            };
+                                ),
+                                None => format!(
+                                    "DefaultEndpointsProtocol=https;AccountName={};EndpointSuffix=core.windows.net",
+                                    account_name
+                                ),
+                            });
 
                             info!(account_name=%account_name, "Successfully retrieved storage account details");
 
@@ -427,7 +441,6 @@ impl AzureStorageAccountController {
         if let (
             Some(account_name),
             Some(resource_id),
-            Some(primary_access_key),
             Some(connection_string),
             Some(primary_blob_endpoint),
             Some(primary_file_endpoint),
@@ -436,7 +449,6 @@ impl AzureStorageAccountController {
         ) = (
             &self.account_name,
             &self.resource_id,
-            &self.primary_access_key,
             &self.connection_string,
             &self.primary_blob_endpoint,
             &self.primary_file_endpoint,
@@ -450,13 +462,17 @@ impl AzureStorageAccountController {
                 primary_file_endpoint: primary_file_endpoint.clone(),
                 primary_queue_endpoint: primary_queue_endpoint.clone(),
                 primary_table_endpoint: primary_table_endpoint.clone(),
-                primary_access_key: primary_access_key.clone(),
+                primary_access_key: self.primary_access_key.clone().unwrap_or_default(),
                 connection_string: connection_string.clone(),
             }))
         } else {
             None
         }
     }
+}
+
+fn azure_storage_endpoint(account_name: &str, service: &str) -> String {
+    format!("https://{account_name}.{service}.core.windows.net/")
 }
 
 // Separate impl block for helper methods
