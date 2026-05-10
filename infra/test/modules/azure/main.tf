@@ -152,46 +152,33 @@ resource "azuread_application_password" "manager" {
   display_name   = "alien-test"
 }
 
-# Target-tenant service principal used by scoped Azure e2e tests. Azure RBAC role
-# assignments require the tenant-local service principal object id, so Terraform
-# owns this identity and exports the object id as part of the test contract.
-resource "azuread_application" "target_agent" {
-  provider         = azuread.target
+# Multi-tenant app registration used by scoped Azure e2e tests. The app
+# registration and secret live in the management tenant where Terraform has
+# application-management privileges.
+resource "azuread_application" "agent" {
+  provider         = azuread.management
   display_name     = "alien-test-agent"
-  sign_in_audience = "AzureADMyOrg"
-  owners           = [data.azurerm_client_config.target.object_id]
+  sign_in_audience = "AzureADMultipleOrgs"
+  owners           = [data.azurerm_client_config.management.object_id]
 }
 
+# Tenant-local service principal for the multi-tenant app. Azure RBAC role
+# assignments require this target-tenant object id, but creating it does not
+# require creating an app registration in the target tenant.
 resource "azuread_service_principal" "target_agent" {
   provider  = azuread.target
-  client_id = azuread_application.target_agent.client_id
+  client_id = azuread_application.agent.client_id
   owners    = [data.azurerm_client_config.target.object_id]
 }
 
-resource "azuread_application_password" "target_agent" {
-  provider       = azuread.target
-  application_id = azuread_application.target_agent.id
+resource "azuread_application_password" "agent" {
+  provider       = azuread.management
+  application_id = azuread_application.agent.id
   display_name   = "alien-test"
 }
 
 removed {
-  from = azuread_application.agent
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
   from = azuread_service_principal.agent
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = azuread_application_password.agent
 
   lifecycle {
     destroy = false
