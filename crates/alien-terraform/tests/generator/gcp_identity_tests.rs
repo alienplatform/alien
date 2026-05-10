@@ -47,6 +47,30 @@ fn gcp_remote_stack_management_role() {
 }
 
 #[test]
+fn gcp_remote_stack_management_function_provision_role() {
+    let stack = Stack::new("acme-mgmt".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["function/provision"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("\"run.services.create\""));
+    assert!(rendered.contains("\"pubsub.topics.create\""));
+    assert!(rendered.contains("\"storage.buckets.update\""));
+    assert!(rendered.contains("google_project_iam_custom_role.management_functionprovision"));
+    assert_terraform_valid(&module, "gcp_remote_stack_management_function_provision");
+}
+
+#[test]
 fn gcp_network_create_two_subnets() {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {

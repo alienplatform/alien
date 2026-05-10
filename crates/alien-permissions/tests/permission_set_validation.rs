@@ -214,11 +214,14 @@ struct AzureOperation {
 }
 
 /// Downloads and parses the Azure provider operations dataset with caching
-async fn fetch_azure_provider_operations_dataset() -> Result<HashMap<String, HashSet<String>>> {
+async fn fetch_azure_provider_operations_dataset() -> Result<HashMap<String, HashMap<String, bool>>>
+{
     let cache_path = get_cache_dir().join("azure_provider_operations_dataset.json");
 
     // Try to load from cache first
-    if let Some(cached_data) = load_from_cache::<HashMap<String, HashSet<String>>>(&cache_path) {
+    if let Some(cached_data) =
+        load_from_cache::<HashMap<String, HashMap<String, bool>>>(&cache_path)
+    {
         return Ok(cached_data);
     }
 
@@ -239,16 +242,22 @@ async fn fetch_azure_provider_operations_dataset() -> Result<HashMap<String, Has
     let provider_operations: Vec<AzureProviderOperation> = serde_json::from_str(&body)
         .context("Failed to parse Azure provider operations dataset JSON")?;
 
-    // Convert to a map of service name -> set of all actions (both regular and data actions) for easy lookup
+    // Convert to a map of service name -> action name -> is_data_action
+    // for easy lookup. Azure role definitions reject data actions if they are
+    // placed in `actions`, and reject regular actions if placed in
+    // `dataActions`, so preserve that distinction.
     // Use lowercase keys for case-insensitive matching
     let mut service_map = HashMap::new();
     for provider in provider_operations {
-        let mut all_actions = HashSet::new();
+        let mut all_actions = HashMap::new();
 
         // Add provider-level operations
         for operation in provider.operations {
             if let Some(name) = operation.name {
-                all_actions.insert(name.to_lowercase());
+                all_actions.insert(
+                    name.to_lowercase(),
+                    operation.is_data_action.unwrap_or(false),
+                );
             }
         }
 
@@ -256,7 +265,10 @@ async fn fetch_azure_provider_operations_dataset() -> Result<HashMap<String, Has
         for resource_type in provider.resource_types {
             for operation in resource_type.operations {
                 if let Some(name) = operation.name {
-                    all_actions.insert(name.to_lowercase());
+                    all_actions.insert(
+                        name.to_lowercase(),
+                        operation.is_data_action.unwrap_or(false),
+                    );
                 }
             }
         }
@@ -406,7 +418,7 @@ fn validate_gcp_permissions(
 /// Validate Azure actions in a permission set
 fn validate_azure_actions(
     permission_set: &alien_core::PermissionSet,
-    provider_operations_dataset: &HashMap<String, HashSet<String>>,
+    provider_operations_dataset: &HashMap<String, HashMap<String, bool>>,
 ) -> Result<()> {
     let azure_platform_permissions = match &permission_set.platforms.azure {
         Some(platform_permissions) => platform_permissions,
@@ -430,12 +442,14 @@ fn validate_azure_actions(
                     provider_operations_dataset.get(&action_service.to_lowercase());
 
                 match service_operations {
-                    Some(operations) => {
-                        // Check if this action exists in the service's operations dataset
-                        if !operations.contains(&action.to_lowercase()) {
-                            invalid_actions.push(format!("{} (regular action)", action));
-                        }
-                    }
+                    Some(operations) => match operations.get(&action.to_lowercase()) {
+                        Some(false) => {}
+                        Some(true) => invalid_actions.push(format!(
+                            "{} is a data action but was listed under actions",
+                            action
+                        )),
+                        None => invalid_actions.push(format!("{} (regular action)", action)),
+                    },
                     None => {
                         invalid_actions.push(format!(
                             "{} - service '{}' not found",
@@ -457,12 +471,14 @@ fn validate_azure_actions(
                     provider_operations_dataset.get(&action_service.to_lowercase());
 
                 match service_operations {
-                    Some(operations) => {
-                        // Check if this data action exists in the service's operations dataset
-                        if !operations.contains(&action.to_lowercase()) {
-                            invalid_actions.push(format!("{} (data action)", action));
-                        }
-                    }
+                    Some(operations) => match operations.get(&action.to_lowercase()) {
+                        Some(true) => {}
+                        Some(false) => invalid_actions.push(format!(
+                            "{} is a regular action but was listed under dataActions",
+                            action
+                        )),
+                        None => invalid_actions.push(format!("{} (data action)", action)),
+                    },
                     None => {
                         invalid_actions.push(format!(
                             "{} - service '{}' not found",

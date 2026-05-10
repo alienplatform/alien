@@ -212,7 +212,9 @@
         "grant": {
           "actions": [
             "Microsoft.KeyVault/vaults/secrets/write",
-            "Microsoft.KeyVault/vaults/secrets/read",
+            "Microsoft.KeyVault/vaults/secrets/read"
+          ],
+          "dataActions": [
             "Microsoft.KeyVault/vaults/secrets/delete"
           ]
         },

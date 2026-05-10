@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use alien_aws_clients::IamApi;
+use alien_aws_clients::{ErrorData as AwsErrorData, IamApi};
 use alien_core::{
     ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
     ManagementConfig, PermissionSet, PermissionSetReference, Platform, ResourceLifecycle, Stack,
@@ -285,6 +285,8 @@ async fn build_aws_scoped_config_with_policies(
         }
     }
 
+    cleanup_scoped_role_policies(&iam_client, &role_name).await?;
+
     for (policy_name, policy) in policies {
         attach_policy_chunks(&iam_client, &role_name, &policy_name, policy).await?;
     }
@@ -433,14 +435,12 @@ async fn attach_policy_chunks(
     policy_name: &str,
     policy: AwsIamPolicy,
 ) -> anyhow::Result<()> {
-    let chunks = split_policy(policy, 9_000)?;
+    let chunks = split_policy(policy, 5_500)?;
+    let policy_run_id = uuid::Uuid::new_v4().simple().to_string();
+    let policy_run_id = &policy_run_id[..8];
 
     for (index, chunk) in chunks.into_iter().enumerate() {
-        let chunk_name = if index == 0 {
-            policy_name.to_string()
-        } else {
-            format!("{}-{}", policy_name, index + 1)
-        };
+        let chunk_name = scoped_managed_policy_name(role_name, policy_name, policy_run_id, index);
         let policy_json =
             serde_json::to_string(&chunk).context("Failed to serialize IAM policy")?;
 
@@ -449,16 +449,133 @@ async fn attach_policy_chunks(
             policy_name = %chunk_name,
             statements = chunk.statement.len(),
             policy_size = policy_json.len(),
-            "Attaching scoped IAM policy"
+            "Creating scoped IAM managed policy"
         );
 
-        iam_client
-            .put_role_policy(role_name, &chunk_name, &policy_json)
+        let create_response = iam_client
+            .create_policy(&chunk_name, &policy_json, Some("/alien-e2e/".to_string()))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to attach policy to scoped role: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create scoped managed policy: {}", e))?;
+        let policy_arn = create_response.create_policy_result.policy.arn;
+
+        if let Err(error) = iam_client.attach_role_policy(role_name, &policy_arn).await {
+            let _ = iam_client.delete_policy(&policy_arn).await;
+            return Err(anyhow::anyhow!(
+                "Failed to attach managed policy to scoped role: {}",
+                error
+            ));
+        }
+
+        info!(
+            role_name = %role_name,
+            policy_arn = %policy_arn,
+            "Attached scoped IAM managed policy"
+        );
     }
 
     Ok(())
+}
+
+async fn cleanup_scoped_role_policies(
+    iam_client: &alien_aws_clients::iam::IamClient,
+    role_name: &str,
+) -> anyhow::Result<()> {
+    match iam_client.list_role_policies(role_name).await {
+        Ok(response) => {
+            if let Some(policy_names) = response.list_role_policies_result.policy_names {
+                for policy_name in policy_names.member {
+                    iam_client
+                        .delete_role_policy(role_name, &policy_name)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to delete stale scoped inline policy {policy_name}: {e}"
+                            )
+                        })?;
+                }
+            }
+        }
+        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Failed to list stale scoped inline policies: {}",
+                error
+            ));
+        }
+    }
+
+    match iam_client.list_attached_role_policies(role_name).await {
+        Ok(response) => {
+            if let Some(attached_policies) = response
+                .list_attached_role_policies_result
+                .attached_policies
+            {
+                for policy in attached_policies.member {
+                    iam_client
+                        .detach_role_policy(role_name, &policy.policy_arn)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to detach stale scoped managed policy {}: {e}",
+                                policy.policy_arn
+                            )
+                        })?;
+
+                    if policy.policy_name.starts_with("alien-e2e-scoped-") {
+                        match iam_client.delete_policy(&policy.policy_arn).await {
+                            Ok(()) => {}
+                            Err(error) if is_aws_not_found(&error) => {}
+                            Err(error) => {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to delete stale scoped managed policy {}: {}",
+                                    policy.policy_arn,
+                                    error
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Failed to list stale scoped managed policies: {}",
+                error
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn scoped_managed_policy_name(
+    role_name: &str,
+    policy_name: &str,
+    run_id: &str,
+    index: usize,
+) -> String {
+    let suffix = if index == 0 {
+        run_id.to_string()
+    } else {
+        format!("{run_id}-{}", index + 1)
+    };
+    let prefix = format!("alien-e2e-scoped-{role_name}-{policy_name}");
+    let max_prefix_len = 128usize.saturating_sub(suffix.len() + 1);
+    let trimmed = prefix
+        .chars()
+        .take(max_prefix_len)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string();
+    format!("{trimmed}-{suffix}")
+}
+
+fn is_aws_not_found(error: &alien_error::AlienError<AwsErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(AwsErrorData::RemoteResourceNotFound { .. })
+    )
 }
 
 fn split_policy(policy: AwsIamPolicy, max_json_len: usize) -> anyhow::Result<Vec<AwsIamPolicy>> {
@@ -635,11 +752,6 @@ async fn build_gcp_scoped_config(
         "{account_id}@{}.iam.gserviceaccount.com",
         admin_config.project_id
     );
-    let service_account_name = format!(
-        "projects/{}/serviceAccounts/{service_account_email}",
-        admin_config.project_id
-    );
-
     match iam_client
         .create_service_account(
             account_id.clone(),
@@ -763,7 +875,7 @@ async fn build_gcp_scoped_config(
 
     let token = iam_client
         .generate_access_token(
-            service_account_name,
+            service_account_email.clone(),
             GenerateAccessTokenRequest::builder()
                 .scope(vec![
                     "https://www.googleapis.com/auth/cloud-platform".to_string()

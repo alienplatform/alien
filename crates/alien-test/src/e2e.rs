@@ -1437,7 +1437,9 @@ pub async fn setup(
         // Pull model: start agent
         let agent = if model == DeploymentModel::Pull {
             let agent_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+                .ok()
+                .filter(|image| !image.is_empty())
+                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
 
             match platform {
                 Platform::Kubernetes => {

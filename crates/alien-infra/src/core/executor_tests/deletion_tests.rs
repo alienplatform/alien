@@ -95,6 +95,47 @@ async fn test_deletion_respects_reverse_dependency_order() -> Result<()> {
     Ok(())
 }
 
+/// Tests dependencies are not stepped while their dependents are still deleting.
+///
+/// This matters for providers whose delete handlers still read dependency
+/// outputs while polling, such as Azure resources reading the resource group.
+#[tokio::test]
+async fn test_dependency_waits_until_dependent_delete_completes() -> Result<()> {
+    let store1 = test_storage("store1");
+    let func1 = test_function("func1");
+
+    let stack = Stack::new("delete-waits-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1.clone(),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let executor = new_executor(&stack)?;
+    let state = new_test_state();
+    let state_after_create = run_to_synced(&executor, state).await?;
+    assert_all_running(&state_after_create, &["store1", "func1"]);
+
+    let deletion_executor = new_deletion_executor()?;
+
+    let step_result = deletion_executor.step(state_after_create).await?;
+    let state = step_result.next_state;
+    assert_eq!(get_status(&state, "func1"), Some(ResourceStatus::Deleting));
+    assert_eq!(get_status(&state, "store1"), Some(ResourceStatus::Running));
+
+    let step_result = deletion_executor.step(state).await?;
+    let state = step_result.next_state;
+    assert_eq!(get_status(&state, "func1"), Some(ResourceStatus::Deleting));
+    assert_eq!(get_status(&state, "store1"), Some(ResourceStatus::Running));
+
+    let final_state = run_to_synced(&deletion_executor, state).await?;
+    assert_deleted(&final_state, &["store1", "func1"]);
+
+    Ok(())
+}
+
 /// Tests partial deletion using lifecycle filter.
 #[tokio::test]
 async fn test_partial_deletion_with_lifecycle_filter() -> Result<()> {

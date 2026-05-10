@@ -148,7 +148,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:apigateway:${awsRegion}::/apis"],
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -157,7 +160,10 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:apigateway:${awsRegion}::/apis"],
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -328,10 +334,24 @@
             "run.services.deleteTagBinding",
             "run.jobs.createTagBinding",
             "run.jobs.deleteTagBinding",
+            "cloudscheduler.jobs.create",
+            "cloudscheduler.jobs.delete",
+            "cloudscheduler.jobs.get",
+            "cloudscheduler.jobs.list",
+            "cloudscheduler.jobs.update",
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.getIamPolicy",
+            "pubsub.topics.setIamPolicy",
+            "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
             "pubsub.subscriptions.create",
             "pubsub.subscriptions.delete",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
+            "storage.buckets.get",
+            "storage.buckets.update",
             "iam.serviceAccounts.getIamPolicy",
             "iam.serviceAccounts.setIamPolicy"
           ]

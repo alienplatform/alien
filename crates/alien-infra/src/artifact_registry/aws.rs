@@ -600,15 +600,53 @@ impl AwsArtifactRegistryController {
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
-        let policy_name = "ECRPullPolicy";
 
-        // Delete pull role policy - treat NotFound as success for idempotent deletion
-        match iam_client
-            .delete_role_policy(&pull_role_name, policy_name)
-            .await
-        {
-            Ok(_) => {
-                info!(role_name = %pull_role_name, "Pull role policy deleted successfully");
+        // Delete all inline policies. Resource-scoped permissions can attach
+        // additional policies to these roles, and IAM refuses to delete a role
+        // while any inline policy remains.
+        match iam_client.list_role_policies(&pull_role_name).await {
+            Ok(response) => {
+                if let Some(policy_names) = response.list_role_policies_result.policy_names {
+                    for policy_name in policy_names.member {
+                        match iam_client
+                            .delete_role_policy(&pull_role_name, &policy_name)
+                            .await
+                        {
+                            Ok(_) => {
+                                info!(
+                                    role_name = %pull_role_name,
+                                    policy_name = %policy_name,
+                                    "Pull role inline policy deleted successfully"
+                                );
+                            }
+                            Err(e)
+                                if matches!(
+                                    e.error,
+                                    Some(
+                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
+                                    )
+                                ) =>
+                            {
+                                info!(
+                                    role_name = %pull_role_name,
+                                    policy_name = %policy_name,
+                                    "Pull role inline policy already deleted"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to delete pull role policy '{}' from '{}'",
+                                            policy_name, pull_role_name
+                                        ),
+                                        resource_id: Some(config.id.clone()),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             Err(e)
                 if matches!(
@@ -616,11 +654,11 @@ impl AwsArtifactRegistryController {
                     Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
                 ) =>
             {
-                info!(role_name = %pull_role_name, "Pull role policy already deleted");
+                info!(role_name = %pull_role_name, "Pull role already deleted");
             }
             Err(e) => {
                 return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to delete pull role policy '{}'", pull_role_name),
+                    message: format!("Failed to list pull role policies '{}'", pull_role_name),
                     resource_id: Some(config.id.clone()),
                 }));
             }
@@ -690,15 +728,53 @@ impl AwsArtifactRegistryController {
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
-        let policy_name = "ECRPushPolicy";
 
-        // Delete push role policy - treat NotFound as success for idempotent deletion
-        match iam_client
-            .delete_role_policy(&push_role_name, policy_name)
-            .await
-        {
-            Ok(_) => {
-                info!(role_name = %push_role_name, "Push role policy deleted successfully");
+        // Delete all inline policies. Resource-scoped permissions can attach
+        // additional policies to these roles, and IAM refuses to delete a role
+        // while any inline policy remains.
+        match iam_client.list_role_policies(&push_role_name).await {
+            Ok(response) => {
+                if let Some(policy_names) = response.list_role_policies_result.policy_names {
+                    for policy_name in policy_names.member {
+                        match iam_client
+                            .delete_role_policy(&push_role_name, &policy_name)
+                            .await
+                        {
+                            Ok(_) => {
+                                info!(
+                                    role_name = %push_role_name,
+                                    policy_name = %policy_name,
+                                    "Push role inline policy deleted successfully"
+                                );
+                            }
+                            Err(e)
+                                if matches!(
+                                    e.error,
+                                    Some(
+                                        alien_client_core::ErrorData::RemoteResourceNotFound { .. }
+                                    )
+                                ) =>
+                            {
+                                info!(
+                                    role_name = %push_role_name,
+                                    policy_name = %policy_name,
+                                    "Push role inline policy already deleted"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to delete push role policy '{}' from '{}'",
+                                            policy_name, push_role_name
+                                        ),
+                                        resource_id: Some(config.id.clone()),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             Err(e)
                 if matches!(
@@ -706,11 +782,11 @@ impl AwsArtifactRegistryController {
                     Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
                 ) =>
             {
-                info!(role_name = %push_role_name, "Push role policy already deleted");
+                info!(role_name = %push_role_name, "Push role already deleted");
             }
             Err(e) => {
                 return Err(e.into_alien_error().context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to delete push role policy '{}'", push_role_name),
+                    message: format!("Failed to list push role policies '{}'", push_role_name),
                     resource_id: Some(config.id.clone()),
                 }));
             }
@@ -1099,7 +1175,10 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
-    use alien_aws_clients::iam::{CreateRoleResponse, CreateRoleResult, MockIamApi, Role};
+    use alien_aws_clients::iam::{
+        CreateRoleResponse, CreateRoleResult, ListRolePoliciesResponse, ListRolePoliciesResult,
+        MockIamApi, PolicyNames, Role,
+    };
     use alien_core::Platform;
     use std::sync::Arc;
 
@@ -1141,6 +1220,22 @@ mod tests {
             .returning(|_, _, _| Ok(()));
 
         // Mock successful policy deletion (for both roles)
+        mock_iam.expect_list_role_policies().returning(|role_name| {
+            let policy_name = if role_name.ends_with("-pull") {
+                "ECRPullPolicy"
+            } else {
+                "ECRPushPolicy"
+            };
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec![policy_name.to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
         mock_iam
             .expect_delete_role_policy()
             .returning(|_, _| Ok(()));

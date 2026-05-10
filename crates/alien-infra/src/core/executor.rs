@@ -935,7 +935,7 @@ impl StackExecutor {
                     | ResourceStatus::ProvisionFailed
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
-                        // Check if this resource is ready for deletion (all dependents are deleted/deleting)
+                        // Check if this resource is ready for deletion (all dependents are deleted)
                         if !self.deletion_ready(resource_id, &state) {
                             debug!(
                                 "Resource '{}' not ready for deletion - skipping until dependents are deleted",
@@ -1205,16 +1205,17 @@ impl StackExecutor {
                 continue;
             }
 
-            let is_actively_modifying = matches!(
-                current_resource_view.status,
-                ResourceStatus::Updating | ResourceStatus::Deleting
-            );
-
             // A resource is ready if:
-            // 1. It's actively being updated or deleted.
+            // 1. It's actively being updated.
             // 2. It's already Running - needs to run Ready handler for health checks.
             // 3. Or, it's not actively modifying (e.g., Pending) AND its dependencies were met before this step.
-            let is_ready = if is_actively_modifying {
+            //
+            // Delete flows use reverse dependency ordering at every step, not
+            // just when entering Deleting. A dependent may still need its
+            // dependency's outputs while its delete flow is polling.
+            let is_ready = if current_resource_view.status == ResourceStatus::Deleting {
+                self.deletion_ready(resource_id, &next_state)
+            } else if current_resource_view.status == ResourceStatus::Updating {
                 true
             } else if current_resource_view.status == ResourceStatus::Running {
                 // Running resources should always be stepped to run their Ready handler.
@@ -1654,15 +1655,14 @@ impl StackExecutor {
 
     /// Checks if a resource is ready for deletion by verifying all its dependents are deleted.
     /// For deletion, the dependency logic is reversed: a resource can only be deleted when
-    /// all resources that depend on it are already deleted or being deleted.
+    /// all resources that depend on it are already deleted.
     fn deletion_ready(&self, resource_id: &str, state: &StackState) -> bool {
         // Find all resources in the state that depend on this resource
         for (dependent_id, dependent_state) in &state.resources {
-            // Skip if the dependent is already deleted or being deleted
-            if matches!(
-                dependent_state.status,
-                ResourceStatus::Deleted | ResourceStatus::Deleting
-            ) {
+            // Skip self and dependents that are fully deleted. A dependent in
+            // Deleting is still active because delete handlers often need
+            // dependency outputs such as resource group names or bucket names.
+            if dependent_id == resource_id || dependent_state.status == ResourceStatus::Deleted {
                 continue;
             }
 

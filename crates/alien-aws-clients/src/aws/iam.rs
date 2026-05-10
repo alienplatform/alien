@@ -42,6 +42,13 @@ pub trait IamApi: Send + Sync + Debug {
         &self,
         role_name: &str,
     ) -> Result<ListAttachedRolePoliciesResponse>;
+    async fn create_policy(
+        &self,
+        policy_name: &str,
+        policy_document: &str,
+        path: Option<String>,
+    ) -> Result<CreatePolicyResponse>;
+    async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
@@ -439,6 +446,30 @@ impl IamApi for IamClient {
             .await
     }
 
+    async fn create_policy(
+        &self,
+        policy_name: &str,
+        policy_document: &str,
+        path: Option<String>,
+    ) -> Result<CreatePolicyResponse> {
+        let mut params = vec![
+            ("PolicyName".to_string(), policy_name.to_string()),
+            ("PolicyDocument".to_string(), policy_document.to_string()),
+        ];
+        if let Some(path) = path {
+            params.push(("Path".to_string(), path));
+        }
+        let body = Self::build_form_body("CreatePolicy", "2010-05-08", params);
+        self.post_xml(body, "CreatePolicy", policy_name).await
+    }
+
+    async fn delete_policy(&self, policy_arn: &str) -> Result<()> {
+        let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
+        let body = Self::build_form_body("DeletePolicy", "2010-05-08", params);
+        self.post_no_response(body, "DeletePolicy", policy_arn)
+            .await
+    }
+
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
         let params = vec![
             ("RoleName".to_string(), role_name.to_string()),
@@ -700,6 +731,32 @@ pub struct GetRolePolicyResult {
     pub role_name: String,
     pub policy_name: String,
     pub policy_document: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyResponse {
+    pub create_policy_result: CreatePolicyResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyResult {
+    pub policy: Policy,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct Policy {
+    pub policy_name: Option<String>,
+    pub policy_id: Option<String>,
+    pub arn: String,
+    pub path: Option<String>,
+    pub default_version_id: Option<String>,
+    pub attachment_count: Option<i32>,
+    pub is_attachable: Option<bool>,
+    pub create_date: Option<String>,
+    pub update_date: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

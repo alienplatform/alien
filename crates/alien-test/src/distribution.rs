@@ -812,7 +812,9 @@ fn terraform_helm_values(outputs: &Value) -> anyhow::Result<Value> {
 
 fn runtime_values() -> anyhow::Result<Value> {
     let image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+        .ok()
+        .filter(|image| !image.is_empty())
+        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
     let (repository, tag) = split_image_tag(&image)?;
     Ok(serde_json::json!({
         "image": {

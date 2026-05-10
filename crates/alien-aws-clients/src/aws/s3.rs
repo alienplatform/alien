@@ -481,11 +481,14 @@ impl S3Api for S3Client {
     ) -> Result<()> {
         let host = self.host(bucket);
         let body = Self::bucket_tagging_xml(tags);
+        let digest = md5::compute(body.as_bytes());
+        let content_md5 = STANDARD.encode(digest.0);
         let builder = self
             .client
             .request(Method::PUT, self.url(bucket, "?tagging"))
             .host(&host)
             .content_type_xml()
+            .header("content-md5", &content_md5)
             .content_sha256(&body)
             .body(body.clone());
 
