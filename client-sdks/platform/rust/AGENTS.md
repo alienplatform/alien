@@ -12,10 +12,10 @@ grep -A 20 "pub struct DeploymentStatus" $CODEGEN
 
 ## Regenerating
 
-```bash
-pnpm run generate:api-rust-sdk   # openapi → SDK
-pnpm run generate:api            # regenerate everything
-```
+`alien-platform-api` generates Rust code at Cargo build time from
+`openapi.json`. Do not edit generated Rust code manually. Update
+`openapi.json` through the platform API generation pipeline, then run
+`cargo build -p alien-platform-api` to inspect generated types.
 
 ## Don't
 

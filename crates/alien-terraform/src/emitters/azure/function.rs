@@ -16,19 +16,19 @@ use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, required_label, stack_name_template, tags},
-    emitters::function_environment::{AzureFunctionEnvironmentRenderer, function_environment},
+    emitters::function_environment::{function_environment, AzureFunctionEnvironmentRenderer},
     expr,
     registry::TfRegistry,
 };
 use alien_core::{
-    AzureContainerAppsEnvironment, ErrorData, Function, FunctionCode, Ingress, Result,
-    ServiceAccount, import::EmitContext,
+    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Function, FunctionCode, Ingress,
+    Result, ServiceAccount,
 };
 use alien_error::AlienError;
 use hcl::{
-    Identifier,
     expr::Expression,
     structure::{Block, Structure},
+    Identifier,
 };
 
 #[derive(Debug, Clone, Copy, Default)]

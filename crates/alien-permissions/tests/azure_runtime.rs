@@ -107,7 +107,7 @@ fn test_azure_scope_interpolation() {
 
     // Verify that the scope was set correctly
     assert_eq!(
-        result.properties.scope, 
+        result.properties.scope,
         "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.Storage/storageAccounts/stcxpaymentsprod"
     );
 }

@@ -160,19 +160,11 @@ export type ProjectHelm = {
 };
 
 /**
- * Terraform provider package configuration. If null, Terraform packages will not be generated.
+ * Terraform package configuration. If null, Terraform packages will not be generated.
  */
 export type ProjectTerraform = {
   /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
-  /**
-   * Whether Terraform provider package generation is enabled
+   * Whether Terraform package generation is enabled
    */
   enabled: boolean;
 };
@@ -198,7 +190,7 @@ export type ProjectPackagesConfig = {
    */
   helm?: ProjectHelm | null | undefined;
   /**
-   * Terraform provider package configuration. If null, Terraform packages will not be generated.
+   * Terraform package configuration. If null, Terraform packages will not be generated.
    */
   terraform?: ProjectTerraform | null | undefined;
 };
@@ -224,6 +216,10 @@ export type Project = {
    * Customization settings for the deployment page background animation.
    */
   deploymentPageBackground?: ProjectDeploymentPageBackground | null | undefined;
+  /**
+   * Custom logo URL to show on the deployment page.
+   */
+  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -377,8 +373,6 @@ export const ProjectTerraform$inboundSchema: z.ZodType<
   ProjectTerraform,
   unknown
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   enabled: z.boolean(),
 });
 
@@ -427,6 +421,7 @@ export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   deploymentPageBackground: z.nullable(
     z.lazy(() => ProjectDeploymentPageBackground$inboundSchema),
   ).optional(),
+  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(z.lazy(() => ProjectPackagesConfig$inboundSchema))
     .optional(),
   domainId: z.nullable(z.string()).optional(),

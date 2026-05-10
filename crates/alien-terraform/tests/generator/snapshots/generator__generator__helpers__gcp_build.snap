@@ -114,10 +114,6 @@ resource "google_cloudbuild_trigger" "builder" {
       logging = "CLOUD_LOGGING_ONLY"
     }
   }
-
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 === import.tf ===
@@ -132,6 +128,9 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_cloudbuild_trigger.builder
+  ]
 }
 
 === outputs.tf ===

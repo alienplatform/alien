@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+assertion_line: 118
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -550,11 +551,27 @@ Resources:
           Version: 2012-10-17
           Statement:
           - Action:
+            - lambda:CreateFunction
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+            Sid: FunctionProvision1
+          - Action:
             - lambda:AddPermission
             - lambda:CreateAlias
+            - lambda:CreateEventSourceMapping
+            - lambda:CreateFunctionUrlConfig
             - lambda:DeleteAlias
+            - lambda:DeleteEventSourceMapping
+            - lambda:DeleteFunction
             - lambda:DeleteFunctionConcurrency
             - lambda:DeleteFunctionEventInvokeConfig
+            - lambda:DeleteFunctionUrlConfig
             - lambda:GetCodeSigningConfig
             - lambda:GetEventSourceMapping
             - lambda:GetFunction
@@ -570,29 +587,39 @@ Resources:
             - lambda:PutFunctionConcurrency
             - lambda:PutFunctionEventInvokeConfig
             - lambda:RemovePermission
+            - lambda:TagResource
+            - lambda:UntagResource
             - lambda:UpdateAlias
+            - lambda:UpdateCodeSigningConfig
             - lambda:UpdateEventSourceMapping
             - lambda:UpdateFunctionCode
             - lambda:UpdateFunctionConfiguration
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-            Sid: FunctionManagement1
+            Sid: FunctionProvision2
           - Action:
             - iam:PassRole
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-            Sid: FunctionManagement2
+            Sid: FunctionProvision3
           - Action:
             - ecr:GetAuthorizationToken
             Effect: Allow
             Resource:
             - '*'
-            Sid: FunctionManagement3
+            Sid: FunctionProvision4
           - Action:
             - ecr:BatchGetImage
             - ecr:GetDownloadUrlForLayer
+            - ecr:GetRepositoryPolicy
+            - ecr:SetRepositoryPolicy
             Effect: Allow
             Resource:
             - Fn::Sub:
@@ -603,33 +630,69 @@ Resources:
                   - Fn::Split:
                     - ':'
                     - Ref: ManagingRoleArn
-            Sid: FunctionManagement4
-          - Action:
-            - acm:DeleteCertificate
-            - acm:DescribeCertificate
-            - acm:ImportCertificate
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-            Sid: FunctionManagement5
+            Sid: FunctionProvision5
           - Action:
             - apigateway:POST
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+            Sid: FunctionProvision6
+          - Action:
+            - apigateway:POST
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
-            Sid: FunctionManagement6
+            Sid: FunctionProvision7
           - Action:
             - apigateway:DELETE
             - apigateway:GET
             - apigateway:PATCH
             - apigateway:PUT
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: FunctionManagement7
+            Sid: FunctionProvision8
+          - Action:
+            - events:PutRule
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+            Sid: FunctionProvision9
+          - Action:
+            - events:DeleteRule
+            - events:DescribeRule
+            - events:PutTargets
+            - events:RemoveTargets
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+            Sid: FunctionProvision10
           - Action:
             - s3:GetBucketAcl
             - s3:GetBucketLocation
@@ -697,13 +760,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      NotificationConfiguration:
-        LambdaConfigurations:
-        - Event: s3:ObjectCreated:*
-          Function:
-            Fn::GetAtt:
-            - PublicApi
-            - Arn
       VersioningConfiguration:
         Status: Enabled
       Tags:
@@ -715,8 +771,6 @@ Resources:
         Value: assets
       - Key: AlienResourceType
         Value: storage
-    DependsOn:
-    - PublicApiStoragePermissionassets
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   AssetsBucketPolicy:
@@ -971,217 +1025,6 @@ Resources:
         Value: build
     DependsOn:
     - BuilderLogGroup
-  PublicApiLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName:
-        Fn::Sub: /aws/lambda/${AWS::StackName}-public-api
-      RetentionInDays: 30
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-  PublicApi:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName:
-        Fn::Sub: ${AWS::StackName}-public-api
-      PackageType: Image
-      Code:
-        ImageUri: 123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api:1.2.3
-      Role:
-        Fn::GetAtt:
-        - ExecutionSaRole
-        - Arn
-      MemorySize: 512
-      Timeout: 60
-      Environment:
-        Variables:
-          ALIEN_ASSETS_BINDING:
-            Fn::ToJsonString:
-              service: s3
-              bucketName:
-                Fn::Sub: ${AWS::StackName}-assets
-          ALIEN_CURRENT_FUNCTION_BINDING_NAME: public-api
-          ALIEN_DEPLOYMENT_TYPE: aws
-          ALIEN_LAMBDA_MODE: buffered
-          ALIEN_METADATA_BINDING:
-            Fn::ToJsonString:
-              service: dynamodb
-              tableName:
-                Ref: Metadata
-              region:
-                Ref: AWS::Region
-          ALIEN_RUNTIME_SEND_OTLP: 'true'
-          ALIEN_SECRETS_BINDING:
-            Fn::ToJsonString:
-              service: parameter-store
-              vaultPrefix:
-                Fn::Sub: ${AWS::StackName}-secrets
-          ALIEN_TRANSPORT: lambda
-          AWS_ACCOUNT_ID:
-            Ref: AWS::AccountId
-          RUST_LOG: info
-      VpcConfig:
-        SubnetIds:
-        - Ref: DefaultNetworkPrivateSubnet1
-        - Fn::If:
-          - NetworkCreateUseAz2
-          - Ref: DefaultNetworkPrivateSubnet2
-          - Ref: AWS::NoValue
-        - Fn::If:
-          - NetworkCreateUseAz3
-          - Ref: DefaultNetworkPrivateSubnet3
-          - Ref: AWS::NoValue
-        SecurityGroupIds:
-        - Ref: DefaultNetworkSecurityGroup
-      Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
-        Value: public-api
-      - Key: AlienResourceType
-        Value: function
-    DependsOn:
-    - PublicApiLogGroup
-  PublicApiStoragePermissionassets:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName:
-        Ref: PublicApi
-      Principal: s3.amazonaws.com
-      SourceAccount:
-        Ref: AWS::AccountId
-  PublicApiApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name:
-        Fn::Sub: ${AWS::StackName}-PublicApi
-      ProtocolType: HTTP
-      DisableExecuteApiEndpoint: false
-  PublicApiIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId:
-        Ref: PublicApiApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri:
-        Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PublicApi.Arn}/invocations
-      PayloadFormatVersion: '2.0'
-  PublicApiRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId:
-        Ref: PublicApiApi
-      RouteKey: ANY /{proxy+}
-      Target:
-        Fn::Sub: integrations/${PublicApiIntegration}
-  PublicApiStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId:
-        Ref: PublicApiApi
-      StageName: $default
-      AutoDeploy: true
-  PublicApiApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName:
-        Ref: PublicApi
-      Principal: apigateway.amazonaws.com
-      SourceArn:
-        Fn::Sub: arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${PublicApiApi}/*/*
-  WorkerLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName:
-        Fn::Sub: /aws/lambda/${AWS::StackName}-worker
-      RetentionInDays: 30
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-  Worker:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName:
-        Fn::Sub: ${AWS::StackName}-worker
-      PackageType: Image
-      Code:
-        ImageUri: 123456789012.dkr.ecr.us-east-1.amazonaws.com/app/worker:1.2.3
-      Role:
-        Fn::GetAtt:
-        - ExecutionSaRole
-        - Arn
-      MemorySize: 256
-      Timeout: 180
-      Environment:
-        Variables:
-          ALIEN_CURRENT_FUNCTION_BINDING_NAME: worker
-          ALIEN_DEPLOYMENT_TYPE: aws
-          ALIEN_LAMBDA_MODE: buffered
-          ALIEN_RUNTIME_SEND_OTLP: 'true'
-          ALIEN_TRANSPORT: lambda
-          AWS_ACCOUNT_ID:
-            Ref: AWS::AccountId
-      VpcConfig:
-        SubnetIds:
-        - Ref: DefaultNetworkPrivateSubnet1
-        - Fn::If:
-          - NetworkCreateUseAz2
-          - Ref: DefaultNetworkPrivateSubnet2
-          - Ref: AWS::NoValue
-        - Fn::If:
-          - NetworkCreateUseAz3
-          - Ref: DefaultNetworkPrivateSubnet3
-          - Ref: AWS::NoValue
-        SecurityGroupIds:
-        - Ref: DefaultNetworkSecurityGroup
-      Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
-        Value: worker
-      - Key: AlienResourceType
-        Value: function
-    DependsOn:
-    - WorkerLogGroup
-  WorkerQueueTrigger0:
-    Type: AWS::Lambda::EventSourceMapping
-    Properties:
-      BatchSize: 1
-      Enabled: true
-      EventSourceArn:
-        Fn::GetAtt:
-        - Jobs
-        - Arn
-      FunctionName:
-        Ref: Worker
-  WorkerScheduleTrigger0:
-    Type: AWS::Events::Rule
-    Properties:
-      ScheduleExpression: rate(5 minutes)
-      State: ENABLED
-      Targets:
-      - Id: WorkerTarget0
-        Arn:
-          Fn::GetAtt:
-          - Worker
-          - Arn
-  WorkerSchedulePermission0:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName:
-        Ref: Worker
-      Principal: events.amazonaws.com
-      SourceArn:
-        Fn::GetAtt:
-        - WorkerScheduleTrigger0
-        - Arn
   DeploymentStackImport:
     Type: AWS::CloudFormation::CustomResource
     Properties:
@@ -1385,45 +1228,6 @@ Resources:
             - Arn
           buildEnvVars:
             PROFILE: release
-      - id: public-api
-        type: function
-        importData:
-          functionName:
-            Ref: PublicApi
-          functionArn:
-            Fn::GetAtt:
-            - PublicApi
-            - Arn
-          eventSourceMappings: []
-          eventbridgeRuleNames: []
-          s3PermissionStatementIds:
-          - PublicApiStoragePermissionassets
-          eventbridgePermissionStatementIds: []
-          url:
-            Fn::Sub: https://${PublicApiApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
-          apiId:
-            Ref: PublicApiApi
-          integrationId:
-            Ref: PublicApiIntegration
-          routeId:
-            Ref: PublicApiRoute
-          stageName: $default
-      - id: worker
-        type: function
-        importData:
-          functionName:
-            Ref: Worker
-          functionArn:
-            Fn::GetAtt:
-            - Worker
-            - Arn
-          eventSourceMappings:
-          - Ref: WorkerQueueTrigger0
-          eventbridgeRuleNames:
-          - Ref: WorkerScheduleTrigger0
-          s3PermissionStatementIds: []
-          eventbridgePermissionStatementIds:
-          - WorkerScheduleInvoke0
     DependsOn:
     - DefaultNetworkVpc
     - DefaultNetworkInternetGateway
@@ -1450,19 +1254,6 @@ Resources:
     - RegistryPushRole
     - BuilderLogGroup
     - Builder
-    - PublicApiLogGroup
-    - PublicApi
-    - PublicApiStoragePermissionassets
-    - PublicApiApi
-    - PublicApiIntegration
-    - PublicApiRoute
-    - PublicApiStage
-    - PublicApiApiPermission
-    - WorkerLogGroup
-    - Worker
-    - WorkerQueueTrigger0
-    - WorkerScheduleTrigger0
-    - WorkerSchedulePermission0
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
@@ -1517,7 +1308,7 @@ Outputs:
                       Ref: CertificateArn
           - Ref: AWS::NoValue
     Description: Manager import StackSettings JSON.
-  DeploymentResources0:
+  DeploymentResources:
     Value:
       Fn::ToJsonString:
       - id: default-network
@@ -1675,47 +1466,4 @@ Outputs:
             - Arn
           buildEnvVars:
             PROFILE: release
-      - id: public-api
-        type: function
-        importData:
-          functionName:
-            Ref: PublicApi
-          functionArn:
-            Fn::GetAtt:
-            - PublicApi
-            - Arn
-          eventSourceMappings: []
-          eventbridgeRuleNames: []
-          s3PermissionStatementIds:
-          - PublicApiStoragePermissionassets
-          eventbridgePermissionStatementIds: []
-          url:
-            Fn::Sub: https://${PublicApiApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
-          apiId:
-            Ref: PublicApiApi
-          integrationId:
-            Ref: PublicApiIntegration
-          routeId:
-            Ref: PublicApiRoute
-          stageName: $default
-    Description: Manager import resources JSON chunk. Reassemble chunks in numeric suffix order.
-  DeploymentResources1:
-    Value:
-      Fn::ToJsonString:
-      - id: worker
-        type: function
-        importData:
-          functionName:
-            Ref: Worker
-          functionArn:
-            Fn::GetAtt:
-            - Worker
-            - Arn
-          eventSourceMappings:
-          - Ref: WorkerQueueTrigger0
-          eventbridgeRuleNames:
-          - Ref: WorkerScheduleTrigger0
-          s3PermissionStatementIds: []
-          eventbridgePermissionStatementIds:
-          - WorkerScheduleInvoke0
-    Description: Manager import resources JSON chunk. Reassemble chunks in numeric suffix order.
+    Description: Manager import resources JSON.

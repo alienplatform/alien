@@ -169,6 +169,14 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_ecr_repository.registry,
+    aws_ecr_lifecycle_policy.registry,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 === outputs.tf ===

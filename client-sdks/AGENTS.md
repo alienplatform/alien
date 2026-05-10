@@ -23,8 +23,9 @@ Rust SDKs use [progenitor](https://github.com/oxidecomputer/progenitor) — type
 TypeScript SDKs use [Speakeasy](https://www.speakeasyapi.dev/) — generated from the same specs.
 
 ```bash
-pnpm run generate:api            # Regenerate all SDKs from OpenAPI specs
-pnpm run generate:api-rust-sdk   # Rust SDKs only
+pnpm run generate:manager-rust-sdk # Regenerate manager Rust SDK inputs
+pnpm run generate:manager-api      # Regenerate manager TypeScript SDK
+pnpm run generate:platform-api     # Regenerate platform TypeScript SDK from checked-in spec
 ```
 
 ## Don't

@@ -10,8 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, ContainerOutputs, EnvironmentVariable, FunctionOutputs, Platform,
-    StackSettings,
+    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, FunctionOutputs,
+    Platform, StackSettings,
 };
 
 use crate::error::ErrorData;
@@ -133,6 +133,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
 pub struct DeleteQuery {
     #[serde(default)]
     pub force: bool,
+    pub delete_scope: Option<DeleteScope>,
 }
 
 #[derive(Debug, Serialize)]
@@ -586,6 +587,7 @@ async fn get_deployment_info(
     params(
         ("id" = String, Path, description = "Deployment ID"),
         ("force" = Option<bool>, Query, description = "Force delete without running cleanup (immediately removes record)"),
+        ("deleteScope" = Option<DeleteScope>, Query, description = "Delete scope: full or liveOnly"),
     ),
     responses(
         (status = 202, description = "Deployment deletion enqueued"),
@@ -614,7 +616,7 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    if query.force || deployment.import_source.is_some() {
+    if query.force {
         if let Err(e) = state
             .deployment_store
             .delete_deployment(&subject, &id)
@@ -623,9 +625,16 @@ async fn delete_deployment(
             return e.into_response();
         }
     } else {
+        let Some(delete_scope) = query.delete_scope else {
+            return ErrorData::bad_request(
+                "deleteScope is required. Use deleteScope=liveOnly for setup handoff cleanup or deleteScope=full for setup/admin teardown.",
+            )
+            .into_response();
+        };
+
         if let Err(e) = state
             .deployment_store
-            .set_delete_pending(&subject, &id)
+            .set_delete_pending(&subject, &id, delete_scope)
             .await
         {
             return e.into_response();

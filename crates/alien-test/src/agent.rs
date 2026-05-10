@@ -7,10 +7,9 @@
 
 use std::{path::Path, sync::Arc};
 
-use alien_core::Platform;
+use alien_core::{ClientConfig, Platform};
 use tracing::info;
 
-use crate::config::TestConfig;
 use crate::manager::TestManager;
 
 /// Default Docker label applied to test alien-agent containers so they can be
@@ -117,14 +116,13 @@ impl TestAlienAgent {
     /// `image` is the alien-agent Docker image to run (e.g.
     /// `ghcr.io/alienplatform/alien-agent:latest`).
     ///
-    /// For cloud platforms (AWS/GCP/Azure), pass a `TestConfig` to inject
-    /// target account credentials into the container so the agent can deploy
-    /// resources directly.
+    /// For cloud platforms (AWS/GCP/Azure), pass the scoped client
+    /// configuration the agent should use inside the target environment.
     pub async fn start_container(
         manager: &TestManager,
         image: &str,
         platform: Platform,
-        config: Option<&TestConfig>,
+        client_config: Option<&ClientConfig>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
             manager_url = %manager.url,
@@ -160,65 +158,8 @@ impl TestAlienAgent {
             format!("ALIEN_API_KEY={}", manager.admin_token),
         ];
 
-        // Inject target account credentials for cloud platforms so the agent
-        // can deploy resources directly (pull model = no cross-account IAM).
-        if let Some(cfg) = config {
-            match platform {
-                Platform::Aws => {
-                    if let Some(ref target) = cfg.aws_target {
-                        args.extend([
-                            "-e".to_string(),
-                            format!("AWS_ACCESS_KEY_ID={}", target.access_key_id),
-                            "-e".to_string(),
-                            format!("AWS_SECRET_ACCESS_KEY={}", target.secret_access_key),
-                            "-e".to_string(),
-                            format!("AWS_REGION={}", target.region),
-                        ]);
-                        if let Some(ref token) = target.session_token {
-                            args.extend(["-e".to_string(), format!("AWS_SESSION_TOKEN={}", token)]);
-                        }
-                        if let Some(ref account_id) = target.account_id {
-                            args.extend([
-                                "-e".to_string(),
-                                format!("AWS_ACCOUNT_ID={}", account_id),
-                            ]);
-                        }
-                    }
-                }
-                Platform::Gcp => {
-                    if let Some(ref target) = cfg.gcp_target {
-                        args.extend([
-                            "-e".to_string(),
-                            format!("GCP_PROJECT_ID={}", target.project_id),
-                            "-e".to_string(),
-                            format!("GCP_REGION={}", target.region),
-                        ]);
-                        if let Some(ref creds) = target.credentials_json {
-                            args.extend([
-                                "-e".to_string(),
-                                format!("GOOGLE_SERVICE_ACCOUNT_KEY={}", creds),
-                            ]);
-                        }
-                    }
-                }
-                Platform::Azure => {
-                    if let Some(ref target) = cfg.azure_target {
-                        args.extend([
-                            "-e".to_string(),
-                            format!("AZURE_SUBSCRIPTION_ID={}", target.subscription_id),
-                            "-e".to_string(),
-                            format!("AZURE_TENANT_ID={}", target.tenant_id),
-                            "-e".to_string(),
-                            format!("AZURE_CLIENT_ID={}", target.client_id),
-                            "-e".to_string(),
-                            format!("AZURE_CLIENT_SECRET={}", target.client_secret),
-                            "-e".to_string(),
-                            format!("AZURE_REGION={}", target.region),
-                        ]);
-                    }
-                }
-                _ => {}
-            }
+        if let Some(client_config) = client_config {
+            append_client_config_env(&mut args, client_config)?;
         }
 
         args.push(image.to_string());
@@ -742,10 +683,86 @@ impl TestAlienAgent {
         manager: &Arc<TestManager>,
         image: &str,
         platform: Platform,
-        config: Option<&TestConfig>,
+        client_config: Option<&ClientConfig>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_container(manager.as_ref(), image, platform, config).await
+        Self::start_container(manager.as_ref(), image, platform, client_config).await
     }
+}
+
+fn append_client_config_env(
+    args: &mut Vec<String>,
+    client_config: &ClientConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match client_config {
+        ClientConfig::Aws(config) => {
+            let alien_core::AwsCredentials::AccessKeys {
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } = &config.credentials
+            else {
+                return Err("agent container tests require AWS access-key credentials".into());
+            };
+
+            args.extend([
+                "-e".to_string(),
+                format!("AWS_ACCESS_KEY_ID={access_key_id}"),
+                "-e".to_string(),
+                format!("AWS_SECRET_ACCESS_KEY={secret_access_key}"),
+                "-e".to_string(),
+                format!("AWS_REGION={}", config.region),
+                "-e".to_string(),
+                format!("AWS_ACCOUNT_ID={}", config.account_id),
+            ]);
+            if let Some(token) = session_token {
+                args.extend(["-e".to_string(), format!("AWS_SESSION_TOKEN={token}")]);
+            }
+        }
+        ClientConfig::Gcp(config) => {
+            args.extend([
+                "-e".to_string(),
+                format!("GCP_PROJECT_ID={}", config.project_id),
+                "-e".to_string(),
+                format!("GCP_REGION={}", config.region),
+            ]);
+            if let alien_core::GcpCredentials::ServiceAccountKey { json } = &config.credentials {
+                args.extend([
+                    "-e".to_string(),
+                    format!("GOOGLE_SERVICE_ACCOUNT_KEY={json}"),
+                ]);
+            } else if let alien_core::GcpCredentials::AccessToken { token } = &config.credentials {
+                args.extend(["-e".to_string(), format!("GCP_ACCESS_TOKEN={token}")]);
+            }
+        }
+        ClientConfig::Azure(config) => {
+            let alien_core::AzureCredentials::ServicePrincipal {
+                client_id,
+                client_secret,
+            } = &config.credentials
+            else {
+                return Err(
+                    "agent container tests require Azure service-principal credentials".into(),
+                );
+            };
+
+            args.extend([
+                "-e".to_string(),
+                format!("AZURE_SUBSCRIPTION_ID={}", config.subscription_id),
+                "-e".to_string(),
+                format!("AZURE_TENANT_ID={}", config.tenant_id),
+                "-e".to_string(),
+                format!("AZURE_CLIENT_ID={client_id}"),
+                "-e".to_string(),
+                format!("AZURE_CLIENT_SECRET={client_secret}"),
+            ]);
+            if let Some(region) = &config.region {
+                args.extend(["-e".to_string(), format!("AZURE_REGION={region}")]);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 /// Get the status of a Docker container (e.g. "running", "exited").

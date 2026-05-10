@@ -161,6 +161,13 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_compute_network.default_network,
+    google_compute_subnetwork.default_network_workload,
+    google_compute_router.default_network_router,
+    google_compute_router_nat.default_network_nat,
+    google_compute_firewall.default_network_internal
+  ]
 }
 
 === outputs.tf ===

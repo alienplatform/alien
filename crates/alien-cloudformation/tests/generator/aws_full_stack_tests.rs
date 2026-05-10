@@ -56,10 +56,6 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         .link(&assets)
         .link(&metadata)
         .link(&secrets)
-        .trigger(FunctionTrigger::storage(
-            &assets,
-            vec!["created".to_string()],
-        ))
         .build();
 
     let worker = Function::new("worker".to_string())
@@ -74,7 +70,7 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
     let stack = Stack::new("full-aws".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global([
-                "function/management",
+                "function/provision",
                 "storage/heartbeat",
                 "queue/heartbeat",
                 "kv/heartbeat",
@@ -105,7 +101,7 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .add(public_api, ResourceLifecycle::Live)
         .add(worker, ResourceLifecycle::Live)

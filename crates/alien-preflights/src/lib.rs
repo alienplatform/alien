@@ -7,8 +7,11 @@ pub mod runner;
 pub mod runtime;
 
 use crate::error::Result;
-use alien_core::{ClientConfig, DeploymentConfig, Platform, Stack, StackState};
+use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "runtime-checks")]
+use alien_core::ClientConfig;
 
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
@@ -208,8 +211,10 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicFunctionLifecycleCheck));
+        registry.add_compile_time_check(Box::new(compile_time::LiveProvisionPermissionsCheck));
         registry.add_compile_time_check(Box::new(compile_time::ValidResourceDependenciesCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceReferencesExistCheck));
+        registry.add_compile_time_check(Box::new(compile_time::TriggerEdgeOwnershipCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleQueueTriggerCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::ServiceAccountImpersonateValidationCheck,

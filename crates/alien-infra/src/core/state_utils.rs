@@ -1,4 +1,4 @@
-use alien_core::{ResourceStatus, StackResourceState, StackState};
+use alien_core::{ResourceLifecycle, ResourceStatus, StackResourceState, StackState};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -233,6 +233,13 @@ pub trait StackStateExt {
     /// - For DeleteFailed resources: retries the delete operation
     /// Returns the IDs of resources that were successfully prepared.
     fn prepare_for_destroy(&mut self) -> Result<Vec<String>>;
+
+    /// Same as [`StackStateExt::prepare_for_destroy`], limited to resources
+    /// whose lifecycle matches the provided filter.
+    fn prepare_for_destroy_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>>;
 }
 
 impl StackStateExt for StackState {
@@ -264,94 +271,116 @@ impl StackStateExt for StackState {
     }
 
     fn prepare_for_destroy(&mut self) -> Result<Vec<String>> {
-        let mut prepared_resource_ids = Vec::new();
+        prepare_for_destroy_matching(self, |_| true)
+    }
 
-        for (resource_id, resource_state) in &mut self.resources {
-            match resource_state.status {
-                ResourceStatus::ProvisionFailed | ResourceStatus::UpdateFailed => {
-                    // For provision/update failures during destroy, transition to delete start
-                    match resource_state.get_internal_controller() {
-                        Ok(Some(mut controller)) => {
-                            tracing::info!(
-                                resource_id = %resource_id,
-                                current_status = ?resource_state.status,
-                                "Transitioning failed resource to delete start for destroy operation"
-                            );
+    fn prepare_for_destroy_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>> {
+        prepare_for_destroy_matching(self, |resource_state| {
+            resource_state
+                .lifecycle
+                .is_some_and(|lifecycle| lifecycle_filter.contains(&lifecycle))
+        })
+    }
+}
 
-                            match controller.transition_to_delete_start() {
-                                Ok(()) => {
-                                    let next_status = controller.get_status();
-                                    let next_outputs = controller.get_outputs();
+fn prepare_for_destroy_matching(
+    stack_state: &mut StackState,
+    should_prepare: impl Fn(&StackResourceState) -> bool,
+) -> Result<Vec<String>> {
+    let mut prepared_resource_ids = Vec::new();
 
-                                    resource_state.set_internal_controller(Some(controller))?;
-                                    resource_state.retry_attempt = 0;
-                                    resource_state.error = None;
-                                    resource_state.status = next_status;
-                                    resource_state.outputs = next_outputs;
-                                    resource_state.last_failed_state = None;
-
-                                    prepared_resource_ids.push(resource_id.clone());
-                                    tracing::info!(
-                                        resource_id = %resource_id,
-                                        new_status = ?next_status,
-                                        "Successfully transitioned resource to delete start"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        resource_id = %resource_id,
-                                        error = %e,
-                                        "Cannot transition resource to delete start - this may indicate the resource doesn't support deletion from this state"
-                                    );
-                                    // Continue with other resources instead of failing the entire operation
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            tracing::warn!(
-                                resource_id = %resource_id,
-                                "No internal controller state for failed resource - cannot transition to delete"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                resource_id = %resource_id,
-                                error = %e,
-                                "Failed to deserialize controller state for resource"
-                            );
-                            return Err(e);
-                        }
-                    }
-                }
-                ResourceStatus::DeleteFailed => {
-                    // For delete failures, use normal retry logic
-                    match resource_state.retry_failed() {
-                        Ok(true) => {
-                            tracing::info!(resource_id = %resource_id, "Successfully retried failed delete operation");
-                            prepared_resource_ids.push(resource_id.clone());
-                        }
-                        Ok(false) => {
-                            tracing::debug!(resource_id = %resource_id, "Delete failed resource could not be retried");
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                resource_id = %resource_id,
-                                error = %e,
-                                "Failed to retry delete operation for resource"
-                            );
-                            return Err(e);
-                        }
-                    }
-                }
-                _ => {
-                    // Resource is not in a failed state, no action needed
-                }
-            }
+    for (resource_id, resource_state) in &mut stack_state.resources {
+        if !should_prepare(resource_state) {
+            continue;
         }
 
-        tracing::info!(prepared_resource_ids = ?prepared_resource_ids, "Completed prepare for destroy operation on stack");
-        Ok(prepared_resource_ids)
+        match resource_state.status {
+            ResourceStatus::ProvisionFailed | ResourceStatus::UpdateFailed => {
+                // For provision/update failures during destroy, transition to delete start
+                match resource_state.get_internal_controller() {
+                    Ok(Some(mut controller)) => {
+                        tracing::info!(
+                            resource_id = %resource_id,
+                            current_status = ?resource_state.status,
+                            "Transitioning failed resource to delete start for destroy operation"
+                        );
+
+                        match controller.transition_to_delete_start() {
+                            Ok(()) => {
+                                let next_status = controller.get_status();
+                                let next_outputs = controller.get_outputs();
+
+                                resource_state.set_internal_controller(Some(controller))?;
+                                resource_state.retry_attempt = 0;
+                                resource_state.error = None;
+                                resource_state.status = next_status;
+                                resource_state.outputs = next_outputs;
+                                resource_state.last_failed_state = None;
+
+                                prepared_resource_ids.push(resource_id.clone());
+                                tracing::info!(
+                                    resource_id = %resource_id,
+                                    new_status = ?next_status,
+                                    "Successfully transitioned resource to delete start"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    resource_id = %resource_id,
+                                    error = %e,
+                                    "Cannot transition resource to delete start - this may indicate the resource doesn't support deletion from this state"
+                                );
+                                // Continue with other resources instead of failing the entire operation
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            resource_id = %resource_id,
+                            "No internal controller state for failed resource - cannot transition to delete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            resource_id = %resource_id,
+                            error = %e,
+                            "Failed to deserialize controller state for resource"
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            ResourceStatus::DeleteFailed => {
+                // For delete failures, use normal retry logic
+                match resource_state.retry_failed() {
+                    Ok(true) => {
+                        tracing::info!(resource_id = %resource_id, "Successfully retried failed delete operation");
+                        prepared_resource_ids.push(resource_id.clone());
+                    }
+                    Ok(false) => {
+                        tracing::debug!(resource_id = %resource_id, "Delete failed resource could not be retried");
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            resource_id = %resource_id,
+                            error = %e,
+                            "Failed to retry delete operation for resource"
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+            _ => {
+                // Resource is not in a failed state, no action needed
+            }
+        }
     }
+
+    tracing::info!(prepared_resource_ids = ?prepared_resource_ids, "Completed prepare for destroy operation on stack");
+    Ok(prepared_resource_ids)
 }
 
 #[cfg(test)]

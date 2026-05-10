@@ -549,6 +549,7 @@ pub async fn prepare_dev_session_deployment(
         client
             .delete_deployment()
             .id(&existing.id)
+            .delete_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::Full)
             .send()
             .await
             .into_sdk_error()

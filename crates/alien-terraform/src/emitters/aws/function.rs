@@ -103,6 +103,10 @@ impl TfEmitter for AwsFunctionEmitter {
             attr("image_uri", Expression::String(image.clone())),
             attr("role", role_arn.clone()),
             attr(
+                "architectures",
+                Expression::Array(vec![Expression::String("arm64".to_string())]),
+            ),
+            attr(
                 "memory_size",
                 Expression::Number(hcl::Number::from(i64::from(function.memory_mb))),
             ),
@@ -608,7 +612,7 @@ fn public_api_resources(label: &str) -> Vec<hcl::structure::Block> {
                     "api_id",
                     expr::traversal(["aws_apigatewayv2_api", label, "id"]),
                 ),
-                attr("route_key", Expression::String("ANY /{proxy+}".to_string())),
+                attr("route_key", Expression::String("$default".to_string())),
                 attr(
                     "target",
                     expr::template(format!(

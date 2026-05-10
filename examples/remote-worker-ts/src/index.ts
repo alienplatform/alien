@@ -34,6 +34,22 @@ command("list-tools", async () =>
   Object.entries(tools).map(([name, t]) => ({ name, description: t.description })),
 )
 
+command("where-am-i", async () => ({
+  deploymentId: process.env.ALIEN_DEPLOYMENT_ID ?? null,
+  platform: process.env.ALIEN_DEPLOYMENT_TYPE ?? null,
+  account:
+    process.env.AWS_ACCOUNT_ID ??
+    process.env.GCP_PROJECT_ID ??
+    process.env.AZURE_SUBSCRIPTION_ID ??
+    null,
+  region:
+    process.env.AWS_REGION ??
+    process.env.GCP_REGION ??
+    process.env.AZURE_REGION ??
+    null,
+  timestamp: new Date().toISOString(),
+}))
+
 app.get("/health", c => c.json({ status: "ok" }))
 
 export default app

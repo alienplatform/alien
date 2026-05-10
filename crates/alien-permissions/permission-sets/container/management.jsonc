@@ -11,9 +11,6 @@
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
             "elasticloadbalancing:DescribeListeners",
-            "acm:ImportCertificate",
-            "acm:DeleteCertificate",
-            "acm:DescribeCertificate",
             "ec2:DescribeVolumes"
           ]
         },
@@ -23,6 +20,58 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["acm:ImportCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["acm:DeleteCertificate", "acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }

@@ -144,6 +144,24 @@ resource "azuread_application_password" "manager" {
   display_name   = "alien-test"
 }
 
+# Scoped service principal used by pull-mode agent e2e tests. The test
+# harness grants only generated Alien permission-set actions to this identity
+# before starting the agent container.
+resource "azuread_application" "agent" {
+  display_name = "alien-test-agent"
+  owners       = [data.azurerm_client_config.management.object_id]
+}
+
+resource "azuread_service_principal" "agent" {
+  client_id = azuread_application.agent.client_id
+  owners    = [data.azurerm_client_config.management.object_id]
+}
+
+resource "azuread_application_password" "agent" {
+  application_id = azuread_application.agent.id
+  display_name   = "alien-test"
+}
+
 # GitHub Actions OIDC federation — lets the Terraform execution SP
 # (alien-terraform-bootstrap) authenticate using GitHub OIDC tokens in CI.
 # Required for ACR scope map creation and other management-side operations.

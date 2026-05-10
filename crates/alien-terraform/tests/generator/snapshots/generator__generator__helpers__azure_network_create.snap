@@ -287,6 +287,18 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_virtual_network.default_network,
+    azurerm_subnet.default_network_public,
+    azurerm_subnet.default_network_private,
+    azurerm_public_ip.default_network_nat_pip,
+    azurerm_nat_gateway.default_network_nat,
+    azurerm_nat_gateway_public_ip_association.default_network_nat,
+    azurerm_subnet_nat_gateway_association.default_network_private,
+    azurerm_network_security_group.default_network_workload,
+    azurerm_subnet_network_security_group_association.default_network_private
+  ]
 }
 
 === outputs.tf ===

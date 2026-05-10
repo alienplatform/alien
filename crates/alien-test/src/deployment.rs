@@ -272,6 +272,7 @@ impl TestDeployment {
             .client()
             .delete_deployment()
             .id(&self.id)
+            .delete_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::Full)
             .send()
             .await
             .map_err(|e| -> Box<dyn std::error::Error> {

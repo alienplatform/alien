@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 /// Kubernetes Function implementation that calls functions via internal Kubernetes Services
 #[derive(Debug)]
 pub struct KubernetesFunction {
-    binding_name: String,
     namespace: String,
     service_name: String,
     service_port: u16,
@@ -56,7 +55,6 @@ impl KubernetesFunction {
             })?;
 
         Ok(Self {
-            binding_name,
             namespace,
             service_name,
             service_port,

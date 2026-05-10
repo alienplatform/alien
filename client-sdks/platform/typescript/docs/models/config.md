@@ -47,8 +47,6 @@ const value: models.ConfigAgentImage = {
 
 ```typescript
 const value: models.ConfigTerraform = {
-  providerName: "<value>",
-  resourceType: "<value>",
   type: "terraform",
 };
 ```

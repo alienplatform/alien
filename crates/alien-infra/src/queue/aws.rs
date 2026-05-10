@@ -4,7 +4,7 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::sqs::SetQueueAttributesRequest;
-use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{standard_resource_tags, Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 
@@ -42,6 +42,7 @@ impl AwsQueueController {
             .create_queue(
                 alien_aws_clients::sqs::CreateQueueRequest::builder()
                     .queue_name(queue_name.clone())
+                    .tags(standard_resource_tags(ctx.resource_prefix, &config.id))
                     .build(),
             )
             .await

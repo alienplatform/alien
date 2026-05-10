@@ -88,6 +88,10 @@ impl CfEmitter for AwsFunctionEmitter {
             .properties
             .insert("PackageType".to_string(), CfExpression::from("Image"));
         lambda.properties.insert(
+            "Architectures".to_string(),
+            CfExpression::list([CfExpression::from("arm64")]),
+        );
+        lambda.properties.insert(
             "Code".to_string(),
             CfExpression::object([("ImageUri", CfExpression::from(image.clone()))]),
         );
@@ -550,7 +554,7 @@ fn public_api_resources(logical_id: &str) -> Vec<CfResource> {
         .insert("ApiId".to_string(), CfExpression::ref_(&api_id));
     route
         .properties
-        .insert("RouteKey".to_string(), CfExpression::from("ANY /{proxy+}"));
+        .insert("RouteKey".to_string(), CfExpression::from("$default"));
     route.properties.insert(
         "Target".to_string(),
         CfExpression::sub(format!("integrations/${{{integration_id}}}")),

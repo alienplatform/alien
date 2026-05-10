@@ -1,5 +1,6 @@
 ---
 source: crates/alien-core/src/import/data/mod.rs
+assertion_line: 135
 expression: schemas
 ---
 {
@@ -1117,6 +1118,20 @@ expression: schemas
     "additionalProperties": false,
     "description": "GCP Function ImportData — a Cloud Run service.",
     "properties": {
+      "commandsSubscriptionName": {
+        "description": "Pub/Sub push-subscription name created for commands delivery.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "commandsTopicName": {
+        "description": "Pub/Sub topic short name created for commands delivery.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "eventarcTriggerNames": {
         "description": "Eventarc trigger names created for storage triggers.",
         "items": {

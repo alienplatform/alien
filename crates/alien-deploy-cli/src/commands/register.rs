@@ -11,8 +11,8 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ManagementConfig, Platform, ResourceType, StackSettings,
     import::{ImportSourceKind, ImportedResource, StackImportRequest},
+    ManagementConfig, Platform, ResourceType, StackSettings,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};

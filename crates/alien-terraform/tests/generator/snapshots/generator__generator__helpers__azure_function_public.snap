@@ -117,16 +117,6 @@ locals {
         environmentName = azurerm_container_app_environment.default_container_apps_environment.name
         defaultDomain   = azurerm_container_app_environment.default_container_apps_environment.default_domain
       }
-    },
-    {
-      id   = "public-api"
-      type = "function"
-      importData = {
-        subscriptionId   = var.azure_subscription_id
-        resourceGroup    = var.azure_resource_group_name
-        containerAppName = azurerm_container_app.public_api.name
-        fqdn             = azurerm_container_app.public_api.latest_revision_fqdn
-      }
     }
   ]
 }
@@ -177,89 +167,6 @@ resource "azurerm_container_app_environment" "default_container_apps_environment
   ]
 }
 
-=== public_api.tf ===
-data "azurerm_client_config" "public_api_current" {}
-
-resource "azurerm_container_app" "public_api" {
-  name                         = "${var.stack_name}-public-api"
-  resource_group_name          = var.azure_resource_group_name
-  container_app_environment_id = azurerm_container_app_environment.default_container_apps_environment.id
-  revision_mode                = "Single"
-
-  template {
-    min_replicas = 0
-    max_replicas = 10
-
-    container {
-      name   = "public-api"
-      image  = "acmeprod.azurecr.io/api:1"
-      cpu    = 0.25
-      memory = "0.5Gi"
-
-      env {
-        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
-        value = "public-api"
-      }
-
-      env {
-        name  = "ALIEN_DEPLOYMENT_TYPE"
-        value = "azure"
-      }
-
-      env {
-        name  = "ALIEN_RUNTIME_SEND_OTLP"
-        value = "true"
-      }
-
-      env {
-        name  = "ALIEN_TRANSPORT"
-        value = "container-app"
-      }
-
-      env {
-        name  = "AZURE_REGION"
-        value = var.azure_location
-      }
-
-      env {
-        name  = "AZURE_SUBSCRIPTION_ID"
-        value = var.azure_subscription_id
-      }
-
-      env {
-        name  = "AZURE_TENANT_ID"
-        value = data.azurerm_client_config.public_api_current.tenant_id
-      }
-    }
-  }
-
-  ingress {
-    external_enabled = true
-    target_port      = 8080
-    transport        = "auto"
-
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
-    }
-  }
-
-  tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "public-api"
-    "alien-resource-type" = "function"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
@@ -272,6 +179,11 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_log_analytics_workspace.default_container_apps_environment_logs,
+    azurerm_container_app_environment.default_container_apps_environment
+  ]
 }
 
 === outputs.tf ===

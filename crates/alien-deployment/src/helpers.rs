@@ -5,7 +5,7 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeBackend, ContainerCluster,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceStatus, Stack, StackState, TemplateInputs, TestEnvironmentInfo, ENV_ALIEN_SECRETS,
+    ResourceStatus, Stack, StackState, TestEnvironmentInfo, WorkerTemplate, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -273,11 +273,11 @@ pub fn inject_monitoring_environment_variables(
     Ok(())
 }
 
-/// Stamp deployment-config values onto ContainerCluster template inputs.
+/// Stamp deployment-config values onto ContainerCluster worker-template inputs.
 ///
-/// ContainerCluster controllers read `template_inputs` (horizond URL, binary hash,
+/// ContainerCluster controllers read `worker_template` (worker URL, binary hash,
 /// monitoring config) from the resource config. These values originate from
-/// `DeploymentConfig` and may change between syncs (e.g., new horizond binary ETag).
+/// `DeploymentConfig` and may change between syncs (e.g., new worker image ID).
 ///
 /// Like `inject_environment_variables`, this runs every step — not just once during
 /// preflights — so the executor's `resource_eq()` always compares against the latest
@@ -285,7 +285,7 @@ pub fn inject_monitoring_environment_variables(
 ///
 /// The OTLP auth header is sensitive, so only a SHA-256 hash is stored for change
 /// detection. The actual value is read from `DeploymentConfig` at provisioning time.
-pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
+pub fn stamp_worker_template(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
     let horizon_config = match &config.compute_backend {
         Some(ComputeBackend::Horizon(h)) => h,
         _ => return Ok(()),
@@ -317,22 +317,20 @@ pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Re
     for cluster_id in &cluster_ids {
         if let Some(entry) = stack.resources.get_mut(cluster_id) {
             if let Some(cluster) = entry.config.downcast_mut::<ContainerCluster>() {
-                cluster.template_inputs = Some(TemplateInputs {
-                    horizond_download_base_url: horizon_config.horizond_download_base_url.clone(),
+                cluster.worker_template = Some(WorkerTemplate {
                     horizon_api_url: horizon_config.url.clone(),
-                    horizond_binary_hash: horizon_config.horizond_binary_hash.clone(),
                     monitoring_logs_endpoint: monitoring_logs_endpoint.clone(),
                     monitoring_metrics_endpoint: monitoring_metrics_endpoint.clone(),
                     monitoring_auth_hash: monitoring_auth_hash.clone(),
                     monitoring_metrics_auth_hash: monitoring_metrics_auth_hash.clone(),
-                    flatcar_image_id: horizon_config.flatcar_image_id.clone(),
+                    worker_image_id: horizon_config.worker_image_id.clone(),
                 });
                 debug!(
                     cluster_id = %cluster_id,
-                    horizond_url = %horizon_config.horizond_download_base_url,
+                    has_worker_image = horizon_config.worker_image_id.is_some(),
                     has_monitoring = monitoring_logs_endpoint.is_some(),
                     has_metrics = monitoring_metrics_endpoint.is_some(),
-                    "Stamped template inputs onto ContainerCluster"
+                    "Stamped worker template onto ContainerCluster"
                 );
             }
         }

@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.PersistImportedDeploymentRequestGcp`
+### `models.PersistImportedDeploymentRequestDomainsGcp`
 
 ```typescript
-const value: models.PersistImportedDeploymentRequestGcp = {
+const value: models.PersistImportedDeploymentRequestDomainsGcp = {
   certificateName: "<value>",
 };
 ```

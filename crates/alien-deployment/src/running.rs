@@ -46,6 +46,11 @@ pub async fn handle_running(
         })
     })?;
 
+    // Stamp deployment-config values onto ContainerCluster template inputs.
+    // Running still drives management work for Frozen container clusters, such
+    // as worker image rollouts.
+    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
+
     // Inject environment variables so the executor sees the same Function config
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
@@ -84,14 +89,20 @@ pub async fn handle_running(
                 message: "Failed to execute health check step".to_string(),
             })?;
 
-    // Check if any resources transitioned to RefreshFailed
-    let has_refresh_failed = step_result
-        .next_state
-        .resources
-        .values()
-        .any(|resource| resource.status == alien_core::ResourceStatus::RefreshFailed);
+    // Ready handlers may run management work for Frozen resources. A failed
+    // management sub-flow can surface as any controller failure status, not
+    // only RefreshFailed.
+    let has_failed = step_result.next_state.resources.values().any(|resource| {
+        matches!(
+            resource.status,
+            alien_core::ResourceStatus::ProvisionFailed
+                | alien_core::ResourceStatus::UpdateFailed
+                | alien_core::ResourceStatus::DeleteFailed
+                | alien_core::ResourceStatus::RefreshFailed
+        )
+    });
 
-    if has_refresh_failed {
+    if has_failed {
         info!("Health check failed for one or more resources");
 
         // Create aggregated error from failed resources

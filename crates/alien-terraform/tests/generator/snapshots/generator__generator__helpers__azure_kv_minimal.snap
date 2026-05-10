@@ -206,6 +206,12 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_cosmosdb_account.metadata,
+    azurerm_cosmosdb_sql_database.metadata_db,
+    azurerm_cosmosdb_sql_container.metadata_container
+  ]
 }
 
 === outputs.tf ===

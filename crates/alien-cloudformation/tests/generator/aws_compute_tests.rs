@@ -39,7 +39,7 @@ fn aws_build_renders_codebuild_project() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let yaml = render_built_ins(
@@ -132,7 +132,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
                     max_size: 3,
                 })
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
 

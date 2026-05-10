@@ -31,7 +31,7 @@ export function authWhoami(
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.Subject,
+    models.WhoamiResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -55,7 +55,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      models.Subject,
+      models.WhoamiResponse,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -124,7 +124,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    models.Subject,
+    models.WhoamiResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -135,7 +135,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.Subject$inboundSchema),
+    M.json(200, models.WhoamiResponse$inboundSchema),
     M.jsonErr(401, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

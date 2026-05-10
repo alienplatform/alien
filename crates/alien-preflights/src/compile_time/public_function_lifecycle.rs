@@ -1,45 +1,39 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Function, Ingress, Platform, Resource, ResourceLifecycle, Stack};
+use alien_core::{Function, Platform, ResourceLifecycle, Stack};
 
-/// Ensures public functions are not Frozen.
+/// Ensures functions have Live lifecycle.
 ///
-/// Public functions require certificate renewal and DNS record updates, which means
-/// we need to be able to update them. Frozen resources cannot be updated, creating
-/// a fundamental conflict.
-///
-/// **Rule:** Public functions must have `Live` lifecycle.
-///
-/// Private functions can be any lifecycle since they don't need certificates.
+/// Kept as a focused error message for function users. The canonical rule
+/// lives in `alien-core` ownership policy and is also checked by
+/// `FrozenResourceLifecycleCheck`.
 pub struct PublicFunctionLifecycleCheck;
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for PublicFunctionLifecycleCheck {
     fn description(&self) -> &'static str {
-        "Public functions cannot be Frozen (certificate renewal requires updates)"
+        "Functions must have Live lifecycle"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
-        // Check if stack contains any public functions
         stack
             .resources()
-            .any(|(_, resource_entry)| is_public_function(&resource_entry.config))
+            .any(|(_, resource_entry)| resource_entry.config.downcast_ref::<Function>().is_some())
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         for (resource_id, resource_entry) in stack.resources() {
-            if !is_public_function(&resource_entry.config) {
+            if resource_entry.config.downcast_ref::<Function>().is_none() {
                 continue;
             }
 
-            if resource_entry.lifecycle == ResourceLifecycle::Frozen {
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
                 errors.push(format!(
-                    "Function '{}' has public ingress but Frozen lifecycle. \
-                    Public functions require certificate renewal every 90 days, which requires updating the function. \
-                    Change the lifecycle to Live, or remove public ingress.",
-                    resource_id
+                    "Function '{}' has lifecycle {:?}, but functions must be Live. \
+                    Functions are Alien-owned resources and require provision permissions.",
+                    resource_id, resource_entry.lifecycle
                 ));
             }
         }
@@ -52,18 +46,10 @@ impl CompileTimeCheck for PublicFunctionLifecycleCheck {
     }
 }
 
-/// Check if a function has public ingress
-fn is_public_function(resource: &Resource) -> bool {
-    if let Some(function) = resource.downcast_ref::<Function>() {
-        return function.ingress == Ingress::Public;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Function, FunctionCode, ResourceEntry, ResourceLifecycle};
+    use alien_core::{Function, FunctionCode, Ingress, Resource, ResourceEntry, ResourceLifecycle};
     use indexmap::IndexMap;
 
     fn create_public_function(id: &str) -> Function {
@@ -87,7 +73,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_public_function_frozen_fails() {
+    async fn test_function_frozen_fails() {
         let function = create_public_function("my-function");
 
         let mut resources = IndexMap::new();
@@ -112,7 +98,7 @@ mod tests {
         let result = check.check(&stack, Platform::Aws).await.unwrap();
 
         assert!(!result.success);
-        assert!(result.errors[0].contains("public ingress but Frozen lifecycle"));
+        assert!(result.errors[0].contains("functions must be Live"));
     }
 
     #[tokio::test]
@@ -144,7 +130,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_private_function_frozen_succeeds() {
+    async fn test_private_function_frozen_fails() {
         let function = create_private_function("my-function");
 
         let mut resources = IndexMap::new();
@@ -168,11 +154,12 @@ mod tests {
         let check = PublicFunctionLifecycleCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
 
-        assert!(result.success);
+        assert!(!result.success);
+        assert!(result.errors[0].contains("functions must be Live"));
     }
 
     #[tokio::test]
-    async fn test_should_run_returns_false_for_no_public_functions() {
+    async fn test_should_run_returns_true_for_private_functions() {
         let function = create_private_function("my-function");
 
         let mut resources = IndexMap::new();
@@ -194,6 +181,6 @@ mod tests {
         };
 
         let check = PublicFunctionLifecycleCheck;
-        assert!(!check.should_run(&stack, Platform::Aws));
+        assert!(check.should_run(&stack, Platform::Aws));
     }
 }

@@ -1,18 +1,18 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ResourceStatus, Stack, StackStatus};
+use alien_core::{ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{debug, info};
 
-/// Handle InitialSetup status (deploy ALL resources)
+/// Handle InitialSetup status (deploy setup-owned Frozen resources)
 ///
 /// This step:
 /// 1. Uses the prepared stack from runtime_metadata (mutated in Pending phase)
-/// 2. Executes one deployment step for all resources (Frozen + Live)
+/// 2. Executes one deployment step for Frozen resources
 /// 3. Updates stack state with the result
-/// 4. Transitions to Provisioning when all resources are deployed
+/// 4. Transitions to Provisioning when Frozen resources are deployed
 ///
 /// Note: Stack settings are set during Pending phase and should not change mid-deployment.
 pub async fn handle_initial_setup(
@@ -47,8 +47,6 @@ pub async fn handle_initial_setup(
             message: "Prepared stack not found in runtime metadata".to_string(),
         })
     })?;
-
-    let mut config = config;
 
     // Inject all environment variables — plain AND secrets.
     //
@@ -89,11 +87,13 @@ pub async fn handle_initial_setup(
         }
     }
 
-    // Deploy all resources (Frozen + Live) during initial setup
-    info!("Deploying all resources in initial setup");
+    // Deploy setup-owned resources during initial setup. Live resources are
+    // created later in Provisioning using the permissions granted by setup.
+    info!("Deploying frozen resources in initial setup");
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .service_provider(service_provider)
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .build()
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to create stack executor for initial setup".to_string(),
@@ -108,18 +108,20 @@ pub async fn handle_initial_setup(
                 message: "Failed to execute deployment step".to_string(),
             })?;
 
-    // Compute the stack status from the resulting state
-    let stack_status =
-        step_result
-            .next_state
-            .compute_stack_status()
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to compute stack status".to_string(),
-            })?;
+    // Compute status only for Frozen resources. A stack with no Frozen
+    // resources can hand off immediately to Provisioning.
+    let stack_status = compute_lifecycle_status(
+        &target_stack,
+        &step_result.next_state,
+        ResourceLifecycle::Frozen,
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to compute initial setup status".to_string(),
+    })?;
 
     // Check if all resources are deployed
     let result = if stack_status == StackStatus::Running {
-        info!("Initial setup complete (all resources deployed), transitioning to Provisioning");
+        info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
 
         // Debug: log all resources in stack state to diagnose external binding persistence
         for (res_id, res_state) in &step_result.next_state.resources {
@@ -160,13 +162,14 @@ pub async fn handle_initial_setup(
             .resources
             .values()
             .filter(|r| {
-                matches!(
-                    r.status,
-                    alien_core::ResourceStatus::ProvisionFailed
-                        | alien_core::ResourceStatus::UpdateFailed
-                        | alien_core::ResourceStatus::DeleteFailed
-                        | alien_core::ResourceStatus::RefreshFailed
-                )
+                r.lifecycle == Some(ResourceLifecycle::Frozen)
+                    && matches!(
+                        r.status,
+                        alien_core::ResourceStatus::ProvisionFailed
+                            | alien_core::ResourceStatus::UpdateFailed
+                            | alien_core::ResourceStatus::DeleteFailed
+                            | alien_core::ResourceStatus::RefreshFailed
+                    )
             })
             .map(|r| (r.config.id().to_string(), r.resource_type.clone()))
             .collect();
@@ -193,14 +196,9 @@ pub async fn handle_initial_setup(
             update_heartbeat: false,
         }
     } else {
-        // Still in progress — log which resources are not yet running
-        let non_running: Vec<_> = step_result
-            .next_state
-            .resources
-            .iter()
-            .filter(|(_, r)| r.status != alien_core::ResourceStatus::Running)
-            .map(|(id, r)| format!("{}({:?})", id, r.status))
-            .collect();
+        // Still in progress — log which Frozen resources are not yet running.
+        let non_running =
+            non_running_resources_for_lifecycle(&target_stack, &step_result.next_state);
         info!(
             "Initial setup in progress. Non-running resources: [{}]",
             non_running.join(", ")
@@ -219,6 +217,46 @@ pub async fn handle_initial_setup(
     };
 
     Ok(result)
+}
+
+fn compute_lifecycle_status(
+    stack: &Stack,
+    stack_state: &StackState,
+    lifecycle: ResourceLifecycle,
+) -> alien_core::Result<StackStatus> {
+    let statuses: Vec<ResourceStatus> = stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == lifecycle)
+        .map(|(resource_id, _)| {
+            stack_state
+                .resources
+                .get(resource_id)
+                .map(|resource| resource.status)
+                .unwrap_or(ResourceStatus::Pending)
+        })
+        .collect();
+
+    if statuses.is_empty() {
+        return Ok(StackStatus::Running);
+    }
+
+    StackState::compute_stack_status_from_resources(&statuses)
+}
+
+fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) -> Vec<String> {
+    stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .filter_map(|(resource_id, _)| {
+            let status = stack_state
+                .resources
+                .get(resource_id)
+                .map(|resource| resource.status)
+                .unwrap_or(ResourceStatus::Pending);
+
+            (status != ResourceStatus::Running).then(|| format!("{resource_id}({status:?})"))
+        })
+        .collect()
 }
 
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup

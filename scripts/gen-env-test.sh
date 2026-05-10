@@ -78,6 +78,9 @@ azure_management_region=$(jq_val management_azure_region)
 azure_management_sp_client_id=$(jq_val management_azure_sp_client_id)
 azure_management_sp_client_secret=$(jq_val management_azure_sp_client_secret)
 azure_management_sp_object_id=$(jq_val management_azure_sp_object_id)
+azure_agent_client_id=$(jq_val azure_agent_client_id)
+azure_agent_client_secret=$(jq_val azure_agent_client_secret)
+azure_agent_object_id=$(jq_val azure_agent_object_id)
 
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)
@@ -166,6 +169,11 @@ AZURE_MANAGEMENT_REGION='${azure_management_region}'
 AZURE_MANAGEMENT_SP_CLIENT_ID='${azure_management_sp_client_id}'
 AZURE_MANAGEMENT_SP_CLIENT_SECRET='${azure_management_sp_client_secret}'
 AZURE_MANAGEMENT_SP_OBJECT_ID='${azure_management_sp_object_id}'
+
+# Azure scoped agent identity
+AZURE_AGENT_CLIENT_ID='${azure_agent_client_id}'
+AZURE_AGENT_CLIENT_SECRET='${azure_agent_client_secret}'
+AZURE_AGENT_OBJECT_ID='${azure_agent_object_id}'
 
 # Azure OIDC (set dynamically in CI, empty for local dev = SP fallback)
 AZURE_MANAGEMENT_OIDC_ISSUER='${AZURE_MANAGEMENT_OIDC_ISSUER:-}'

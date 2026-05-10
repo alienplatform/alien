@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+ * Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
  */
 export function deploymentsDelete(
   client: AlienCore,
@@ -95,6 +95,8 @@ async function $do(
   const path = pathToFunc("/v1/deployments/{id}")(pathParams);
 
   const query = encodeFormQuery({
+    "deleteScope": payload.deleteScope,
+    "force": payload.force,
     "workspace": payload.workspace,
   });
 

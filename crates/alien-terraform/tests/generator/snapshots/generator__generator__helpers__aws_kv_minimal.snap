@@ -141,6 +141,9 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_dynamodb_table.metadata
+  ]
 }
 
 === outputs.tf ===

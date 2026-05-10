@@ -1,35 +1,231 @@
 {
   "id": "container-cluster/management",
-  "description": "Allows managing ContainerCluster capacity (scaling) and inspecting machines.",
+  "description": "Allows managing the worker fleet inside a setup-owned ContainerCluster boundary.",
   "platforms": {
     "aws": [
-      // ASG update/scale — scoped to stack-prefixed ASG names
+      // Launch templates are the worker-image rollout surface. The IAM role,
+      // instance profile, security group, and surrounding network remain setup-owned.
       {
         "grant": {
-          "actions": ["autoscaling:UpdateAutoScalingGroup", "autoscaling:SetDesiredCapacity"]
+          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateLaunchTemplateVersion",
+            "ec2:DeleteLaunchTemplate"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // ASG creation must include boundary tags in the create request.
+      {
+        "grant": {
+          "actions": ["autoscaling:CreateAutoScalingGroup"]
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
-      // Read-only inspection — ASGs and individual instances.
-      // AWS requires Resource: "*" for all Describe actions.
+      // Existing ASGs are managed only when they carry the Alien boundary tags.
+      {
+        "grant": {
+          "actions": [
+            "autoscaling:DeleteAutoScalingGroup",
+            "autoscaling:UpdateAutoScalingGroup",
+            "autoscaling:SetDesiredCapacity",
+            "autoscaling:StartInstanceRefresh"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // ELB target groups are used for ASG health checks only.
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:AddTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:DeleteTargetGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // OTLP auth headers are stored as stack-prefixed secrets.
+      {
+        "grant": {
+          "actions": [
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:CreateSecret",
+            "secretsmanager:UpdateSecret",
+            "secretsmanager:DeleteSecret"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"]
+          }
+        }
+      },
+      // iam:PassRole remains name-scoped. IAM roles do not consistently support
+      // the same resource-tag checks for PassRole that EC2/ELB resources do.
+      {
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+          }
+        }
+      },
+      // Read-only inspection. AWS requires Resource: "*" for these Describe APIs.
       {
         "grant": {
           "actions": [
             "autoscaling:DescribeAutoScalingGroups",
+            "autoscaling:DescribeInstanceRefreshes",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
-            "ec2:DescribeTags"
+            "ec2:DescribeTags",
+            "ec2:GetConsoleOutput"
           ]
         },
         "binding": {

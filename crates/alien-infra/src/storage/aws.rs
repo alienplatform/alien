@@ -13,7 +13,9 @@ use alien_aws_clients::s3::{
     LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api, S3Client, VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Resource, ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_core::{
+    standard_resource_tags, Resource, ResourceOutputs, ResourceStatus, Storage, StorageOutputs,
+};
 use alien_error::{Context, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use std::sync::Arc;
@@ -58,6 +60,17 @@ impl AwsStorageController {
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create S3 bucket '{}'", bucket_name),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        client
+            .put_bucket_abac_tags(
+                &bucket_name,
+                &standard_resource_tags(ctx.resource_prefix, &config.id),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to tag S3 bucket '{}'", bucket_name),
                 resource_id: Some(config.id.clone()),
             })?;
 

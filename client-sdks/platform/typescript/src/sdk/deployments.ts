@@ -109,7 +109,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+   * Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
    */
   async delete(
     request: operations.DeleteDeploymentRequest,

@@ -88,7 +88,7 @@ impl StackMutation for ContainerClusterMutation {
 
     async fn mutate(
         &self,
-        mut stack: Stack,
+        stack: Stack,
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
@@ -148,13 +148,11 @@ impl ContainerClusterMutation {
             _ => Vec::new(),
         };
 
-        // Add cluster to stack as Live resource.
-        // In CF: only IAM Role + Instance Profile + Security Group are in the template.
-        // The controller creates Launch Template + ASG during Provisioning phase.
-        // In imperative mode: controller creates everything during Provisioning.
+        // The cluster boundary is setup-owned. Runtime management may still
+        // scale or roll workers inside the setup-created boundary.
         let cluster_entry = ResourceEntry {
             config: alien_core::Resource::new(cluster),
-            lifecycle: ResourceLifecycle::Live,
+            lifecycle: ResourceLifecycle::Frozen,
             dependencies,
             remote_access: false,
         };
@@ -413,32 +411,6 @@ fn build_capacity_group_for_id(
         })?;
     Ok(CapacityGroup {
         group_id: group_id.to_string(),
-        instance_type: Some(selection.instance_type.to_string()),
-        profile: Some(selection.profile),
-        min_size: selection.min_machines,
-        max_size: selection.max_machines,
-    })
-}
-
-/// Build a capacity group for a cloud platform by analyzing container requirements
-/// and selecting the optimal instance type from the catalog.
-fn build_cloud_capacity_group(
-    containers: &[&Container],
-    platform: Platform,
-) -> Result<CapacityGroup> {
-    let requirements = aggregate_workload_requirements(containers)?;
-
-    let selection =
-        instance_catalog::select_instance_type(platform, &requirements).map_err(|msg| {
-            AlienError::new(crate::error::ErrorData::StackMutationFailed {
-                mutation_name: "ContainerClusterMutation".to_string(),
-                message: format!("instance type selection failed: {msg}"),
-                resource_id: None,
-            })
-        })?;
-
-    Ok(CapacityGroup {
-        group_id: "general".to_string(),
         instance_type: Some(selection.instance_type.to_string()),
         profile: Some(selection.profile),
         min_size: selection.min_machines,

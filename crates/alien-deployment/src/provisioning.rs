@@ -63,12 +63,10 @@ pub async fn handle_provisioning(
         })
     })?;
 
-    let mut config = config;
-
     // Stamp deployment-config values onto ContainerCluster template inputs.
     // Runs every step (not just during preflights) so the executor sees the latest
-    // DeploymentConfig values — e.g., a new horizond binary ETag after recompilation.
-    crate::helpers::stamp_template_inputs(&mut target_stack, &config)?;
+    // DeploymentConfig values — e.g., a new worker image ID.
+    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
 
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config)?;

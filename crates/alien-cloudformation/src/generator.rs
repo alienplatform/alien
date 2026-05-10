@@ -3,8 +3,8 @@ use crate::{
     template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate},
 };
 use alien_core::{
-    import::EmitContext, DomainSettings, ErrorData, Function, FunctionCode, HeartbeatsMode,
-    Network, NetworkSettings, Platform, ResourceLifecycle, Result, Stack, StackSettings,
+    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Function,
+    FunctionCode, HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
     TelemetryMode, UpdatesMode,
 };
 use alien_error::AlienError;
@@ -120,7 +120,8 @@ pub fn generate_cloudformation_template(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        if !should_emit_resource(resource_type.as_ref()) {
+        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
+        if !ownership.should_emit_in_setup(resource.lifecycle) {
             continue;
         }
         let emitter = options.registry.require(&resource_type, Platform::Aws)?;
@@ -221,34 +222,8 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
 
 /// Generate a CloudFormation stack policy that prevents stack updates from
 /// mutating resources Alien manages after import.
-pub fn generate_cloudformation_stack_policy(stack: &Stack) -> Result<serde_json::Value> {
-    let names = logical_names(stack)?;
-    let statements = stack
-        .resources()
-        .filter_map(|(resource_id, resource)| {
-            if resource.lifecycle != ResourceLifecycle::Live {
-                return None;
-            }
-            if !should_emit_resource(resource.config.resource_type().as_ref()) {
-                return None;
-            }
-            let logical_id = names.get(resource_id)?;
-            Some(json!({
-                "Effect": "Deny",
-                "Principal": "*",
-                "Action": "Update:*",
-                "Resource": format!("LogicalResourceId/{logical_id}")
-            }))
-        })
-        .collect::<Vec<_>>();
-
-    Ok(json!({ "Statement": statements }))
-}
-
-fn should_emit_resource(resource_type: &str) -> bool {
-    // Workload resources are reconciled by the runtime after the infrastructure
-    // import has registered the cloud primitives they run on.
-    resource_type != "container"
+pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json::Value> {
+    Ok(json!({ "Statement": [] }))
 }
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {
@@ -806,12 +781,14 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
     }
 
     if chunks.len() == 1 {
+        let chunk = chunks.into_iter().next().expect("one chunk");
+        let value = match &chunk {
+            CfExpression::List(items) if items.is_empty() => CfExpression::from("[]"),
+            _ => CfExpression::to_json_string(chunk),
+        };
         template.outputs.insert(
             OUTPUT_RESOURCES.to_string(),
-            output(
-                "Manager import resources JSON.",
-                CfExpression::to_json_string(chunks.into_iter().next().expect("one chunk")),
-            ),
+            output("Manager import resources JSON.", value),
         );
         return Ok(());
     }

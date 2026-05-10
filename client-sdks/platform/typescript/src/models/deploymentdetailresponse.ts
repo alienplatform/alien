@@ -800,6 +800,34 @@ export type DeploymentDetailResponseStackState = {
   resources: { [k: string]: DeploymentDetailResponseStackStateResources };
 };
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const DeploymentDetailResponseDeleteScope = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type DeploymentDetailResponseDeleteScope = ClosedEnum<
+  typeof DeploymentDetailResponseDeleteScope
+>;
+
 export const DeploymentDetailResponseManagementEnum = {
   Auto: "auto",
 } as const;
@@ -850,6 +878,20 @@ export type DeploymentDetailResponseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseOverrideEffect = ClosedEnum<
+  typeof DeploymentDetailResponseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseOverrideAwGrant = {
@@ -875,6 +917,10 @@ export type DeploymentDetailResponseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1143,6 +1189,20 @@ export type DeploymentDetailResponseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseExtendEffect = ClosedEnum<
+  typeof DeploymentDetailResponseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseExtendAwGrant = {
@@ -1168,6 +1228,10 @@ export type DeploymentDetailResponseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1444,6 +1508,20 @@ export type DeploymentDetailResponseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseProfileEffect = ClosedEnum<
+  typeof DeploymentDetailResponseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseProfileAwGrant = {
@@ -1469,6 +1547,10 @@ export type DeploymentDetailResponseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1829,6 +1911,17 @@ export type DeploymentDetailResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
+  /**
+   * Scope for a delete operation.
+   *
+   * @remarks
+   *
+   * Full deletes are setup/admin owned and may remove both Frozen and Live
+   * resources. Live-only deletes are used by setup handoff resources
+   * (Terraform/CloudFormation) so Alien removes only the resources it owns
+   * before setup tears down Frozen resources.
+   */
+  deleteScope?: DeploymentDetailResponseDeleteScope | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -3082,6 +3175,11 @@ export function deploymentDetailResponseStackStateFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseDeleteScope$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseDeleteScope
+> = z.enum(DeploymentDetailResponseDeleteScope);
+
+/** @internal */
 export const DeploymentDetailResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponseManagementEnum
 > = z.enum(DeploymentDetailResponseManagementEnum);
@@ -3166,6 +3264,11 @@ export function deploymentDetailResponseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseOverrideEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseOverrideEffect
+> = z.enum(DeploymentDetailResponseOverrideEffect);
+
+/** @internal */
 export const DeploymentDetailResponseOverrideAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseOverrideAwGrant,
   unknown
@@ -3199,6 +3302,7 @@ export const DeploymentDetailResponseOverrideAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     DeploymentDetailResponseOverrideAwBinding$inboundSchema
   ),
+  effect: DeploymentDetailResponseOverrideEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseOverrideAwGrant$inboundSchema),
 });
 
@@ -3740,6 +3844,11 @@ export function deploymentDetailResponseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseExtendEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseExtendEffect
+> = z.enum(DeploymentDetailResponseExtendEffect);
+
+/** @internal */
 export const DeploymentDetailResponseExtendAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseExtendAwGrant,
   unknown
@@ -3766,6 +3875,7 @@ export const DeploymentDetailResponseExtendAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentDetailResponseExtendAwBinding$inboundSchema),
+  effect: DeploymentDetailResponseExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseExtendAwGrant$inboundSchema),
 });
 
@@ -4322,6 +4432,11 @@ export function deploymentDetailResponseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseProfileEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseProfileEffect
+> = z.enum(DeploymentDetailResponseProfileEffect);
+
+/** @internal */
 export const DeploymentDetailResponseProfileAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseProfileAwGrant,
   unknown
@@ -4348,6 +4463,7 @@ export const DeploymentDetailResponseProfileAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentDetailResponseProfileAwBinding$inboundSchema),
+  effect: DeploymentDetailResponseProfileEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseProfileAwGrant$inboundSchema),
 });
 
@@ -4973,6 +5089,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deleteScope: DeploymentDetailResponseDeleteScope$inboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([

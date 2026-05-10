@@ -32,7 +32,10 @@ use alien_aws_clients::ec2::{
     Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Network, NetworkOutputs, NetworkSettings, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    standard_resource_tags, Network, NetworkOutputs, NetworkSettings, ResourceOutputs,
+    ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use async_trait::async_trait;
@@ -212,20 +215,50 @@ impl AwsNetworkController {
         (public_cidrs, private_cidrs)
     }
 
+    fn create_tag_specification(
+        &self,
+        resource_prefix: &str,
+        resource_id: &str,
+        resource_type: &str,
+        name: impl Into<String>,
+        extra_tags: impl IntoIterator<Item = (String, String)>,
+    ) -> TagSpecification {
+        let mut tags = vec![Tag {
+            key: "Name".to_string(),
+            value: name.into(),
+        }];
+
+        tags.extend(
+            standard_resource_tags(resource_prefix, resource_id)
+                .into_iter()
+                .chain(extra_tags)
+                .map(|(key, value)| Tag { key, value }),
+        );
+
+        TagSpecification {
+            resource_type: resource_type.to_string(),
+            tags,
+        }
+    }
+
     /// Create tags for AWS resources.
-    fn create_tags(&self, resource_prefix: &str, resource_type: &str) -> Vec<TagSpecification> {
+    fn create_tags(
+        &self,
+        resource_prefix: &str,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> Vec<TagSpecification> {
         vec![TagSpecification {
             resource_type: resource_type.to_string(),
-            tags: vec![
-                Tag {
-                    key: "Name".to_string(),
-                    value: format!("{}-{}", resource_prefix, resource_type.to_lowercase()),
-                },
-                Tag {
-                    key: "ManagedBy".to_string(),
-                    value: "Alien".to_string(),
-                },
-            ],
+            tags: self
+                .create_tag_specification(
+                    resource_prefix,
+                    resource_id,
+                    resource_type,
+                    format!("{}-{}", resource_prefix, resource_type.to_lowercase()),
+                    [],
+                )
+                .tags,
         }]
     }
 }
@@ -414,7 +447,7 @@ impl AwsNetworkController {
             .create_vpc(
                 CreateVpcRequest::builder()
                     .cidr_block(vpc_cidr.clone())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, "vpc"))
+                    .tag_specifications(self.create_tags(ctx.resource_prefix, &config.id, "vpc"))
                     .build(),
             )
             .await
@@ -523,7 +556,11 @@ impl AwsNetworkController {
         let igw_response = client
             .create_internet_gateway(
                 CreateInternetGatewayRequest::builder()
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, "internet-gateway"))
+                    .tag_specifications(self.create_tags(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "internet-gateway",
+                    ))
                     .build(),
             )
             .await
@@ -622,23 +659,13 @@ impl AwsNetworkController {
                         .vpc_id(vpc_id.clone())
                         .cidr_block(cidr.clone())
                         .availability_zone(az.clone())
-                        .tag_specifications(vec![TagSpecification {
-                            resource_type: "subnet".to_string(),
-                            tags: vec![
-                                Tag {
-                                    key: "Name".to_string(),
-                                    value: subnet_name,
-                                },
-                                Tag {
-                                    key: "ManagedBy".to_string(),
-                                    value: "Alien".to_string(),
-                                },
-                                Tag {
-                                    key: "Type".to_string(),
-                                    value: "Public".to_string(),
-                                },
-                            ],
-                        }])
+                        .tag_specifications(vec![self.create_tag_specification(
+                            ctx.resource_prefix,
+                            &config.id,
+                            "subnet",
+                            subnet_name,
+                            [("Type".to_string(), "Public".to_string())],
+                        )])
                         .build(),
                 )
                 .await
@@ -666,23 +693,13 @@ impl AwsNetworkController {
                         .vpc_id(vpc_id.clone())
                         .cidr_block(cidr.clone())
                         .availability_zone(az.clone())
-                        .tag_specifications(vec![TagSpecification {
-                            resource_type: "subnet".to_string(),
-                            tags: vec![
-                                Tag {
-                                    key: "Name".to_string(),
-                                    value: subnet_name,
-                                },
-                                Tag {
-                                    key: "ManagedBy".to_string(),
-                                    value: "Alien".to_string(),
-                                },
-                                Tag {
-                                    key: "Type".to_string(),
-                                    value: "Private".to_string(),
-                                },
-                            ],
-                        }])
+                        .tag_specifications(vec![self.create_tag_specification(
+                            ctx.resource_prefix,
+                            &config.id,
+                            "subnet",
+                            subnet_name,
+                            [("Type".to_string(), "Private".to_string())],
+                        )])
                         .build(),
                 )
                 .await
@@ -742,19 +759,13 @@ impl AwsNetworkController {
             .create_route_table(
                 CreateRouteTableRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![TagSpecification {
-                        resource_type: "route-table".to_string(),
-                        tags: vec![
-                            Tag {
-                                key: "Name".to_string(),
-                                value: format!("{}-public-rt", ctx.resource_prefix),
-                            },
-                            Tag {
-                                key: "ManagedBy".to_string(),
-                                value: "Alien".to_string(),
-                            },
-                        ],
-                    }])
+                    .tag_specifications(vec![self.create_tag_specification(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "route-table",
+                        format!("{}-public-rt", ctx.resource_prefix),
+                        [],
+                    )])
                     .build(),
             )
             .await
@@ -820,19 +831,13 @@ impl AwsNetworkController {
             .create_route_table(
                 CreateRouteTableRequest::builder()
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(vec![TagSpecification {
-                        resource_type: "route-table".to_string(),
-                        tags: vec![
-                            Tag {
-                                key: "Name".to_string(),
-                                value: format!("{}-private-rt", ctx.resource_prefix),
-                            },
-                            Tag {
-                                key: "ManagedBy".to_string(),
-                                value: "Alien".to_string(),
-                            },
-                        ],
-                    }])
+                    .tag_specifications(vec![self.create_tag_specification(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "route-table",
+                        format!("{}-private-rt", ctx.resource_prefix),
+                        [],
+                    )])
                     .build(),
             )
             .await
@@ -912,7 +917,11 @@ impl AwsNetworkController {
             .allocate_address(
                 AllocateAddressRequest::builder()
                     .domain("vpc".to_string())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, "elastic-ip"))
+                    .tag_specifications(self.create_tags(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "elastic-ip",
+                    ))
                     .build(),
             )
             .await
@@ -939,7 +948,11 @@ impl AwsNetworkController {
                     .subnet_id(public_subnet_id.clone())
                     .allocation_id(allocation_id)
                     .connectivity_type("public".to_string())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, "natgateway"))
+                    .tag_specifications(self.create_tags(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "natgateway",
+                    ))
                     .build(),
             )
             .await
@@ -1096,7 +1109,11 @@ impl AwsNetworkController {
                         "Alien managed security group for VPC internal communication".to_string(),
                     )
                     .vpc_id(vpc_id.clone())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, "security-group"))
+                    .tag_specifications(self.create_tags(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "security-group",
+                    ))
                     .build(),
             )
             .await

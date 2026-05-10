@@ -13,7 +13,9 @@ use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
-use alien_aws_clients::eventbridge::{EventBridgeTarget, PutRuleRequest, PutTargetsRequest};
+use alien_aws_clients::eventbridge::{
+    EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
+};
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
     UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
@@ -21,8 +23,8 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, Network,
-    ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
+    standard_resource_tags, CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress,
+    Network, ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -30,6 +32,13 @@ use alien_macros::controller;
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_function_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
+    standard_resource_tags(prefix, resource_id)
+        .into_iter()
+        .map(|(key, value)| EventBridgeTag { key, value })
+        .collect()
 }
 
 impl AwsFunctionController {
@@ -269,6 +278,8 @@ impl AwsFunctionController {
 
         let code = FunctionCode::builder().image_uri(image_uri).build();
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &cfg.id);
+        let mut function_tags = standard_resource_tags(ctx.resource_prefix, &cfg.id);
+        function_tags.insert("Name".to_string(), aws_function_name.clone());
 
         if cfg.ingress == Ingress::Public {
             match Self::resolve_domain_info(ctx, &cfg.id) {
@@ -325,6 +336,7 @@ impl AwsFunctionController {
             .timeout(cfg.timeout_seconds as i32)
             .memory_size(cfg.memory_mb as i32)
             .publish(false)
+            .tags(function_tags)
             .maybe_environment(environment)
             .architectures(vec!["arm64".to_string()])
             .maybe_vpc_config(vpc_config)
@@ -498,12 +510,17 @@ impl AwsFunctionController {
 
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        let tags = standard_resource_tags(ctx.resource_prefix, &function_config.id)
+            .into_iter()
+            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+            .collect();
         let response = acm_client
             .import_certificate(
                 alien_aws_clients::acm::ImportCertificateRequest::builder()
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
+                    .tags(tags)
                     .build(),
             )
             .await
@@ -545,6 +562,7 @@ impl AwsFunctionController {
             .get_aws_apigatewayv2_client(aws_cfg)
             .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
+        let api_tags = standard_resource_tags(ctx.resource_prefix, &function_config.id);
 
         let api = client
             .create_api(
@@ -554,6 +572,7 @@ impl AwsFunctionController {
                         ctx.resource_prefix, function_config.id
                     ))
                     .protocol_type("HTTP".to_string())
+                    .tags(api_tags)
                     .build(),
             )
             .await
@@ -758,6 +777,10 @@ impl AwsFunctionController {
                 CreateStageRequest::builder()
                     .stage_name("$default".to_string())
                     .auto_deploy(true)
+                    .tags(standard_resource_tags(
+                        ctx.resource_prefix,
+                        &function_config.id,
+                    ))
                     .build(),
             )
             .await
@@ -838,6 +861,10 @@ impl AwsFunctionController {
                         .endpoint_type("REGIONAL".to_string())
                         .security_policy("TLS_1_2".to_string())
                         .build()])
+                    .tags(standard_resource_tags(
+                        ctx.resource_prefix,
+                        &function_config.id,
+                    ))
                     .build(),
             )
             .await
@@ -1394,6 +1421,7 @@ impl AwsFunctionController {
                             "Alien schedule trigger for function '{}'",
                             config.id
                         )),
+                        tags: Some(eventbridge_tags(ctx.resource_prefix, &config.id)),
                     })
                     .await
                     .context(ErrorData::CloudPlatformError {
@@ -1624,6 +1652,10 @@ impl AwsFunctionController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        let tags = standard_resource_tags(ctx.resource_prefix, &function_config.id)
+            .into_iter()
+            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+            .collect();
 
         acm_client
             .reimport_certificate(
@@ -1632,6 +1664,7 @@ impl AwsFunctionController {
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
+                    .tags(tags)
                     .build(),
             )
             .await
@@ -2204,6 +2237,7 @@ impl AwsFunctionController {
                                 "Alien schedule trigger for function '{}'",
                                 current_config.id
                             )),
+                            tags: Some(eventbridge_tags(ctx.resource_prefix, &current_config.id)),
                         })
                         .await
                         .context(ErrorData::CloudPlatformError {

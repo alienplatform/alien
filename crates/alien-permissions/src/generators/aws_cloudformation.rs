@@ -116,7 +116,7 @@ impl AwsCloudFormationPermissionsGenerator {
 
             let statement = AwsCloudFormationIamStatement {
                 sid: statement_id,
-                effect: "Allow".to_string(),
+                effect: platform_permission.effect.as_str().to_string(),
                 action: action_values,
                 resource: resources,
                 condition: if conditions.is_empty() {
@@ -177,6 +177,9 @@ impl AwsCloudFormationPermissionsGenerator {
             "${awsAccountId}",
             "${externalId}",
             "${managingAccountId}",
+            "${stackTag}",
+            "${resourceTag}",
+            "${managedByTag}",
         ]
         .iter()
         .any(|placeholder| template.contains(placeholder));
@@ -214,6 +217,9 @@ impl AwsCloudFormationPermissionsGenerator {
             // Handle AWS-specific variables that should map to CloudFormation pseudo parameters
             result = result.replace("${awsRegion}", "${AWS::Region}");
             result = result.replace("${awsAccountId}", "${AWS::AccountId}");
+            result = result.replace("${stackTag}", alien_core::ALIEN_STACK_TAG_KEY);
+            result = result.replace("${resourceTag}", alien_core::ALIEN_RESOURCE_TAG_KEY);
+            result = result.replace("${managedByTag}", alien_core::ALIEN_MANAGED_BY_TAG_KEY);
 
             // Handle external ID
             if let Some(external_id) = context.external_id.as_ref() {
@@ -276,6 +282,8 @@ impl AwsCloudFormationPermissionsGenerator {
             sorted_condition_keys.sort();
 
             for condition_key in sorted_condition_keys {
+                let interpolated_condition_key =
+                    crate::VariableInterpolator::interpolate_variables(condition_key, context)?;
                 let condition_values = &condition_template[condition_key];
                 let mut interpolated_values = IndexMap::new();
 
@@ -284,13 +292,15 @@ impl AwsCloudFormationPermissionsGenerator {
                 sorted_value_keys.sort();
 
                 for value_key in sorted_value_keys {
+                    let interpolated_value_key =
+                        crate::VariableInterpolator::interpolate_variables(value_key, context)?;
                     let value_template = &condition_values[value_key];
                     let interpolated_value =
                         self.interpolate_cloudformation_string(value_template, context)?;
-                    interpolated_values.insert(value_key.clone(), interpolated_value);
+                    interpolated_values.insert(interpolated_value_key, interpolated_value);
                 }
 
-                interpolated_conditions.insert(condition_key.clone(), interpolated_values);
+                interpolated_conditions.insert(interpolated_condition_key, interpolated_values);
             }
 
             Ok(interpolated_conditions)

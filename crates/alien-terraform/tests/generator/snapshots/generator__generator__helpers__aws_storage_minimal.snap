@@ -142,6 +142,13 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_s3_bucket.data,
+    aws_s3_bucket_server_side_encryption_configuration.data,
+    aws_s3_bucket_ownership_controls.data,
+    aws_s3_bucket_public_access_block.data,
+    aws_s3_bucket_policy.data
+  ]
 }
 
 === outputs.tf ===

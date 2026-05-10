@@ -13,7 +13,7 @@ export class Auth extends ClientSDK {
    */
   async whoami(
     options?: RequestOptions,
-  ): Promise<models.Subject> {
+  ): Promise<models.WhoamiResponse> {
     return unwrapAsync(authWhoami(
       this,
       options,

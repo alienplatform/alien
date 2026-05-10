@@ -1178,9 +1178,15 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
                                                                             ),
                                                                             "aws",
                                                                         ) => {
-                                                                            let is_empty = aws_access.account_ids.is_empty() && 
-                                                                                          aws_access.role_arns.is_empty() && 
-                                                                                          aws_access.allowed_service_types.is_empty();
+                                                                            let is_empty = aws_access
+                                                                                .account_ids
+                                                                                .is_empty()
+                                                                                && aws_access
+                                                                                    .role_arns
+                                                                                    .is_empty()
+                                                                                && aws_access
+                                                                                    .allowed_service_types
+                                                                                    .is_empty();
                                                                             if is_empty {
                                                                                 println!("[{}] ✓ Final AWS cross-account access is empty - all access properly removed", provider_name);
                                                                             } else {
@@ -1193,9 +1199,15 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
                                                                             ),
                                                                             "gcp",
                                                                         ) => {
-                                                                            let is_empty = gcp_access.project_numbers.is_empty() && 
-                                                                                          gcp_access.service_account_emails.is_empty() && 
-                                                                                          gcp_access.allowed_service_types.is_empty();
+                                                                            let is_empty = gcp_access
+                                                                                .project_numbers
+                                                                                .is_empty()
+                                                                                && gcp_access
+                                                                                    .service_account_emails
+                                                                                    .is_empty()
+                                                                                && gcp_access
+                                                                                    .allowed_service_types
+                                                                                    .is_empty();
                                                                             if is_empty {
                                                                                 println!("[{}] ✓ Final GCP cross-account access is empty - all access properly removed", provider_name);
                                                                             } else {

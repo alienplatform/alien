@@ -21,7 +21,6 @@ const LEASE_DURATION_SECS: i64 = 30;
 #[derive(Debug)]
 pub struct LocalQueue {
     db: Arc<Mutex<sled::Db>>,
-    data_dir: PathBuf,
 }
 
 /// Stored message format that avoids serde issues with `MessagePayload`'s internal tagging.
@@ -94,7 +93,6 @@ impl LocalQueue {
 
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            data_dir,
         })
     }
 

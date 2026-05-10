@@ -4,8 +4,21 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
+import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+
+/**
+ * Delete scope: full or liveOnly
+ */
+export const DeleteScope = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Delete scope: full or liveOnly
+ */
+export type DeleteScope = ClosedEnum<typeof DeleteScope>;
 
 export type DeleteDeploymentRequest = {
   /**
@@ -16,6 +29,11 @@ export type DeleteDeploymentRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
+  force?: boolean | null | undefined;
+  /**
+   * Delete scope: full or liveOnly
+   */
+  deleteScope?: DeleteScope | undefined;
 };
 
 /**
@@ -26,9 +44,16 @@ export type DeleteDeploymentResponse = {
 };
 
 /** @internal */
+export const DeleteScope$outboundSchema: z.ZodEnum<typeof DeleteScope> = z.enum(
+  DeleteScope,
+);
+
+/** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
+  force: boolean | null;
+  deleteScope?: string | undefined;
 };
 
 /** @internal */
@@ -38,6 +63,8 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
+  force: z.nullable(z.boolean().default(false)),
+  deleteScope: DeleteScope$outboundSchema.optional(),
 });
 
 export function deleteDeploymentRequestToJSON(

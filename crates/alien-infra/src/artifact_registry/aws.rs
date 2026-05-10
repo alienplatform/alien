@@ -6,8 +6,11 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::CreateRoleRequest;
-use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
+use alien_core::{
+    standard_resource_tags, ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs,
+    ResourceStatus,
+};
 
 use alien_aws_clients::aws::ecr::{
     PutReplicationConfigurationRequest, ReplicationConfiguration, ReplicationDestination,
@@ -100,6 +103,12 @@ impl AwsArtifactRegistryController {
             .role_name(pull_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
             .description(format!("Alien ECR pull role for registry {}", config.id))
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &config.id)
+                    .into_iter()
+                    .map(|(key, value)| CreateRoleTag { key, value })
+                    .collect(),
+            )
             .build();
 
         let response =
@@ -190,6 +199,12 @@ impl AwsArtifactRegistryController {
             .role_name(push_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
             .description(format!("Alien ECR push role for registry {}", config.id))
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &config.id)
+                    .into_iter()
+                    .map(|(key, value)| CreateRoleTag { key, value })
+                    .collect(),
+            )
             .build();
 
         let response =

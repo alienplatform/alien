@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -164,54 +165,6 @@ locals {
         repositoryPrefix = "${var.stack_name}-registry"
         pullRoleArn      = aws_iam_role.registry_pull.arn
         pushRoleArn      = aws_iam_role.registry_push.arn
-      }
-    },
-    {
-      id   = "builder"
-      type = "build"
-      importData = {
-        projectName = aws_codebuild_project.builder.name
-        projectArn  = aws_codebuild_project.builder.arn
-        buildEnvVars = {
-          PROFILE = "release"
-        }
-      }
-    },
-    {
-      id   = "public-api"
-      type = "function"
-      importData = {
-        functionName         = aws_lambda_function.public_api.function_name
-        functionArn          = aws_lambda_function.public_api.arn
-        eventSourceMappings  = []
-        eventbridgeRuleNames = []
-        s3PermissionStatementIds = [
-          aws_lambda_permission.public_api_storage_assets.statement_id
-        ]
-        eventbridgePermissionStatementIds = []
-        url                               = aws_apigatewayv2_api.public_api.api_endpoint
-        apiId                             = aws_apigatewayv2_api.public_api.id
-        integrationId                     = aws_apigatewayv2_integration.public_api.id
-        routeId                           = aws_apigatewayv2_route.public_api.id
-        stageName                         = "$default"
-      }
-    },
-    {
-      id   = "worker"
-      type = "function"
-      importData = {
-        functionName = aws_lambda_function.worker.function_name
-        functionArn  = aws_lambda_function.worker.arn
-        eventSourceMappings = [
-          aws_lambda_event_source_mapping.worker_queue_0.uuid
-        ]
-        eventbridgeRuleNames = [
-          aws_cloudwatch_event_rule.worker_schedule_0.name
-        ]
-        s3PermissionStatementIds = []
-        eventbridgePermissionStatementIds = [
-          aws_lambda_permission.worker_schedule_perm_0.statement_id
-        ]
       }
     }
   ]
@@ -397,7 +350,7 @@ resource "aws_iam_role" "management" {
 resource "aws_iam_role_policy" "management_set_0" {
   name   = "function-management-0"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["apigateway:POST"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"], Sid = "FunctionManagement6" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement7" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement6" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"], Sid = "FunctionManagement7" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement8" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement9" }], Version = "2012-10-17" })
 }
 
 resource "aws_iam_role_policy" "management_set_1" {
@@ -602,290 +555,6 @@ resource "aws_iam_role_policy" "registry_push_policy" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = aws_ecr_repository.registry.arn }] })
 }
 
-=== builder.tf ===
-resource "aws_cloudwatch_log_group" "builder_logs" {
-  name              = "/aws/codebuild/${var.stack_name}-builder"
-  retention_in_days = 30
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "builder"
-    AlienResourceType = "build"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_codebuild_project" "builder" {
-  name         = "${var.stack_name}-builder"
-  service_role = aws_iam_role.execution_sa.arn
-
-  artifacts {
-    type = "NO_ARTIFACTS"
-  }
-
-  environment {
-    type            = "LINUX_CONTAINER"
-    image           = "aws/codebuild/standard:7.0"
-    compute_type    = "BUILD_GENERAL1_MEDIUM"
-    privileged_mode = true
-
-    environment_variable {
-      name  = "PROFILE"
-      value = "release"
-      type  = "PLAINTEXT"
-    }
-  }
-
-  source {
-    type      = "NO_SOURCE"
-    buildspec = "version: 0.2\nphases:\n  build:\n    commands:\n      - echo \"Build project is ready for runtime-provided commands\"\n"
-  }
-
-  logs_config {
-    cloudwatch_logs {
-      status     = "ENABLED"
-      group_name = aws_cloudwatch_log_group.builder_logs.name
-    }
-  }
-
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "builder"
-    AlienResourceType = "build"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-=== public_api.tf ===
-resource "aws_cloudwatch_log_group" "public_api_logs" {
-  name              = "/aws/lambda/${var.stack_name}-public-api"
-  retention_in_days = 30
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "public-api"
-    AlienResourceType = "function"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_function" "public_api" {
-  function_name = "${var.stack_name}-public-api"
-  package_type  = "Image"
-  image_uri     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api:1.2.3"
-  role          = aws_iam_role.execution_sa.arn
-  memory_size   = 512
-  timeout       = 60
-
-  environment {
-    variables = {
-      ALIEN_ASSETS_BINDING                = jsonencode({ service = "s3", bucketName = aws_s3_bucket.assets.bucket })
-      ALIEN_CURRENT_FUNCTION_BINDING_NAME = "public-api"
-      ALIEN_DEPLOYMENT_TYPE               = "aws"
-      ALIEN_LAMBDA_MODE                   = "buffered"
-      ALIEN_METADATA_BINDING              = jsonencode({ service = "dynamodb", tableName = aws_dynamodb_table.metadata.name, region = data.aws_region.current.region })
-      ALIEN_RUNTIME_SEND_OTLP             = "true"
-      ALIEN_SECRETS_BINDING               = jsonencode({ service = "parameter-store", vaultPrefix = "${var.stack_name}-secrets" })
-      ALIEN_TRANSPORT                     = "lambda"
-      AWS_ACCOUNT_ID                      = data.aws_caller_identity.current.account_id
-      RUST_LOG                            = "info"
-    }
-  }
-
-  vpc_config {
-    subnet_ids = aws_subnet.default_network_private[*].id
-    security_group_ids = [
-      aws_security_group.default_network_workload.id
-    ]
-  }
-
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "public-api"
-    AlienResourceType = "function"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_permission" "public_api_storage_assets" {
-  statement_id   = "${var.stack_name}-public_api_storage_assets"
-  action         = "lambda:InvokeFunction"
-  function_name  = aws_lambda_function.public_api.function_name
-  principal      = "s3.amazonaws.com"
-  source_account = data.aws_caller_identity.current.account_id
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_apigatewayv2_api" "public_api" {
-  name          = "${var.stack_name}-public_api-api"
-  protocol_type = "HTTP"
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_apigatewayv2_integration" "public_api" {
-  api_id                 = aws_apigatewayv2_api.public_api.id
-  integration_type       = "AWS_PROXY"
-  integration_method     = "POST"
-  integration_uri        = aws_lambda_function.public_api.invoke_arn
-  payload_format_version = "2.0"
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_apigatewayv2_route" "public_api" {
-  api_id    = aws_apigatewayv2_api.public_api.id
-  route_key = "ANY /{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.public_api.id}"
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_apigatewayv2_stage" "public_api" {
-  api_id      = aws_apigatewayv2_api.public_api.id
-  name        = "$default"
-  auto_deploy = true
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_permission" "public_api_api" {
-  statement_id  = "public_apiApiInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.public_api.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.public_api.execution_arn}/*/*"
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-=== worker.tf ===
-resource "aws_cloudwatch_log_group" "worker_logs" {
-  name              = "/aws/lambda/${var.stack_name}-worker"
-  retention_in_days = 30
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "worker"
-    AlienResourceType = "function"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_function" "worker" {
-  function_name = "${var.stack_name}-worker"
-  package_type  = "Image"
-  image_uri     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/worker:1.2.3"
-  role          = aws_iam_role.execution_sa.arn
-  memory_size   = 256
-  timeout       = 180
-
-  environment {
-    variables = {
-      ALIEN_CURRENT_FUNCTION_BINDING_NAME = "worker"
-      ALIEN_DEPLOYMENT_TYPE               = "aws"
-      ALIEN_LAMBDA_MODE                   = "buffered"
-      ALIEN_RUNTIME_SEND_OTLP             = "true"
-      ALIEN_TRANSPORT                     = "lambda"
-      AWS_ACCOUNT_ID                      = data.aws_caller_identity.current.account_id
-    }
-  }
-
-  vpc_config {
-    subnet_ids = aws_subnet.default_network_private[*].id
-    security_group_ids = [
-      aws_security_group.default_network_workload.id
-    ]
-  }
-
-  tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "worker"
-    AlienResourceType = "function"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_event_source_mapping" "worker_queue_0" {
-  event_source_arn = aws_sqs_queue.jobs.arn
-  function_name    = aws_lambda_function.worker.function_name
-  batch_size       = 1
-  enabled          = true
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_cloudwatch_event_rule" "worker_schedule_0" {
-  name                = "${var.stack_name}-worker-schedule-0"
-  schedule_expression = "rate(5 minutes)"
-  state               = "ENABLED"
-  tags = {
-    ManagedBy = "alien.dev"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_cloudwatch_event_target" "worker_schedule_target_0" {
-  rule      = aws_cloudwatch_event_rule.worker_schedule_0.name
-  target_id = "worker-target-0"
-  arn       = aws_lambda_function.worker.arn
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "aws_lambda_permission" "worker_schedule_perm_0" {
-  statement_id  = "workerScheduleInvoke0"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.worker.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.worker_schedule_0.arn
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
@@ -898,6 +567,43 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_vpc.default_network,
+    aws_internet_gateway.default_network,
+    aws_subnet.default_network_public,
+    aws_subnet.default_network_private,
+    aws_eip.default_network_nat,
+    aws_nat_gateway.default_network,
+    aws_route_table.default_network_public,
+    aws_route_table.default_network_private,
+    aws_route_table_association.default_network_public,
+    aws_route_table_association.default_network_private,
+    aws_security_group.default_network_workload,
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_role_policy.execution_sa_set_1,
+    aws_iam_role.management,
+    aws_iam_role_policy.management_set_0,
+    aws_iam_role_policy.management_set_1,
+    aws_iam_role_policy.management_set_2,
+    aws_iam_role_policy.management_set_3,
+    aws_iam_role_policy.management_set_4,
+    aws_iam_role_policy.management_self_read,
+    aws_s3_bucket.assets,
+    aws_s3_bucket_server_side_encryption_configuration.assets,
+    aws_s3_bucket_ownership_controls.assets,
+    aws_s3_bucket_public_access_block.assets,
+    aws_s3_bucket_policy.assets,
+    aws_s3_bucket_versioning.assets,
+    aws_sqs_queue.jobs,
+    aws_dynamodb_table.metadata,
+    aws_ecr_repository.registry,
+    aws_ecr_lifecycle_policy.registry,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 === outputs.tf ===

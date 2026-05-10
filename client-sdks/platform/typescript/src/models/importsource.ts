@@ -386,6 +386,10 @@ export type ImportSource = {
    */
   deploymentName: string;
   /**
+   * Stable physical-name prefix used by the distribution artifact.
+   */
+  stackPrefix: string;
+  /**
    * Source label for observability only — does not affect import behavior.
    */
   sourceKind?: ImportSourceKind | undefined;
@@ -1090,6 +1094,7 @@ export function importSourceManagementConfigUnionToJSON(
 /** @internal */
 export type ImportSource$Outbound = {
   deploymentName: string;
+  stackPrefix: string;
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
@@ -1109,6 +1114,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   ImportSource
 > = z.object({
   deploymentName: z.string(),
+  stackPrefix: z.string(),
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
   platform: ImportSourcePlatformEnum$outboundSchema,

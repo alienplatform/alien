@@ -16,7 +16,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::function_environment::{GcpFunctionEnvironmentRenderer, function_environment},
+    emitters::function_environment::{function_environment, GcpFunctionEnvironmentRenderer},
     emitters::gcp::helpers::{
         downcast, label_for_ref, labels, required_label, service_account_email,
     },
@@ -24,8 +24,8 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    ErrorData, Function, FunctionCode, FunctionTrigger, Ingress, Result,
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Function,
+    FunctionCode, FunctionTrigger, Ingress, Result,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;

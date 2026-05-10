@@ -215,6 +215,14 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_container_registry.registry,
+    azurerm_user_assigned_identity.registry_pull,
+    azurerm_role_assignment.registry_pull_role,
+    azurerm_user_assigned_identity.registry_push,
+    azurerm_role_assignment.registry_push_role
+  ]
 }
 
 === outputs.tf ===

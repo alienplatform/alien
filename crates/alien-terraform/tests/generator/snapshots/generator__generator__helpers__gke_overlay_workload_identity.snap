@@ -11,6 +11,10 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
   }
 }
 
@@ -172,6 +176,15 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
   ]
 }
 
+=== iam_propagation.tf ===
+resource "time_sleep" "gcp_iam_propagation" {
+  create_duration = "120s"
+  depends_on = [
+    google_project_iam_custom_role.execution_sa_storagedataread,
+    google_project_iam_member.execution_sa_storagedataread_binding_0
+  ]
+}
+
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
@@ -184,6 +197,14 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_storage_bucket.data,
+    google_service_account.execution_sa,
+    google_project_iam_custom_role.execution_sa_storagedataread,
+    google_project_iam_member.execution_sa_storagedataread_binding_0,
+    google_service_account_iam_binding.execution_sa_workload_identity,
+    time_sleep.gcp_iam_propagation
+  ]
 }
 
 === outputs.tf ===

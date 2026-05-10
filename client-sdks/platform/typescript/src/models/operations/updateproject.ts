@@ -162,19 +162,11 @@ export type UpdateProjectHelm = {
 };
 
 /**
- * Terraform provider package configuration. If null, Terraform packages will not be generated.
+ * Terraform package configuration. If null, Terraform packages will not be generated.
  */
 export type UpdateProjectTerraform = {
   /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
-  /**
-   * Whether Terraform provider package generation is enabled
+   * Whether Terraform package generation is enabled
    */
   enabled: boolean;
 };
@@ -200,7 +192,7 @@ export type UpdateProjectPackagesConfig = {
    */
   helm?: UpdateProjectHelm | null | undefined;
   /**
-   * Terraform provider package configuration. If null, Terraform packages will not be generated.
+   * Terraform package configuration. If null, Terraform packages will not be generated.
    */
   terraform?: UpdateProjectTerraform | null | undefined;
 };
@@ -221,6 +213,10 @@ export type UpdateProjectRequestBody = {
     | UpdateProjectDeploymentPageBackground
     | null
     | undefined;
+  /**
+   * Custom logo URL to show on the deployment page.
+   */
+  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -414,8 +410,6 @@ export function updateProjectHelmToJSON(
 
 /** @internal */
 export type UpdateProjectTerraform$Outbound = {
-  providerName: string;
-  resourceType: string;
   enabled: boolean;
 };
 
@@ -424,8 +418,6 @@ export const UpdateProjectTerraform$outboundSchema: z.ZodType<
   UpdateProjectTerraform$Outbound,
   UpdateProjectTerraform
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   enabled: z.boolean(),
 });
 
@@ -480,6 +472,7 @@ export type UpdateProjectRequestBody$Outbound = {
     | UpdateProjectDeploymentPageBackground$Outbound
     | null
     | undefined;
+  deploymentPageLogoUrl?: string | null | undefined;
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
   domainId?: string | null | undefined;
 };
@@ -496,6 +489,7 @@ export const UpdateProjectRequestBody$outboundSchema: z.ZodType<
   deploymentPageBackground: z.nullable(
     z.lazy(() => UpdateProjectDeploymentPageBackground$outboundSchema),
   ).optional(),
+  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => UpdateProjectPackagesConfig$outboundSchema),
   ).optional(),

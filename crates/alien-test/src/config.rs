@@ -97,6 +97,10 @@ pub struct AzureTestResources {
     /// ACR repository URL for pushing built images,
     /// e.g. `myregistry.azurecr.io/image`
     pub acr_repository: Option<String>,
+    /// Scoped service principal used by pull-mode agent e2e tests.
+    pub agent_client_id: Option<String>,
+    pub agent_client_secret: Option<String>,
+    pub agent_object_id: Option<String>,
     /// Pre-provisioned shared Container Apps Environment (in target subscription).
     /// When set, e2e tests inject this as an external binding instead of creating
     /// a new environment per test, avoiding the 20-environment Azure quota limit.
@@ -368,6 +372,9 @@ impl TestConfig {
             managed_environment_name: env::var("ALIEN_TEST_AZURE_MANAGED_ENVIRONMENT_NAME").ok(),
             registry_name: env::var("ALIEN_TEST_AZURE_REGISTRY_NAME").ok(),
             acr_repository: env::var("ALIEN_TEST_AZURE_ACR_REPOSITORY").ok(),
+            agent_client_id: env::var("AZURE_AGENT_CLIENT_ID").ok(),
+            agent_client_secret: env::var("AZURE_AGENT_CLIENT_SECRET").ok(),
+            agent_object_id: env::var("AZURE_AGENT_OBJECT_ID").ok(),
             shared_container_env,
         }
     }
@@ -451,6 +458,9 @@ impl TestConfig {
         mask_opt(&azr.managed_environment_name);
         mask_opt(&azr.registry_name);
         mask_opt(&azr.acr_repository);
+        mask_opt(&azr.agent_client_id);
+        mask_opt(&azr.agent_client_secret);
+        mask_opt(&azr.agent_object_id);
         if let Some(env) = &azr.shared_container_env {
             mask(&env.environment_name);
             mask(&env.resource_id);

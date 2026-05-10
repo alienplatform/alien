@@ -240,39 +240,6 @@ locals {
         pullPrincipalId = azurerm_user_assigned_identity.registry_pull.principal_id
         pushPrincipalId = azurerm_user_assigned_identity.registry_push.principal_id
       }
-    },
-    {
-      id   = "builder"
-      type = "build"
-      importData = {
-        subscriptionId = var.azure_subscription_id
-        resourceGroup  = var.azure_resource_group_name
-        registryName   = azurerm_container_registry.registry.name
-        taskName       = azurerm_container_registry_task.builder.name
-        buildEnvVars = {
-          PROFILE = "release"
-        }
-      }
-    },
-    {
-      id   = "public-api"
-      type = "function"
-      importData = {
-        subscriptionId   = var.azure_subscription_id
-        resourceGroup    = var.azure_resource_group_name
-        containerAppName = azurerm_container_app.public_api.name
-        fqdn             = azurerm_container_app.public_api.latest_revision_fqdn
-      }
-    },
-    {
-      id   = "worker"
-      type = "function"
-      importData = {
-        subscriptionId   = var.azure_subscription_id
-        resourceGroup    = var.azure_resource_group_name
-        containerAppName = azurerm_container_app.worker.name
-        fqdn             = null
-      }
     }
   ]
 }
@@ -844,245 +811,6 @@ resource "azurerm_role_assignment" "registry_push_role" {
   ]
 }
 
-=== builder.tf ===
-resource "azurerm_container_registry_task" "builder" {
-  name                  = "${var.stack_name}-builder"
-  container_registry_id = azurerm_container_registry.registry.id
-  is_system_task        = false
-
-  platform {
-    os           = "Linux"
-    architecture = "amd64"
-  }
-
-  encoded_step {
-    task_content  = "version: v1.1.0\nsteps:\n  - cmd: echo \"alien build placeholder\"\n"
-    value_content = "PROFILE: \"release\""
-  }
-
-  identity {
-    type = "SystemAssigned"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-=== public_api.tf ===
-data "azurerm_client_config" "public_api_current" {}
-
-resource "azurerm_container_app" "public_api" {
-  name                         = "${var.stack_name}-public-api"
-  resource_group_name          = var.azure_resource_group_name
-  container_app_environment_id = azurerm_container_app_environment.default_container_apps_environment.id
-  revision_mode                = "Single"
-
-  template {
-    min_replicas = 0
-    max_replicas = 10
-
-    container {
-      name   = "public-api"
-      image  = "acmeprod.azurecr.io/api:1.2.3"
-      cpu    = 0.25
-      memory = "0.5Gi"
-
-      env {
-        name  = "ALIEN_ASSETS_BINDING"
-        value = jsonencode({ service = "blob", accountName = azurerm_storage_account.default_storage_account.name, containerName = azurerm_storage_container.assets.name })
-      }
-
-      env {
-        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
-        value = "public-api"
-      }
-
-      env {
-        name  = "ALIEN_DEPLOYMENT_TYPE"
-        value = "azure"
-      }
-
-      env {
-        name  = "ALIEN_METADATA_BINDING"
-        value = jsonencode({ service = "tablestorage", resourceGroupName = var.azure_resource_group_name, accountName = azurerm_cosmosdb_account.metadata.name, tableName = azurerm_cosmosdb_sql_container.metadata_container.name })
-      }
-
-      env {
-        name  = "ALIEN_RUNTIME_SEND_OTLP"
-        value = "true"
-      }
-
-      env {
-        name  = "ALIEN_SECRETS_BINDING"
-        value = jsonencode({ service = "key-vault", vaultName = azurerm_key_vault.secrets.name })
-      }
-
-      env {
-        name  = "ALIEN_TRANSPORT"
-        value = "container-app"
-      }
-
-      env {
-        name  = "AZURE_CLIENT_ID"
-        value = azurerm_user_assigned_identity.execution_sa.client_id
-      }
-
-      env {
-        name  = "AZURE_REGION"
-        value = var.azure_location
-      }
-
-      env {
-        name  = "AZURE_SUBSCRIPTION_ID"
-        value = var.azure_subscription_id
-      }
-
-      env {
-        name  = "AZURE_TENANT_ID"
-        value = data.azurerm_client_config.public_api_current.tenant_id
-      }
-
-      env {
-        name  = "RUST_LOG"
-        value = "info"
-      }
-    }
-  }
-
-  ingress {
-    external_enabled = true
-    target_port      = 8080
-    transport        = "auto"
-
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
-    }
-  }
-
-  tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "public-api"
-    "alien-resource-type" = "function"
-  }
-
-  identity {
-    type = "UserAssigned"
-    identity_ids = [
-      azurerm_user_assigned_identity.execution_sa.id
-    ]
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-=== worker.tf ===
-data "azurerm_client_config" "worker_current" {}
-
-resource "azurerm_container_app" "worker" {
-  name                         = "${var.stack_name}-worker"
-  resource_group_name          = var.azure_resource_group_name
-  container_app_environment_id = azurerm_container_app_environment.default_container_apps_environment.id
-  revision_mode                = "Single"
-
-  template {
-    min_replicas = 0
-    max_replicas = 10
-
-    container {
-      name   = "worker"
-      image  = "acmeprod.azurecr.io/worker:1.2.3"
-      cpu    = 0.25
-      memory = "0.5Gi"
-
-      env {
-        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
-        value = "worker"
-      }
-
-      env {
-        name  = "ALIEN_DEPLOYMENT_TYPE"
-        value = "azure"
-      }
-
-      env {
-        name  = "ALIEN_RUNTIME_SEND_OTLP"
-        value = "true"
-      }
-
-      env {
-        name  = "ALIEN_TRANSPORT"
-        value = "container-app"
-      }
-
-      env {
-        name  = "AZURE_CLIENT_ID"
-        value = azurerm_user_assigned_identity.execution_sa.client_id
-      }
-
-      env {
-        name  = "AZURE_REGION"
-        value = var.azure_location
-      }
-
-      env {
-        name  = "AZURE_SUBSCRIPTION_ID"
-        value = var.azure_subscription_id
-      }
-
-      env {
-        name  = "AZURE_TENANT_ID"
-        value = data.azurerm_client_config.worker_current.tenant_id
-      }
-    }
-  }
-
-  ingress {
-    external_enabled = false
-    target_port      = 8080
-    transport        = "auto"
-
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
-    }
-  }
-
-  tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "worker"
-    "alien-resource-type" = "function"
-  }
-
-  identity {
-    type = "UserAssigned"
-    identity_ids = [
-      azurerm_user_assigned_identity.execution_sa.id
-    ]
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
@@ -1095,6 +823,44 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_storage_account.default_storage_account,
+    azurerm_servicebus_namespace.default_service_bus_namespace,
+    azurerm_log_analytics_workspace.default_container_apps_environment_logs,
+    azurerm_container_app_environment.default_container_apps_environment,
+    azurerm_virtual_network.default_network,
+    azurerm_subnet.default_network_public,
+    azurerm_subnet.default_network_private,
+    azurerm_public_ip.default_network_nat_pip,
+    azurerm_nat_gateway.default_network_nat,
+    azurerm_nat_gateway_public_ip_association.default_network_nat,
+    azurerm_subnet_nat_gateway_association.default_network_private,
+    azurerm_network_security_group.default_network_workload,
+    azurerm_subnet_network_security_group_association.default_network_private,
+    azurerm_user_assigned_identity.execution_sa,
+    azurerm_role_definition.execution_sa_storage_data_read,
+    azurerm_role_assignment.execution_sa_storage_data_read_assignment,
+    azurerm_role_definition.execution_sa_queue_data_write,
+    azurerm_role_assignment.execution_sa_queue_data_write_assignment,
+    azurerm_user_assigned_identity.management,
+    azurerm_role_definition.management_management_role,
+    azurerm_role_assignment.management_management_uami_assignment,
+    azurerm_role_assignment.management_management_sp_assignment,
+    azurerm_federated_identity_credential.management_fic,
+    azurerm_role_assignment.management_acr_push_assignment,
+    azurerm_storage_container.assets,
+    azurerm_servicebus_queue.jobs,
+    azurerm_cosmosdb_account.metadata,
+    azurerm_cosmosdb_sql_database.metadata_db,
+    azurerm_cosmosdb_sql_container.metadata_container,
+    azurerm_key_vault.secrets,
+    azurerm_container_registry.registry,
+    azurerm_user_assigned_identity.registry_pull,
+    azurerm_role_assignment.registry_pull_role,
+    azurerm_user_assigned_identity.registry_push,
+    azurerm_role_assignment.registry_push_role
+  ]
 }
 
 === outputs.tf ===

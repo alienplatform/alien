@@ -56,6 +56,20 @@ export type SyncReconcileRequestCurrentReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestCurrentReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestCurrentReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestCurrentReleaseOverrideAwGrant = {
@@ -81,6 +95,10 @@ export type SyncReconcileRequestCurrentReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestCurrentReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestCurrentReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -356,6 +374,20 @@ export type SyncReconcileRequestCurrentReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestCurrentReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestCurrentReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestCurrentReleaseExtendAwGrant = {
@@ -381,6 +413,10 @@ export type SyncReconcileRequestCurrentReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestCurrentReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestCurrentReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -662,6 +698,20 @@ export type SyncReconcileRequestCurrentReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestCurrentReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestCurrentReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileRequestCurrentReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestCurrentReleaseProfileAwGrant = {
@@ -687,6 +737,10 @@ export type SyncReconcileRequestCurrentReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestCurrentReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestCurrentReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1218,6 +1272,34 @@ export type SyncReconcileRequestPlatform = ClosedEnum<
   typeof SyncReconcileRequestPlatform
 >;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const SyncReconcileRequestDeleteScope = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type SyncReconcileRequestDeleteScope = ClosedEnum<
+  typeof SyncReconcileRequestDeleteScope
+>;
+
 export const SyncReconcileRequestPreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1268,6 +1350,20 @@ export type SyncReconcileRequestPreparedStackOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestPreparedStackOverrideAwGrant = {
@@ -1293,6 +1389,10 @@ export type SyncReconcileRequestPreparedStackOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestPreparedStackOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1566,6 +1666,20 @@ export type SyncReconcileRequestPreparedStackExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPreparedStackExtendEffect = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestPreparedStackExtendAwGrant = {
@@ -1591,6 +1705,10 @@ export type SyncReconcileRequestPreparedStackExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestPreparedStackExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1872,6 +1990,20 @@ export type SyncReconcileRequestPreparedStackProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPreparedStackProfileEffect = ClosedEnum<
+  typeof SyncReconcileRequestPreparedStackProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestPreparedStackProfileAwGrant = {
@@ -1897,6 +2029,10 @@ export type SyncReconcileRequestPreparedStackProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestPreparedStackProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2264,6 +2400,17 @@ export type SyncReconcileRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileRequestRuntimeMetadata = {
+  /**
+   * Scope for a delete operation.
+   *
+   * @remarks
+   *
+   * Full deletes are setup/admin owned and may remove both Frozen and Live
+   * resources. Live-only deletes are used by setup handoff resources
+   * (Terraform/CloudFormation) so Alien removes only the resources it owns
+   * before setup tears down Frozen resources.
+   */
+  deleteScope?: SyncReconcileRequestDeleteScope | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2659,6 +2806,20 @@ export type SyncReconcileRequestTargetReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestTargetReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestTargetReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestTargetReleaseOverrideAwGrant = {
@@ -2684,6 +2845,10 @@ export type SyncReconcileRequestTargetReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestTargetReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestTargetReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2957,6 +3122,20 @@ export type SyncReconcileRequestTargetReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestTargetReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestTargetReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestTargetReleaseExtendAwGrant = {
@@ -2982,6 +3161,10 @@ export type SyncReconcileRequestTargetReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestTargetReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestTargetReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3263,6 +3446,20 @@ export type SyncReconcileRequestTargetReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestTargetReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestTargetReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileRequestTargetReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileRequestTargetReleaseProfileAwGrant = {
@@ -3288,6 +3485,10 @@ export type SyncReconcileRequestTargetReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileRequestTargetReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestTargetReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3926,6 +4127,12 @@ export function syncReconcileRequestCurrentReleaseOverrideAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestCurrentReleaseOverrideEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseOverrideEffect> = z.enum(
+    SyncReconcileRequestCurrentReleaseOverrideEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -3957,6 +4164,7 @@ export function syncReconcileRequestCurrentReleaseOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseOverrideAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseOverrideAwGrant$Outbound;
 };
 
@@ -3969,6 +4177,8 @@ export const SyncReconcileRequestCurrentReleaseOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestCurrentReleaseOverrideEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAwGrant$outboundSchema
     ),
@@ -4642,6 +4852,12 @@ export function syncReconcileRequestCurrentReleaseExtendAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestCurrentReleaseExtendEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseExtendEffect> = z.enum(
+    SyncReconcileRequestCurrentReleaseExtendEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -4673,6 +4889,7 @@ export function syncReconcileRequestCurrentReleaseExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseExtendAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseExtendAwGrant$Outbound;
 };
 
@@ -4685,6 +4902,8 @@ export const SyncReconcileRequestCurrentReleaseExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestCurrentReleaseExtendEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAwGrant$outboundSchema
     ),
@@ -5385,6 +5604,12 @@ export function syncReconcileRequestCurrentReleaseProfileAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestCurrentReleaseProfileEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestCurrentReleaseProfileEffect> = z.enum(
+    SyncReconcileRequestCurrentReleaseProfileEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -5416,6 +5641,7 @@ export function syncReconcileRequestCurrentReleaseProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseProfileAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseProfileAwGrant$Outbound;
 };
 
@@ -5428,6 +5654,8 @@ export const SyncReconcileRequestCurrentReleaseProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestCurrentReleaseProfileEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAwGrant$outboundSchema
     ),
@@ -6444,6 +6672,11 @@ export const SyncReconcileRequestPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestPlatform);
 
 /** @internal */
+export const SyncReconcileRequestDeleteScope$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestDeleteScope
+> = z.enum(SyncReconcileRequestDeleteScope);
+
+/** @internal */
 export const SyncReconcileRequestPreparedStackManagementEnum$outboundSchema:
   z.ZodEnum<typeof SyncReconcileRequestPreparedStackManagementEnum> = z.enum(
     SyncReconcileRequestPreparedStackManagementEnum,
@@ -6541,6 +6774,12 @@ export function syncReconcileRequestPreparedStackOverrideAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestPreparedStackOverrideEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackOverrideEffect> = z.enum(
+    SyncReconcileRequestPreparedStackOverrideEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -6572,6 +6811,7 @@ export function syncReconcileRequestPreparedStackOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackOverrideAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackOverrideAwGrant$Outbound;
 };
 
@@ -6584,6 +6824,8 @@ export const SyncReconcileRequestPreparedStackOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestPreparedStackOverrideEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAwGrant$outboundSchema
     ),
@@ -7257,6 +7499,12 @@ export function syncReconcileRequestPreparedStackExtendAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestPreparedStackExtendEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackExtendEffect> = z.enum(
+    SyncReconcileRequestPreparedStackExtendEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestPreparedStackExtendAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -7288,6 +7536,7 @@ export function syncReconcileRequestPreparedStackExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackExtendAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackExtendAwGrant$Outbound;
 };
 
@@ -7300,6 +7549,8 @@ export const SyncReconcileRequestPreparedStackExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestPreparedStackExtendEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAwGrant$outboundSchema
     ),
@@ -7999,6 +8250,12 @@ export function syncReconcileRequestPreparedStackProfileAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestPreparedStackProfileEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPreparedStackProfileEffect> = z.enum(
+    SyncReconcileRequestPreparedStackProfileEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestPreparedStackProfileAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -8030,6 +8287,7 @@ export function syncReconcileRequestPreparedStackProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackProfileAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackProfileAwGrant$Outbound;
 };
 
@@ -8042,6 +8300,8 @@ export const SyncReconcileRequestPreparedStackProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestPreparedStackProfileEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAwGrant$outboundSchema
     ),
@@ -8816,6 +9076,7 @@ export function syncReconcileRequestPreparedStackUnionToJSON(
 
 /** @internal */
 export type SyncReconcileRequestRuntimeMetadata$Outbound = {
+  deleteScope?: string | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   preparedStack?:
     | SyncReconcileRequestPreparedStack$Outbound
@@ -8830,6 +9091,7 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
   SyncReconcileRequestRuntimeMetadata$Outbound,
   SyncReconcileRequestRuntimeMetadata
 > = z.object({
+  deleteScope: SyncReconcileRequestDeleteScope$outboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
@@ -9384,6 +9646,12 @@ export function syncReconcileRequestTargetReleaseOverrideAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestTargetReleaseOverrideEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseOverrideEffect> = z.enum(
+    SyncReconcileRequestTargetReleaseOverrideEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -9415,6 +9683,7 @@ export function syncReconcileRequestTargetReleaseOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseOverrideAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseOverrideAwGrant$Outbound;
 };
 
@@ -9427,6 +9696,8 @@ export const SyncReconcileRequestTargetReleaseOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestTargetReleaseOverrideEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAwGrant$outboundSchema
     ),
@@ -10101,6 +10372,12 @@ export function syncReconcileRequestTargetReleaseExtendAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestTargetReleaseExtendEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseExtendEffect> = z.enum(
+    SyncReconcileRequestTargetReleaseExtendEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -10132,6 +10409,7 @@ export function syncReconcileRequestTargetReleaseExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseExtendAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseExtendAwGrant$Outbound;
 };
 
@@ -10144,6 +10422,8 @@ export const SyncReconcileRequestTargetReleaseExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestTargetReleaseExtendEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAwGrant$outboundSchema
     ),
@@ -10844,6 +11124,12 @@ export function syncReconcileRequestTargetReleaseProfileAwBindingToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestTargetReleaseProfileEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestTargetReleaseProfileEffect> = z.enum(
+    SyncReconcileRequestTargetReleaseProfileEffect,
+  );
+
+/** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
@@ -10875,6 +11161,7 @@ export function syncReconcileRequestTargetReleaseProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseProfileAwBinding$Outbound;
+  effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseProfileAwGrant$Outbound;
 };
 
@@ -10887,6 +11174,8 @@ export const SyncReconcileRequestTargetReleaseProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAwBinding$outboundSchema
     ),
+    effect: SyncReconcileRequestTargetReleaseProfileEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAwGrant$outboundSchema
     ),

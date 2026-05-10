@@ -45,11 +45,41 @@
         }
       },
       // EBS volume attach/detach for persistent storage containers.
-      // horizond calls ec2:AttachVolume/DetachVolume/DescribeVolumes at runtime.
-      // Describe* require Resource: "*" (AWS API limitation).
       {
         "grant": {
-          "actions": ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DescribeVolumes"]
+          "actions": ["ec2:AttachVolume", "ec2:DetachVolume"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // AWS requires Resource: "*" for DescribeVolumes.
+      {
+        "grant": {
+          "actions": ["ec2:DescribeVolumes"]
         },
         "binding": {
           "stack": {
@@ -72,13 +102,25 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
-            ]
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*"
-            ]
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }

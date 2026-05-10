@@ -300,6 +300,8 @@ pub struct PutRuleRequest {
     pub schedule_expression: String,
     pub state: Option<String>,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<EventBridgeTag>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,6 +322,13 @@ pub struct PutTargetsRequest {
 pub struct EventBridgeTarget {
     pub id: String,
     pub arn: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EventBridgeTag {
+    pub key: String,
+    pub value: String,
 }
 
 // Internal request types (not exposed publicly)

@@ -13,9 +13,9 @@ use tf_provider::schema::{
     Attribute, AttributeConstraint, AttributeType, Block, Description, Schema,
 };
 use tf_provider::value::{ValueAny, ValueEmpty, ValueList, ValueString};
-use tf_provider::{Diagnostics, Provider, Resource, map, serve};
+use tf_provider::{map, serve, Diagnostics, Provider, Resource};
 
-use crate::resource_alien_deployment::{AlienDeploymentInput, build_client, create, delete, read};
+use crate::resource_alien_deployment::{build_client, create, delete, read, AlienDeploymentInput};
 
 /// Runtime defaults supplied by the binary embedding this provider.
 #[derive(Debug, Clone)]

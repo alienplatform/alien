@@ -33,7 +33,7 @@ fn aws_build_renders_codebuild_project() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
@@ -53,7 +53,7 @@ fn aws_function_basic_lambda() {
                 .timeout_seconds(30)
                 .memory_mb(256)
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
@@ -95,7 +95,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
                     max_size: 3,
                 })
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
 

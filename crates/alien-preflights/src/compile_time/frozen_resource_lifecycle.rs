@@ -1,43 +1,38 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, ResourceLifecycle, Stack};
-use std::collections::HashSet;
+use alien_core::{ownership_policy_for_resource_type, Platform, Stack};
 
-/// Ensures resources that must be Frozen are marked with Frozen lifecycle only.
+/// Ensures each resource uses a lifecycle allowed by the ownership policy.
 ///
-/// Resources like `ArtifactRegistry` and `Build` must have Frozen lifecycle.
+/// The policy is intentionally centralized in `alien-core` so preflights,
+/// template emitters, importers, and permissions agree on ownership.
 pub struct FrozenResourceLifecycleCheck;
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for FrozenResourceLifecycleCheck {
     fn description(&self) -> &'static str {
-        "Resources that must be Frozen should be marked with Frozen lifecycle only"
+        "Resources must use lifecycles allowed by the ownership policy"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
-        // Check if stack contains any of the must-be-frozen resource types
-        stack.resources().any(|(_, resource_entry)| {
-            matches!(
-                resource_entry.config.resource_type().0.as_ref(),
-                "artifact-registry" | "build"
-            )
-        })
+        stack.resources().next().is_some()
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
-        let must_be_frozen_types = HashSet::from(["artifact-registry", "build"]);
         let mut errors = Vec::new();
 
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
+            let policy = ownership_policy_for_resource_type(resource_type);
 
-            if must_be_frozen_types.contains(resource_type)
-                && resource_entry.lifecycle != ResourceLifecycle::Frozen
-            {
+            if !policy.allows_lifecycle(resource_entry.lifecycle) {
                 errors.push(format!(
-                    "Resource '{}' of type '{}' must have Frozen lifecycle, but has {:?}",
-                    resource_id, resource_type, resource_entry.lifecycle
+                    "Resource '{}' of type '{}' has lifecycle {:?}, but allowed lifecycles are {}",
+                    resource_id,
+                    resource_type,
+                    resource_entry.lifecycle,
+                    policy.allowed_lifecycles()
                 ));
             }
         }
@@ -53,11 +48,14 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ArtifactRegistry, Build, ResourceEntry, ResourceLifecycle};
+    use alien_core::{
+        ArtifactRegistry, Build, CapacityGroup, Container, ContainerCluster, ContainerCode,
+        Function, FunctionCode, ResourceEntry, ResourceLifecycle, ResourceSpec, Storage,
+    };
     use indexmap::IndexMap;
 
     #[tokio::test]
-    async fn test_frozen_lifecycle_success() {
+    async fn test_frozen_only_resources_succeed_when_frozen() {
         let build = Build::new("test-build".to_string())
             .permissions("test".to_string())
             .build();
@@ -68,7 +66,7 @@ mod tests {
             "test-build".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(build),
-                lifecycle: ResourceLifecycle::Frozen, // Correct lifecycle
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -77,7 +75,7 @@ mod tests {
             "test-registry".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(registry),
-                lifecycle: ResourceLifecycle::Frozen, // Correct lifecycle
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -96,7 +94,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_frozen_lifecycle_failure() {
+    async fn test_frozen_only_resource_fails_when_live() {
         let build = Build::new("test-build".to_string())
             .permissions("test".to_string())
             .build();
@@ -106,7 +104,7 @@ mod tests {
             "test-build".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(build),
-                lifecycle: ResourceLifecycle::Live, // Wrong lifecycle!
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -122,6 +120,145 @@ mod tests {
         let check = FrozenResourceLifecycleCheck;
         let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(!result.success);
-        assert!(result.errors[0].contains("must have Frozen lifecycle"));
+        assert!(result.errors[0].contains("allowed lifecycles are Frozen"));
+    }
+
+    #[tokio::test]
+    async fn test_function_must_be_live() {
+        let function = Function::new("my-function".to_string())
+            .code(FunctionCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "my-function".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(function),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let check = FrozenResourceLifecycleCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("allowed lifecycles are Live"));
+    }
+
+    #[tokio::test]
+    async fn test_container_must_be_live() {
+        let container = Container::new("my-container".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("test".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "my-container".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let check = FrozenResourceLifecycleCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("allowed lifecycles are Live"));
+    }
+
+    #[tokio::test]
+    async fn test_container_cluster_must_be_frozen() {
+        let cluster = ContainerCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("m7g.large".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 3,
+            })
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let check = FrozenResourceLifecycleCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("allowed lifecycles are Frozen"));
+    }
+
+    #[tokio::test]
+    async fn test_storage_can_be_frozen_or_live() {
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let storage = Storage::new(format!("storage-{lifecycle:?}")).build();
+            let mut resources = IndexMap::new();
+            resources.insert(
+                "storage".to_string(),
+                ResourceEntry {
+                    config: alien_core::Resource::new(storage),
+                    lifecycle,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                },
+            );
+
+            let stack = Stack {
+                id: "test-stack".to_string(),
+                resources,
+                permissions: alien_core::permissions::PermissionsConfig::default(),
+                supported_platforms: None,
+            };
+
+            let check = FrozenResourceLifecycleCheck;
+            let result = check.check(&stack, Platform::Aws).await.unwrap();
+            assert!(result.success);
+        }
     }
 }

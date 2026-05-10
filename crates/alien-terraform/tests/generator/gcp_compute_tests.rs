@@ -33,7 +33,7 @@ fn gcp_build_renders_cloud_build_trigger() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
@@ -53,7 +53,7 @@ fn gcp_function_basic_cloud_run() {
                 .timeout_seconds(30)
                 .memory_mb(256)
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
@@ -125,7 +125,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
                     max_size: 3,
                 })
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
 

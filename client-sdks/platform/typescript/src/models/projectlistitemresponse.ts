@@ -170,19 +170,11 @@ export type ProjectListItemResponseHelm = {
 };
 
 /**
- * Terraform provider package configuration. If null, Terraform packages will not be generated.
+ * Terraform package configuration. If null, Terraform packages will not be generated.
  */
 export type ProjectListItemResponseTerraform = {
   /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
-  /**
-   * Whether Terraform provider package generation is enabled
+   * Whether Terraform package generation is enabled
    */
   enabled: boolean;
 };
@@ -208,7 +200,7 @@ export type ProjectListItemResponsePackagesConfig = {
    */
   helm?: ProjectListItemResponseHelm | null | undefined;
   /**
-   * Terraform provider package configuration. If null, Terraform packages will not be generated.
+   * Terraform package configuration. If null, Terraform packages will not be generated.
    */
   terraform?: ProjectListItemResponseTerraform | null | undefined;
 };
@@ -237,6 +229,10 @@ export type ProjectListItemResponse = {
     | ProjectListItemResponseDeploymentPageBackground
     | null
     | undefined;
+  /**
+   * Custom logo URL to show on the deployment page.
+   */
+  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -403,8 +399,6 @@ export const ProjectListItemResponseTerraform$inboundSchema: z.ZodType<
   ProjectListItemResponseTerraform,
   unknown
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   enabled: z.boolean(),
 });
 
@@ -463,6 +457,7 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
   deploymentPageBackground: z.nullable(
     z.lazy(() => ProjectListItemResponseDeploymentPageBackground$inboundSchema),
   ).optional(),
+  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => ProjectListItemResponsePackagesConfig$inboundSchema),
   ).optional(),

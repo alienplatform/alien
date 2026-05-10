@@ -750,6 +750,19 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "deleteScope",
+            "in": "query",
+            "description": "Delete scope: full or liveOnly",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "full",
+                "liveOnly"
+              ]
+            }
           }
         ],
         "responses": {

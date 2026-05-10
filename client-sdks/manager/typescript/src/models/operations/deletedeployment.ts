@@ -13,12 +13,17 @@ export type DeleteDeploymentRequest = {
    * Force delete without running cleanup (immediately removes record)
    */
   force?: boolean | undefined;
+  /**
+   * Delete scope: full or liveOnly
+   */
+  deleteScope?: "full" | "liveOnly" | undefined;
 };
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
   force?: boolean | undefined;
+  deleteScope?: "full" | "liveOnly" | undefined;
 };
 
 /** @internal */
@@ -28,6 +33,7 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   force: z.boolean().optional(),
+  deleteScope: z.enum(["full", "liveOnly"]).optional(),
 });
 
 export function deleteDeploymentRequestToJSON(

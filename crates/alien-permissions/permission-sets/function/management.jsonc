@@ -34,14 +34,30 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
       {
+        // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
+        // the role being passed and does not give us the same reliable
+        // resource-tag boundary as EC2/ELB/Lambda resources.
         "grant": {
           "actions": ["iam:PassRole"]
         },
@@ -82,18 +98,58 @@
       },
       {
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
       {
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 API/domain creation. The request must carry boundary tags.
         "grant": {
           "actions": ["apigateway:POST"]
         },
@@ -101,16 +157,60 @@
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 child creates run under already-tagged APIs/domains.
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
@@ -123,13 +223,26 @@
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }

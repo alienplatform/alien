@@ -186,6 +186,11 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_servicebus_namespace.default_service_bus_namespace,
+    azurerm_servicebus_queue.jobs
+  ]
 }
 
 === outputs.tf ===

@@ -2,6 +2,28 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum AwsPermissionEffect {
+    #[default]
+    Allow,
+    Deny,
+}
+
+impl AwsPermissionEffect {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Allow => "Allow",
+            Self::Deny => "Deny",
+        }
+    }
+
+    pub fn is_allow(&self) -> bool {
+        matches!(self, Self::Allow)
+    }
+}
+
 /// Grant permissions for a specific cloud platform
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -85,6 +107,9 @@ pub struct GcpCondition {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AwsPlatformPermission {
+    /// IAM effect. Defaults to Allow.
+    #[serde(default, skip_serializing_if = "AwsPermissionEffect::is_allow")]
+    pub effect: AwsPermissionEffect,
     /// What permissions to grant
     pub grant: PermissionGrant,
     /// How to bind the permissions (stack vs resource scope)

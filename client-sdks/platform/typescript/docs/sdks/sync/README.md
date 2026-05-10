@@ -5,8 +5,8 @@
 ### Available Operations
 
 * [acquire](#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-* [reconcile](#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
-* [release](#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+* [reconcile](#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+* [release](#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ## acquire
 
@@ -99,7 +99,7 @@ run();
 
 ## reconcile
 
-Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
+Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
 
 ### Example Usage
 
@@ -188,7 +188,7 @@ run();
 
 ## release
 
-Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### Example Usage
 

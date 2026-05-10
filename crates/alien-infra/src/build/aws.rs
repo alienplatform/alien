@@ -6,10 +6,12 @@ use crate::error::{ErrorData, Result};
 use alien_aws_clients::codebuild::{
     BatchGetProjectsRequest, CloudWatchLogsConfig, CreateProjectRequest, DeleteProjectRequest,
     EnvironmentVariable, LogsConfig, ProjectArtifacts, ProjectEnvironment, ProjectSource,
-    S3LogsConfig,
+    S3LogsConfig, Tag,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
+use alien_core::{
+    standard_resource_tags, Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
@@ -144,6 +146,12 @@ phases:
             })
             .service_role(role_arn)
             .description(format!("Alien build project: {}", cfg.id))
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &cfg.id)
+                    .into_iter()
+                    .map(|(key, value)| Tag::builder().key(key).value(value).build())
+                    .collect(),
+            )
             .build();
 
         let response =

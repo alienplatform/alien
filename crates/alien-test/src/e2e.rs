@@ -1426,6 +1426,7 @@ pub async fn setup(
                     &config,
                     platform,
                     &deployment,
+                    &stack,
                     &manager,
                     management_config,
                 )
@@ -1447,11 +1448,19 @@ pub async fn setup(
                 }
                 _ => {
                     // Docker container for cloud pull (AWS/GCP/Azure pull)
+                    let agent_client_config = crate::setup::build_agent_client_config(
+                        &config,
+                        platform,
+                        &stack,
+                        &deployment.name,
+                    )
+                    .await
+                    .context("Failed to build scoped agent credentials")?;
                     let agent = crate::agent::TestAlienAgent::start_container(
                         &manager,
                         &agent_image,
                         platform,
-                        Some(&config),
+                        Some(&agent_client_config),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to start alien-agent container: {}", e))?;

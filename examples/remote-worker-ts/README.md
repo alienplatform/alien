@@ -27,6 +27,7 @@ Your Cloud                          Customer's Cloud
 |---------|-------------|
 | `execute-tool` | Run a tool by name (`read-file`, `write-file`) |
 | `list-tools` | List all available tools and their descriptions |
+| `where-am-i` | Return runtime metadata: deployment ID, platform, cloud account, region |
 
 ## Local development
 

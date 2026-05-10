@@ -191,6 +191,12 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_storage_bucket.assets,
+    google_pubsub_topic.jobs,
+    google_pubsub_subscription.jobs,
+    google_firestore_database.metadata
+  ]
 }
 
 === outputs.tf ===

@@ -1,10 +1,11 @@
 //! Auto-generates minimal IAM/RBAC permissions for initial setup.
 //!
-//! Initial setup (admin runs `alien deploy up`) creates ALL cloud resources
-//! (frozen AND live). This module generates the minimal permission set needed,
-//! given a stack definition and target platform.
+//! Initial setup creates setup-owned Frozen resources. Alien-owned Live
+//! resources are created later by the deployment loop with management
+//! credentials. This module generates the setup permission set for that first
+//! Frozen-resource phase.
 
-use alien_core::Stack;
+use alien_core::{ownership_policy_for_resource_type, Stack};
 
 use crate::generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator};
 use crate::registry::get_permission_set;
@@ -19,15 +20,23 @@ fn normalize_resource_type(resource_type: &str) -> String {
 
 /// Collects all provision permission set IDs needed for a stack's initial setup.
 ///
-/// Walks every resource in the stack and includes its `<type>/provision` permission
-/// set if one exists in the registry. Also adds cross-cutting permission sets
-/// (e.g. `service-account/provision`) that any initial setup requires regardless
-/// of the resources declared.
+/// Walks resources emitted during setup and includes their `<type>/provision`
+/// permission set if one exists in the registry. Live resources are excluded:
+/// their provision permissions belong to the ongoing management profile.
+/// Also adds cross-cutting permission sets (e.g. `service-account/provision`)
+/// that any initial setup requires regardless of the resources declared.
 pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
     let mut set_ids = Vec::new();
 
     for (_, resource_entry) in stack.resources() {
-        let resource_type = normalize_resource_type(resource_entry.config.resource_type().as_ref());
+        let raw_resource_type = resource_entry.config.resource_type();
+        let raw_resource_type = raw_resource_type.as_ref();
+        let policy = ownership_policy_for_resource_type(raw_resource_type);
+        if !policy.should_emit_in_setup(resource_entry.lifecycle) {
+            continue;
+        }
+
+        let resource_type = normalize_resource_type(raw_resource_type);
         let provision_id = format!("{resource_type}/provision");
 
         if get_permission_set(&provision_id).is_some() && !set_ids.contains(&provision_id) {
@@ -46,13 +55,12 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
     set_ids
 }
 
-/// Generate a merged AWS IAM policy document containing ALL provision
+/// Generate a merged AWS IAM policy document containing setup provision
 /// permissions for the given platform.
 ///
-/// This generates the COMPLETE initial setup policy covering every resource
-/// type that Alien can provision. This is intentionally broad — it includes
-/// permissions for resources that preflights may add (RSM, ServiceAccount,
-/// SecretsVault, etc.) which aren't in the raw stack definition.
+/// This generates a complete setup policy covering every Frozen/setup resource
+/// type that setup can create. It intentionally excludes Live-only resources,
+/// which are created by Alien after setup.
 ///
 /// Customer-facing output: "here's the IAM policy you need to attach to
 /// your admin role before running `alien deploy up`."
@@ -62,7 +70,16 @@ pub fn generate_aws_initial_setup_policy(
     let generator = AwsRuntimePermissionsGenerator::new();
     let all_provision_ids = crate::registry::list_permission_set_ids()
         .into_iter()
-        .filter(|id| id.ends_with("/provision"))
+        .filter(|id| {
+            let Some((resource_type, operation)) = id.split_once('/') else {
+                return false;
+            };
+            if operation != "provision" {
+                return false;
+            }
+            ownership_policy_for_resource_type(resource_type)
+                .should_emit_in_setup(alien_core::ResourceLifecycle::Frozen)
+        })
         .collect::<Vec<_>>();
 
     let mut all_statements = Vec::new();
@@ -101,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn function_stack_includes_function_provision() {
+    fn live_function_stack_excludes_function_provision() {
         let function = test_function("my-fn");
 
         let stack = Stack::new("test-stack".to_string())
@@ -110,8 +127,8 @@ mod tests {
 
         let ids = initial_setup_permission_set_ids(&stack);
         assert!(
-            ids.contains(&"function/provision".to_string()),
-            "Expected function/provision in {ids:?}"
+            !ids.contains(&"function/provision".to_string()),
+            "function/provision belongs to management permissions, got {ids:?}"
         );
     }
 
@@ -170,8 +187,33 @@ mod tests {
             .build();
 
         let ids = initial_setup_permission_set_ids(&stack);
-        assert!(ids.contains(&"function/provision".to_string()));
+        assert!(!ids.contains(&"function/provision".to_string()));
         assert!(ids.contains(&"storage/provision".to_string()));
         assert!(ids.contains(&"service-account/provision".to_string()));
+    }
+
+    #[test]
+    fn complete_aws_initial_setup_policy_excludes_live_only_provision_sets() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack")
+            .with_resource_name("test");
+
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let actions = policy
+            .statement
+            .iter()
+            .flat_map(|statement| statement.action.iter())
+            .collect::<Vec<_>>();
+
+        assert!(
+            !actions.contains(&&"lambda:CreateFunction".to_string()),
+            "setup policy must not include live function provision actions"
+        );
+        assert!(
+            actions.iter().any(|action| action.starts_with("s3:")),
+            "setup policy should still include frozen-capable resource actions"
+        );
     }
 }

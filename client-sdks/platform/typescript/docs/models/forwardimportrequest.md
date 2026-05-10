@@ -10,6 +10,7 @@ let value: ForwardImportRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   source: {
     deploymentName: "<value>",
+    stackPrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "kubernetes",
     region: "<value>",

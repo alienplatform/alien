@@ -126,7 +126,7 @@
           }
         }
       },
-      // Secret Manager for machine token storage
+      // Secret Manager for worker runtime secrets
       {
         "grant": {
           "permissions": [
@@ -207,7 +207,7 @@
           }
         }
       },
-      // Key Vault for machine token
+      // Key Vault for worker runtime secrets
       {
         "grant": {
           "actions": [

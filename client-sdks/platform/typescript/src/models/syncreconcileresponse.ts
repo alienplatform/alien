@@ -62,6 +62,20 @@ export type SyncReconcileResponseCurrentReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseOverrideAwGrant = {
@@ -87,6 +101,10 @@ export type SyncReconcileResponseCurrentReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -365,6 +383,20 @@ export type SyncReconcileResponseCurrentReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseExtendAwGrant = {
@@ -390,6 +422,10 @@ export type SyncReconcileResponseCurrentReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -671,6 +707,20 @@ export type SyncReconcileResponseCurrentReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseProfileAwGrant = {
@@ -696,6 +746,10 @@ export type SyncReconcileResponseCurrentReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1229,6 +1283,34 @@ export type SyncReconcileResponseCurrentPlatform = ClosedEnum<
   typeof SyncReconcileResponseCurrentPlatform
 >;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const SyncReconcileResponseDeleteScope = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type SyncReconcileResponseDeleteScope = ClosedEnum<
+  typeof SyncReconcileResponseDeleteScope
+>;
+
 export const SyncReconcileResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1279,6 +1361,20 @@ export type SyncReconcileResponsePreparedStackOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackOverrideAwGrant = {
@@ -1304,6 +1400,10 @@ export type SyncReconcileResponsePreparedStackOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1579,6 +1679,20 @@ export type SyncReconcileResponsePreparedStackExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackExtendAwGrant = {
@@ -1604,6 +1718,10 @@ export type SyncReconcileResponsePreparedStackExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1885,6 +2003,20 @@ export type SyncReconcileResponsePreparedStackProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackProfileAwGrant = {
@@ -1910,6 +2042,10 @@ export type SyncReconcileResponsePreparedStackProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2277,6 +2413,17 @@ export type SyncReconcileResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileResponseRuntimeMetadata = {
+  /**
+   * Scope for a delete operation.
+   *
+   * @remarks
+   *
+   * Full deletes are setup/admin owned and may remove both Frozen and Live
+   * resources. Live-only deletes are used by setup handoff resources
+   * (Terraform/CloudFormation) so Alien removes only the resources it owns
+   * before setup tears down Frozen resources.
+   */
+  deleteScope?: SyncReconcileResponseDeleteScope | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2670,6 +2817,20 @@ export type SyncReconcileResponseTargetReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseOverrideAwGrant = {
@@ -2695,6 +2856,10 @@ export type SyncReconcileResponseTargetReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2970,6 +3135,20 @@ export type SyncReconcileResponseTargetReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseExtendAwGrant = {
@@ -2995,6 +3174,10 @@ export type SyncReconcileResponseTargetReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3276,6 +3459,20 @@ export type SyncReconcileResponseTargetReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseProfileAwGrant = {
@@ -3301,6 +3498,10 @@ export type SyncReconcileResponseTargetReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3736,7 +3937,7 @@ export type SyncReconcileResponseCurrent = {
 };
 
 /**
- * Configuration for a single Horizon cluster.
+ * Configuration for a single container worker cluster.
  *
  * @remarks
  *
@@ -3782,39 +3983,18 @@ export type SyncReconcileResponseComputeBackendHorizon = {
    */
   clusters: { [k: string]: SyncReconcileResponseClusters };
   /**
-   * AMI / image ID for the Flatcar OS image used by EC2 instances.
-   *
-   * @remarks
-   * The Flatcar image has horizond baked in, so no user-data script is needed.
-   */
-  flatcarImageId?: string | null | undefined;
-  /**
-   * ETag of the horizond binary fetched from the releases server -- used as a
-   *
-   * @remarks
-   * change-detection signal only. nginx auto-generates ETags from mtime+size,
-   * so every `cargo zigbuild` changes this value and triggers a rolling update.
-   *
-   * Optional: when absent (releases server unreachable), change detection
-   * falls back to URL-only (sufficient for versioned production releases).
-   */
-  horizondBinaryHash?: string | null | undefined;
-  /**
-   * Base URL for downloading the horizond binary, without arch suffix.
-   *
-   * @remarks
-   *
-   * Each cloud controller appends `/linux-{arch}/horizond` to construct the
-   * final download URL used in VM startup scripts.
-   *
-   * Production example: "https://releases.alien.dev/horizond/v0.3.0"
-   * Dev example (ngrok): "https://abc123.ngrok.dev"
-   */
-  horizondDownloadBaseUrl: string;
-  /**
-   * Horizon API base URL (e.g., "https://horizon.alien.dev")
+   * Worker control-plane API base URL.
    */
   url: string;
+  /**
+   * AMI / image ID for the worker machine image.
+   *
+   * @remarks
+   *
+   * The image contains the worker runtime bootstrap. Controllers only pass
+   * machine-specific settings into that image.
+   */
+  workerImageId?: string | null | undefined;
   type: SyncReconcileResponseComputeBackendType;
 };
 
@@ -5992,14 +6172,14 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, all compute workloads (containers and horizond VM workers) export
+ * When set, all compute workloads (containers and worker VMs) export
  * their logs to the given endpoint via OTLP/HTTP.
  *
  * The `logs_auth_header` is stored as plain text in DeploymentConfig because
  * alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
- * before vault secrets load. For horizond, the infra controller writes the
- * same value to the cloud vault (same pattern as the machine token) and the
- * startup script fetches it at boot via IAM.
+ * before vault secrets load. For worker VMs, worker-template stamping passes
+ * the monitoring configuration to the provider controller, which stores the
+ * sensitive header in the cloud vault used by the worker image.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
@@ -6011,10 +6191,9 @@ export type SyncReconcileResponseMonitoring = {
    * into all containers. It must be plain (not a vault secret) because alien-runtime
    * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
    *
-   * horizond VM workers do NOT use this field directly. The ContainerCluster infra
-   * controller writes the same value to the cloud vault (GCP: Secret Manager,
-   * AWS: Secrets Manager, Azure: Key Vault) and the startup script fetches it at
-   * boot via IAM -- the same pattern as the machine token.
+   * Worker VMs do NOT use this field directly. The ContainerCluster infra
+   * controller writes the same value to the cloud vault used by the worker
+   * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
    *
    * Example: "authorization=Bearer <write-token>"
    */
@@ -6042,7 +6221,7 @@ export type SyncReconcileResponseMonitoring = {
    * Full OTLP metrics endpoint URL (optional).
    *
    * @remarks
-   * When set, horizond exports its own VM/container orchestration metrics here.
+   * When set, the worker runtime exports its own VM/container orchestration metrics here.
    * Example: "https://api.axiom.co/v1/metrics"
    */
   metricsEndpoint?: string | null | undefined;
@@ -6534,6 +6713,20 @@ export type OverrideReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const OverrideReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type OverrideReleaseInfoEffect = ClosedEnum<
+  typeof OverrideReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type OverrideReleaseInfoAwGrant = {
@@ -6559,6 +6752,10 @@ export type OverrideReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: OverrideReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: OverrideReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -6817,6 +7014,20 @@ export type ExtendReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const ExtendReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ExtendReleaseInfoEffect = ClosedEnum<
+  typeof ExtendReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type ExtendReleaseInfoAwGrant = {
@@ -6842,6 +7053,10 @@ export type ExtendReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: ExtendReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ExtendReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -7106,6 +7321,20 @@ export type ProfileReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const ProfileReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ProfileReleaseInfoEffect = ClosedEnum<
+  typeof ProfileReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type ProfileReleaseInfoAwGrant = {
@@ -7131,6 +7360,10 @@ export type ProfileReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: ProfileReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ProfileReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -7624,6 +7857,12 @@ export function syncReconcileResponseCurrentReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseOverrideEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -7654,6 +7893,8 @@ export const SyncReconcileResponseCurrentReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema
     ),
@@ -8248,6 +8489,12 @@ export function syncReconcileResponseCurrentReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseExtendEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseExtendAwGrant, unknown> = z
     .object({
@@ -8278,6 +8525,8 @@ export const SyncReconcileResponseCurrentReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema
     ),
@@ -8901,6 +9150,12 @@ export function syncReconcileResponseCurrentReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseProfileEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseProfileAwGrant, unknown> = z
     .object({
@@ -8931,6 +9186,8 @@ export const SyncReconcileResponseCurrentReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema
     ),
@@ -9819,6 +10076,11 @@ export const SyncReconcileResponseCurrentPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseCurrentPlatform);
 
 /** @internal */
+export const SyncReconcileResponseDeleteScope$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseDeleteScope
+> = z.enum(SyncReconcileResponseDeleteScope);
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackManagementEnum$inboundSchema:
   z.ZodEnum<typeof SyncReconcileResponsePreparedStackManagementEnum> = z.enum(
     SyncReconcileResponsePreparedStackManagementEnum,
@@ -9905,6 +10167,12 @@ export function syncReconcileResponsePreparedStackOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackOverrideEffect> = z.enum(
+    SyncReconcileResponsePreparedStackOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackOverrideAwGrant, unknown> = z
     .object({
@@ -9935,6 +10203,8 @@ export const SyncReconcileResponsePreparedStackOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema
     ),
@@ -10522,6 +10792,12 @@ export function syncReconcileResponsePreparedStackExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackExtendEffect> = z.enum(
+    SyncReconcileResponsePreparedStackExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackExtendAwGrant, unknown> = z
     .object({
@@ -10552,6 +10828,8 @@ export const SyncReconcileResponsePreparedStackExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema
     ),
@@ -11165,6 +11443,12 @@ export function syncReconcileResponsePreparedStackProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackProfileEffect> = z.enum(
+    SyncReconcileResponsePreparedStackProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackProfileAwGrant, unknown> = z
     .object({
@@ -11195,6 +11479,8 @@ export const SyncReconcileResponsePreparedStackProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema
     ),
@@ -11866,6 +12152,7 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncReconcileResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deleteScope: SyncReconcileResponseDeleteScope$inboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
@@ -12321,6 +12608,12 @@ export function syncReconcileResponseTargetReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseOverrideEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -12351,6 +12644,8 @@ export const SyncReconcileResponseTargetReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema
     ),
@@ -12937,6 +13232,12 @@ export function syncReconcileResponseTargetReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseExtendEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseExtendAwGrant, unknown> = z
     .object({
@@ -12967,6 +13268,8 @@ export const SyncReconcileResponseTargetReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema
     ),
@@ -13579,6 +13882,12 @@ export function syncReconcileResponseTargetReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseProfileEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseProfileAwGrant, unknown> = z
     .object({
@@ -13609,6 +13918,8 @@ export const SyncReconcileResponseTargetReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema
     ),
@@ -14387,10 +14698,8 @@ export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
       z.string(),
       z.lazy(() => SyncReconcileResponseClusters$inboundSchema),
     ),
-    flatcarImageId: z.nullable(z.string()).optional(),
-    horizondBinaryHash: z.nullable(z.string()).optional(),
-    horizondDownloadBaseUrl: z.string(),
     url: z.string(),
+    workerImageId: z.nullable(z.string()).optional(),
     type: SyncReconcileResponseComputeBackendType$inboundSchema,
   });
 
@@ -19404,6 +19713,11 @@ export function overrideReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const OverrideReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof OverrideReleaseInfoEffect
+> = z.enum(OverrideReleaseInfoEffect);
+
+/** @internal */
 export const OverrideReleaseInfoAwGrant$inboundSchema: z.ZodType<
   OverrideReleaseInfoAwGrant,
   unknown
@@ -19429,6 +19743,7 @@ export const OverrideReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => OverrideReleaseInfoAwBinding$inboundSchema),
+  effect: OverrideReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => OverrideReleaseInfoAwGrant$inboundSchema),
 });
 
@@ -19870,6 +20185,11 @@ export function extendReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const ExtendReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ExtendReleaseInfoEffect
+> = z.enum(ExtendReleaseInfoEffect);
+
+/** @internal */
 export const ExtendReleaseInfoAwGrant$inboundSchema: z.ZodType<
   ExtendReleaseInfoAwGrant,
   unknown
@@ -19895,6 +20215,7 @@ export const ExtendReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ExtendReleaseInfoAwBinding$inboundSchema),
+  effect: ExtendReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ExtendReleaseInfoAwGrant$inboundSchema),
 });
 
@@ -20348,6 +20669,11 @@ export function profileReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const ProfileReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ProfileReleaseInfoEffect
+> = z.enum(ProfileReleaseInfoEffect);
+
+/** @internal */
 export const ProfileReleaseInfoAwGrant$inboundSchema: z.ZodType<
   ProfileReleaseInfoAwGrant,
   unknown
@@ -20373,6 +20699,7 @@ export const ProfileReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ProfileReleaseInfoAwBinding$inboundSchema),
+  effect: ProfileReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ProfileReleaseInfoAwGrant$inboundSchema),
 });
 

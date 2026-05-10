@@ -5,8 +5,33 @@
     "aws": [
       {
         "grant": {
+          "actions": ["lambda:CreateFunction"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
-            "lambda:CreateFunction",
             "lambda:DeleteFunction",
             "lambda:AddPermission",
             "lambda:RemovePermission",
@@ -43,14 +68,30 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
       {
+        // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
+        // the role being passed and does not give us the same reliable
+        // resource-tag boundary as EC2/ELB/Lambda resources.
         "grant": {
           "actions": ["iam:PassRole"]
         },
@@ -101,23 +142,57 @@
         }
       },
       {
-        // API Gateway V2 — POST to /apis (create API) and /apis/* (create
-        // integrations, routes, stages on an existing API).
+        // API Gateway V2 API create. The request must carry boundary tags.
         "grant": {
           "actions": ["apigateway:POST"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis",
-              "arn:aws:apigateway:${awsRegion}::/apis/*"
-            ]
+            "resources": ["arn:aws:apigateway:${awsRegion}::/apis"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis",
-              "arn:aws:apigateway:${awsRegion}::/apis/*"
-            ]
+            "resources": ["arn:aws:apigateway:${awsRegion}::/apis"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 child creates (integration/route/stage) run under an
+        // already-tagged API.
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:apigateway:${awsRegion}::/apis/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:apigateway:${awsRegion}::/apis/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
@@ -131,13 +206,84 @@
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // EventBridge schedule rules are created with Alien boundary tags.
+        "grant": {
+          "actions": ["events:PutRule"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "events:DeleteRule",
+            "events:DescribeRule",
+            "events:PutTargets",
+            "events:RemoveTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }

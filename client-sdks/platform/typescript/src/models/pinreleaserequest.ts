@@ -5,11 +5,11 @@
 import * as z from "zod/v4";
 
 /**
- * Request schema for pinning/unpinning agent release
+ * Request schema for pinning/unpinning deployment release
  */
 export type PinReleaseRequest = {
   /**
-   * Release ID to pin the agent to. Set to null to unpin and use active release.
+   * Release ID to pin the deployment to. Set to null to unpin and use active release.
    */
   releaseId?: string | null | undefined;
 };

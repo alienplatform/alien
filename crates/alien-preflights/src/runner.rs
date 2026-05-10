@@ -1,8 +1,13 @@
 use crate::error::{ErrorData, Result};
-use crate::{CheckResult, PreflightRegistry, PreflightSummary};
-use alien_core::{ClientConfig, DeploymentConfig, Platform, Stack, StackState};
+use crate::{PreflightRegistry, PreflightSummary};
+use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
+
+#[cfg(feature = "runtime-checks")]
+use crate::CheckResult;
+#[cfg(feature = "runtime-checks")]
+use alien_core::ClientConfig;
 
 /// Preflight runner that executes all checks and mutations
 pub struct PreflightRunner {

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, EnvironmentInfo, EnvironmentVariable, Platform, RuntimeMetadata,
-    StackState,
+    import::ImportSourceKind, DeleteScope, EnvironmentInfo, EnvironmentVariable, Platform,
+    RuntimeMetadata, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -551,6 +551,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+        delete_scope: DeleteScope,
     ) -> Result<(), AlienError> {
         let deployment = self
             .get_deployment(caller, id)
@@ -566,9 +567,18 @@ impl DeploymentStore for SqliteDeploymentStore {
             .into_generic());
         }
 
+        let mut runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
+        runtime_metadata.delete_scope = delete_scope;
+        let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize delete runtime metadata".to_string(),
+            })?;
+
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "delete-pending")
+            .value(Deployments::RuntimeMetadata, runtime_metadata_json)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await

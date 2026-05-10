@@ -223,6 +223,12 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_storage_account.default_storage_account,
+    azurerm_storage_container.audit,
+    azurerm_storage_management_policy.audit
+  ]
 }
 
 === outputs.tf ===

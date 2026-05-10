@@ -14,8 +14,8 @@ Auto-generated API clients for alien-manager (OSS control plane).
 
 ```bash
 # From repo root
-pnpm run generate:api-rust-sdk   # Rust only
-pnpm run generate:api            # All SDKs
+pnpm run generate:manager-rust-sdk # Rust SDK inputs
+pnpm run generate:manager-api      # TypeScript SDK
 ```
 
 The OpenAPI spec is generated from alien-manager's Axum routes (utoipa annotations).

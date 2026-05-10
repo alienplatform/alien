@@ -100,20 +100,12 @@ resource "aws_iam_role" "builder_role" {
     AlienResourceId   = "builder"
     AlienResourceType = "build"
   }
-
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 resource "aws_iam_role_policy" "builder_role_logs" {
   name   = "alien-managed-policy"
   role   = aws_iam_role.builder_role.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" }] })
-
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 resource "aws_cloudwatch_log_group" "builder_logs" {
@@ -124,10 +116,6 @@ resource "aws_cloudwatch_log_group" "builder_logs" {
     AlienStackId      = var.stack_name
     AlienResourceId   = "builder"
     AlienResourceType = "build"
-  }
-
-  lifecycle {
-    ignore_changes = all
   }
 }
 
@@ -170,10 +158,6 @@ resource "aws_codebuild_project" "builder" {
     AlienResourceId   = "builder"
     AlienResourceType = "build"
   }
-
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 === import.tf ===
@@ -188,6 +172,12 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_iam_role.builder_role,
+    aws_iam_role_policy.builder_role_logs,
+    aws_cloudwatch_log_group.builder_logs,
+    aws_codebuild_project.builder
+  ]
 }
 
 === outputs.tf ===

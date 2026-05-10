@@ -63,6 +63,20 @@ export type SyncAcquireResponseCurrentReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseCurrentReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseCurrentReleaseOverrideEffect = ClosedEnum<
+  typeof SyncAcquireResponseCurrentReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseCurrentReleaseOverrideAwGrant = {
@@ -88,6 +102,10 @@ export type SyncAcquireResponseCurrentReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseCurrentReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseCurrentReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -361,6 +379,20 @@ export type SyncAcquireResponseCurrentReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseCurrentReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseCurrentReleaseExtendEffect = ClosedEnum<
+  typeof SyncAcquireResponseCurrentReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseCurrentReleaseExtendAwGrant = {
@@ -386,6 +418,10 @@ export type SyncAcquireResponseCurrentReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseCurrentReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseCurrentReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -667,6 +703,20 @@ export type SyncAcquireResponseCurrentReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseCurrentReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseCurrentReleaseProfileEffect = ClosedEnum<
+  typeof SyncAcquireResponseCurrentReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseCurrentReleaseProfileAwGrant = {
@@ -692,6 +742,10 @@ export type SyncAcquireResponseCurrentReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseCurrentReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseCurrentReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1223,6 +1277,34 @@ export type SyncAcquireResponseCurrentPlatform = ClosedEnum<
   typeof SyncAcquireResponseCurrentPlatform
 >;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const SyncAcquireResponseDeleteScope = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type SyncAcquireResponseDeleteScope = ClosedEnum<
+  typeof SyncAcquireResponseDeleteScope
+>;
+
 export const SyncAcquireResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1273,6 +1355,20 @@ export type SyncAcquireResponsePreparedStackOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponsePreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponsePreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncAcquireResponsePreparedStackOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponsePreparedStackOverrideAwGrant = {
@@ -1298,6 +1394,10 @@ export type SyncAcquireResponsePreparedStackOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponsePreparedStackOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponsePreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1571,6 +1671,20 @@ export type SyncAcquireResponsePreparedStackExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponsePreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponsePreparedStackExtendEffect = ClosedEnum<
+  typeof SyncAcquireResponsePreparedStackExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponsePreparedStackExtendAwGrant = {
@@ -1596,6 +1710,10 @@ export type SyncAcquireResponsePreparedStackExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponsePreparedStackExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponsePreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1874,6 +1992,20 @@ export type SyncAcquireResponsePreparedStackProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponsePreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponsePreparedStackProfileEffect = ClosedEnum<
+  typeof SyncAcquireResponsePreparedStackProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponsePreparedStackProfileAwGrant = {
@@ -1899,6 +2031,10 @@ export type SyncAcquireResponsePreparedStackProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponsePreparedStackProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponsePreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2266,6 +2402,17 @@ export type SyncAcquireResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncAcquireResponseRuntimeMetadata = {
+  /**
+   * Scope for a delete operation.
+   *
+   * @remarks
+   *
+   * Full deletes are setup/admin owned and may remove both Frozen and Live
+   * resources. Live-only deletes are used by setup handoff resources
+   * (Terraform/CloudFormation) so Alien removes only the resources it owns
+   * before setup tears down Frozen resources.
+   */
+  deleteScope?: SyncAcquireResponseDeleteScope | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2657,6 +2804,20 @@ export type SyncAcquireResponseTargetReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseTargetReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseTargetReleaseOverrideEffect = ClosedEnum<
+  typeof SyncAcquireResponseTargetReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseTargetReleaseOverrideAwGrant = {
@@ -2682,6 +2843,10 @@ export type SyncAcquireResponseTargetReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseTargetReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseTargetReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2955,6 +3120,20 @@ export type SyncAcquireResponseTargetReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseTargetReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseTargetReleaseExtendEffect = ClosedEnum<
+  typeof SyncAcquireResponseTargetReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseTargetReleaseExtendAwGrant = {
@@ -2980,6 +3159,10 @@ export type SyncAcquireResponseTargetReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseTargetReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseTargetReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3258,6 +3441,20 @@ export type SyncAcquireResponseTargetReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncAcquireResponseTargetReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncAcquireResponseTargetReleaseProfileEffect = ClosedEnum<
+  typeof SyncAcquireResponseTargetReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncAcquireResponseTargetReleaseProfileAwGrant = {
@@ -3283,6 +3480,10 @@ export type SyncAcquireResponseTargetReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncAcquireResponseTargetReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncAcquireResponseTargetReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3714,7 +3915,7 @@ export type SyncAcquireResponseCurrent = {
 };
 
 /**
- * Configuration for a single Horizon cluster.
+ * Configuration for a single container worker cluster.
  *
  * @remarks
  *
@@ -3760,39 +3961,18 @@ export type SyncAcquireResponseComputeBackendHorizon = {
    */
   clusters: { [k: string]: SyncAcquireResponseClusters };
   /**
-   * AMI / image ID for the Flatcar OS image used by EC2 instances.
-   *
-   * @remarks
-   * The Flatcar image has horizond baked in, so no user-data script is needed.
-   */
-  flatcarImageId?: string | null | undefined;
-  /**
-   * ETag of the horizond binary fetched from the releases server -- used as a
-   *
-   * @remarks
-   * change-detection signal only. nginx auto-generates ETags from mtime+size,
-   * so every `cargo zigbuild` changes this value and triggers a rolling update.
-   *
-   * Optional: when absent (releases server unreachable), change detection
-   * falls back to URL-only (sufficient for versioned production releases).
-   */
-  horizondBinaryHash?: string | null | undefined;
-  /**
-   * Base URL for downloading the horizond binary, without arch suffix.
-   *
-   * @remarks
-   *
-   * Each cloud controller appends `/linux-{arch}/horizond` to construct the
-   * final download URL used in VM startup scripts.
-   *
-   * Production example: "https://releases.alien.dev/horizond/v0.3.0"
-   * Dev example (ngrok): "https://abc123.ngrok.dev"
-   */
-  horizondDownloadBaseUrl: string;
-  /**
-   * Horizon API base URL (e.g., "https://horizon.alien.dev")
+   * Worker control-plane API base URL.
    */
   url: string;
+  /**
+   * AMI / image ID for the worker machine image.
+   *
+   * @remarks
+   *
+   * The image contains the worker runtime bootstrap. Controllers only pass
+   * machine-specific settings into that image.
+   */
+  workerImageId?: string | null | undefined;
   type: SyncAcquireResponseComputeBackendType;
 };
 
@@ -5956,14 +6136,14 @@ export type SyncAcquireResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, all compute workloads (containers and horizond VM workers) export
+ * When set, all compute workloads (containers and worker VMs) export
  * their logs to the given endpoint via OTLP/HTTP.
  *
  * The `logs_auth_header` is stored as plain text in DeploymentConfig because
  * alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
- * before vault secrets load. For horizond, the infra controller writes the
- * same value to the cloud vault (same pattern as the machine token) and the
- * startup script fetches it at boot via IAM.
+ * before vault secrets load. For worker VMs, worker-template stamping passes
+ * the monitoring configuration to the provider controller, which stores the
+ * sensitive header in the cloud vault used by the worker image.
  */
 export type SyncAcquireResponseMonitoring = {
   /**
@@ -5975,10 +6155,9 @@ export type SyncAcquireResponseMonitoring = {
    * into all containers. It must be plain (not a vault secret) because alien-runtime
    * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
    *
-   * horizond VM workers do NOT use this field directly. The ContainerCluster infra
-   * controller writes the same value to the cloud vault (GCP: Secret Manager,
-   * AWS: Secrets Manager, Azure: Key Vault) and the startup script fetches it at
-   * boot via IAM -- the same pattern as the machine token.
+   * Worker VMs do NOT use this field directly. The ContainerCluster infra
+   * controller writes the same value to the cloud vault used by the worker
+   * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
    *
    * Example: "authorization=Bearer <write-token>"
    */
@@ -6006,7 +6185,7 @@ export type SyncAcquireResponseMonitoring = {
    * Full OTLP metrics endpoint URL (optional).
    *
    * @remarks
-   * When set, horizond exports its own VM/container orchestration metrics here.
+   * When set, the worker runtime exports its own VM/container orchestration metrics here.
    * Example: "https://api.axiom.co/v1/metrics"
    */
   metricsEndpoint?: string | null | undefined;
@@ -6449,7 +6628,7 @@ export type SyncAcquireResponseDeployment = {
    */
   deploymentId: string;
   /**
-   * Project ID the agent belongs to
+   * Project ID the deployment belongs to
    */
   projectId: string;
   /**
@@ -6468,7 +6647,7 @@ export type Failure = {
    */
   deploymentId: string;
   /**
-   * Project ID the agent belongs to
+   * Project ID the deployment belongs to
    */
   projectId: string;
   error: APIError;
@@ -6575,6 +6754,12 @@ export function syncAcquireResponseCurrentReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseCurrentReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseCurrentReleaseOverrideEffect> = z.enum(
+    SyncAcquireResponseCurrentReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseCurrentReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseCurrentReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -6605,6 +6790,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncAcquireResponseCurrentReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideAwGrant$inboundSchema
     ),
@@ -7194,6 +7381,12 @@ export function syncAcquireResponseCurrentReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseCurrentReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseCurrentReleaseExtendEffect> = z.enum(
+    SyncAcquireResponseCurrentReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseCurrentReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseCurrentReleaseExtendAwGrant, unknown> = z.object(
     {
@@ -7227,6 +7420,8 @@ export const SyncAcquireResponseCurrentReleaseExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseCurrentReleaseExtendAwBinding$inboundSchema
   ),
+  effect: SyncAcquireResponseCurrentReleaseExtendEffect$inboundSchema
+    .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseCurrentReleaseExtendAwGrant$inboundSchema
   ),
@@ -7838,6 +8033,12 @@ export function syncAcquireResponseCurrentReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseCurrentReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseCurrentReleaseProfileEffect> = z.enum(
+    SyncAcquireResponseCurrentReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseCurrentReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseCurrentReleaseProfileAwGrant, unknown> = z
     .object({
@@ -7868,6 +8069,8 @@ export const SyncAcquireResponseCurrentReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAwBinding$inboundSchema
     ),
+    effect: SyncAcquireResponseCurrentReleaseProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAwGrant$inboundSchema
     ),
@@ -8724,6 +8927,11 @@ export const SyncAcquireResponseCurrentPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncAcquireResponseCurrentPlatform);
 
 /** @internal */
+export const SyncAcquireResponseDeleteScope$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseDeleteScope
+> = z.enum(SyncAcquireResponseDeleteScope);
+
+/** @internal */
 export const SyncAcquireResponsePreparedStackManagementEnum$inboundSchema:
   z.ZodEnum<typeof SyncAcquireResponsePreparedStackManagementEnum> = z.enum(
     SyncAcquireResponsePreparedStackManagementEnum,
@@ -8810,6 +9018,12 @@ export function syncAcquireResponsePreparedStackOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponsePreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponsePreparedStackOverrideEffect> = z.enum(
+    SyncAcquireResponsePreparedStackOverrideEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponsePreparedStackOverrideAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponsePreparedStackOverrideAwGrant, unknown> = z
     .object({
@@ -8840,6 +9054,8 @@ export const SyncAcquireResponsePreparedStackOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAwBinding$inboundSchema
     ),
+    effect: SyncAcquireResponsePreparedStackOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAwGrant$inboundSchema
     ),
@@ -9427,6 +9643,12 @@ export function syncAcquireResponsePreparedStackExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponsePreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponsePreparedStackExtendEffect> = z.enum(
+    SyncAcquireResponsePreparedStackExtendEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponsePreparedStackExtendAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponsePreparedStackExtendAwGrant, unknown> = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
@@ -9458,6 +9680,7 @@ export const SyncAcquireResponsePreparedStackExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendAwBinding$inboundSchema
   ),
+  effect: SyncAcquireResponsePreparedStackExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendAwGrant$inboundSchema
   ),
@@ -10069,6 +10292,12 @@ export function syncAcquireResponsePreparedStackProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponsePreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponsePreparedStackProfileEffect> = z.enum(
+    SyncAcquireResponsePreparedStackProfileEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponsePreparedStackProfileAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponsePreparedStackProfileAwGrant, unknown> = z.object(
     {
@@ -10102,6 +10331,8 @@ export const SyncAcquireResponsePreparedStackProfileAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponsePreparedStackProfileAwBinding$inboundSchema
   ),
+  effect: SyncAcquireResponsePreparedStackProfileEffect$inboundSchema
+    .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponsePreparedStackProfileAwGrant$inboundSchema
   ),
@@ -10758,6 +10989,7 @@ export const SyncAcquireResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncAcquireResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deleteScope: SyncAcquireResponseDeleteScope$inboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
@@ -11195,6 +11427,12 @@ export function syncAcquireResponseTargetReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseTargetReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseTargetReleaseOverrideEffect> = z.enum(
+    SyncAcquireResponseTargetReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseTargetReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseTargetReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -11225,6 +11463,8 @@ export const SyncAcquireResponseTargetReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncAcquireResponseTargetReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAwGrant$inboundSchema
     ),
@@ -11811,6 +12051,12 @@ export function syncAcquireResponseTargetReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseTargetReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseTargetReleaseExtendEffect> = z.enum(
+    SyncAcquireResponseTargetReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseTargetReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseTargetReleaseExtendAwGrant, unknown> = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
@@ -11842,6 +12088,7 @@ export const SyncAcquireResponseTargetReleaseExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendAwBinding$inboundSchema
   ),
+  effect: SyncAcquireResponseTargetReleaseExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendAwGrant$inboundSchema
   ),
@@ -12452,6 +12699,12 @@ export function syncAcquireResponseTargetReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseTargetReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseTargetReleaseProfileEffect> = z.enum(
+    SyncAcquireResponseTargetReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncAcquireResponseTargetReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncAcquireResponseTargetReleaseProfileAwGrant, unknown> = z.object(
     {
@@ -12485,6 +12738,8 @@ export const SyncAcquireResponseTargetReleaseProfileAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseTargetReleaseProfileAwBinding$inboundSchema
   ),
+  effect: SyncAcquireResponseTargetReleaseProfileEffect$inboundSchema
+    .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseTargetReleaseProfileAwGrant$inboundSchema
   ),
@@ -13245,10 +13500,8 @@ export const SyncAcquireResponseComputeBackendHorizon$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncAcquireResponseClusters$inboundSchema),
   ),
-  flatcarImageId: z.nullable(z.string()).optional(),
-  horizondBinaryHash: z.nullable(z.string()).optional(),
-  horizondDownloadBaseUrl: z.string(),
   url: z.string(),
+  workerImageId: z.nullable(z.string()).optional(),
   type: SyncAcquireResponseComputeBackendType$inboundSchema,
 });
 

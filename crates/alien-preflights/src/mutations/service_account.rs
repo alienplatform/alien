@@ -3,8 +3,9 @@
 use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
-    permissions::PermissionSet, DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle,
-    ServiceAccount, Stack, StackState,
+    permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
+    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceAccount, Stack,
+    StackState,
 };
 use alien_error::Context;
 use async_trait::async_trait;
@@ -68,11 +69,17 @@ impl StackMutation for ServiceAccountMutation {
                 profile_name
             );
 
+            let permission_profile = if stack_state.platform == Platform::Aws {
+                with_aws_tag_tamper_protection(permission_profile)
+            } else {
+                permission_profile.clone()
+            };
+
             // Create ServiceAccount from permission profile
             let service_account_id = format!("{}-sa", profile_name);
             let service_account = ServiceAccount::from_permission_profile(
                 service_account_id.clone(),
-                permission_profile,
+                &permission_profile,
                 permission_set_resolver,
             )
             .context(ErrorData::StackMutationFailed {
@@ -114,4 +121,16 @@ impl StackMutation for ServiceAccountMutation {
 
         Ok(stack)
     }
+}
+
+fn with_aws_tag_tamper_protection(profile: &PermissionProfile) -> PermissionProfile {
+    let mut profile = profile.clone();
+    let permission = PermissionSetReference::from_name("aws/tag-tamper-protection");
+
+    let global_permissions = profile.0.entry("*".to_string()).or_default();
+    if !global_permissions.contains(&permission) {
+        global_permissions.push(permission);
+    }
+
+    profile
 }

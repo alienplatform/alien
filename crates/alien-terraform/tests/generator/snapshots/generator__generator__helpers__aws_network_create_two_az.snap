@@ -256,6 +256,19 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    aws_vpc.default_network,
+    aws_internet_gateway.default_network,
+    aws_subnet.default_network_public,
+    aws_subnet.default_network_private,
+    aws_eip.default_network_nat,
+    aws_nat_gateway.default_network,
+    aws_route_table.default_network_public,
+    aws_route_table.default_network_private,
+    aws_route_table_association.default_network_public,
+    aws_route_table_association.default_network_private,
+    aws_security_group.default_network_workload
+  ]
 }
 
 === outputs.tf ===

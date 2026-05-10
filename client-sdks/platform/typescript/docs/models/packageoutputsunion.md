@@ -51,11 +51,15 @@ const value: models.OutputsCloudformation = {
 
 ```typescript
 const value: models.OutputsTerraform = {
-  gpgPublicKey: {
-    asciiArmor: "<value>",
-    keyId: "<id>",
+  modules: {},
+  provider: {
+    gpgPublicKey: {
+      asciiArmor: "<value>",
+      keyId: "<id>",
+    },
+    platforms: {},
+    source: "<value>",
   },
-  platforms: {},
   type: "terraform",
 };
 ```

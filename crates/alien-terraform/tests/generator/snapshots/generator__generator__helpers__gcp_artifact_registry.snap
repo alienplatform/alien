@@ -144,6 +144,13 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_artifact_registry_repository.registry,
+    google_service_account.registry_pull,
+    google_artifact_registry_repository_iam_member.registry_pull_iam,
+    google_service_account.registry_push,
+    google_artifact_registry_repository_iam_member.registry_push_iam
+  ]
 }
 
 === outputs.tf ===

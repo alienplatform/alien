@@ -19,6 +19,12 @@ pub use error::*;
 mod resource;
 pub use resource::*;
 
+mod ownership;
+pub use ownership::*;
+
+mod tags;
+pub use tags::*;
+
 mod load_balancer;
 pub use load_balancer::*;
 

@@ -1,0 +1,78 @@
+{
+  "id": "aws/tag-tamper-protection",
+  "description": "Prevents runtime identities from changing Alien boundary tags.",
+  "platforms": {
+    "aws": [
+      {
+        "effect": "Deny",
+        "grant": {
+          "actions": [
+            "acm:RemoveTagsFromCertificate",
+            "apigateway:PATCH",
+            "autoscaling:DeleteTags",
+            "dynamodb:UntagResource",
+            "ec2:DeleteTags",
+            "ecr:UntagResource",
+            "elasticloadbalancing:RemoveTags",
+            "events:UntagResource",
+            "iam:UntagRole",
+            "lambda:UntagResource",
+            "secretsmanager:UntagResource",
+            "sqs:UntagQueue"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "ForAnyValue:StringLike": {
+                "aws:TagKeys": "alien.dev/*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "ForAnyValue:StringLike": {
+                "aws:TagKeys": "alien.dev/*"
+              }
+            }
+          }
+        }
+      },
+      {
+        // S3 buckets are tagged immediately after CreateBucket because S3 has
+        // no portable tag-on-create path in our client. Once the boundary tag
+        // exists, runtime identities may not rewrite Alien-owned tag keys.
+        "effect": "Deny",
+        "grant": {
+          "actions": ["s3:PutBucketTagging"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "aws:ResourceTag/${stackTag}": "*"
+              },
+              "ForAnyValue:StringLike": {
+                "aws:TagKeys": "alien.dev/*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "aws:ResourceTag/${stackTag}": "*"
+              },
+              "ForAnyValue:StringLike": {
+                "aws:TagKeys": "alien.dev/*"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

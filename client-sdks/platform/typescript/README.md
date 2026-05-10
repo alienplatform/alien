@@ -185,7 +185,7 @@ run();
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
-* [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both agent-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either agent or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+* [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
@@ -204,7 +204,7 @@ run();
 * [listFilterPlatforms](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
-* [delete](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+* [delete](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
@@ -273,8 +273,8 @@ run();
 ### [Sync](docs/sdks/sync/README.md)
 
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
-* [release](docs/sdks/sync/README.md#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+* [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### [User](docs/sdks/user/README.md)
 
@@ -295,6 +295,7 @@ run();
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 * [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+* [dismissOnboarding](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 
 </details>
 <!-- End Available Resources and Operations [operations] -->
@@ -338,7 +339,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`containersListDeploymentContainers`](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
 - [`containersListDeploymentEvents`](docs/sdks/containers/README.md#listdeploymentevents) - List orchestration events for a deployment's container cluster.
 - [`containersListDeploymentMachines`](docs/sdks/containers/README.md#listdeploymentmachines) - List all compute machines in a deployment's container cluster.
-- [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both agent-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either agent or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+- [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
@@ -347,7 +348,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
-- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
@@ -396,8 +397,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
-- [`syncRelease`](docs/sdks/sync/README.md#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+- [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 - [`userListGitNamespaceRepositories`](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).
 - [`userListGitNamespaces`](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
@@ -406,6 +407,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`workspacesAddMember`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
+- [`workspacesDismissOnboarding`](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
 - [`workspacesList`](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 - [`workspacesListMembers`](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.

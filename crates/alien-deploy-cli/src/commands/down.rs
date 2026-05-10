@@ -155,6 +155,7 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
     client
         .delete_deployment()
         .id(&deployment_id)
+        .delete_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::Full)
         .send()
         .await
         .into_alien_error()

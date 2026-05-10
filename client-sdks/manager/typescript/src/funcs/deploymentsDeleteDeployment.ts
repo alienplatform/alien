@@ -91,6 +91,7 @@ async function $do(
 
   const query = encodeFormQuery({
     "force": payload.force,
+    "deleteScope": payload.deleteScope,
   });
 
   const headers = new Headers(compactMap({

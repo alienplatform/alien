@@ -101,19 +101,11 @@ export type CreateProjectHelmRequest = {
 };
 
 /**
- * Terraform provider package configuration. If null, Terraform packages will not be generated.
+ * Terraform package configuration. If null, Terraform packages will not be generated.
  */
 export type CreateProjectTerraformRequest = {
   /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
-  /**
-   * Whether Terraform provider package generation is enabled
+   * Whether Terraform package generation is enabled
    */
   enabled: boolean;
 };
@@ -139,7 +131,7 @@ export type CreateProjectPackagesConfigRequest = {
    */
   helm?: CreateProjectHelmRequest | null | undefined;
   /**
-   * Terraform provider package configuration. If null, Terraform packages will not be generated.
+   * Terraform package configuration. If null, Terraform packages will not be generated.
    */
   terraform?: CreateProjectTerraformRequest | null | undefined;
 };
@@ -327,19 +319,11 @@ export type CreateProjectHelmResponse = {
 };
 
 /**
- * Terraform provider package configuration. If null, Terraform packages will not be generated.
+ * Terraform package configuration. If null, Terraform packages will not be generated.
  */
 export type CreateProjectTerraformResponse = {
   /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
-  /**
-   * Whether Terraform provider package generation is enabled
+   * Whether Terraform package generation is enabled
    */
   enabled: boolean;
 };
@@ -365,7 +349,7 @@ export type CreateProjectPackagesConfigResponse = {
    */
   helm?: CreateProjectHelmResponse | null | undefined;
   /**
-   * Terraform provider package configuration. If null, Terraform packages will not be generated.
+   * Terraform package configuration. If null, Terraform packages will not be generated.
    */
   terraform?: CreateProjectTerraformResponse | null | undefined;
 };
@@ -408,6 +392,10 @@ export type CreateProjectResponse = {
     | CreateProjectDeploymentPageBackground
     | null
     | undefined;
+  /**
+   * Custom logo URL to show on the deployment page.
+   */
+  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -556,8 +544,6 @@ export function createProjectHelmRequestToJSON(
 
 /** @internal */
 export type CreateProjectTerraformRequest$Outbound = {
-  providerName: string;
-  resourceType: string;
   enabled: boolean;
 };
 
@@ -566,8 +552,6 @@ export const CreateProjectTerraformRequest$outboundSchema: z.ZodType<
   CreateProjectTerraformRequest$Outbound,
   CreateProjectTerraformRequest
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   enabled: z.boolean(),
 });
 
@@ -829,8 +813,6 @@ export const CreateProjectTerraformResponse$inboundSchema: z.ZodType<
   CreateProjectTerraformResponse,
   unknown
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   enabled: z.boolean(),
 });
 
@@ -908,6 +890,7 @@ export const CreateProjectResponse$inboundSchema: z.ZodType<
   deploymentPageBackground: z.nullable(
     z.lazy(() => CreateProjectDeploymentPageBackground$inboundSchema),
   ).optional(),
+  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigResponse$inboundSchema),
   ).optional(),

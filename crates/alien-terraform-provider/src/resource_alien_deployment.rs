@@ -14,6 +14,10 @@ use alien_manager_api::types::{
 use alien_manager_api::{Client, SdkResultExt};
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const DEPLOYMENT_WAIT_ATTEMPTS: usize = 180;
+const DEPLOYMENT_WAIT_INTERVAL: Duration = Duration::from_secs(10);
 
 /// HCL-side input. Mirrors the [`crate::schema::resource_schema`] attributes
 /// and round-trips through `serde` for testability without dragging the
@@ -97,7 +101,9 @@ pub async fn create(
         .await
         .into_sdk_error()
         .map_err(map_sdk_err)?;
-    Ok(response.into_inner())
+    let response = response.into_inner();
+    wait_until_running(client, &response.deployment_id).await?;
+    Ok(response)
 }
 
 /// Resource Read: re-issue the import request as a drift probe. The manager
@@ -115,11 +121,90 @@ pub async fn delete(client: &Client, deployment_id: &str) -> Result<(), CrudErro
     client
         .delete_deployment()
         .id(deployment_id)
+        .delete_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::LiveOnly)
         .send()
         .await
         .into_sdk_error()
         .map_err(map_sdk_err)?;
+    wait_until_deleted(client, deployment_id).await?;
     Ok(())
+}
+
+async fn wait_until_running(client: &Client, deployment_id: &str) -> Result<(), CrudError> {
+    wait_for_deployment_status(
+        client,
+        deployment_id,
+        &["running"],
+        &[
+            "provisioning-failed",
+            "initial-setup-failed",
+            "update-failed",
+            "delete-failed",
+            "error",
+        ],
+    )
+    .await
+}
+
+async fn wait_until_deleted(client: &Client, deployment_id: &str) -> Result<(), CrudError> {
+    for _ in 0..DEPLOYMENT_WAIT_ATTEMPTS {
+        match get_deployment_status(client, deployment_id).await {
+            Ok(status) if status == "deleted" => return Ok(()),
+            Ok(status) if is_failed_status(&status) => {
+                return Err(CrudError::Manager(format!(
+                    "deployment {deployment_id} failed while deleting: {status}"
+                )));
+            }
+            Ok(_) => {}
+            Err(CrudError::NotFound) => return Ok(()),
+            Err(err) => return Err(err),
+        }
+        tokio::time::sleep(DEPLOYMENT_WAIT_INTERVAL).await;
+    }
+
+    Err(CrudError::Transport(format!(
+        "timed out waiting for deployment {deployment_id} to delete"
+    )))
+}
+
+async fn wait_for_deployment_status(
+    client: &Client,
+    deployment_id: &str,
+    success_statuses: &[&str],
+    failure_statuses: &[&str],
+) -> Result<(), CrudError> {
+    for _ in 0..DEPLOYMENT_WAIT_ATTEMPTS {
+        let status = get_deployment_status(client, deployment_id).await?;
+        if success_statuses.contains(&status.as_str()) {
+            return Ok(());
+        }
+        if failure_statuses.contains(&status.as_str()) || is_failed_status(&status) {
+            return Err(CrudError::Manager(format!(
+                "deployment {deployment_id} reached terminal status: {status}"
+            )));
+        }
+        tokio::time::sleep(DEPLOYMENT_WAIT_INTERVAL).await;
+    }
+
+    Err(CrudError::Transport(format!(
+        "timed out waiting for deployment {deployment_id} to become running"
+    )))
+}
+
+async fn get_deployment_status(client: &Client, deployment_id: &str) -> Result<String, CrudError> {
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .map_err(map_sdk_err)?
+        .into_inner();
+    Ok(deployment.status)
+}
+
+fn is_failed_status(status: &str) -> bool {
+    status.ends_with("-failed") || status == "error"
 }
 
 fn build_request(input: &AlienDeploymentInput) -> Result<StackImportRequest, CrudError> {

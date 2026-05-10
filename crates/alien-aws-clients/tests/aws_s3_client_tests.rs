@@ -948,8 +948,9 @@ async fn test_empty_bucket_with_versions(ctx: &mut S3TestContext) {
     if delete_bucket_result.is_ok() {
         ctx.untrack_bucket(&bucket_name);
     }
-    assert!(delete_bucket_result.is_ok(), 
-        "Failed to delete bucket after versioned empty_bucket, likely not empty: {:?}. List output: {:?}", 
+    assert!(
+        delete_bucket_result.is_ok(),
+        "Failed to delete bucket after versioned empty_bucket, likely not empty: {:?}. List output: {:?}",
         delete_bucket_result.err(),
         list_after_empty_result
     );

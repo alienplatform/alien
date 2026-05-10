@@ -794,6 +794,15 @@ pub struct CreateTableRequest {
     pub billing_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provisioned_throughput: Option<ProvisionedThroughput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<Tag>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct Tag {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]

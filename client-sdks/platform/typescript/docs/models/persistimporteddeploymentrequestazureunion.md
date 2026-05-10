@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.PersistImportedDeploymentRequestAzure`
+### `models.PersistImportedDeploymentRequestDomainsAzure`
 
 ```typescript
-const value: models.PersistImportedDeploymentRequestAzure = {
+const value: models.PersistImportedDeploymentRequestDomainsAzure = {
   keyVaultCertificateId: "<id>",
 };
 ```

@@ -10,7 +10,7 @@
 * [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
 * [get](#get) - Retrieve an agent by ID.
-* [delete](#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+* [delete](#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
 * [redeploy](#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
@@ -491,7 +491,7 @@ run();
 
 ## delete
 
-Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 
 ### Example Usage
 
@@ -666,6 +666,8 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
         stackSettings: {},
@@ -716,6 +718,8 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
         stackSettings: {},

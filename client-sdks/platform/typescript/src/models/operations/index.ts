@@ -24,6 +24,7 @@ export * from "./deletedomain.js";
 export * from "./deletemanager.js";
 export * from "./deleteproject.js";
 export * from "./deleteworkspace.js";
+export * from "./dismissworkspaceonboarding.js";
 export * from "./generatemanagertoken.js";
 export * from "./getapikey.js";
 export * from "./getcommand.js";

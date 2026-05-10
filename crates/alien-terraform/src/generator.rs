@@ -23,14 +23,14 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    ErrorData, Network, NetworkSettings, ResourceLifecycle, Result, Stack, StackSettings,
-    import::EmitContext,
+    import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
+    Result, Stack, StackSettings,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
-    Identifier,
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
+    Identifier,
 };
 use indexmap::IndexMap;
 
@@ -160,17 +160,9 @@ pub fn generate_terraform_module(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        if !should_emit_resource(resource_type.as_ref()) {
+        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
+        if !ownership.should_emit_in_setup(resource.lifecycle) {
             continue;
-        }
-
-        if target.is_kubernetes() {
-            if resource.lifecycle != ResourceLifecycle::Frozen {
-                continue;
-            }
-            if resource_type.as_ref() == "function" {
-                continue;
-            }
         }
 
         let emitter = options.registry.require(&resource_type, platform)?;
@@ -184,9 +176,6 @@ pub fn generate_terraform_module(
         };
 
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
-        if resource.lifecycle == ResourceLifecycle::Live {
-            add_live_resource_lifecycle(&mut fragment);
-        }
         // Split per-emitter `locals` out of the per-resource file \u2014 they
         // belong in `locals.tf` so reviewers see all locals together.
         let local_contributions = std::mem::take(&mut fragment.locals);
@@ -214,13 +203,35 @@ pub fn generate_terraform_module(
     if matches!(platform, alien_core::Platform::Azure) {
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
+    let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
+        gcp_iam_resource_addresses(&per_resource)
+    } else {
+        Vec::new()
+    };
+    let gcp_iam_propagation_barrier = if gcp_iam_propagation_dependencies.is_empty() {
+        None
+    } else {
+        Some(expr::traversal(["time_sleep", "gcp_iam_propagation"]))
+    };
+    let mut import_depends_on: Vec<Expression> = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter_map(resource_address)
+        .collect();
+    if let Some(barrier) = &gcp_iam_propagation_barrier {
+        import_depends_on.push(barrier.clone());
+    }
 
     let network_vars = network_extra_variables(stack, &labels);
 
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
         "versions.tf".to_string(),
-        render_body(versions_body(target, options.registration.as_ref()))?,
+        render_body(versions_body(
+            target,
+            options.registration.as_ref(),
+            gcp_iam_propagation_barrier.is_some(),
+        ))?,
     );
     files.insert(
         "variables.tf".to_string(),
@@ -247,10 +258,19 @@ pub fn generate_terraform_module(
             files.insert(file_name, render_body(body)?);
         }
     }
+    if !gcp_iam_propagation_dependencies.is_empty() {
+        files.insert(
+            "iam_propagation.tf".to_string(),
+            render_body(gcp_iam_propagation_body(&gcp_iam_propagation_dependencies))?,
+        );
+    }
 
     files.insert(
         "import.tf".to_string(),
-        render_body(import_body(options.registration.as_ref()))?,
+        render_body(import_body(
+            options.registration.as_ref(),
+            &import_depends_on,
+        ))?,
     );
     files.insert(
         "outputs.tf".to_string(),
@@ -270,12 +290,6 @@ pub fn generate_terraform_module(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
-}
-
-fn should_emit_resource(resource_type: &str) -> bool {
-    // Workload resources are reconciled by the runtime after the infrastructure
-    // import has registered the cloud primitives they run on.
-    resource_type != "container"
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {
@@ -372,6 +386,39 @@ fn resource_address(resource: &Block) -> Option<Expression> {
     Some(expr::traversal([provider_type, label]))
 }
 
+fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Vec<Expression> {
+    per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter(|resource| {
+            if resource.identifier.as_str() != "resource" {
+                return false;
+            }
+            let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+                return false;
+            };
+            matches!(
+                provider_type,
+                "google_project_iam_custom_role"
+                    | "google_project_iam_member"
+                    | "google_service_account_iam_member"
+            )
+        })
+        .filter_map(resource_address)
+        .collect()
+}
+
+fn gcp_iam_propagation_body(depends_on: &[Expression]) -> Body {
+    Body::from(vec![Structure::Block(resource_block(
+        "time_sleep",
+        "gcp_iam_propagation",
+        [
+            attr("create_duration", Expression::String("120s".to_string())),
+            attr("depends_on", Expression::Array(depends_on.to_vec())),
+        ],
+    ))])
+}
+
 fn upsert_depends_on(resource: &mut Block, depends_on: &[Expression]) {
     for structure in &mut resource.body.0 {
         if let Structure::Attribute(attribute) = structure {
@@ -394,42 +441,6 @@ fn upsert_depends_on(resource: &mut Block, depends_on: &[Expression]) {
         .body
         .0
         .push(attr("depends_on", Expression::Array(depends_on.to_vec())));
-}
-
-fn add_live_resource_lifecycle(fragment: &mut TfFragment) {
-    for resource in &mut fragment.resource_blocks {
-        if let Some(lifecycle) = lifecycle_block_mut(resource) {
-            upsert_attr(lifecycle, "ignore_changes", expr::raw("all"));
-        } else {
-            resource.body.0.push(nested(block(
-                "lifecycle",
-                [attr("ignore_changes", expr::raw("all"))],
-            )));
-        }
-    }
-}
-
-fn lifecycle_block_mut(resource: &mut Block) -> Option<&mut Block> {
-    resource
-        .body
-        .0
-        .iter_mut()
-        .find_map(|structure| match structure {
-            Structure::Block(block) if block.identifier.as_str() == "lifecycle" => Some(block),
-            _ => None,
-        })
-}
-
-fn upsert_attr(block: &mut Block, name: &str, value: Expression) {
-    for structure in &mut block.body.0 {
-        if let Structure::Attribute(attr) = structure {
-            if attr.key.as_str() == name {
-                attr.expr = value;
-                return;
-            }
-        }
-    }
-    block.body.0.push(attr(name, value));
 }
 
 fn body_is_empty(body: &Body) -> bool {
@@ -491,7 +502,11 @@ fn render_body(body: Body) -> Result<String> {
         })
 }
 
-fn versions_body(target: TerraformTarget, registration: Option<&TerraformRegistration>) -> Body {
+fn versions_body(
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+    include_time_provider: bool,
+) -> Body {
     let mut required: Vec<Structure> = vec![attr(
         "required_version",
         Expression::String(">= 1.5.0".to_string()),
@@ -506,6 +521,9 @@ fn versions_body(target: TerraformTarget, registration: Option<&TerraformRegistr
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
+        if include_time_provider {
+            provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
+        }
     }
     if matches!(target.platform(), alien_core::Platform::Azure) {
         provider_attrs.push(attr(
@@ -928,65 +946,80 @@ fn json_to_expression(value: &serde_json::Value) -> Expression {
     }
 }
 
-fn import_body(registration: Option<&TerraformRegistration>) -> Body {
+fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
+    let depends_on_attr = (!depends_on.is_empty()).then(|| {
+        attr(
+            "depends_on",
+            Expression::Array(depends_on.iter().cloned().collect()),
+        )
+    });
     if let Some(registration) = registration {
+        let mut body = vec![
+            attr(
+                "deployment_group_token",
+                expr::raw("var.deployment_group_token"),
+            ),
+            attr(
+                "name",
+                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
+            ),
+            attr("stack_prefix", expr::raw("var.stack_name")),
+            attr("platform", expr::raw("local.deployment_platform")),
+            attr("region", expr::raw("local.deployment_region")),
+            attr("manager_url", expr::raw("var.manager_url")),
+            attr(
+                "management_config",
+                expr::raw("local.deployment_management_config"),
+            ),
+            attr(
+                "stack_settings",
+                expr::raw("local.deployment_stack_settings"),
+            ),
+            attr("resources", expr::raw("local.deployment_resources")),
+        ];
+        if let Some(depends_on_attr) = depends_on_attr {
+            body.push(depends_on_attr);
+        }
         return Body::from(vec![Structure::Block(resource_block(
             &registration.provider_resource_type(),
             "this",
-            [
-                attr(
-                    "deployment_group_token",
-                    expr::raw("var.deployment_group_token"),
-                ),
-                attr(
-                    "name",
-                    expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-                ),
-                attr("stack_prefix", expr::raw("var.stack_name")),
-                attr("platform", expr::raw("local.deployment_platform")),
-                attr("region", expr::raw("local.deployment_region")),
-                attr("manager_url", expr::raw("var.manager_url")),
-                attr(
-                    "management_config",
-                    expr::raw("local.deployment_management_config"),
-                ),
-                attr(
-                    "stack_settings",
-                    expr::raw("local.deployment_stack_settings"),
-                ),
-                attr("resources", expr::raw("local.deployment_resources")),
-            ],
+            body,
         ))]);
+    }
+
+    let mut body = vec![attr(
+        "input",
+        expr::object([
+            ("platform", expr::raw("local.deployment_platform")),
+            (
+                "deployment_group_token",
+                expr::raw("var.deployment_group_token"),
+            ),
+            (
+                "deployment_name",
+                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
+            ),
+            ("stack_prefix", expr::raw("var.stack_name")),
+            ("manager_url", expr::raw("var.manager_url")),
+            (
+                "management_config",
+                expr::raw("local.deployment_management_config"),
+            ),
+            (
+                "stack_settings",
+                expr::raw("local.deployment_stack_settings"),
+            ),
+            ("resources", expr::raw("local.deployment_resources")),
+        ]),
+    )];
+    if let Some(depends_on_attr) = depends_on_attr {
+        body.push(depends_on_attr);
     }
 
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
         "deployment_stack_import",
-        [attr(
-            "input",
-            expr::object([
-                ("platform", expr::raw("local.deployment_platform")),
-                (
-                    "deployment_group_token",
-                    expr::raw("var.deployment_group_token"),
-                ),
-                (
-                    "deployment_name",
-                    expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-                ),
-                ("stack_prefix", expr::raw("var.stack_name")),
-                ("manager_url", expr::raw("var.manager_url")),
-                (
-                    "management_config",
-                    expr::raw("local.deployment_management_config"),
-                ),
-                (
-                    "stack_settings",
-                    expr::raw("local.deployment_stack_settings"),
-                ),
-                ("resources", expr::raw("local.deployment_resources")),
-            ]),
-        )],
+        body,
     ))])
 }
 
@@ -1105,13 +1138,17 @@ mod tests {
             resource_type: "deployment".to_string(),
         };
 
-        let versions = render_body(versions_body(TerraformTarget::Aws, Some(&registration)))
-            .expect("versions render");
+        let versions = render_body(versions_body(
+            TerraformTarget::Aws,
+            Some(&registration),
+            false,
+        ))
+        .expect("versions render");
         assert!(versions.contains("example_app ="));
         assert!(versions.contains("registry.example.com/acme/example-app"));
 
         let import =
-            render_body(import_body(Some(&registration))).expect("registration import render");
+            render_body(import_body(Some(&registration), &[])).expect("registration import render");
         assert!(import.contains("resource \"example_app_deployment\" \"this\""));
 
         let outputs =

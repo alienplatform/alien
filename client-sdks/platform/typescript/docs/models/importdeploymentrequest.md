@@ -13,6 +13,7 @@ const value: models.ForwardImportRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   source: {
     deploymentName: "<value>",
+    stackPrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "kubernetes",
     region: "<value>",
@@ -36,6 +37,7 @@ const value: models.PersistImportedDeploymentRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   platform: "kubernetes",
   stackSettings: {},
+  runtimeMetadata: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
 ```

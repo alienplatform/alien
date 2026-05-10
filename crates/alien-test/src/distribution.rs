@@ -7,11 +7,11 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use alien_core::{
+    import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig,
     DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
     Function, FunctionCode, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState,
-    import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
 };
 use anyhow::Context;
 use serde_json::Value;

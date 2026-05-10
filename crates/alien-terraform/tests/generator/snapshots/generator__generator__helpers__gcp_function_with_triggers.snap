@@ -93,27 +93,6 @@ locals {
         projectId      = var.gcp_project
         location       = google_storage_bucket.assets.location
       }
-    },
-    {
-      id   = "worker"
-      type = "function"
-      importData = {
-        projectId   = var.gcp_project
-        region      = var.gcp_region
-        serviceName = google_cloud_run_v2_service.worker.name
-        url         = null
-        pubsubSubscriptionNames = [
-          google_pubsub_subscription.worker_queue_0.name
-        ]
-        schedulerJobNames = [
-          google_cloud_scheduler_job.worker_schedule_1.name
-        ]
-        eventarcTriggerNames = [
-          google_eventarc_trigger.worker_storage_2.name
-        ]
-        commandsTopicName        = null
-        commandsSubscriptionName = null
-      }
     }
   ]
 }
@@ -167,135 +146,6 @@ resource "google_storage_bucket" "assets" {
   }
 }
 
-=== worker.tf ===
-resource "google_cloud_run_v2_service" "worker" {
-  name     = "${var.stack_name}-worker"
-  project  = var.gcp_project
-  location = var.gcp_region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
-  labels = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "worker"
-    "alien-resource-type" = "function"
-  }
-  deletion_protection = false
-
-  template {
-    timeout = "60s"
-
-    containers {
-      image = "us-central1-docker.pkg.dev/proj/app/worker:1"
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-        cpu_idle = true
-      }
-
-      env {
-        name  = "ALIEN_CURRENT_FUNCTION_BINDING_NAME"
-        value = "worker"
-      }
-
-      env {
-        name  = "ALIEN_DEPLOYMENT_TYPE"
-        value = "gcp"
-      }
-
-      env {
-        name  = "ALIEN_RUNTIME_SEND_OTLP"
-        value = "true"
-      }
-
-      env {
-        name  = "ALIEN_TRANSPORT"
-        value = "cloud-run"
-      }
-
-      env {
-        name  = "GCP_PROJECT_ID"
-        value = var.gcp_project
-      }
-
-      env {
-        name  = "GCP_REGION"
-        value = var.gcp_region
-      }
-
-      env {
-        name  = "GOOGLE_CLOUD_PROJECT"
-        value = var.gcp_project
-      }
-    }
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "google_pubsub_subscription" "worker_queue_0" {
-  name                 = "${var.stack_name}-worker-from-jobs"
-  project              = var.gcp_project
-  topic                = google_pubsub_topic.jobs.id
-  ack_deadline_seconds = 120
-
-  push_config {
-    push_endpoint = google_cloud_run_v2_service.worker.uri
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "google_cloud_scheduler_job" "worker_schedule_1" {
-  name      = "${var.stack_name}-worker-sched-1"
-  project   = var.gcp_project
-  region    = var.gcp_region
-  schedule  = "*/5 * * * *"
-  time_zone = "Etc/UTC"
-
-  http_target {
-    uri         = google_cloud_run_v2_service.worker.uri
-    http_method = "POST"
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "google_eventarc_trigger" "worker_storage_2" {
-  name     = "${var.stack_name}-worker-assets-storage"
-  project  = var.gcp_project
-  location = var.gcp_region
-
-  matching_criteria {
-    attribute = "type"
-    value     = "google.cloud.storage.object.v1.finalized"
-  }
-
-  matching_criteria {
-    attribute = "bucket"
-    value     = google_storage_bucket.assets.name
-  }
-
-  destination {
-    cloud_run_service {
-      service = google_cloud_run_v2_service.worker.name
-      region  = google_cloud_run_v2_service.worker.location
-    }
-  }
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
@@ -308,6 +158,11 @@ resource "terraform_data" "deployment_stack_import" {
     stack_settings         = local.deployment_stack_settings
     resources              = local.deployment_resources
   }
+  depends_on = [
+    google_pubsub_topic.jobs,
+    google_pubsub_subscription.jobs,
+    google_storage_bucket.assets
+  ]
 }
 
 === outputs.tf ===

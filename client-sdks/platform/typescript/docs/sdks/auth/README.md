@@ -66,7 +66,7 @@ run();
 
 ### Response
 
-**Promise\<[models.Subject](../../models/subject.md)\>**
+**Promise\<[models.WhoamiResponse](../../models/whoamiresponse.md)\>**
 
 ### Errors
 
