@@ -155,23 +155,47 @@ resource "azuread_application_password" "manager" {
 # Target-tenant service principal used by scoped Azure e2e tests. Azure RBAC role
 # assignments require the tenant-local service principal object id, so Terraform
 # owns this identity and exports the object id as part of the test contract.
-resource "azuread_application" "agent" {
+resource "azuread_application" "target_agent" {
   provider         = azuread.target
   display_name     = "alien-test-agent"
   sign_in_audience = "AzureADMyOrg"
   owners           = [data.azurerm_client_config.target.object_id]
 }
 
-resource "azuread_service_principal" "agent" {
+resource "azuread_service_principal" "target_agent" {
   provider  = azuread.target
-  client_id = azuread_application.agent.client_id
+  client_id = azuread_application.target_agent.client_id
   owners    = [data.azurerm_client_config.target.object_id]
 }
 
-resource "azuread_application_password" "agent" {
+resource "azuread_application_password" "target_agent" {
   provider       = azuread.target
-  application_id = azuread_application.agent.id
+  application_id = azuread_application.target_agent.id
   display_name   = "alien-test"
+}
+
+removed {
+  from = azuread_application.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_service_principal.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_application_password.agent
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # GitHub Actions OIDC federation — lets the Terraform execution SP
