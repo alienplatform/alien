@@ -24,14 +24,14 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+ * Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
  */
 export function authWhoami(
   client: AlienCore,
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.WhoamiResponse,
+    models.Subject,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -55,7 +55,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      models.WhoamiResponse,
+      models.Subject,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -124,7 +124,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    models.WhoamiResponse,
+    models.Subject,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -135,7 +135,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.WhoamiResponse$inboundSchema),
+    M.json(200, models.Subject$inboundSchema),
     M.jsonErr(401, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

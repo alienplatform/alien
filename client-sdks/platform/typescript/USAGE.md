@@ -7,7 +7,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile();
+  const result = await alien.user.getProfile();
 
   console.log(result);
 }

@@ -38,6 +38,13 @@ variable "manager_url" {
   default     = ""
 }
 
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
 variable "aws_region" {
   type        = string
   description = "AWS region used by the AWS provider."
@@ -72,9 +79,9 @@ locals {
   deployment_region   = data.aws_region.current.region
   deployment_management_config = {
     platform        = "aws"
-    managingRoleArn = data.aws_caller_identity.current.arn
+    managingRoleArn = var.managing_role_arn
   }
-  deployment_stack_settings = {}
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "data"
@@ -180,6 +187,7 @@ output "deployment_management_config" {
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
+  sensitive   = true
 }
 
 output "deployment_resources" {

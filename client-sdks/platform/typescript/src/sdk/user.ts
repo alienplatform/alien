@@ -3,6 +3,7 @@
  */
 
 import { userCreateWorkspace } from "../funcs/userCreateWorkspace.js";
+import { userGetProfile } from "../funcs/userGetProfile.js";
 import { userListGitNamespaceRepositories } from "../funcs/userListGitNamespaceRepositories.js";
 import { userListGitNamespaces } from "../funcs/userListGitNamespaces.js";
 import { userListMemberships } from "../funcs/userListMemberships.js";
@@ -15,12 +16,24 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class User extends ClientSDK {
   /**
+   * Get the current user's profile and user-scoped onboarding state.
+   */
+  async getProfile(
+    options?: RequestOptions,
+  ): Promise<models.UserProfile> {
+    return unwrapAsync(userGetProfile(
+      this,
+      options,
+    ));
+  }
+
+  /**
    * Update the current user's profile (display name).
    */
   async updateProfile(
     request?: operations.UpdateUserProfileRequest | undefined,
     options?: RequestOptions,
-  ): Promise<operations.UpdateUserProfileResponse> {
+  ): Promise<models.UserProfile> {
     return unwrapAsync(userUpdateProfile(
       this,
       request,

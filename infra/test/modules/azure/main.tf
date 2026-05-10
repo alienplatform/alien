@@ -8,7 +8,7 @@ terraform {
     azuread = {
       source                = "hashicorp/azuread"
       version               = "~> 3.0"
-      configuration_aliases = [azuread.management, azuread.target]
+      configuration_aliases = [azuread.management]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
@@ -125,10 +125,6 @@ data "azurerm_client_config" "management" {
   provider = azurerm.management
 }
 
-data "azurerm_client_config" "target" {
-  provider = azurerm.target
-}
-
 # ── Management: Service Principal ─────────────────────────────────────────
 # Multi-tenant SP used as a local-dev fallback for cross-tenant client_credentials.
 # In production/CI, OIDC token exchange replaces this SP entirely.
@@ -152,33 +148,35 @@ resource "azuread_application_password" "manager" {
   display_name   = "alien-test"
 }
 
-# Multi-tenant app registration used by scoped Azure e2e tests. The app
-# registration and secret live in the management tenant where Terraform has
-# application-management privileges.
-resource "azuread_application" "agent" {
-  provider         = azuread.management
-  display_name     = "alien-test-agent"
-  sign_in_audience = "AzureADMultipleOrgs"
-  owners           = [data.azurerm_client_config.management.object_id]
+# Azure e2e deployment identities are pre-provisioned outside this Terraform
+# workspace and passed in as root variables. Drop historical managed agent
+# identities from state without requiring directory delete privileges.
+removed {
+  from = azuread_application.agent
+
+  lifecycle {
+    destroy = false
+  }
 }
 
-# Tenant-local service principal for the multi-tenant app. Azure RBAC role
-# assignments require this target-tenant object id, but creating it does not
-# require creating an app registration in the target tenant.
-resource "azuread_service_principal" "target_agent" {
-  provider  = azuread.target
-  client_id = azuread_application.agent.client_id
-  owners    = [data.azurerm_client_config.target.object_id]
-}
+removed {
+  from = azuread_application_password.agent
 
-resource "azuread_application_password" "agent" {
-  provider       = azuread.management
-  application_id = azuread_application.agent.id
-  display_name   = "alien-test"
+  lifecycle {
+    destroy = false
+  }
 }
 
 removed {
   from = azuread_service_principal.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_service_principal.target_agent
 
   lifecycle {
     destroy = false

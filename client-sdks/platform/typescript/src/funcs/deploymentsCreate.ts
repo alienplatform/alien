@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+ * Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
  */
 export function deploymentsCreate(
   client: AlienCore,

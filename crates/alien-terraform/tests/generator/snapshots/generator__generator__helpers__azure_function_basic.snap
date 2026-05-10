@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -37,6 +36,13 @@ variable "manager_url" {
   type        = string
   description = "Optional manager endpoint used by pull-style runtimes."
   default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
 }
 
 variable "azure_location" {
@@ -98,7 +104,7 @@ locals {
     oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
     oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
   }
-  deployment_stack_settings = {}
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -216,6 +222,7 @@ output "deployment_management_config" {
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
+  sensitive   = true
 }
 
 output "deployment_resources" {

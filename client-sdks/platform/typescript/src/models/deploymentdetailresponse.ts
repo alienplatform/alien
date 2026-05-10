@@ -810,7 +810,7 @@ export type DeploymentDetailResponseStackState = {
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export const DeploymentDetailResponseDeleteScope = {
+export const DeploymentDetailResponseDeleteScopeEnum = {
   Full: "full",
   LiveOnly: "liveOnly",
 } as const;
@@ -824,9 +824,13 @@ export const DeploymentDetailResponseDeleteScope = {
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export type DeploymentDetailResponseDeleteScope = ClosedEnum<
-  typeof DeploymentDetailResponseDeleteScope
+export type DeploymentDetailResponseDeleteScopeEnum = ClosedEnum<
+  typeof DeploymentDetailResponseDeleteScopeEnum
 >;
+
+export type DeploymentDetailResponseDeleteScopeUnion =
+  | DeploymentDetailResponseDeleteScopeEnum
+  | any;
 
 export const DeploymentDetailResponseManagementEnum = {
   Auto: "auto",
@@ -1911,17 +1915,11 @@ export type DeploymentDetailResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
-  /**
-   * Scope for a delete operation.
-   *
-   * @remarks
-   *
-   * Full deletes are setup/admin owned and may remove both Frozen and Live
-   * resources. Live-only deletes are used by setup handoff resources
-   * (Terraform/CloudFormation) so Alien removes only the resources it owns
-   * before setup tears down Frozen resources.
-   */
-  deleteScope?: DeploymentDetailResponseDeleteScope | undefined;
+  deleteScope?:
+    | DeploymentDetailResponseDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -3175,9 +3173,31 @@ export function deploymentDetailResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const DeploymentDetailResponseDeleteScope$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseDeleteScope
-> = z.enum(DeploymentDetailResponseDeleteScope);
+export const DeploymentDetailResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseDeleteScopeEnum
+> = z.enum(DeploymentDetailResponseDeleteScopeEnum);
+
+/** @internal */
+export const DeploymentDetailResponseDeleteScopeUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDeleteScopeUnion,
+  unknown
+> = z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]);
+
+export function deploymentDetailResponseDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseDeleteScopeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDeleteScopeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseDeleteScopeUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentDetailResponseManagementEnum$inboundSchema: z.ZodEnum<
@@ -5089,7 +5109,9 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: DeploymentDetailResponseDeleteScope$inboundSchema.optional(),
+  deleteScope: z.nullable(
+    z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([

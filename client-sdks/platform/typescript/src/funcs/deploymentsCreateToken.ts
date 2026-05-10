@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+ * Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
  */
 export function deploymentsCreateToken(
   client: AlienCore,

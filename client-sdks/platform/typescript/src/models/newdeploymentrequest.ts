@@ -444,7 +444,7 @@ export type NewDeploymentRequestStackSettings = {
 };
 
 /**
- * Request schema for creating a new agent
+ * Request schema for creating a new deployment
  */
 export type NewDeploymentRequest = {
   /**

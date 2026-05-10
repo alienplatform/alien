@@ -38,6 +38,13 @@ variable "manager_url" {
   default     = ""
 }
 
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{\"network\":{\"type\":\"byo-vpc-gcp\",\"network_name\":\"shared-vpc\",\"subnet_name\":\"workload-us-central1\",\"region\":\"us-central1\"}}"
+  sensitive   = true
+}
+
 variable "gcp_project" {
   type        = string
   description = "GCP project ID."
@@ -71,14 +78,7 @@ locals {
     projectId           = var.gcp_project
     serviceAccountEmail = var.managing_service_account_email
   }
-  deployment_stack_settings = {
-    network = {
-      network_name = "shared-vpc"
-      region       = "us-central1"
-      subnet_name  = "workload-us-central1"
-      type         = "byo-vpc-gcp"
-    }
-  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-network"
@@ -153,6 +153,7 @@ output "deployment_management_config" {
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
+  sensitive   = true
 }
 
 output "deployment_resources" {

@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * List deployment groups with agent counts. Used for filter dropdowns.
+ * List deployment groups with deployment counts. Used for filter dropdowns.
  */
 export function deploymentsListFilterDeploymentGroups(
   client: AlienCore,

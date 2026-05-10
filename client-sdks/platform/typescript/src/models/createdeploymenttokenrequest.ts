@@ -6,11 +6,11 @@ import * as z from "zod/v4";
 
 export type CreateDeploymentTokenRequest = {
   /**
-   * Optional description for the agent token
+   * Optional description for the deployment token
    */
   description: string | null;
   /**
-   * Optional expiration date for the agent token
+   * Optional expiration date for the deployment token
    */
   expiresAt?: Date | undefined;
 };

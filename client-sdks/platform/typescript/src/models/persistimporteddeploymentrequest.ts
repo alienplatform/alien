@@ -348,7 +348,7 @@ export type PersistImportedDeploymentRequestStackSettings = {
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export const PersistImportedDeploymentRequestDeleteScope = {
+export const PersistImportedDeploymentRequestDeleteScopeEnum = {
   Full: "full",
   LiveOnly: "liveOnly",
 } as const;
@@ -362,9 +362,13 @@ export const PersistImportedDeploymentRequestDeleteScope = {
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export type PersistImportedDeploymentRequestDeleteScope = ClosedEnum<
-  typeof PersistImportedDeploymentRequestDeleteScope
+export type PersistImportedDeploymentRequestDeleteScopeEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestDeleteScopeEnum
 >;
+
+export type PersistImportedDeploymentRequestDeleteScopeUnion =
+  | PersistImportedDeploymentRequestDeleteScopeEnum
+  | any;
 
 export const PersistImportedDeploymentRequestManagementEnum = {
   Auto: "auto",
@@ -1463,17 +1467,11 @@ export type PersistImportedDeploymentRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type PersistImportedDeploymentRequestRuntimeMetadata = {
-  /**
-   * Scope for a delete operation.
-   *
-   * @remarks
-   *
-   * Full deletes are setup/admin owned and may remove both Frozen and Live
-   * resources. Live-only deletes are used by setup handoff resources
-   * (Terraform/CloudFormation) so Alien removes only the resources it owns
-   * before setup tears down Frozen resources.
-   */
-  deleteScope?: PersistImportedDeploymentRequestDeleteScope | undefined;
+  deleteScope?:
+    | PersistImportedDeploymentRequestDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2324,10 +2322,36 @@ export function persistImportedDeploymentRequestStackSettingsToJSON(
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestDeleteScope$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestDeleteScope> = z.enum(
-    PersistImportedDeploymentRequestDeleteScope,
+export const PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestDeleteScopeEnum> = z.enum(
+    PersistImportedDeploymentRequestDeleteScopeEnum,
   );
+
+/** @internal */
+export type PersistImportedDeploymentRequestDeleteScopeUnion$Outbound =
+  | string
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDeleteScopeUnion$Outbound,
+    PersistImportedDeploymentRequestDeleteScopeUnion
+  > = z.union([
+    PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestDeleteScopeUnionToJSON(
+  persistImportedDeploymentRequestDeleteScopeUnion:
+    PersistImportedDeploymentRequestDeleteScopeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestDeleteScopeUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const PersistImportedDeploymentRequestManagementEnum$outboundSchema:
@@ -4724,7 +4748,7 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 
 /** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
-  deleteScope?: string | undefined;
+  deleteScope?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
@@ -4740,8 +4764,12 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     PersistImportedDeploymentRequestRuntimeMetadata$Outbound,
     PersistImportedDeploymentRequestRuntimeMetadata
   > = z.object({
-    deleteScope: PersistImportedDeploymentRequestDeleteScope$outboundSchema
-      .optional(),
+    deleteScope: z.nullable(
+      z.union([
+        PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
+        z.any(),
+      ]),
+    ).optional(),
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
     preparedStack: z.nullable(
       z.union([

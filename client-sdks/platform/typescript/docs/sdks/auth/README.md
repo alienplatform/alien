@@ -4,11 +4,11 @@
 
 ### Available Operations
 
-* [whoami](#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+* [whoami](#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
 
 ## whoami
 
-Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
 
 ### Example Usage
 
@@ -66,7 +66,7 @@ run();
 
 ### Response
 
-**Promise\<[models.WhoamiResponse](../../models/whoamiresponse.md)\>**
+**Promise\<[models.Subject](../../models/subject.md)\>**
 
 ### Errors
 

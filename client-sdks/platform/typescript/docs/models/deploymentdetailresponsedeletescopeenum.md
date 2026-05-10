@@ -1,4 +1,4 @@
-# SyncAcquireResponseDeleteScope
+# DeploymentDetailResponseDeleteScopeEnum
 
 Scope for a delete operation.
 
@@ -10,9 +10,9 @@ before setup tears down Frozen resources.
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseDeleteScope } from "@alienplatform/platform-api/models";
+import { DeploymentDetailResponseDeleteScopeEnum } from "@alienplatform/platform-api/models";
 
-let value: SyncAcquireResponseDeleteScope = "liveOnly";
+let value: DeploymentDetailResponseDeleteScopeEnum = "full";
 ```
 
 ## Values

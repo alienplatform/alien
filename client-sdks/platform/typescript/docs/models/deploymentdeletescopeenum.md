@@ -1,4 +1,4 @@
-# PersistImportedDeploymentRequestDeleteScope
+# DeploymentDeleteScopeEnum
 
 Scope for a delete operation.
 
@@ -10,9 +10,9 @@ before setup tears down Frozen resources.
 ## Example Usage
 
 ```typescript
-import { PersistImportedDeploymentRequestDeleteScope } from "@alienplatform/platform-api/models";
+import { DeploymentDeleteScopeEnum } from "@alienplatform/platform-api/models";
 
-let value: PersistImportedDeploymentRequestDeleteScope = "liveOnly";
+let value: DeploymentDeleteScopeEnum = "liveOnly";
 ```
 
 ## Values

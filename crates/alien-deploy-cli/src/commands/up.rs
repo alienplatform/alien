@@ -25,7 +25,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use clap::Parser;
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -91,6 +91,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub data_dir: Option<String>,
 
+    /// JSON file containing StackSettings selected by the deployment page.
+    #[arg(long)]
+    pub stack_settings_file: Option<PathBuf>,
+
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -149,11 +153,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     output::label_value("Name", &name);
     eprintln!();
 
+    let stack_settings = load_stack_settings(&args, platform)?;
+
     // Create authenticated manager client
     let client = create_manager_client(&token, &manager_url)?;
 
     // Initialize with manager
-    let init = initialize_deployment(&client, &token, platform, &name).await?;
+    let init = initialize_deployment(&client, &token, platform, &name, &stack_settings).await?;
     let deployment_id = init.deployment_id;
     output::success("Connected to manager");
 
@@ -322,6 +328,30 @@ fn resolve_deployment_info(
     })
 }
 
+fn load_stack_settings(args: &UpArgs, platform: Platform) -> Result<StackSettings> {
+    if let Some(path) = &args.stack_settings_file {
+        let text = std::fs::read_to_string(path).into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: format!("Failed to read stack settings file {}", path.display()),
+            },
+        )?;
+        return serde_json::from_str(&text).into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: format!("Failed to parse stack settings file {}", path.display()),
+            },
+        );
+    }
+
+    let mut settings = StackSettings::default();
+    settings.deployment_model = match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
+            alien_core::DeploymentModel::Push
+        }
+        Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
+    };
+    Ok(settings)
+}
+
 /// Discover the manager URL via the platform API.
 ///
 /// Calls GET /v1/resolve?platform=X to resolve the manager.
@@ -475,6 +505,7 @@ async fn initialize_deployment(
     _token: &str,
     platform: Platform,
     name: &str,
+    stack_settings: &StackSettings,
 ) -> Result<InitResult> {
     let sdk_platform = match platform {
         Platform::Aws => alien_manager_api::types::Platform::Aws,
@@ -488,6 +519,7 @@ async fn initialize_deployment(
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform),
+        stack_settings: Some(sdk_stack_settings(stack_settings)?),
     };
 
     let response = client
@@ -505,6 +537,21 @@ async fn initialize_deployment(
         deployment_id: init.deployment_id,
         deployment_token: init.token,
     })
+}
+
+fn sdk_stack_settings(
+    stack_settings: &StackSettings,
+) -> Result<alien_manager_api::types::StackSettings> {
+    let value = serde_json::to_value(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize stack settings".to_string(),
+        })?;
+    serde_json::from_value(value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to convert stack settings for manager API".to_string(),
+        })
 }
 
 async fn run_pull_model(

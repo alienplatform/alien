@@ -27,8 +27,8 @@ let value: ListAPIKeysResponse = {
       revokedAt: null,
       createdByUser: {
         id: "<id>",
-        email: "Domenick70@hotmail.com",
-        image: "https://picsum.photos/seed/uBkY5PS5f/1154/1987",
+        email: "Estell68@gmail.com",
+        image: "https://loremflickr.com/3629/3834?lock=7022967937577458",
       },
     },
   ],

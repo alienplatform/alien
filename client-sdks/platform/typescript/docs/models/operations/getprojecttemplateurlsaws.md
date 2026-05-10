@@ -1,6 +1,6 @@
 # GetProjectTemplateUrlsAws
 
-Template URLs for deploying an AWS agent
+Template URLs for deploying an AWS setup stack
 
 ## Example Usage
 

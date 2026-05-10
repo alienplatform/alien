@@ -38,6 +38,13 @@ variable "manager_url" {
   default     = ""
 }
 
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
 variable "azure_location" {
   type        = string
   description = "Azure location."
@@ -109,7 +116,7 @@ locals {
     oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
     oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
   }
-  deployment_stack_settings = {}
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -279,6 +286,7 @@ output "deployment_management_config" {
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
+  sensitive   = true
 }
 
 output "deployment_resources" {
@@ -289,6 +297,7 @@ output "deployment_resources" {
 output "helm_values" {
   value       = jsonencode(local.helm_values)
   description = "Helm values JSON for the manager-fetch Kubernetes install."
+  sensitive   = true
 }
 
 === README.md ===

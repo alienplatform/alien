@@ -3,26 +3,12 @@
  */
 
 import * as z from "zod/v4";
-import { safeParse } from "../../lib/schemas.js";
-import { Result as SafeParseResult } from "../../types/fp.js";
-import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type UpdateUserProfileRequest = {
   /**
    * Display name
    */
   name?: string | undefined;
-};
-
-/**
- * Profile updated.
- */
-export type UpdateUserProfileResponse = {
-  id: string;
-  email: string;
-  name: string;
-  image: string | null;
-  githubUsername: string | null;
 };
 
 /** @internal */
@@ -43,27 +29,5 @@ export function updateUserProfileRequestToJSON(
 ): string {
   return JSON.stringify(
     UpdateUserProfileRequest$outboundSchema.parse(updateUserProfileRequest),
-  );
-}
-
-/** @internal */
-export const UpdateUserProfileResponse$inboundSchema: z.ZodType<
-  UpdateUserProfileResponse,
-  unknown
-> = z.object({
-  id: z.string(),
-  email: z.string(),
-  name: z.string(),
-  image: z.nullable(z.string()),
-  githubUsername: z.nullable(z.string()),
-});
-
-export function updateUserProfileResponseFromJSON(
-  jsonString: string,
-): SafeParseResult<UpdateUserProfileResponse, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => UpdateUserProfileResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'UpdateUserProfileResponse' from JSON`,
   );
 }

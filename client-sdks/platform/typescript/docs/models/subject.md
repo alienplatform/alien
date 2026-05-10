@@ -1,21 +1,19 @@
-# WhoamiResponse
+# Subject
 
-Whoami endpoint response — the authenticated subject plus onboarding flags (user only).
+Authenticated principal that can be either a user (with workspace-scoped permissions) or a service account (with configurable scope and role)
 
 
 ## Supported Types
 
-### `models.WhoamiResponseUser`
+### `models.UserSubject`
 
 ```typescript
-const value: models.WhoamiResponseUser = {
+const value: models.UserSubject = {
   kind: "user",
   id: "<id>",
-  email: "Hector93@hotmail.com",
+  email: "King27@yahoo.com",
   workspaceId: "<id>",
   role: "workspace.member",
-  cliConnected: true,
-  onboardingDismissedAt: new Date("2024-04-20T09:35:24.669Z"),
 };
 ```
 

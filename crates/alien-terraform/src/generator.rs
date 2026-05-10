@@ -235,7 +235,11 @@ pub fn generate_terraform_module(
     );
     files.insert(
         "variables.tf".to_string(),
-        render_body(variables_body(target, &network_vars))?,
+        render_body(variables_body(
+            target,
+            &network_vars,
+            &options.stack_settings,
+        )?)?,
     );
     files.insert(
         "providers.tf".to_string(),
@@ -562,8 +566,19 @@ fn provider_decl_attr(source: &str, version: &str) -> Expression {
     ])
 }
 
-fn variables_body(target: TerraformTarget, network_vars: &NetworkVariables) -> Body {
+fn variables_body(
+    target: TerraformTarget,
+    network_vars: &NetworkVariables,
+    stack_settings: &StackSettings,
+) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
+    let stack_settings_json = serde_json::to_string(stack_settings)
+        .into_alien_error()
+        .map_err(|err| {
+            AlienError::new(ErrorData::JsonSerializationFailed {
+                reason: format!("failed to serialize StackSettings: {err}"),
+            })
+        })?;
     blocks.push(nested(variable_block(
         "stack_name",
         "Stable physical-name prefix for resources created by this module.",
@@ -587,6 +602,12 @@ fn variables_body(target: TerraformTarget, network_vars: &NetworkVariables) -> B
         "Optional manager endpoint used by pull-style runtimes.",
         Some(Expression::String("".to_string())),
         false,
+    )));
+    blocks.push(nested(variable_block(
+        "stack_settings_json",
+        "Optional JSON-encoded StackSettings override supplied by deployment installers.",
+        Some(Expression::String(stack_settings_json)),
+        true,
     )));
 
     if matches!(target.platform(), alien_core::Platform::Aws) {
@@ -706,7 +727,7 @@ fn variables_body(target: TerraformTarget, network_vars: &NetworkVariables) -> B
         )));
     }
 
-    Body::from(blocks)
+    Ok(Body::from(blocks))
 }
 
 fn list_variable_block(name: &str, description: &str, default: Option<Vec<String>>) -> Block {
@@ -806,7 +827,7 @@ fn providers_body(target: TerraformTarget) -> Body {
 
 fn locals_body(
     target: TerraformTarget,
-    stack_settings: &StackSettings,
+    _stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
 ) -> Result<Body> {
@@ -827,7 +848,7 @@ fn locals_body(
     ));
     body.push(attr(
         "deployment_stack_settings",
-        stack_settings_expression(stack_settings)?,
+        expr::raw("jsondecode(var.stack_settings_json)"),
     ));
     body.push(attr(
         "deployment_resources",
@@ -874,10 +895,7 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
     );
     match target.platform() {
         alien_core::Platform::Aws => {
-            object.insert(
-                "managingRoleArn",
-                expr::raw("data.aws_caller_identity.current.arn"),
-            );
+            object.insert("managingRoleArn", expr::raw("var.managing_role_arn"));
         }
         alien_core::Platform::Gcp => {
             object.insert("projectId", expr::raw("var.gcp_project"));
@@ -909,41 +927,6 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
         _ => {}
     }
     expr::object(object.into_iter().map(|(k, v)| (k, v)))
-}
-
-fn stack_settings_expression(settings: &StackSettings) -> Result<Expression> {
-    let value = serde_json::to_value(settings)
-        .into_alien_error()
-        .map_err(|err| {
-            AlienError::new(ErrorData::JsonSerializationFailed {
-                reason: format!("failed to serialize StackSettings: {err}"),
-            })
-        })?;
-    Ok(json_to_expression(&value))
-}
-
-fn json_to_expression(value: &serde_json::Value) -> Expression {
-    match value {
-        serde_json::Value::Null => Expression::Null,
-        serde_json::Value::Bool(b) => Expression::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Expression::Number(hcl::Number::from(i))
-            } else if let Some(f) = n.as_f64() {
-                Expression::Number(hcl::Number::from_f64(f).unwrap_or_else(|| hcl::Number::from(0)))
-            } else {
-                Expression::Null
-            }
-        }
-        serde_json::Value::String(s) => Expression::String(s.clone()),
-        serde_json::Value::Array(items) => {
-            Expression::Array(items.iter().map(json_to_expression).collect())
-        }
-        serde_json::Value::Object(map) => {
-            let pairs = map.iter().map(|(k, v)| (k.as_str(), json_to_expression(v)));
-            expr::object(pairs)
-        }
-    }
 }
 
 fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
@@ -1082,13 +1065,18 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
     let blocks: Vec<Structure> = outputs
         .into_iter()
         .map(|(name, value, description)| {
+            let mut body = vec![
+                attr("value", value),
+                attr("description", Expression::String(description.to_string())),
+            ];
+            if name == "deployment_stack_settings" || name == "helm_values" {
+                body.push(attr("sensitive", Expression::Bool(true)));
+            }
+
             nested(Block {
                 identifier: Identifier::sanitized("output"),
                 labels: vec![BlockLabel::String(name.to_string())],
-                body: Body::from(vec![
-                    attr("value", value),
-                    attr("description", Expression::String(description.to_string())),
-                ]),
+                body: Body::from(body),
             })
         })
         .collect();

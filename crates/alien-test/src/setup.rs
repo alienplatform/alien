@@ -1035,6 +1035,7 @@ async fn build_azure_scoped_config(
         .agent_object_id
         .as_ref()
         .context("AZURE_AGENT_OBJECT_ID is required for scoped Azure agent e2e credentials")?;
+    ensure_distinct_azure_agent_identity(agent_client_id, &target.client_id)?;
 
     let admin_config = build_azure_target_config(config)?
         .azure_config()
@@ -1184,12 +1185,53 @@ async fn build_azure_scoped_config(
     )))
 }
 
+fn ensure_distinct_azure_agent_identity(
+    agent_client_id: &str,
+    target_client_id: &str,
+) -> anyhow::Result<()> {
+    if agent_client_id.eq_ignore_ascii_case(target_client_id) {
+        anyhow::bail!(
+            "AZURE_AGENT_CLIENT_ID must identify a pre-provisioned scoped Azure e2e deployment service principal, not AZURE_TARGET_CLIENT_ID"
+        );
+    }
+
+    Ok(())
+}
+
 fn dedupe_permission_sets(permission_sets: Vec<PermissionSet>) -> Vec<PermissionSet> {
     let mut seen = HashSet::new();
     permission_sets
         .into_iter()
         .filter(|permission_set| seen.insert(permission_set.id.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_distinct_azure_agent_identity;
+
+    #[test]
+    fn rejects_target_credentials_as_azure_agent_identity() {
+        let err = ensure_distinct_azure_agent_identity(
+            "11111111-2222-3333-4444-555555555555",
+            "11111111-2222-3333-4444-555555555555",
+        )
+        .expect_err("matching client IDs must be rejected");
+
+        assert!(
+            err.to_string().contains("not AZURE_TARGET_CLIENT_ID"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn accepts_distinct_azure_agent_identity() {
+        ensure_distinct_azure_agent_identity(
+            "11111111-2222-3333-4444-555555555555",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        )
+        .expect("distinct client IDs should be accepted");
+    }
 }
 
 fn gcp_scoped_account_id(purpose: &str, deployment_name: &str) -> String {

@@ -19,7 +19,7 @@ export type RetryDeploymentRequest = {
 };
 
 /**
- * Agent retry enqueued successfully.
+ * Deployment retry enqueued successfully.
  */
 export type RetryDeploymentResponse = {
   message: string;

@@ -2431,6 +2431,16 @@
                 "$ref": "#/components/schemas/Platform"
               }
             ]
+          },
+          "stackSettings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StackSettings"
+              }
+            ]
           }
         }
       },

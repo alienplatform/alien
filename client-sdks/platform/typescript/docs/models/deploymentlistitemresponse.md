@@ -35,7 +35,7 @@ let value: DeploymentListItemResponse = {
       commitAuthorLogin: "johndoe",
       commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
-    createdAt: new Date("2025-01-26T19:54:46.712Z"),
+    createdAt: new Date("2024-12-03T20:05:51.098Z"),
   },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",

@@ -126,3 +126,24 @@ variable "azure_target_client_secret" {
   sensitive   = true
 }
 
+# Azure - E2E deployment identity
+variable "azure_agent_client_id" {
+  description = "Pre-provisioned Azure e2e deployment service principal client ID"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "azure_agent_client_secret" {
+  description = "Pre-provisioned Azure e2e deployment service principal client secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "azure_agent_object_id" {
+  description = "Pre-provisioned Azure e2e deployment service principal object ID"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

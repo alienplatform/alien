@@ -14,13 +14,6 @@ provider "azuread" {
   client_secret = var.azure_management_client_secret
 }
 
-provider "azuread" {
-  alias         = "target"
-  tenant_id     = var.azure_target_tenant_id
-  client_id     = var.azure_target_client_id
-  client_secret = var.azure_target_client_secret
-}
-
 provider "aws" {
   alias      = "management"
   access_key = var.aws_management_access_key_id

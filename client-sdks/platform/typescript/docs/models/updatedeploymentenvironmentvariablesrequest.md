@@ -1,6 +1,6 @@
 # UpdateDeploymentEnvironmentVariablesRequest
 
-Request schema for updating agent environment variables
+Request schema for updating deployment environment variables
 
 ## Example Usage
 
@@ -22,4 +22,4 @@ let value: UpdateDeploymentEnvironmentVariablesRequest = {
 
 | Field                                                                                                                            | Type                                                                                                                             | Required                                                                                                                         | Description                                                                                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `variables`                                                                                                                      | [models.UpdateDeploymentEnvironmentVariablesRequestVariable](../models/updatedeploymentenvironmentvariablesrequestvariable.md)[] | :heavy_check_mark:                                                                                                               | Environment variables for the agent                                                                                              |
+| `variables`                                                                                                                      | [models.UpdateDeploymentEnvironmentVariablesRequestVariable](../models/updatedeploymentenvironmentvariablesrequestvariable.md)[] | :heavy_check_mark:                                                                                                               | Environment variables for the deployment                                                                                         |

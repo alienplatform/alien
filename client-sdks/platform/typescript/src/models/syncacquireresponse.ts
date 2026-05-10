@@ -1287,7 +1287,7 @@ export type SyncAcquireResponseCurrentPlatform = ClosedEnum<
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export const SyncAcquireResponseDeleteScope = {
+export const SyncAcquireResponseDeleteScopeEnum = {
   Full: "full",
   LiveOnly: "liveOnly",
 } as const;
@@ -1301,9 +1301,13 @@ export const SyncAcquireResponseDeleteScope = {
  * (Terraform/CloudFormation) so Alien removes only the resources it owns
  * before setup tears down Frozen resources.
  */
-export type SyncAcquireResponseDeleteScope = ClosedEnum<
-  typeof SyncAcquireResponseDeleteScope
+export type SyncAcquireResponseDeleteScopeEnum = ClosedEnum<
+  typeof SyncAcquireResponseDeleteScopeEnum
 >;
+
+export type SyncAcquireResponseDeleteScopeUnion =
+  | SyncAcquireResponseDeleteScopeEnum
+  | any;
 
 export const SyncAcquireResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -2402,17 +2406,7 @@ export type SyncAcquireResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncAcquireResponseRuntimeMetadata = {
-  /**
-   * Scope for a delete operation.
-   *
-   * @remarks
-   *
-   * Full deletes are setup/admin owned and may remove both Frozen and Live
-   * resources. Live-only deletes are used by setup handoff resources
-   * (Terraform/CloudFormation) so Alien removes only the resources it owns
-   * before setup tears down Frozen resources.
-   */
-  deleteScope?: SyncAcquireResponseDeleteScope | undefined;
+  deleteScope?: SyncAcquireResponseDeleteScopeEnum | any | null | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -8927,9 +8921,26 @@ export const SyncAcquireResponseCurrentPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncAcquireResponseCurrentPlatform);
 
 /** @internal */
-export const SyncAcquireResponseDeleteScope$inboundSchema: z.ZodEnum<
-  typeof SyncAcquireResponseDeleteScope
-> = z.enum(SyncAcquireResponseDeleteScope);
+export const SyncAcquireResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseDeleteScopeEnum
+> = z.enum(SyncAcquireResponseDeleteScopeEnum);
+
+/** @internal */
+export const SyncAcquireResponseDeleteScopeUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseDeleteScopeUnion,
+  unknown
+> = z.union([SyncAcquireResponseDeleteScopeEnum$inboundSchema, z.any()]);
+
+export function syncAcquireResponseDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDeleteScopeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDeleteScopeUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncAcquireResponsePreparedStackManagementEnum$inboundSchema:
@@ -10989,7 +11000,9 @@ export const SyncAcquireResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncAcquireResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: SyncAcquireResponseDeleteScope$inboundSchema.optional(),
+  deleteScope: z.nullable(
+    z.union([SyncAcquireResponseDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([

@@ -1,4 +1,4 @@
-# DeploymentDeleteScope
+# SyncReconcileResponseDeleteScopeEnum
 
 Scope for a delete operation.
 
@@ -10,9 +10,9 @@ before setup tears down Frozen resources.
 ## Example Usage
 
 ```typescript
-import { DeploymentDeleteScope } from "@alienplatform/platform-api/models";
+import { SyncReconcileResponseDeleteScopeEnum } from "@alienplatform/platform-api/models";
 
-let value: DeploymentDeleteScope = "liveOnly";
+let value: SyncReconcileResponseDeleteScopeEnum = "full";
 ```
 
 ## Values

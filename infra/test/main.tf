@@ -31,7 +31,6 @@ module "azure" {
     azurerm.management = azurerm.management
     azurerm.target     = azurerm.target
     azuread.management = azuread
-    azuread.target     = azuread.target
   }
 
   management_subscription_id = var.azure_management_subscription_id

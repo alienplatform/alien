@@ -39,11 +39,11 @@ export type UpdateDeploymentEnvironmentVariablesRequestVariable = {
 };
 
 /**
- * Request schema for updating agent environment variables
+ * Request schema for updating deployment environment variables
  */
 export type UpdateDeploymentEnvironmentVariablesRequest = {
   /**
-   * Environment variables for the agent
+   * Environment variables for the deployment
    */
   variables: Array<UpdateDeploymentEnvironmentVariablesRequestVariable>;
 };

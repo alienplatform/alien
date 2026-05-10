@@ -2298,6 +2298,10 @@
           "platform": {
             "$ref": "#/components/schemas/Platform",
             "nullable": true
+          },
+          "stackSettings": {
+            "$ref": "#/components/schemas/StackSettings",
+            "nullable": true
           }
         }
       },

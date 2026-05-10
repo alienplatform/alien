@@ -19,7 +19,7 @@ export type GetProjectTemplateUrlsRequest = {
 };
 
 /**
- * Template URLs for deploying an AWS agent
+ * Template URLs for deploying an AWS setup stack
  */
 export type GetProjectTemplateUrlsAws = {
   /**
@@ -37,7 +37,7 @@ export type GetProjectTemplateUrlsAws = {
  */
 export type GetProjectTemplateUrlsResponse = {
   /**
-   * Template URLs for deploying an AWS agent
+   * Template URLs for deploying an AWS setup stack
    */
   aws?: GetProjectTemplateUrlsAws | null | undefined;
 };

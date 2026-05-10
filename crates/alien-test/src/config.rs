@@ -97,7 +97,10 @@ pub struct AzureTestResources {
     /// ACR repository URL for pushing built images,
     /// e.g. `myregistry.azurecr.io/image`
     pub acr_repository: Option<String>,
-    /// Scoped service principal used by Azure e2e deployment tests.
+    /// Pre-provisioned Azure e2e deployment service principal.
+    ///
+    /// This must be distinct from the bootstrap target credentials. Test setup
+    /// grants scoped Alien permissions to this principal before deployment.
     pub agent_client_id: Option<String>,
     pub agent_client_secret: Option<String>,
     pub agent_object_id: Option<String>,

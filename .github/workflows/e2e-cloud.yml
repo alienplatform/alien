@@ -3,48 +3,56 @@ name: E2E Tests
 on:
   workflow_dispatch:
     inputs:
-      run_push:
-        description: "Run native push E2E"
+      run_push_aws_cli:
+        description: "Push / AWS / CLI"
         type: boolean
         default: true
-      run_pull:
-        description: "Run native pull E2E"
+      run_push_gcp_cli:
+        description: "Push / GCP / CLI"
         type: boolean
         default: true
-      run_terraform:
-        description: "Run Terraform distribution E2E"
+      run_push_azure_cli:
+        description: "Push / Azure / CLI"
+        type: boolean
+        default: true
+      run_push_aws_cloudformation:
+        description: "Push / AWS / CloudFormation"
         type: boolean
         default: false
-      run_cloudformation:
-        description: "Run CloudFormation distribution E2E"
+      run_push_aws_terraform:
+        description: "Push / AWS / Terraform"
         type: boolean
         default: false
-      platform_aws:
-        description: "Platform: AWS (aarch64)"
-        type: boolean
-        default: true
-      platform_gcp:
-        description: "Platform: GCP (x86_64)"
-        type: boolean
-        default: true
-      platform_azure:
-        description: "Platform: Azure (x86_64)"
-        type: boolean
-        default: true
-      platform_k8s:
-        description: "Platform: Kubernetes"
-        type: boolean
-        default: true
-      local_linux:
-        description: "Platform: Local / Linux"
-        type: boolean
-        default: true
-      local_macos:
-        description: "Platform: Local / macOS"
+      run_push_gcp_terraform:
+        description: "Push / GCP / Terraform"
         type: boolean
         default: false
-      local_windows:
-        description: "Platform: Local / Windows"
+      run_push_azure_terraform:
+        description: "Push / Azure / Terraform"
+        type: boolean
+        default: false
+      run_kubernetes_aws_terraform_helm:
+        description: "Terraform + Helm Install on Kubernetes / AWS"
+        type: boolean
+        default: false
+      run_kubernetes_gcp_terraform_helm:
+        description: "Terraform + Helm Install on Kubernetes / GCP"
+        type: boolean
+        default: false
+      run_kubernetes_azure_terraform_helm:
+        description: "Terraform + Helm Install on Kubernetes / Azure"
+        type: boolean
+        default: false
+      run_local_linux_agent:
+        description: "Local / Linux / Agent"
+        type: boolean
+        default: true
+      run_local_macos_agent:
+        description: "Local / macOS / Agent"
+        type: boolean
+        default: false
+      run_local_windows_agent:
+        description: "Local / Windows / Agent"
         type: boolean
         default: false
       language:
@@ -89,12 +97,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       push_matrix: ${{ steps.set.outputs.push_matrix }}
-      pull_matrix: ${{ steps.set.outputs.pull_matrix }}
       local_matrix: ${{ steps.set.outputs.local_matrix }}
       terraform_matrix: ${{ steps.set.outputs.terraform_matrix }}
       cloudformation_matrix: ${{ steps.set.outputs.cloudformation_matrix }}
       has_push: ${{ steps.set.outputs.has_push }}
-      has_pull: ${{ steps.set.outputs.has_pull }}
       has_local: ${{ steps.set.outputs.has_local }}
       has_terraform: ${{ steps.set.outputs.has_terraform }}
       has_cloudformation: ${{ steps.set.outputs.has_cloudformation }}
@@ -123,12 +129,10 @@ jobs:
 
           if [ "$SHOULD_RUN" = "false" ]; then
             echo 'push_matrix={"include":[]}' >> $GITHUB_OUTPUT
-            echo 'pull_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo 'local_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo 'terraform_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo 'cloudformation_matrix={"include":[]}' >> $GITHUB_OUTPUT
             echo "has_push=false" >> $GITHUB_OUTPUT
-            echo "has_pull=false" >> $GITHUB_OUTPUT
             echo "has_local=false" >> $GITHUB_OUTPUT
             echo "has_terraform=false" >> $GITHUB_OUTPUT
             echo "has_cloudformation=false" >> $GITHUB_OUTPUT
@@ -140,103 +144,75 @@ jobs:
             exit 0
           fi
 
-          # For workflow_dispatch, read inputs; otherwise enable everything
+          # For workflow_dispatch, use explicit checkboxes for the product
+          # flows.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            AWS="${{ inputs.platform_aws }}"
-            GCP="${{ inputs.platform_gcp }}"
-            AZURE="${{ inputs.platform_azure }}"
-            K8S="${{ inputs.platform_k8s }}"
-            LOCAL_LINUX="${{ inputs.local_linux }}"
-            LOCAL_MACOS="${{ inputs.local_macos }}"
-            LOCAL_WINDOWS="${{ inputs.local_windows }}"
+            PUSH_AWS_CLI="${{ inputs.run_push_aws_cli }}"
+            PUSH_GCP_CLI="${{ inputs.run_push_gcp_cli }}"
+            PUSH_AZURE_CLI="${{ inputs.run_push_azure_cli }}"
+            PUSH_AWS_CLOUDFORMATION="${{ inputs.run_push_aws_cloudformation }}"
+            PUSH_AWS_TERRAFORM="${{ inputs.run_push_aws_terraform }}"
+            PUSH_GCP_TERRAFORM="${{ inputs.run_push_gcp_terraform }}"
+            PUSH_AZURE_TERRAFORM="${{ inputs.run_push_azure_terraform }}"
+            KUBERNETES_AWS_TERRAFORM_HELM="${{ inputs.run_kubernetes_aws_terraform_helm }}"
+            KUBERNETES_GCP_TERRAFORM_HELM="${{ inputs.run_kubernetes_gcp_terraform_helm }}"
+            KUBERNETES_AZURE_TERRAFORM_HELM="${{ inputs.run_kubernetes_azure_terraform_helm }}"
+            LOCAL_LINUX_AGENT="${{ inputs.run_local_linux_agent }}"
+            LOCAL_MACOS_AGENT="${{ inputs.run_local_macos_agent }}"
+            LOCAL_WINDOWS_AGENT="${{ inputs.run_local_windows_agent }}"
             LANG="${{ inputs.language }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
-            PUSH="${{ inputs.run_push }}"
-            PULL="${{ inputs.run_pull }}"
-            TERRAFORM="${{ inputs.run_terraform }}"
-            CLOUDFORMATION="${{ inputs.run_cloudformation }}"
           else
-            AWS=true; GCP=true; AZURE=true; K8S=true
-            LOCAL_LINUX=true; LOCAL_MACOS=true; LOCAL_WINDOWS=true
-            PUSH=true; PULL=true
-            TERRAFORM=false; CLOUDFORMATION=false
-            LANG=All; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
+            PUSH_AWS_CLI=true
+            PUSH_GCP_CLI=false
+            PUSH_AZURE_CLI=false
+            PUSH_AWS_CLOUDFORMATION=false
+            PUSH_AWS_TERRAFORM=false
+            PUSH_GCP_TERRAFORM=false
+            PUSH_AZURE_TERRAFORM=false
+            KUBERNETES_AWS_TERRAFORM_HELM=false
+            KUBERNETES_GCP_TERRAFORM_HELM=false
+            KUBERNETES_AZURE_TERRAFORM_HELM=false
+            LOCAL_LINUX_AGENT=true
+            LOCAL_MACOS_AGENT=false
+            LOCAL_WINDOWS_AGENT=false
+            LANG=Rust; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
           # Build push matrix
           PUSH_ENTRIES='[]'
-          if [ "$PUSH" = "true" ]; then
-            if [ "$AWS" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false}]')
-              fi
+          if [ "$PUSH_AWS_CLI" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false}]')
             fi
-            if [ "$GCP" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false}]')
-              fi
-            fi
-            if [ "$AZURE" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true}]')
-              fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false}]')
             fi
           fi
-
-          # Build pull matrix
-          PULL_ENTRIES='[]'
-          if [ "$PULL" = "true" ]; then
-            if [ "$AWS" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-aws-rust","test_filter":"pull_aws_rust"}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-aws-typescript","test_filter":"pull_aws_typescript"}]')
-              fi
+          if [ "$PUSH_GCP_CLI" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false}]')
             fi
-            if [ "$GCP" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-gcp-rust","test_filter":"pull_gcp_rust"}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-gcp-typescript","test_filter":"pull_gcp_typescript"}]')
-              fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false}]')
             fi
-            if [ "$AZURE" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-azure-rust","test_filter":"pull_azure_rust"}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-azure-typescript","test_filter":"pull_azure_typescript"}]')
-              fi
+          fi
+          if [ "$PUSH_AZURE_CLI" = "true" ]; then
+            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true}]')
             fi
-            if [ "$K8S" = "true" ]; then
-              if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-kubernetes-rust","test_filter":"pull_kubernetes_rust"}]')
-              fi
-              if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-                PULL_ENTRIES=$(echo "$PULL_ENTRIES" | jq -c '. + [{"name":"pull-kubernetes-typescript","test_filter":"pull_kubernetes_typescript"}]')
-              fi
+            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true}]')
             fi
           fi
 
           HAS_PUSH=$([ "$(echo "$PUSH_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
-          HAS_PULL=$([ "$(echo "$PULL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
 
           # Build local matrix (native agent on each OS)
           LOCAL_ENTRIES='[]'
-          if [ "$LOCAL_LINUX" = "true" ]; then
+          if [ "$LOCAL_LINUX_AGENT" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_rust"}]')
             fi
@@ -244,7 +220,7 @@ jobs:
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-typescript","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_typescript"}]')
             fi
           fi
-          if [ "$LOCAL_MACOS" = "true" ]; then
+          if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-rust","os":"depot-macos-latest","test_filter":"pull_local_rust"}]')
             fi
@@ -252,7 +228,7 @@ jobs:
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-typescript","os":"depot-macos-latest","test_filter":"pull_local_typescript"}]')
             fi
           fi
-          if [ "$LOCAL_WINDOWS" = "true" ]; then
+          if [ "$LOCAL_WINDOWS_AGENT" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-rust","os":"depot-windows-2025-8","test_filter":"pull_local_rust"}]')
             fi
@@ -263,37 +239,34 @@ jobs:
 
           HAS_LOCAL=$([ "$(echo "$LOCAL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
 
-          # Build Terraform distribution matrix. Helm is implicit for K8s
-          # targets; it is the runtime installer, not a separate top-level
-          # workflow input.
+          # Build Terraform distribution matrix. Kubernetes entries provision
+          # frozen resources with Terraform and install the agent with Helm.
           TERRAFORM_ENTRIES='[]'
-          if [ "$TERRAFORM" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              if [ "$AWS" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false}]')
-              fi
-              if [ "$GCP" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false}]')
-              fi
-              if [ "$AZURE" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true}]')
-              fi
-              if [ "$K8S" = "true" ] && [ "$AWS" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false}]')
-              fi
-              if [ "$K8S" = "true" ] && [ "$GCP" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false}]')
-              fi
-              if [ "$K8S" = "true" ] && [ "$AZURE" = "true" ]; then
-                TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true}]')
-              fi
+          if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false}]')
+            fi
+            if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false}]')
+            fi
+            if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true}]')
+            fi
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false}]')
+            fi
+            if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false}]')
+            fi
+            if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true}]')
             fi
           fi
 
           # Build CloudFormation distribution matrix. CloudFormation is AWS-only
           # and currently validates the push/import path.
           CLOUDFORMATION_ENTRIES='[]'
-          if [ "$CLOUDFORMATION" = "true" ] && [ "$AWS" = "true" ]; then
+          if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
               CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false}]')
             fi
@@ -303,32 +276,25 @@ jobs:
           HAS_CLOUDFORMATION=$([ "$(echo "$CLOUDFORMATION_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
 
           # Architecture needs: AWS→aarch64, GCP/Azure→x86_64
-          # Pull tests always run on ARM runners, so the agent Docker image
-          # must include an aarch64 binary whenever any pull tests are enabled.
           ANY_TESTS=false
-          if [ "$HAS_PUSH" = "true" ] || [ "$HAS_PULL" = "true" ] || [ "$HAS_TERRAFORM" = "true" ] || [ "$HAS_CLOUDFORMATION" = "true" ]; then ANY_TESTS=true; fi
+          if [ "$HAS_PUSH" = "true" ] || [ "$HAS_TERRAFORM" = "true" ] || [ "$HAS_CLOUDFORMATION" = "true" ]; then ANY_TESTS=true; fi
 
           NEEDS_X86_64=false
           NEEDS_AARCH64=false
           if [ "$ANY_TESTS" = "true" ]; then
-            if [ "$GCP" = "true" ] || [ "$AZURE" = "true" ]; then NEEDS_X86_64=true; fi
-            if [ "$AWS" = "true" ]; then NEEDS_AARCH64=true; fi
+            if [ "$PUSH_GCP_CLI" = "true" ] || [ "$PUSH_AZURE_CLI" = "true" ]; then NEEDS_X86_64=true; fi
+            if [ "$PUSH_AWS_CLI" = "true" ]; then NEEDS_AARCH64=true; fi
           fi
-          # Pull tests run on ARM runners and use the agent Docker image,
-          # so aarch64 is always needed when pull tests are in the matrix.
-          if [ "$HAS_PULL" = "true" ]; then NEEDS_AARCH64=true; fi
           # Distribution tests run on ARM runners. K8s Terraform+Helm tests also
           # consume the agent image, so keep both architectures available.
           if [ "$HAS_TERRAFORM" = "true" ]; then NEEDS_X86_64=true; NEEDS_AARCH64=true; fi
           if [ "$HAS_CLOUDFORMATION" = "true" ]; then NEEDS_AARCH64=true; fi
 
           echo "push_matrix=$(echo "$PUSH_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
-          echo "pull_matrix=$(echo "$PULL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "local_matrix=$(echo "$LOCAL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "terraform_matrix=$(echo "$TERRAFORM_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "cloudformation_matrix=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "has_push=$HAS_PUSH" >> $GITHUB_OUTPUT
-          echo "has_pull=$HAS_PULL" >> $GITHUB_OUTPUT
           echo "has_local=$HAS_LOCAL" >> $GITHUB_OUTPUT
           echo "has_terraform=$HAS_TERRAFORM" >> $GITHUB_OUTPUT
           echo "has_cloudformation=$HAS_CLOUDFORMATION" >> $GITHUB_OUTPUT
@@ -548,7 +514,6 @@ jobs:
     needs: [compute-matrix]
     if: |
       needs.compute-matrix.outputs.has_push == 'true' ||
-      needs.compute-matrix.outputs.has_pull == 'true' ||
       needs.compute-matrix.outputs.has_local == 'true' ||
       needs.compute-matrix.outputs.has_terraform == 'true' ||
       needs.compute-matrix.outputs.has_cloudformation == 'true'
@@ -598,6 +563,9 @@ jobs:
           TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+          TF_VAR_azure_agent_client_id: ${{ secrets.TEST_AZURE_AGENT_CLIENT_ID }}
+          TF_VAR_azure_agent_client_secret: ${{ secrets.TEST_AZURE_AGENT_CLIENT_SECRET }}
+          TF_VAR_azure_agent_object_id: ${{ secrets.TEST_AZURE_AGENT_OBJECT_ID }}
 
       - name: Set up Azure OIDC token
         run: |
@@ -745,95 +713,6 @@ jobs:
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
-
-  # ── E2E pull test matrix ───────────────────────────────────────────
-
-  pull-test:
-    needs: [compute-matrix, setup, build-base-image, build-agent-image]
-    if: |
-      !cancelled() && !failure() &&
-      needs.compute-matrix.outputs.has_pull == 'true'
-    # See `push-test` for why this environment is declared.
-    environment: e2e-tests
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.compute-matrix.outputs.pull_matrix) }}
-    runs-on: depot-ubuntu-24.04-arm-8
-    timeout-minutes: 60
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure git credentials
-        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Download .env.test
-        uses: actions/download-artifact@v4
-        with:
-          name: env-test-e2e
-
-      - uses: docker/login-action@v3
-        if: needs.compute-matrix.outputs.build_images == 'true'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull agent image
-        if: needs.compute-matrix.outputs.build_images == 'true'
-        run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
-
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: depot/setup-action@v1
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: taiki-e/install-action@cargo-nextest
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.11.0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-
-      - name: Mask sensitive values from .env.test
-        run: |
-          while IFS= read -r line; do
-            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-            val="${line#*=}"
-            val="${val#\'}" && val="${val%\'}"
-            val="${val#\"}" && val="${val%\"}"
-            [ -n "$val" ] && echo "::add-mask::$val"
-          done < .env.test
-
-      - name: Run E2E pull test
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
-          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
-        run: |
-          set -a && source .env.test && set +a
-          depot cargo nextest run -p alien-test --test pull ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E CloudFormation distribution matrix ─────────────────────────
 
@@ -1192,7 +1071,7 @@ jobs:
   # orphaned cloud resources in the dedicated test target accounts.
 
   cleanup:
-    needs: [compute-matrix, push-test, pull-test, cloudformation-test, terraform-test, local-test]
+    needs: [compute-matrix, push-test, cloudformation-test, terraform-test, local-test]
     if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30

@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Delete a project. The project must have no agents.
+ * Delete a project. The project must have no deployments.
  */
 export function projectsDelete(
   client: AlienCore,

@@ -59,7 +59,7 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Delete a project. The project must have no agents.
+   * Delete a project. The project must have no deployments.
    */
   async delete(
     request: operations.DeleteProjectRequest,
@@ -101,7 +101,7 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Get template URLs for deploying agents in this project.
+   * Get template URLs for deploying setup stacks in this project.
    */
   async getTemplateUrls(
     request: operations.GetProjectTemplateUrlsRequest,

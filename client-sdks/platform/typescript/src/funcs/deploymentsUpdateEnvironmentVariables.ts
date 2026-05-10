@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
+ * Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
  */
 export function deploymentsUpdateEnvironmentVariables(
   client: AlienCore,

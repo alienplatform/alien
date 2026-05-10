@@ -42,6 +42,13 @@ variable "manager_url" {
   default     = ""
 }
 
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.44.0.0/16\",\"availability_zones\":1},\"updates\":\"approval-required\"}"
+  sensitive   = true
+}
+
 variable "gcp_project" {
   type        = string
   description = "GCP project ID."
@@ -75,14 +82,7 @@ locals {
     projectId           = var.gcp_project
     serviceAccountEmail = var.managing_service_account_email
   }
-  deployment_stack_settings = {
-    network = {
-      availability_zones = 1
-      cidr               = "10.44.0.0/16"
-      type               = "create"
-    }
-    updates = "approval-required"
-  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-network"
@@ -676,6 +676,7 @@ output "deployment_management_config" {
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_stack_settings)
   description = "Manager import StackSettings JSON."
+  sensitive   = true
 }
 
 output "deployment_resources" {

@@ -5,19 +5,19 @@
 ### Available Operations
 
 * [list](#list) - Retrieve all deployments.
-* [create](#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+* [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 * [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
-* [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
-* [get](#get) - Retrieve an agent by ID.
+* [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
+* [get](#get) - Retrieve a deployment by ID.
 * [delete](#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
-* [redeploy](#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+* [redeploy](#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
-* [retry](#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
-* [updateEnvironmentVariables](#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
-* [createToken](#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+* [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+* [updateEnvironmentVariables](#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+* [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ## list
 
@@ -97,7 +97,7 @@ run();
 
 ## create
 
-Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 
 ### Example Usage
 
@@ -338,7 +338,7 @@ run();
 
 ## listFilterDeploymentGroups
 
-List deployment groups with agent counts. Used for filter dropdowns.
+List deployment groups with deployment counts. Used for filter dropdowns.
 
 ### Example Usage
 
@@ -414,7 +414,7 @@ run();
 
 ## get
 
-Retrieve an agent by ID.
+Retrieve a deployment by ID.
 
 ### Example Usage
 
@@ -774,7 +774,7 @@ run();
 
 ## redeploy
 
-Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 
 ### Example Usage
 
@@ -934,7 +934,7 @@ run();
 
 ## retry
 
-Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 
 ### Example Usage
 
@@ -1011,7 +1011,7 @@ run();
 
 ## updateEnvironmentVariables
 
-Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
+Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 
 ### Example Usage
 
@@ -1088,7 +1088,7 @@ run();
 
 ## createToken
 
-Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ### Example Usage
 

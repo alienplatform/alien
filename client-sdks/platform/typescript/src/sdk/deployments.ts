@@ -37,7 +37,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+   * Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
    */
   async create(
     request?: operations.CreateDeploymentRequest | undefined,
@@ -79,7 +79,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * List deployment groups with agent counts. Used for filter dropdowns.
+   * List deployment groups with deployment counts. Used for filter dropdowns.
    */
   async listFilterDeploymentGroups(
     request?:
@@ -95,7 +95,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Retrieve an agent by ID.
+   * Retrieve a deployment by ID.
    */
   async get(
     request: operations.GetDeploymentRequest,
@@ -151,7 +151,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+   * Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
    */
   async redeploy(
     request: operations.RedeployDeploymentRequest,
@@ -179,7 +179,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+   * Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
    */
   async retry(
     request: operations.RetryDeploymentRequest,
@@ -193,7 +193,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
+   * Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
    */
   async updateEnvironmentVariables(
     request: operations.UpdateDeploymentEnvironmentVariablesRequest,
@@ -207,7 +207,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+   * Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
    */
   async createToken(
     request: operations.CreateDeploymentTokenRequest,
