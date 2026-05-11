@@ -169,6 +169,8 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
     if push {
         for action in [
             "ecr:CompleteLayerUpload",
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
             "ecr:UploadLayerPart",

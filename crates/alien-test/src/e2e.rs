@@ -811,14 +811,14 @@ pub async fn deploy_test_app(
 }
 
 // ---------------------------------------------------------------------------
-// Developer + customer flow (mirrors real alien-deploy up)
+// Developer + customer flow (mirrors real alien-deploy deploy)
 // ---------------------------------------------------------------------------
 
 /// Result of the developer-side setup.
 pub struct DeveloperSetupResult {
     /// Deployment group ID.
     pub group_id: String,
-    /// Deployment group token (the token the customer uses with `alien-deploy up`).
+    /// Deployment group token (the token the customer uses with `alien-deploy deploy`).
     pub dg_token: String,
 }
 
@@ -827,7 +827,7 @@ pub struct DeveloperSetupResult {
 /// This mirrors what the developer does before handing off to a customer:
 /// `alien build` → `alien release` → `alien onboard` (creates DG + token).
 ///
-/// The customer then uses the DG token with `alien-deploy up`.
+/// The customer then uses the DG token with `alien-deploy deploy`.
 pub async fn developer_setup(
     manager: &Arc<TestManager>,
     platform: Platform,
@@ -1026,9 +1026,9 @@ fn workspace_root() -> Option<std::path::PathBuf> {
     })
 }
 
-/// Run `alien-deploy up` as the customer would, then discover the deployment ID.
+/// Run `alien-deploy deploy` as the customer would, then discover the deployment ID.
 ///
-/// This is the real customer flow: `alien-deploy up --token <dg_token> --platform <platform>`.
+/// This is the real customer flow: `alien-deploy deploy --token <dg_token> --platform <platform>`.
 /// For push model, it reads cloud credentials from the environment.
 /// For local pull, it installs alien-agent as an OS service.
 pub async fn run_alien_deploy_up(
@@ -1061,7 +1061,7 @@ pub async fn run_alien_deploy_up(
     } else {
         tokio::process::Command::new(&deploy_binary)
     };
-    cmd.arg("up")
+    cmd.arg("deploy")
         .arg("--token")
         .arg(dg_token)
         .arg("--manager-url")
@@ -1105,7 +1105,7 @@ pub async fn run_alien_deploy_up(
         platform = %platform.as_str(),
         manager_url = %manager.url,
         foreground = %foreground,
-        "Running alien-deploy up"
+        "Running alien-deploy deploy"
     );
 
     // In foreground mode, the agent runs as a child process that never exits.
@@ -1114,9 +1114,9 @@ pub async fn run_alien_deploy_up(
     let _foreground_child = if foreground {
         let mut child = cmd
             .spawn()
-            .context("Failed to spawn alien-deploy up in foreground mode")?;
+            .context("Failed to spawn alien-deploy deploy in foreground mode")?;
 
-        // Wait for the deployment to be created. alien-deploy up initializes
+        // Wait for the deployment to be created. alien-deploy deploy initializes
         // with the manager first (creates the deployment record), then starts
         // the agent loop. Poll the manager until the deployment appears.
         let max_wait = std::time::Duration::from_secs(60);
@@ -1127,7 +1127,7 @@ pub async fn run_alien_deploy_up(
             // Check if the process died early (error in initialization)
             if let Some(status) = child.try_wait()? {
                 anyhow::bail!(
-                    "alien-deploy up exited early ({}). Check test output above for agent logs.",
+                    "alien-deploy deploy exited early ({}). Check test output above for agent logs.",
                     status,
                 );
             }
@@ -1154,25 +1154,25 @@ pub async fn run_alien_deploy_up(
 
         Some(child)
     } else {
-        // Service mode: alien-deploy up installs the service and exits.
+        // Service mode: alien-deploy deploy installs the service and exits.
         let output = cmd
             .output()
             .await
-            .context("Failed to execute alien-deploy up")?;
+            .context("Failed to execute alien-deploy deploy")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if !stdout.is_empty() {
-            info!("alien-deploy up stdout:\n{}", stdout);
+            info!("alien-deploy deploy stdout:\n{}", stdout);
         }
         if !stderr.is_empty() {
-            info!("alien-deploy up stderr:\n{}", stderr);
+            info!("alien-deploy deploy stderr:\n{}", stderr);
         }
 
         if !output.status.success() {
             anyhow::bail!(
-                "alien-deploy up failed (exit {})\nstdout:\n{}\nstderr:\n{}",
+                "alien-deploy deploy failed (exit {})\nstdout:\n{}\nstderr:\n{}",
                 output.status,
                 stdout,
                 stderr,
@@ -1195,15 +1195,15 @@ pub async fn run_alien_deploy_up(
     let dep = deployments
         .items
         .first()
-        .context("No deployment found in group after alien-deploy up")?;
+        .context("No deployment found in group after alien-deploy deploy")?;
 
     let deployment_id = dep.id.clone();
     let deployment_name = dep.name.clone();
-    info!(%deployment_id, %deployment_name, "Discovered deployment created by alien-deploy up");
+    info!(%deployment_id, %deployment_name, "Discovered deployment created by alien-deploy deploy");
 
     // The deployment token was created during deployment creation and is stored
     // on the record. Create a fresh one for test usage since we can't access
-    // the original (it was returned to alien-deploy up).
+    // the original (it was returned to alien-deploy deploy).
     let dep_token = manager
         .create_deployment_token(group_id, &deployment_id)
         .await
@@ -1378,31 +1378,31 @@ pub async fn setup(
 
     // ── Route to the correct flow based on platform + model ─────────
     //
-    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy up` flow.
+    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy deploy` flow.
     //   Developer role: build, push, release, create DG + token.
-    //   Customer role: `alien-deploy up --token <dg_token> --platform <platform>`.
+    //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
     //
     // K8s pull uses the direct Terraform+Helm flow.
 
-    // Only local pull uses `alien-deploy up` for now.
-    // Push model has an auth issue: alien-deploy up uses the DG token for
+    // Only local pull uses `alien-deploy deploy` for now.
+    // Push model has an auth issue: alien-deploy deploy uses the DG token for
     // sync/acquire, but the manager only accepts admin/deployment tokens there.
     // TODO: fix alien-deploy-cli to re-create client with deployment token
     // after initialize, then enable push model here too.
     let uses_alien_deploy_up = model == DeploymentModel::Pull && platform == Platform::Local;
 
     let (mut deployment, agent) = if uses_alien_deploy_up {
-        // ── alien-deploy up flow (local pull) ─────────────────────────
+        // ── alien-deploy deploy flow (local pull) ─────────────────────────
         //
         // Developer side: build, push, release, create DG + DG token.
         let dev = developer_setup(&manager, platform, language).await?;
 
-        // Customer side: alien-deploy up installs alien-agent as OS service.
+        // Customer side: alien-deploy deploy installs alien-agent as OS service.
         let deployment =
             run_alien_deploy_up(&manager, &dev.dg_token, platform, &dev.group_id).await?;
         info!(
             deployment_id = %deployment.id,
-            "Deployment created via alien-deploy up"
+            "Deployment created via alien-deploy deploy"
         );
 
         // Track agent for cleanup. In foreground mode the agent runs as a
@@ -1424,7 +1424,7 @@ pub async fn setup(
         // ── Direct flow (push + K8s pull) ───────────────────────────
         //
         // Push model: test harness calls push_initial_setup() directly
-        // with the admin token (alien-deploy up auth not yet supported).
+        // with the admin token (alien-deploy deploy auth not yet supported).
         //
         // K8s pull: helm install alien-agent chart.
         if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
@@ -1484,7 +1484,7 @@ pub async fn setup(
     let agent_container_id = agent.as_ref().and_then(|a| a.container_id.clone());
 
     // Wait for the deployment to be running (populates URL).
-    // For push: the manager's deployment loop drives this after alien-deploy up completes.
+    // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
     // For pull: the alien-agent drives this via sync + deployment loop.
     let wait_result = deployment
         .wait_until_running(Duration::from_secs(600))

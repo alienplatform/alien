@@ -14,7 +14,7 @@ pub async fn list_command(_args: ListArgs) -> Result<()> {
     let deployments = tracker.list();
 
     if deployments.is_empty() {
-        output::info("No tracked deployments. Use 'alien-deploy up' to create one.");
+        output::info("No tracked deployments. Use 'alien-deploy deploy' to create one.");
         return Ok(());
     }
 

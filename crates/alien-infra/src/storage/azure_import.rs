@@ -120,7 +120,7 @@ impl ResourceImporter for AzureContainerAppsEnvironmentImporter {
         let controller = AzureContainerAppsEnvironmentController {
             state: AzureContainerAppsEnvironmentState::Ready,
             environment_name: Some(data.environment_name),
-            resource_id: None,
+            resource_id: Some(data.resource_id),
             resource_group_name: Some(data.resource_group),
             default_domain: Some(data.default_domain),
             static_ip: None,

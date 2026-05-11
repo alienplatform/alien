@@ -257,7 +257,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         "  curl -fsSL {}/install | bash",
         mgr.manager_url.trim_end_matches('/')
     );
-    println!("  alien-deploy up \\");
+    println!("  alien-deploy deploy \\");
     println!("    --token {} \\", token_response.token);
     println!("    --name <deployment-name> \\");
     println!("    --platform <aws|gcp|azure> \\");

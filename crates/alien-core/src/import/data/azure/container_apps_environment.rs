@@ -13,6 +13,8 @@ pub struct AzureContainerAppsEnvironmentImportData {
     pub resource_group: String,
     /// Container Apps Environment name.
     pub environment_name: String,
+    /// ARM resource ID of the Container Apps Environment.
+    pub resource_id: String,
     /// Default domain (`<env>.<region>.azurecontainerapps.io`).
     pub default_domain: String,
 }

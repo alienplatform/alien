@@ -102,7 +102,7 @@ pub struct TestAlienAgent {
     pub encryption_key_file: Option<tempfile::NamedTempFile>,
     /// The platform this agent targets.
     pub platform: Platform,
-    /// Whether the agent was installed as an OS service via `alien-deploy up`.
+    /// Whether the agent was installed as an OS service via `alien-deploy deploy`.
     pub installed_as_service: bool,
     /// Path to the alien-deploy binary (for service uninstall during cleanup).
     pub deploy_binary: Option<std::path::PathBuf>,
@@ -447,7 +447,7 @@ impl TestAlienAgent {
 }
 
 impl TestAlienAgent {
-    /// Create a `TestAlienAgent` representing an OS service installed by `alien-deploy up`.
+    /// Create a `TestAlienAgent` representing an OS service installed by `alien-deploy deploy`.
     pub fn from_service(deploy_binary: Option<std::path::PathBuf>) -> Self {
         Self {
             container_id: None,

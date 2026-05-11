@@ -192,7 +192,7 @@ mod tests {
             .track(
                 "prod".to_string(),
                 "dep_123".to_string(),
-                "tok_abc".to_string(),
+                "ax_dg_abc".to_string(),
                 "https://manager.example.com".to_string(),
                 "aws".to_string(),
             )
@@ -200,7 +200,7 @@ mod tests {
 
         let dep = tracker.get("prod").unwrap();
         assert_eq!(dep.deployment_id, "dep_123");
-        assert_eq!(dep.token, "tok_abc");
+        assert_eq!(dep.token, "ax_dg_abc");
         assert_eq!(dep.manager_url, "https://manager.example.com");
         assert_eq!(dep.platform, "aws");
 
@@ -217,7 +217,7 @@ mod tests {
                 .track(
                     "staging".to_string(),
                     "dep_456".to_string(),
-                    "tok_def".to_string(),
+                    "ax_dg_def".to_string(),
                     "https://manager.test.com".to_string(),
                     "local".to_string(),
                 )
@@ -324,7 +324,7 @@ mod tests {
         let dep = TrackedDeployment {
             name: "test".to_string(),
             deployment_id: "dep_123".to_string(),
-            token: "tok_abc".to_string(),
+            token: "ax_dg_abc".to_string(),
             manager_url: "https://example.com".to_string(),
             platform: "aws".to_string(),
             tracked_at: "2025-01-01T00:00:00Z".to_string(),

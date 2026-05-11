@@ -36,6 +36,7 @@ aws-sdk-cloudformation = { version = "1", default-features = false, features = [
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 # CLI & Logging
 clap = { workspace = true, features = ["derive", "env"] }

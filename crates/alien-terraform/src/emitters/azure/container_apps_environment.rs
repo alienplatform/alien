@@ -95,6 +95,10 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 expr::traversal(["azurerm_container_app_environment", label, "name"]),
             ),
             (
+                "resourceId",
+                expr::traversal(["azurerm_container_app_environment", label, "id"]),
+            ),
+            (
                 "defaultDomain",
                 expr::traversal(["azurerm_container_app_environment", label, "default_domain"]),
             ),

@@ -30,14 +30,14 @@ set -a && source .env.test && set +a
 Tests use `TestContext` with two roles:
 
 1. **Developer** — Manager startup, build, release creation, deployment group + token
-2. **Customer** — `alien-deploy up`, wait for running, run binding/command checks
+2. **Customer** — `alien-deploy deploy`, wait for running, run binding/command checks
 
 | Platform | Model | Flow |
 |---|---|---|
-| AWS/GCP/Azure | Push | `alien-deploy up --platform <cloud>` |
+| AWS/GCP/Azure | Push | `alien-deploy deploy --platform <cloud>` |
 | AWS/GCP/Azure | Pull | Docker alien-agent container |
 | K8s | Pull | `helm install` |
-| Local | Pull | `alien-deploy up --platform local` |
+| Local | Pull | `alien-deploy deploy --platform local` |
 
 ## Core Principle
 

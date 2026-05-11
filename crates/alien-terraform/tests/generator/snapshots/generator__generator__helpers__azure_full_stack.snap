@@ -143,6 +143,7 @@ locals {
         subscriptionId  = var.azure_subscription_id
         resourceGroup   = var.azure_resource_group_name
         environmentName = azurerm_container_app_environment.default_container_apps_environment.name
+        resourceId      = azurerm_container_app_environment.default_container_apps_environment.id
         defaultDomain   = azurerm_container_app_environment.default_container_apps_environment.default_domain
       }
     },

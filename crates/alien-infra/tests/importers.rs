@@ -22,19 +22,19 @@
 use alien_core::import::{
     data::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
-        AwsStorageImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
-        AzureStorageImportData, GcpKvImportData, GcpServiceActivationImportData,
-        GcpStorageImportData,
+        AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
+        AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureStorageImportData,
+        GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
     },
     ImportContext,
 };
 use alien_core::{
-    ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment, AzureManagementConfig,
-    AzureResourceGroup, AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
-    Build, Function, GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue,
-    RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceDefinition,
-    ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType, ServiceAccount,
-    ServiceActivation, StackSettings, Storage, Vault,
+    ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
+    AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
+    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build, Function,
+    GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
+    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -329,6 +329,38 @@ fn azure_resource_group_round_trip() {
         "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien"
     );
     assert_eq!(outputs.location, "eastus");
+}
+
+#[test]
+fn azure_container_apps_environment_round_trip_includes_dependency_outputs() {
+    let entry =
+        entry(AzureContainerAppsEnvironment::new("default-container-env".to_string()).build());
+    let data = AzureContainerAppsEnvironmentImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        environment_name: "alien-env".to_string(),
+        resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.App/managedEnvironments/alien-env".to_string(),
+        default_domain: "alien-env.example.azurecontainerapps.io".to_string(),
+    };
+    let state = run_through_registry(
+        &AzureContainerAppsEnvironment::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AzureContainerAppsEnvironmentOutputs>())
+        .expect("imported Azure Container Apps Environment must expose dependency outputs");
+    assert_eq!(outputs.environment_name, data.environment_name);
+    assert_eq!(outputs.resource_id, data.resource_id);
+    assert_eq!(outputs.resource_group_name, data.resource_group);
+    assert_eq!(outputs.default_domain, data.default_domain);
 }
 
 #[test]

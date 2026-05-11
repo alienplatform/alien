@@ -1209,12 +1209,6 @@ fn terraform_tfvars(
                 "gcp_region".to_string(),
                 Value::String(target.region.clone()),
             );
-            // CI projects pre-create canonical permission-set roles to avoid
-            // exhausting GCP's project custom-role quota during repeated runs.
-            vars.insert(
-                "gcp_use_existing_custom_roles".to_string(),
-                Value::Bool(true),
-            );
             if let Some(email) = prepared
                 .config
                 .gcp_mgmt

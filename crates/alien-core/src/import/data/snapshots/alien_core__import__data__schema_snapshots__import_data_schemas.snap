@@ -531,6 +531,10 @@ expression: schemas
         "description": "Resource group hosting the environment.",
         "type": "string"
       },
+      "resourceId": {
+        "description": "ARM resource ID of the Container Apps Environment.",
+        "type": "string"
+      },
       "subscriptionId": {
         "description": "Subscription ID hosting the environment.",
         "type": "string"
@@ -540,6 +544,7 @@ expression: schemas
       "defaultDomain",
       "environmentName",
       "resourceGroup",
+      "resourceId",
       "subscriptionId"
     ],
     "title": "AzureContainerAppsEnvironmentImportData",

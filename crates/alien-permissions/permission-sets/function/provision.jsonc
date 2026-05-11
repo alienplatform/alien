@@ -456,7 +456,15 @@
             "Microsoft.App/managedEnvironments/daprComponents/read",
             "Microsoft.App/managedEnvironments/read",
             "Microsoft.App/managedEnvironments/join/action",
-            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete"
           ],
           "dataActions": []
         },

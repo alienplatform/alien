@@ -172,6 +172,8 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
     if push {
         repository_actions.extend([
             "ecr:CompleteLayerUpload",
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
             "ecr:UploadLayerPart",

@@ -35,9 +35,9 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Deploy the application to a target environment
-    Up(UpArgs),
+    Deploy(UpArgs),
     /// Destroy a deployment and its resources
-    Down(DownArgs),
+    Destroy(DownArgs),
     /// Show deployment status
     Status(StatusArgs),
     /// List tracked deployments
@@ -70,8 +70,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     setup_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Up(args) => up_command(args, embedded_config.as_ref()).await,
-        Commands::Down(args) => down_command(args).await,
+        Commands::Deploy(args) => up_command(args, embedded_config.as_ref()).await,
+        Commands::Destroy(args) => down_command(args, embedded_config.as_ref()).await,
         Commands::Status(args) => status_command(args).await,
         Commands::List(args) => list_command(args).await,
         Commands::Agent(args) => agent_command(args).await,
@@ -88,7 +88,7 @@ mod tests {
     fn test_parse_up_command() {
         let cli = Cli::try_parse_from([
             "alien-deploy",
-            "up",
+            "deploy",
             "--token",
             "dg_abc123",
             "--platform",
@@ -99,7 +99,7 @@ mod tests {
         .unwrap();
 
         assert!(!cli.verbose);
-        assert!(matches!(cli.command, Commands::Up(_)));
+        assert!(matches!(cli.command, Commands::Deploy(_)));
     }
 
     #[test]
@@ -118,7 +118,7 @@ mod tests {
             "--sync-url",
             "https://manager.example.com",
             "--sync-token",
-            "tok_abc",
+            "ax_dg_abc",
             "--platform",
             "local",
         ])
@@ -135,8 +135,8 @@ mod tests {
 
     #[test]
     fn test_parse_down_command() {
-        let cli = Cli::try_parse_from(["alien-deploy", "down", "--name", "prod"]).unwrap();
-        assert!(matches!(cli.command, Commands::Down(_)));
+        let cli = Cli::try_parse_from(["alien-deploy", "destroy", "--name", "prod"]).unwrap();
+        assert!(matches!(cli.command, Commands::Destroy(_)));
     }
 
     #[test]
