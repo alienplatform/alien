@@ -127,10 +127,10 @@ resource "aws_s3_bucket" "data" {
   bucket        = "${var.stack_name}-data"
   force_destroy = false
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "data"
-    AlienResourceType = "storage"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "data"
+    AlienResourceType      = "storage"
   }
 }
 
@@ -170,10 +170,10 @@ resource "aws_iam_role" "execution_sa" {
   name               = "${var.stack_name}-execution-sa"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "ec2.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "execution-sa"
-    AlienResourceType = "service-account"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "execution-sa"
+    AlienResourceType      = "service-account"
   }
 }
 

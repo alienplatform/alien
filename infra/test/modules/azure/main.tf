@@ -148,9 +148,8 @@ resource "azuread_application_password" "manager" {
   display_name   = "alien-test"
 }
 
-# Azure e2e deployment identities are pre-provisioned outside this Terraform
-# workspace and passed in as root variables. Drop historical managed agent
-# identities from state without requiring directory delete privileges.
+# Drop historical managed cloud-pull identities from state without requiring
+# directory delete privileges. The current e2e flows do not use these resources.
 removed {
   from = azuread_application.agent
 

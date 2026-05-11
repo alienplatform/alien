@@ -96,6 +96,7 @@ async function $do(
   const path = pathToFunc("/v1/managers/{id}/management-config")(pathParams);
 
   const query = encodeFormQuery({
+    "platform": payload.platform,
     "workspace": payload.workspace,
   });
 

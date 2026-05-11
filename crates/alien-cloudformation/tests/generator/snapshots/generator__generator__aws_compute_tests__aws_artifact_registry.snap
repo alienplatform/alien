@@ -119,11 +119,12 @@ Resources:
               action:
                 type: expire
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: acme-ecr
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry
@@ -165,11 +166,12 @@ Resources:
               - RegistryRepository
               - Arn
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: acme-ecr
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry
@@ -215,11 +217,12 @@ Resources:
               - RegistryRepository
               - Arn
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: acme-ecr
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry

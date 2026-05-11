@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ManagerManagementConfigs,
+  ManagerManagementConfigs$inboundSchema,
+} from "./managermanagementconfigs.js";
 import { ManagerStatus, ManagerStatus$inboundSchema } from "./managerstatus.js";
 
 /**
@@ -24,87 +28,6 @@ export const ManagerTarget = {
  * Represents the target cloud platform.
  */
 export type ManagerTarget = ClosedEnum<typeof ManagerTarget>;
-
-export const ManagerPlatformKubernetes = {
-  Kubernetes: "kubernetes",
-} as const;
-export type ManagerPlatformKubernetes = ClosedEnum<
-  typeof ManagerPlatformKubernetes
->;
-
-export type ManagerManagementConfigKubernetes = {
-  platform: ManagerPlatformKubernetes;
-};
-
-export const ManagerPlatformAzure = {
-  Azure: "azure",
-} as const;
-export type ManagerPlatformAzure = ClosedEnum<typeof ManagerPlatformAzure>;
-
-/**
- * Azure management configuration extracted from stack settings
- */
-export type ManagerManagementConfigAzure = {
-  /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
-   * The managing Azure Tenant ID for cross-tenant access
-   */
-  managingTenantId: string;
-  /**
-   * OIDC issuer URL for federated identity credential creation
-   */
-  oidcIssuer?: string | null | undefined;
-  /**
-   * OIDC subject claim for federated identity credential creation
-   */
-  oidcSubject?: string | null | undefined;
-  platform: ManagerPlatformAzure;
-};
-
-export const ManagerPlatformGcp = {
-  Gcp: "gcp",
-} as const;
-export type ManagerPlatformGcp = ClosedEnum<typeof ManagerPlatformGcp>;
-
-/**
- * GCP management configuration extracted from stack settings
- */
-export type ManagerManagementConfigGcp = {
-  /**
-   * Service account email for management roles
-   */
-  serviceAccountEmail: string;
-  platform: ManagerPlatformGcp;
-};
-
-export const ManagerPlatformAws = {
-  Aws: "aws",
-} as const;
-export type ManagerPlatformAws = ClosedEnum<typeof ManagerPlatformAws>;
-
-/**
- * AWS management configuration extracted from stack settings
- */
-export type ManagerManagementConfigAws = {
-  /**
-   * The managing AWS IAM role ARN that can assume cross-account roles
-   */
-  managingRoleArn: string;
-  platform: ManagerPlatformAws;
-};
-
-/**
- * Management configuration for cross-account access (self-reported via heartbeat)
- */
-export type ManagerManagementConfigUnion =
-  | ManagerManagementConfigAws
-  | ManagerManagementConfigGcp
-  | ManagerManagementConfigAzure
-  | ManagerManagementConfigKubernetes
-  | any;
 
 /**
  * Runtime metrics (self-reported via heartbeat)
@@ -146,16 +69,9 @@ export type Manager = {
    */
   url?: string | null | undefined;
   /**
-   * Management configuration for cross-account access (self-reported via heartbeat)
+   * Per-platform management configurations for cross-account access (self-reported via heartbeat)
    */
-  managementConfig?:
-    | ManagerManagementConfigAws
-    | ManagerManagementConfigGcp
-    | ManagerManagementConfigAzure
-    | ManagerManagementConfigKubernetes
-    | any
-    | null
-    | undefined;
+  managementConfigs: ManagerManagementConfigs;
   /**
    * Whether this is a system manager (Alien-hosted)
    */
@@ -199,126 +115,6 @@ export const ManagerTarget$inboundSchema: z.ZodEnum<typeof ManagerTarget> = z
   .enum(ManagerTarget);
 
 /** @internal */
-export const ManagerPlatformKubernetes$inboundSchema: z.ZodEnum<
-  typeof ManagerPlatformKubernetes
-> = z.enum(ManagerPlatformKubernetes);
-
-/** @internal */
-export const ManagerManagementConfigKubernetes$inboundSchema: z.ZodType<
-  ManagerManagementConfigKubernetes,
-  unknown
-> = z.object({
-  platform: ManagerPlatformKubernetes$inboundSchema,
-});
-
-export function managerManagementConfigKubernetesFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerManagementConfigKubernetes, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerManagementConfigKubernetes$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerManagementConfigKubernetes' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerPlatformAzure$inboundSchema: z.ZodEnum<
-  typeof ManagerPlatformAzure
-> = z.enum(ManagerPlatformAzure);
-
-/** @internal */
-export const ManagerManagementConfigAzure$inboundSchema: z.ZodType<
-  ManagerManagementConfigAzure,
-  unknown
-> = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
-  managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
-  platform: ManagerPlatformAzure$inboundSchema,
-});
-
-export function managerManagementConfigAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerManagementConfigAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerManagementConfigAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerPlatformGcp$inboundSchema: z.ZodEnum<
-  typeof ManagerPlatformGcp
-> = z.enum(ManagerPlatformGcp);
-
-/** @internal */
-export const ManagerManagementConfigGcp$inboundSchema: z.ZodType<
-  ManagerManagementConfigGcp,
-  unknown
-> = z.object({
-  serviceAccountEmail: z.string(),
-  platform: ManagerPlatformGcp$inboundSchema,
-});
-
-export function managerManagementConfigGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerManagementConfigGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerManagementConfigGcp' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerPlatformAws$inboundSchema: z.ZodEnum<
-  typeof ManagerPlatformAws
-> = z.enum(ManagerPlatformAws);
-
-/** @internal */
-export const ManagerManagementConfigAws$inboundSchema: z.ZodType<
-  ManagerManagementConfigAws,
-  unknown
-> = z.object({
-  managingRoleArn: z.string(),
-  platform: ManagerPlatformAws$inboundSchema,
-});
-
-export function managerManagementConfigAwsFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerManagementConfigAws, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerManagementConfigAws' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerManagementConfigUnion$inboundSchema: z.ZodType<
-  ManagerManagementConfigUnion,
-  unknown
-> = z.union([
-  z.lazy(() => ManagerManagementConfigAws$inboundSchema),
-  z.lazy(() => ManagerManagementConfigGcp$inboundSchema),
-  z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
-  z.lazy(() => ManagerManagementConfigKubernetes$inboundSchema),
-  z.any(),
-]);
-
-export function managerManagementConfigUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerManagementConfigUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerManagementConfigUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerManagementConfigUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerMetrics$inboundSchema: z.ZodType<ManagerMetrics, unknown> =
   z.object({
     activeDeployments: z.number().optional(),
@@ -343,15 +139,7 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   name: z.string(),
   targets: z.array(ManagerTarget$inboundSchema),
   url: z.nullable(z.string()).optional(),
-  managementConfig: z.nullable(
-    z.union([
-      z.lazy(() => ManagerManagementConfigAws$inboundSchema),
-      z.lazy(() => ManagerManagementConfigGcp$inboundSchema),
-      z.lazy(() => ManagerManagementConfigAzure$inboundSchema),
-      z.lazy(() => ManagerManagementConfigKubernetes$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
+  managementConfigs: ManagerManagementConfigs$inboundSchema,
   isSystem: z.boolean(),
   workspaceId: z.string(),
   status: ManagerStatus$inboundSchema,

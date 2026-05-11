@@ -1382,8 +1382,7 @@ pub async fn setup(
     //   Developer role: build, push, release, create DG + token.
     //   Customer role: `alien-deploy up --token <dg_token> --platform <platform>`.
     //
-    // Cloud pull (AWS/GCP/Azure pull) and K8s pull: use existing direct flows.
-    //   These match the real customer flow (deploy Docker image / helm install).
+    // K8s pull uses the direct Terraform+Helm flow.
 
     // Only local pull uses `alien-deploy up` for now.
     // Push model has an auth issue: alien-deploy up uses the DG token for
@@ -1422,13 +1421,18 @@ pub async fn setup(
 
         (deployment, agent)
     } else {
-        // ── Direct flow (push + cloud pull + K8s pull) ───────────────
+        // ── Direct flow (push + K8s pull) ───────────────────────────
         //
         // Push model: test harness calls push_initial_setup() directly
         // with the admin token (alien-deploy up auth not yet supported).
         //
-        // Cloud pull: deploy alien-agent Docker image with injected creds.
         // K8s pull: helm install alien-agent chart.
+        if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
+            anyhow::bail!(
+                "direct cloud pull is not supported by the e2e harness; use local pull or Terraform+Helm Kubernetes pull"
+            );
+        }
+
         let (deployment, stack) = deploy_test_app(&manager, platform, model, language).await?;
         info!(
             deployment_id = %deployment.id,
@@ -1458,58 +1462,16 @@ pub async fn setup(
             }
         }
 
-        // Pull model: start agent
-        let agent = if model == DeploymentModel::Pull {
+        // Pull model: start the agent for supported pull flows.
+        let agent = if model == DeploymentModel::Pull && platform == Platform::Kubernetes {
             let agent_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
                 .ok()
                 .filter(|image| !image.is_empty())
                 .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
 
-            match platform {
-                Platform::Kubernetes => {
-                    let agent =
-                        start_generated_helm_agent(&manager, &deployment, &stack, &agent_image)
-                            .await?;
-                    Some(agent)
-                }
-                _ => {
-                    // Docker container for cloud pull (AWS/GCP/Azure pull)
-                    let agent_client_config = crate::setup::build_agent_client_config(
-                        &config,
-                        platform,
-                        &stack,
-                        &deployment.name,
-                    )
-                    .await
-                    .context("Failed to build scoped agent credentials")?;
-                    let agent = crate::agent::TestAlienAgent::start_container(
-                        &manager,
-                        &agent_image,
-                        platform,
-                        Some(&agent_client_config),
-                    )
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start alien-agent container: {}", e))?;
-
-                    // Give the agent a moment to start, then verify it's still running
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    if let Some(ref cid) = agent.container_id {
-                        let status = crate::agent::docker_container_status(cid).await;
-                        if status != "running" {
-                            let logs = crate::agent::docker_container_logs(cid).await;
-                            anyhow::bail!(
-                                "Agent container {} exited (status: {}). Logs:\n{}",
-                                cid,
-                                status,
-                                logs
-                            );
-                        }
-                        info!(container_id = %cid, %status, "Agent container health check passed");
-                    }
-
-                    Some(agent)
-                }
-            }
+            let agent =
+                start_generated_helm_agent(&manager, &deployment, &stack, &agent_image).await?;
+            Some(agent)
         } else {
             None
         };

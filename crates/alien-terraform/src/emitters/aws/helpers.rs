@@ -12,7 +12,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount,
+    ResourceRef, ResourceType, Result, ServiceAccount, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -69,10 +70,13 @@ pub fn stack_name_template(suffix: &str) -> Expression {
 /// resource-type slug ("storage", "queue", …).
 pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     expr::object([
-        ("ManagedBy", Expression::String("alien.dev".to_string())),
-        ("AlienStackId", expr::raw("var.stack_name")),
         (
-            "AlienResourceId",
+            ALIEN_MANAGED_BY_TAG_KEY,
+            Expression::String(ALIEN_MANAGED_BY_TAG_VALUE.to_string()),
+        ),
+        (ALIEN_STACK_TAG_KEY, expr::raw("var.stack_name")),
+        (
+            ALIEN_RESOURCE_TAG_KEY,
             Expression::String(ctx.resource_id.to_string()),
         ),
         (

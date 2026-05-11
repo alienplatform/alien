@@ -179,20 +179,20 @@ resource "aws_vpc" "default_network" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
 resource "aws_internet_gateway" "default_network" {
   vpc_id = aws_vpc.default_network.id
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -203,10 +203,10 @@ resource "aws_subnet" "default_network_public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -216,20 +216,20 @@ resource "aws_subnet" "default_network_private" {
   cidr_block        = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index + 2)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
 resource "aws_eip" "default_network_nat" {
   domain = "vpc"
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -237,10 +237,10 @@ resource "aws_nat_gateway" "default_network" {
   allocation_id = aws_eip.default_network_nat.id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -253,10 +253,10 @@ resource "aws_route_table" "default_network_public" {
   }
 
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -269,10 +269,10 @@ resource "aws_route_table" "default_network_private" {
   }
 
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -303,10 +303,10 @@ resource "aws_security_group" "default_network_workload" {
   }
 
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "default-network"
-    AlienResourceType = "network"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
   }
 }
 
@@ -315,10 +315,10 @@ resource "aws_iam_role" "execution_sa" {
   name               = "${var.stack_name}-execution-sa"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "execution-sa"
-    AlienResourceType = "service-account"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "execution-sa"
+    AlienResourceType      = "service-account"
   }
 }
 
@@ -339,10 +339,10 @@ resource "aws_iam_role" "management" {
   name               = "${var.stack_name}-management"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "management"
-    AlienResourceType = "remote-stack-management"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "management"
+    AlienResourceType      = "remote-stack-management"
   }
 }
 
@@ -387,10 +387,10 @@ resource "aws_s3_bucket" "assets" {
   bucket        = "${var.stack_name}-assets"
   force_destroy = false
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "assets"
-    AlienResourceType = "storage"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "assets"
+    AlienResourceType      = "storage"
   }
 }
 
@@ -440,10 +440,10 @@ resource "aws_sqs_queue" "jobs" {
   visibility_timeout_seconds = 1080
   message_retention_seconds  = 345600
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "jobs"
-    AlienResourceType = "queue"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "jobs"
+    AlienResourceType      = "queue"
   }
 }
 
@@ -478,10 +478,10 @@ resource "aws_dynamodb_table" "metadata" {
   }
 
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "metadata"
-    AlienResourceType = "kv"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "metadata"
+    AlienResourceType      = "kv"
   }
 
   lifecycle {
@@ -504,10 +504,10 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 
   lifecycle {
@@ -524,10 +524,10 @@ resource "aws_iam_role" "registry_pull" {
   name               = "${var.stack_name}-registry-pull"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 }
 
@@ -535,10 +535,10 @@ resource "aws_iam_role" "registry_push" {
   name               = "${var.stack_name}-registry-push"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 }
 

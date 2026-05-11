@@ -114,11 +114,12 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: storage-minimal
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: data
       - Key: AlienResourceType
         Value: storage

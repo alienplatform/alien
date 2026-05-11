@@ -6,6 +6,10 @@ import * as alien from "@alienplatform/core"
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure
 const storage = new alien.Storage("data").build()
 
+// alien.Queue
+// alien.Kv
+// alien.Postgres
+
 // Writer container
 const writer = new alien.Container("writer")
   .code({
@@ -64,7 +68,7 @@ const router = new alien.Container("router")
   .build()
 
 export default new alien.Stack("byoc-database")
-  .platforms(["aws", "gcp", "azure"])
+  .platforms(["aws", "gcp", "azure", "kubernetes"])
   .add(storage, "frozen")
   .add(writer, "live")
   .add(reader, "live")

@@ -4,8 +4,27 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
+import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+
+/**
+ * Represents the target cloud platform.
+ */
+export const GetManagerManagementConfigPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type GetManagerManagementConfigPlatformEnum = ClosedEnum<
+  typeof GetManagerManagementConfigPlatformEnum
+>;
 
 export type GetManagerManagementConfigRequest = {
   /**
@@ -16,6 +35,10 @@ export type GetManagerManagementConfigRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: GetManagerManagementConfigPlatformEnum;
 };
 
 export type Kubernetes = {
@@ -82,9 +105,15 @@ export type GetManagerManagementConfigResponse =
   | Kubernetes;
 
 /** @internal */
+export const GetManagerManagementConfigPlatformEnum$outboundSchema: z.ZodEnum<
+  typeof GetManagerManagementConfigPlatformEnum
+> = z.enum(GetManagerManagementConfigPlatformEnum);
+
+/** @internal */
 export type GetManagerManagementConfigRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
+  platform: string;
 };
 
 /** @internal */
@@ -94,6 +123,7 @@ export const GetManagerManagementConfigRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
+  platform: GetManagerManagementConfigPlatformEnum$outboundSchema,
 });
 
 export function getManagerManagementConfigRequestToJSON(

@@ -102,10 +102,10 @@ resource "aws_iam_role" "builder_role" {
   name               = "${var.stack_name}-builder-build"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "codebuild.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "builder"
-    AlienResourceType = "build"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "builder"
+    AlienResourceType      = "build"
   }
 }
 
@@ -119,10 +119,10 @@ resource "aws_cloudwatch_log_group" "builder_logs" {
   name              = "/aws/codebuild/${var.stack_name}-builder"
   retention_in_days = 30
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "builder"
-    AlienResourceType = "build"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "builder"
+    AlienResourceType      = "build"
   }
 }
 
@@ -160,10 +160,10 @@ resource "aws_codebuild_project" "builder" {
   }
 
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "builder"
-    AlienResourceType = "build"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "builder"
+    AlienResourceType      = "build"
   }
 }
 

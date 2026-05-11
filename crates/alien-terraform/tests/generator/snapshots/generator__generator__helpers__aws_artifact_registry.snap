@@ -114,10 +114,10 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 
   lifecycle {
@@ -134,10 +134,10 @@ resource "aws_iam_role" "registry_pull" {
   name               = "${var.stack_name}-registry-pull"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 }
 
@@ -145,10 +145,10 @@ resource "aws_iam_role" "registry_push" {
   name               = "${var.stack_name}-registry-push"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "registry"
-    AlienResourceType = "artifact-registry"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "registry"
+    AlienResourceType      = "artifact-registry"
   }
 }
 

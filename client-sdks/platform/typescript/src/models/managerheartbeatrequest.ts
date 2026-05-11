@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  ManagerManagementConfigs,
+  ManagerManagementConfigs$Outbound,
+  ManagerManagementConfigs$outboundSchema,
+} from "./managermanagementconfigs.js";
 
 /**
  * Current health status
@@ -19,93 +24,6 @@ export const ManagerHeartbeatRequestStatus = {
 export type ManagerHeartbeatRequestStatus = ClosedEnum<
   typeof ManagerHeartbeatRequestStatus
 >;
-
-export const ManagerHeartbeatRequestPlatformKubernetes = {
-  Kubernetes: "kubernetes",
-} as const;
-export type ManagerHeartbeatRequestPlatformKubernetes = ClosedEnum<
-  typeof ManagerHeartbeatRequestPlatformKubernetes
->;
-
-export type ManagerHeartbeatRequestManagementConfigKubernetes = {
-  platform: ManagerHeartbeatRequestPlatformKubernetes;
-};
-
-export const ManagerHeartbeatRequestPlatformAzure = {
-  Azure: "azure",
-} as const;
-export type ManagerHeartbeatRequestPlatformAzure = ClosedEnum<
-  typeof ManagerHeartbeatRequestPlatformAzure
->;
-
-/**
- * Azure management configuration extracted from stack settings
- */
-export type ManagerHeartbeatRequestManagementConfigAzure = {
-  /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
-   * The managing Azure Tenant ID for cross-tenant access
-   */
-  managingTenantId: string;
-  /**
-   * OIDC issuer URL for federated identity credential creation
-   */
-  oidcIssuer?: string | null | undefined;
-  /**
-   * OIDC subject claim for federated identity credential creation
-   */
-  oidcSubject?: string | null | undefined;
-  platform: ManagerHeartbeatRequestPlatformAzure;
-};
-
-export const ManagerHeartbeatRequestPlatformGcp = {
-  Gcp: "gcp",
-} as const;
-export type ManagerHeartbeatRequestPlatformGcp = ClosedEnum<
-  typeof ManagerHeartbeatRequestPlatformGcp
->;
-
-/**
- * GCP management configuration extracted from stack settings
- */
-export type ManagerHeartbeatRequestManagementConfigGcp = {
-  /**
-   * Service account email for management roles
-   */
-  serviceAccountEmail: string;
-  platform: ManagerHeartbeatRequestPlatformGcp;
-};
-
-export const ManagerHeartbeatRequestPlatformAws = {
-  Aws: "aws",
-} as const;
-export type ManagerHeartbeatRequestPlatformAws = ClosedEnum<
-  typeof ManagerHeartbeatRequestPlatformAws
->;
-
-/**
- * AWS management configuration extracted from stack settings
- */
-export type ManagerHeartbeatRequestManagementConfigAws = {
-  /**
-   * The managing AWS IAM role ARN that can assume cross-account roles
-   */
-  managingRoleArn: string;
-  platform: ManagerHeartbeatRequestPlatformAws;
-};
-
-/**
- * Management configuration for cross-account access (from ServiceAccount binding)
- */
-export type ManagerHeartbeatRequestManagementConfigUnion =
-  | ManagerHeartbeatRequestManagementConfigAws
-  | ManagerHeartbeatRequestManagementConfigGcp
-  | ManagerHeartbeatRequestManagementConfigAzure
-  | ManagerHeartbeatRequestManagementConfigKubernetes
-  | any;
 
 /**
  * Optional runtime metrics
@@ -130,17 +48,7 @@ export type ManagerHeartbeatRequest = {
    * Manager public URL (for accessing DeepStore endpoints)
    */
   url: string;
-  /**
-   * Management configuration for cross-account access (from ServiceAccount binding)
-   */
-  managementConfig?:
-    | ManagerHeartbeatRequestManagementConfigAws
-    | ManagerHeartbeatRequestManagementConfigGcp
-    | ManagerHeartbeatRequestManagementConfigAzure
-    | ManagerHeartbeatRequestManagementConfigKubernetes
-    | any
-    | null
-    | undefined;
+  managementConfigs: ManagerManagementConfigs;
   /**
    * Optional runtime metrics
    */
@@ -151,173 +59,6 @@ export type ManagerHeartbeatRequest = {
 export const ManagerHeartbeatRequestStatus$outboundSchema: z.ZodEnum<
   typeof ManagerHeartbeatRequestStatus
 > = z.enum(ManagerHeartbeatRequestStatus);
-
-/** @internal */
-export const ManagerHeartbeatRequestPlatformKubernetes$outboundSchema:
-  z.ZodEnum<typeof ManagerHeartbeatRequestPlatformKubernetes> = z.enum(
-    ManagerHeartbeatRequestPlatformKubernetes,
-  );
-
-/** @internal */
-export type ManagerHeartbeatRequestManagementConfigKubernetes$Outbound = {
-  platform: string;
-};
-
-/** @internal */
-export const ManagerHeartbeatRequestManagementConfigKubernetes$outboundSchema:
-  z.ZodType<
-    ManagerHeartbeatRequestManagementConfigKubernetes$Outbound,
-    ManagerHeartbeatRequestManagementConfigKubernetes
-  > = z.object({
-    platform: ManagerHeartbeatRequestPlatformKubernetes$outboundSchema,
-  });
-
-export function managerHeartbeatRequestManagementConfigKubernetesToJSON(
-  managerHeartbeatRequestManagementConfigKubernetes:
-    ManagerHeartbeatRequestManagementConfigKubernetes,
-): string {
-  return JSON.stringify(
-    ManagerHeartbeatRequestManagementConfigKubernetes$outboundSchema.parse(
-      managerHeartbeatRequestManagementConfigKubernetes,
-    ),
-  );
-}
-
-/** @internal */
-export const ManagerHeartbeatRequestPlatformAzure$outboundSchema: z.ZodEnum<
-  typeof ManagerHeartbeatRequestPlatformAzure
-> = z.enum(ManagerHeartbeatRequestPlatformAzure);
-
-/** @internal */
-export type ManagerHeartbeatRequestManagementConfigAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
-  managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
-  platform: string;
-};
-
-/** @internal */
-export const ManagerHeartbeatRequestManagementConfigAzure$outboundSchema:
-  z.ZodType<
-    ManagerHeartbeatRequestManagementConfigAzure$Outbound,
-    ManagerHeartbeatRequestManagementConfigAzure
-  > = z.object({
-    managementPrincipalId: z.nullable(z.string()).optional(),
-    managingTenantId: z.string(),
-    oidcIssuer: z.nullable(z.string()).optional(),
-    oidcSubject: z.nullable(z.string()).optional(),
-    platform: ManagerHeartbeatRequestPlatformAzure$outboundSchema,
-  });
-
-export function managerHeartbeatRequestManagementConfigAzureToJSON(
-  managerHeartbeatRequestManagementConfigAzure:
-    ManagerHeartbeatRequestManagementConfigAzure,
-): string {
-  return JSON.stringify(
-    ManagerHeartbeatRequestManagementConfigAzure$outboundSchema.parse(
-      managerHeartbeatRequestManagementConfigAzure,
-    ),
-  );
-}
-
-/** @internal */
-export const ManagerHeartbeatRequestPlatformGcp$outboundSchema: z.ZodEnum<
-  typeof ManagerHeartbeatRequestPlatformGcp
-> = z.enum(ManagerHeartbeatRequestPlatformGcp);
-
-/** @internal */
-export type ManagerHeartbeatRequestManagementConfigGcp$Outbound = {
-  serviceAccountEmail: string;
-  platform: string;
-};
-
-/** @internal */
-export const ManagerHeartbeatRequestManagementConfigGcp$outboundSchema:
-  z.ZodType<
-    ManagerHeartbeatRequestManagementConfigGcp$Outbound,
-    ManagerHeartbeatRequestManagementConfigGcp
-  > = z.object({
-    serviceAccountEmail: z.string(),
-    platform: ManagerHeartbeatRequestPlatformGcp$outboundSchema,
-  });
-
-export function managerHeartbeatRequestManagementConfigGcpToJSON(
-  managerHeartbeatRequestManagementConfigGcp:
-    ManagerHeartbeatRequestManagementConfigGcp,
-): string {
-  return JSON.stringify(
-    ManagerHeartbeatRequestManagementConfigGcp$outboundSchema.parse(
-      managerHeartbeatRequestManagementConfigGcp,
-    ),
-  );
-}
-
-/** @internal */
-export const ManagerHeartbeatRequestPlatformAws$outboundSchema: z.ZodEnum<
-  typeof ManagerHeartbeatRequestPlatformAws
-> = z.enum(ManagerHeartbeatRequestPlatformAws);
-
-/** @internal */
-export type ManagerHeartbeatRequestManagementConfigAws$Outbound = {
-  managingRoleArn: string;
-  platform: string;
-};
-
-/** @internal */
-export const ManagerHeartbeatRequestManagementConfigAws$outboundSchema:
-  z.ZodType<
-    ManagerHeartbeatRequestManagementConfigAws$Outbound,
-    ManagerHeartbeatRequestManagementConfigAws
-  > = z.object({
-    managingRoleArn: z.string(),
-    platform: ManagerHeartbeatRequestPlatformAws$outboundSchema,
-  });
-
-export function managerHeartbeatRequestManagementConfigAwsToJSON(
-  managerHeartbeatRequestManagementConfigAws:
-    ManagerHeartbeatRequestManagementConfigAws,
-): string {
-  return JSON.stringify(
-    ManagerHeartbeatRequestManagementConfigAws$outboundSchema.parse(
-      managerHeartbeatRequestManagementConfigAws,
-    ),
-  );
-}
-
-/** @internal */
-export type ManagerHeartbeatRequestManagementConfigUnion$Outbound =
-  | ManagerHeartbeatRequestManagementConfigAws$Outbound
-  | ManagerHeartbeatRequestManagementConfigGcp$Outbound
-  | ManagerHeartbeatRequestManagementConfigAzure$Outbound
-  | ManagerHeartbeatRequestManagementConfigKubernetes$Outbound
-  | any;
-
-/** @internal */
-export const ManagerHeartbeatRequestManagementConfigUnion$outboundSchema:
-  z.ZodType<
-    ManagerHeartbeatRequestManagementConfigUnion$Outbound,
-    ManagerHeartbeatRequestManagementConfigUnion
-  > = z.union([
-    z.lazy(() => ManagerHeartbeatRequestManagementConfigAws$outboundSchema),
-    z.lazy(() => ManagerHeartbeatRequestManagementConfigGcp$outboundSchema),
-    z.lazy(() => ManagerHeartbeatRequestManagementConfigAzure$outboundSchema),
-    z.lazy(() =>
-      ManagerHeartbeatRequestManagementConfigKubernetes$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function managerHeartbeatRequestManagementConfigUnionToJSON(
-  managerHeartbeatRequestManagementConfigUnion:
-    ManagerHeartbeatRequestManagementConfigUnion,
-): string {
-  return JSON.stringify(
-    ManagerHeartbeatRequestManagementConfigUnion$outboundSchema.parse(
-      managerHeartbeatRequestManagementConfigUnion,
-    ),
-  );
-}
 
 /** @internal */
 export type ManagerHeartbeatRequestMetrics$Outbound = {
@@ -353,14 +94,7 @@ export type ManagerHeartbeatRequest$Outbound = {
   status: string;
   version?: string | undefined;
   url: string;
-  managementConfig?:
-    | ManagerHeartbeatRequestManagementConfigAws$Outbound
-    | ManagerHeartbeatRequestManagementConfigGcp$Outbound
-    | ManagerHeartbeatRequestManagementConfigAzure$Outbound
-    | ManagerHeartbeatRequestManagementConfigKubernetes$Outbound
-    | any
-    | null
-    | undefined;
+  managementConfigs: ManagerManagementConfigs$Outbound;
   metrics?: ManagerHeartbeatRequestMetrics$Outbound | undefined;
 };
 
@@ -372,17 +106,7 @@ export const ManagerHeartbeatRequest$outboundSchema: z.ZodType<
   status: ManagerHeartbeatRequestStatus$outboundSchema,
   version: z.string().optional(),
   url: z.string(),
-  managementConfig: z.nullable(
-    z.union([
-      z.lazy(() => ManagerHeartbeatRequestManagementConfigAws$outboundSchema),
-      z.lazy(() => ManagerHeartbeatRequestManagementConfigGcp$outboundSchema),
-      z.lazy(() => ManagerHeartbeatRequestManagementConfigAzure$outboundSchema),
-      z.lazy(() =>
-        ManagerHeartbeatRequestManagementConfigKubernetes$outboundSchema
-      ),
-      z.any(),
-    ]),
-  ).optional(),
+  managementConfigs: ManagerManagementConfigs$outboundSchema,
   metrics: z.lazy(() => ManagerHeartbeatRequestMetrics$outboundSchema)
     .optional(),
 });

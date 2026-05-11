@@ -317,6 +317,17 @@ fn azure_resource_group_round_trip() {
     );
     assert_running_with_internal_state(&state);
     assert_eq!(internal_state(&state)["resourceGroupName"], "rg-alien");
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AzureResourceGroupOutputs>())
+        .expect("imported Azure resource group must expose dependency outputs");
+    assert_eq!(outputs.name, "rg-alien");
+    assert_eq!(
+        outputs.resource_id,
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien"
+    );
+    assert_eq!(outputs.location, "eastus");
 }
 
 #[test]

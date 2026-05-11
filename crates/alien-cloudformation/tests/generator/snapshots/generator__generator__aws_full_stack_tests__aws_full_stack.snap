@@ -142,11 +142,12 @@ Resources:
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -154,11 +155,12 @@ Resources:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -190,11 +192,12 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -218,11 +221,12 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -247,11 +251,12 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -276,11 +281,12 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -306,11 +312,12 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -335,11 +342,12 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -350,11 +358,12 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -374,11 +383,12 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -396,11 +406,12 @@ Resources:
       SubnetId:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -470,11 +481,12 @@ Resources:
       - IpProtocol: '-1'
         CidrIp: 0.0.0.0/0
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: default-network
       - Key: AlienResourceType
         Value: network
@@ -518,11 +530,12 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
             Sid: QueueDataWrite
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: execution-sa
       - Key: AlienResourceType
         Value: service-account
@@ -763,11 +776,12 @@ Resources:
             Resource:
               Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: management
       - Key: AlienResourceType
         Value: remote-stack-management
@@ -791,11 +805,12 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: assets
       - Key: AlienResourceType
         Value: storage
@@ -828,11 +843,12 @@ Resources:
       VisibilityTimeout: 1080
       MessageRetentionPeriod: 345600
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: jobs
       - Key: AlienResourceType
         Value: queue
@@ -858,11 +874,12 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: metadata
       - Key: AlienResourceType
         Value: kv
@@ -891,11 +908,12 @@ Resources:
               action:
                 type: expire
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry
@@ -939,11 +957,12 @@ Resources:
               - RegistryRepository
               - Arn
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry
@@ -991,11 +1010,12 @@ Resources:
               - RegistryRepository
               - Arn
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: registry
       - Key: AlienResourceType
         Value: artifact-registry
@@ -1043,11 +1063,12 @@ Resources:
           GroupName:
             Ref: BuilderLogGroup
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: full-aws
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: builder
       - Key: AlienResourceType
         Value: build

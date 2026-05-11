@@ -563,9 +563,6 @@ jobs:
           TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
-          TF_VAR_azure_agent_client_id: ${{ secrets.TEST_AZURE_AGENT_CLIENT_ID }}
-          TF_VAR_azure_agent_client_secret: ${{ secrets.TEST_AZURE_AGENT_CLIENT_SECRET }}
-          TF_VAR_azure_agent_object_id: ${{ secrets.TEST_AZURE_AGENT_OBJECT_ID }}
 
       - name: Set up Azure OIDC token
         run: |

@@ -126,11 +126,12 @@ Resources:
           ExpirationInDays: 365
           Prefix: ''
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: data-layer
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: assets
       - Key: AlienResourceType
         Value: storage
@@ -169,11 +170,12 @@ Resources:
       VisibilityTimeout: 30
       MessageRetentionPeriod: 345600
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: data-layer
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: jobs
       - Key: AlienResourceType
         Value: queue
@@ -199,11 +201,12 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: data-layer
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: metadata
       - Key: AlienResourceType
         Value: kv

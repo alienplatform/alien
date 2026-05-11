@@ -338,6 +338,7 @@ async function run() {
   const result = await alien.managers.getManagementConfig({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
+    platform: "azure",
   });
 
   console.log(result);
@@ -364,6 +365,7 @@ async function run() {
   const res = await managersGetManagementConfig(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
+    platform: "azure",
   });
   if (res.ok) {
     const { value: result } = res;

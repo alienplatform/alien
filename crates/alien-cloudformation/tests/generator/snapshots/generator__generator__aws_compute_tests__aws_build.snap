@@ -119,11 +119,12 @@ Resources:
             - logs:PutLogEvents
             Resource: '*'
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: acme-build
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: builder
       - Key: AlienResourceType
         Value: build
@@ -169,11 +170,12 @@ Resources:
           GroupName:
             Ref: BuilderLogGroup
       Tags:
-      - Key: ManagedBy
-        Value: alien.dev
-      - Key: AlienStackId
-        Value: acme-build
-      - Key: AlienResourceId
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
         Value: builder
       - Key: AlienResourceType
         Value: build

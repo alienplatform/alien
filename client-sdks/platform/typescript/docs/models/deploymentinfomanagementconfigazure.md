@@ -1,13 +1,13 @@
-# ManagerManagementConfigAzure
+# DeploymentInfoManagementConfigAzure
 
 Azure management configuration extracted from stack settings
 
 ## Example Usage
 
 ```typescript
-import { ManagerManagementConfigAzure } from "@alienplatform/platform-api/models";
+import { DeploymentInfoManagementConfigAzure } from "@alienplatform/platform-api/models";
 
-let value: ManagerManagementConfigAzure = {
+let value: DeploymentInfoManagementConfigAzure = {
   managingTenantId: "<id>",
   platform: "azure",
 };
@@ -21,4 +21,4 @@ let value: ManagerManagementConfigAzure = {
 | `managingTenantId`                                                    | *string*                                                              | :heavy_check_mark:                                                    | The managing Azure Tenant ID for cross-tenant access                  |
 | `oidcIssuer`                                                          | *string*                                                              | :heavy_minus_sign:                                                    | OIDC issuer URL for federated identity credential creation            |
 | `oidcSubject`                                                         | *string*                                                              | :heavy_minus_sign:                                                    | OIDC subject claim for federated identity credential creation         |
-| `platform`                                                            | [models.ManagerPlatformAzure](../models/managerplatformazure.md)      | :heavy_check_mark:                                                    | N/A                                                                   |
+| `platform`                                                            | *"azure"*                                                             | :heavy_check_mark:                                                    | N/A                                                                   |

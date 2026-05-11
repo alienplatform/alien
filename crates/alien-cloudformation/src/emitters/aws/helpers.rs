@@ -8,7 +8,8 @@
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
     import::EmitContext, ErrorData, Function, Network, NetworkSettings, Queue, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault,
+    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -79,9 +80,9 @@ pub fn stack_name(suffix: &str) -> CfExpression {
 /// Standard Alien resource tags.
 pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::list([
-        tag("ManagedBy", "alien.dev"),
-        tag("AlienStackId", ctx.stack.id()),
-        tag("AlienResourceId", ctx.resource_id),
+        tag(ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE),
+        tag_expr(ALIEN_STACK_TAG_KEY, CfExpression::ref_("AWS::StackName")),
+        tag(ALIEN_RESOURCE_TAG_KEY, ctx.resource_id),
         tag(
             "AlienResourceType",
             ctx.resource.config.resource_type().as_ref(),
@@ -90,10 +91,11 @@ pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
 }
 
 pub fn tag(key: &str, value: &str) -> CfExpression {
-    CfExpression::object([
-        ("Key", CfExpression::from(key)),
-        ("Value", CfExpression::from(value)),
-    ])
+    tag_expr(key, CfExpression::from(value))
+}
+
+pub fn tag_expr(key: &str, value: CfExpression) -> CfExpression {
+    CfExpression::object([("Key", CfExpression::from(key)), ("Value", value)])
 }
 
 /// `aws:PrincipalArn` plus `Service` trust policy block.

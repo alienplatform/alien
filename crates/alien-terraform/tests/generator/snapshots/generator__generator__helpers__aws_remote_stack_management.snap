@@ -100,10 +100,10 @@ resource "aws_iam_role" "management" {
   name               = "${var.stack_name}-management"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "management"
-    AlienResourceType = "remote-stack-management"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "management"
+    AlienResourceType      = "remote-stack-management"
   }
 }
 

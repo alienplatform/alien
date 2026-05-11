@@ -14,6 +14,7 @@ use alien_core::{
 
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
+use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
 use crate::infra_requirements::{
     AzureContainerAppsEnvironmentController, AzureContainerAppsEnvironmentState,
     AzureResourceGroupController, AzureResourceGroupState, AzureServiceBusNamespaceController,
@@ -56,13 +57,12 @@ impl ResourceImporter for AzureResourceGroupImporter {
         data: AzureResourceGroupImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        let _ = data.subscription_id;
+        let resource_id =
+            azure_resource_group_resource_id(&data.subscription_id, &data.resource_group);
         let controller = AzureResourceGroupController {
             state: AzureResourceGroupState::Ready,
             resource_group_name: Some(data.resource_group),
-            // The full ARM `resource_id` is reconstructed at heartbeat time
-            // from `subscription_id + name`.
-            resource_id: None,
+            resource_id: Some(resource_id),
             location: Some(data.location),
             _internal_stay_count: None,
         };

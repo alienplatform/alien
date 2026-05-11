@@ -99,10 +99,10 @@ resource "aws_s3_bucket" "assets" {
   bucket        = "${var.stack_name}-assets"
   force_destroy = false
   tags = {
-    ManagedBy         = "alien.dev"
-    AlienStackId      = var.stack_name
-    AlienResourceId   = "assets"
-    AlienResourceType = "storage"
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "assets"
+    AlienResourceType      = "storage"
   }
 }
 

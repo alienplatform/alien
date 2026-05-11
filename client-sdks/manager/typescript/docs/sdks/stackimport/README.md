@@ -39,6 +39,7 @@ async function run() {
     platform: "gcp",
     region: "<value>",
     resources: [],
+    stackPrefix: "<value>",
     stackSettings: {},
   });
 
@@ -74,6 +75,7 @@ async function run() {
     platform: "gcp",
     region: "<value>",
     resources: [],
+    stackPrefix: "<value>",
     stackSettings: {},
   });
   if (res.ok) {

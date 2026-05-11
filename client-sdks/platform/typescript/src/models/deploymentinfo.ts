@@ -449,6 +449,114 @@ export type Packages = {
   helm?: DeploymentInfoHelm | undefined;
 };
 
+/**
+ * Represents the target cloud platform.
+ */
+export const TargetsPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type TargetsPlatformEnum = ClosedEnum<typeof TargetsPlatformEnum>;
+
+export type DeploymentInfoManagementConfigKubernetes = {
+  platform: "kubernetes";
+};
+
+/**
+ * Azure management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigAzure = {
+  /**
+   * Management service principal object ID for local development fallback
+   */
+  managementPrincipalId?: string | null | undefined;
+  /**
+   * The managing Azure Tenant ID for cross-tenant access
+   */
+  managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
+  platform: "azure";
+};
+
+/**
+ * GCP management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigGcp = {
+  /**
+   * Service account email for management roles
+   */
+  serviceAccountEmail: string;
+  platform: "gcp";
+};
+
+/**
+ * AWS management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigAws = {
+  /**
+   * The managing AWS IAM role ARN that can assume cross-account roles
+   */
+  managingRoleArn: string;
+  platform: "aws";
+};
+
+/**
+ * Management configuration for different cloud platforms.
+ *
+ * @remarks
+ *
+ * Platform-derived configuration for cross-account/cross-tenant access.
+ * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+ */
+export type DeploymentInfoManagementConfigUnion =
+  | DeploymentInfoManagementConfigAws
+  | DeploymentInfoManagementConfigGcp
+  | DeploymentInfoManagementConfigAzure
+  | DeploymentInfoManagementConfigKubernetes;
+
+export type Targets = {
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: TargetsPlatformEnum;
+  managerUrl: string;
+  /**
+   * Management configuration for different cloud platforms.
+   *
+   * @remarks
+   *
+   * Platform-derived configuration for cross-account/cross-tenant access.
+   * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+   */
+  managementConfig:
+    | DeploymentInfoManagementConfigAws
+    | DeploymentInfoManagementConfigGcp
+    | DeploymentInfoManagementConfigAzure
+    | DeploymentInfoManagementConfigKubernetes;
+  awsManagingAccountId?: string | undefined;
+};
+
+export type InstallContext = {
+  /**
+   * Deployment-session install context by Terraform/installer target
+   */
+  targets: { [k: string]: Targets };
+};
+
 export type DeploymentInfo = {
   /**
    * Type of token used to authenticate this request
@@ -464,6 +572,7 @@ export type DeploymentInfo = {
   deploymentGroup?: DeploymentInfoDeploymentGroup | undefined;
   project: DeploymentInfoProject;
   packages: Packages;
+  installContext: InstallContext;
 };
 
 /** @internal */
@@ -924,6 +1033,157 @@ export function packagesFromJSON(
 }
 
 /** @internal */
+export const TargetsPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformEnum
+> = z.enum(TargetsPlatformEnum);
+
+/** @internal */
+export const DeploymentInfoManagementConfigKubernetes$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigKubernetes,
+  unknown
+> = z.object({
+  platform: z.literal("kubernetes"),
+});
+
+export function deploymentInfoManagementConfigKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentInfoManagementConfigKubernetes,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigKubernetes$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentInfoManagementConfigKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigAzure$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigAzure,
+  unknown
+> = z.object({
+  managementPrincipalId: z.nullable(z.string()).optional(),
+  managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
+  platform: z.literal("azure"),
+});
+
+export function deploymentInfoManagementConfigAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigGcp$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigGcp,
+  unknown
+> = z.object({
+  serviceAccountEmail: z.string(),
+  platform: z.literal("gcp"),
+});
+
+export function deploymentInfoManagementConfigGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigAws$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigAws,
+  unknown
+> = z.object({
+  managingRoleArn: z.string(),
+  platform: z.literal("aws"),
+});
+
+export function deploymentInfoManagementConfigAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigUnion$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+]);
+
+export function deploymentInfoManagementConfigUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
+  platform: TargetsPlatformEnum$inboundSchema,
+  managerUrl: z.string(),
+  managementConfig: z.union([
+    z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+  ]),
+  awsManagingAccountId: z.string().optional(),
+});
+
+export function targetsFromJSON(
+  jsonString: string,
+): SafeParseResult<Targets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Targets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Targets' from JSON`,
+  );
+}
+
+/** @internal */
+export const InstallContext$inboundSchema: z.ZodType<InstallContext, unknown> =
+  z.object({
+    targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
+  });
+
+export function installContextFromJSON(
+  jsonString: string,
+): SafeParseResult<InstallContext, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InstallContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InstallContext' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
   z.object({
     tokenType: DeploymentInfoTokenType$inboundSchema,
@@ -932,6 +1192,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
       .optional(),
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
+    installContext: z.lazy(() => InstallContext$inboundSchema),
   });
 
 export function deploymentInfoFromJSON(

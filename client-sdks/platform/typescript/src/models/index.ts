@@ -60,6 +60,7 @@ export * from "./manager.js";
 export * from "./managerdeployment.js";
 export * from "./managerheartbeatrequest.js";
 export * from "./managerheartbeatresponse.js";
+export * from "./managermanagementconfigs.js";
 export * from "./managerrole.js";
 export * from "./managerscope.js";
 export * from "./managerstatus.js";

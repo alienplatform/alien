@@ -73,6 +73,14 @@ export type StackImportRequest = {
   resources: Array<ImportedResource>;
   sourceKind?: ImportSourceKind | null | undefined;
   /**
+   * Stable physical-name prefix used by the distribution artifact for
+   *
+   * @remarks
+   * generated resources. This is the Alien stack prefix, not merely a UI
+   * name: runtime controllers use it when addressing imported resources.
+   */
+  stackPrefix: string;
+  /**
    * User-customizable deployment settings specified at deploy time.
    *
    * @remarks
@@ -97,6 +105,7 @@ export type StackImportRequest$Outbound = {
   releaseId?: string | null | undefined;
   resources: Array<ImportedResource$Outbound>;
   sourceKind?: string | null | undefined;
+  stackPrefix: string;
   stackSettings: StackSettings$Outbound;
 };
 
@@ -113,6 +122,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   releaseId: z.nullable(z.string()).optional(),
   resources: z.array(ImportedResource$outboundSchema),
   sourceKind: z.nullable(ImportSourceKind$outboundSchema).optional(),
+  stackPrefix: z.string(),
   stackSettings: StackSettings$outboundSchema,
 });
 

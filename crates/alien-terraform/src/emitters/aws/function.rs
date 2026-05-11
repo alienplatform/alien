@@ -151,7 +151,7 @@ impl TfEmitter for AwsFunctionEmitter {
         for resource in storage_trigger_resources(function, label)? {
             fragment.resource_blocks.push(resource);
         }
-        for resource in schedule_trigger_resources(function, label)? {
+        for resource in schedule_trigger_resources(ctx, function, label)? {
             fragment.resource_blocks.push(resource);
         }
         if function.ingress == Ingress::Public {
@@ -486,6 +486,7 @@ fn storage_trigger_resources(
 }
 
 fn schedule_trigger_resources(
+    ctx: &EmitContext<'_>,
     function: &Function,
     label: &str,
 ) -> Result<Vec<hcl::structure::Block>> {
@@ -516,10 +517,7 @@ fn schedule_trigger_resources(
                 ),
                 attr("schedule_expression", Expression::String(schedule.clone())),
                 attr("state", Expression::String("ENABLED".to_string())),
-                attr(
-                    "tags",
-                    expr::object([("ManagedBy", Expression::String("alien.dev".to_string()))]),
-                ),
+                attr("tags", tags(ctx, "function")),
             ],
         ));
         resources.push(resource_block(

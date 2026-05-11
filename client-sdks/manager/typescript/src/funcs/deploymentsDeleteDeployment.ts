@@ -90,8 +90,8 @@ async function $do(
   const path = pathToFunc("/v1/deployments/{id}")(pathParams);
 
   const query = encodeFormQuery({
-    "force": payload.force,
     "deleteScope": payload.deleteScope,
+    "force": payload.force,
   });
 
   const headers = new Headers(compactMap({
