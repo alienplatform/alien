@@ -97,7 +97,7 @@ locals {
 === data.tf ===
 resource "aws_s3_bucket" "data" {
   bucket        = "${var.stack_name}-data"
-  force_destroy = false
+  force_destroy = true
   tags = {
     "alien.dev/managed-by" = "alien"
     "alien.dev/stack"      = var.stack_name

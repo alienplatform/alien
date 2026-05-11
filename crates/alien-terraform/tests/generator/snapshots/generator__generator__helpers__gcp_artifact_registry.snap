@@ -62,6 +62,12 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_use_existing_custom_roles" {
+  type        = bool
+  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
+  default     = false
+}
+
 === providers.tf ===
 provider "google" {
   project = var.gcp_project

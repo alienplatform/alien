@@ -66,6 +66,12 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_use_existing_custom_roles" {
+  type        = bool
+  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
+  default     = false
+}
+
 === providers.tf ===
 provider "google" {
   project = var.gcp_project
@@ -106,6 +112,7 @@ resource "google_service_account" "management" {
 }
 
 resource "google_project_iam_custom_role" "management_functionmanagement" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-functionManagement", var.stack_name)), 0, 8))
   title       = "Function Management"
@@ -182,11 +189,12 @@ resource "google_project_iam_custom_role" "management_functionmanagement" {
 
 resource "google_project_iam_member" "management_functionmanagement_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_functionmanagement.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/functionManagement", var.gcp_project) : google_project_iam_custom_role.management_functionmanagement[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "management_storageheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-storageHeartbeat", var.stack_name)), 0, 8))
   title       = "Storage Heartbeat"
@@ -207,7 +215,7 @@ resource "google_project_iam_custom_role" "management_storageheartbeat" {
 
 resource "google_project_iam_member" "management_storageheartbeat_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_storageheartbeat.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_storageheartbeat[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 

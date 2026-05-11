@@ -123,7 +123,7 @@ locals {
 === assets.tf ===
 resource "aws_s3_bucket" "assets" {
   bucket        = "${var.stack_name}-assets"
-  force_destroy = false
+  force_destroy = true
   tags = {
     "alien.dev/managed-by" = "alien"
     "alien.dev/stack"      = var.stack_name

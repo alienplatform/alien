@@ -261,6 +261,10 @@ pub fn emit_custom_role_and_bindings(
         "google_project_iam_custom_role",
         &role_label,
         [
+            attr(
+                "count",
+                expr::raw("var.gcp_use_existing_custom_roles ? 0 : 1"),
+            ),
             attr("project", expr::raw("var.gcp_project")),
             attr("role_id", custom_role_id_template(sa_label, &role_id)),
             attr("title", Expression::String(custom_role.title.clone())),
@@ -297,10 +301,13 @@ pub fn emit_custom_role_and_bindings(
         } else {
             format!("{role_label}_binding")
         };
+        let role_expression = expr::raw(format!(
+            "var.gcp_use_existing_custom_roles ? format(\"projects/%s/roles/{role_id}\", var.gcp_project) : google_project_iam_custom_role.{role_label}[0].name"
+        ));
         push_iam_member(
             fragment,
             &binding_label,
-            &role_label,
+            role_expression,
             member_override,
             &binding,
         )?;
@@ -318,16 +325,13 @@ fn bindings_count(_binding: &GcpIamBinding) -> bool {
 fn push_iam_member(
     fragment: &mut TfFragment,
     binding_label: &str,
-    role_label: &str,
+    role: Expression,
     member_override: &Expression,
     binding: &GcpIamBinding,
 ) -> Result<()> {
     let mut body: Vec<Structure> = vec![
         attr("project", expr::raw("var.gcp_project")),
-        attr(
-            "role",
-            expr::traversal(["google_project_iam_custom_role", role_label, "name"]),
-        ),
+        attr("role", role),
         attr("member", member_override.clone()),
     ];
 

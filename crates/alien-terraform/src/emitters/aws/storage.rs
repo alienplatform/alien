@@ -74,7 +74,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         label,
         [
             attr("bucket", stack_name_template(storage.id())),
-            attr("force_destroy", Expression::Bool(false)),
+            attr("force_destroy", Expression::Bool(true)),
             attr("tags", tags(ctx, "storage")),
         ],
     )

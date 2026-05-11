@@ -66,6 +66,12 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_use_existing_custom_roles" {
+  type        = bool
+  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
+  default     = false
+}
+
 === providers.tf ===
 provider "google" {
   project = var.gcp_project
@@ -234,6 +240,7 @@ resource "google_service_account" "execution_sa" {
 }
 
 resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_execution_sa_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-storageDataRead", var.stack_name)), 0, 8))
   title       = "Storage Data Read"
@@ -253,11 +260,12 @@ resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
 
 resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.execution_sa_storagedataread.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageDataRead", var.gcp_project) : google_project_iam_custom_role.execution_sa_storagedataread[0].name
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
 resource "google_project_iam_custom_role" "execution_sa_queuedatawrite" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_execution_sa_queueDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-queueDataWrite", var.stack_name)), 0, 8))
   title       = "Queue Data Write"
@@ -272,7 +280,7 @@ resource "google_project_iam_custom_role" "execution_sa_queuedatawrite" {
 
 resource "google_project_iam_member" "execution_sa_queuedatawrite_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.execution_sa_queuedatawrite.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/queueDataWrite", var.gcp_project) : google_project_iam_custom_role.execution_sa_queuedatawrite[0].name
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -285,6 +293,7 @@ resource "google_service_account" "management" {
 }
 
 resource "google_project_iam_custom_role" "management_functionmanagement" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-functionManagement", var.stack_name)), 0, 8))
   title       = "Function Management"
@@ -361,11 +370,12 @@ resource "google_project_iam_custom_role" "management_functionmanagement" {
 
 resource "google_project_iam_member" "management_functionmanagement_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_functionmanagement.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/functionManagement", var.gcp_project) : google_project_iam_custom_role.management_functionmanagement[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "management_storageheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-storageHeartbeat", var.stack_name)), 0, 8))
   title       = "Storage Heartbeat"
@@ -386,11 +396,12 @@ resource "google_project_iam_custom_role" "management_storageheartbeat" {
 
 resource "google_project_iam_member" "management_storageheartbeat_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_storageheartbeat.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_storageheartbeat[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "management_queueheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_queueHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-queueHeartbeat", var.stack_name)), 0, 8))
   title       = "Queue Heartbeat"
@@ -406,11 +417,12 @@ resource "google_project_iam_custom_role" "management_queueheartbeat" {
 
 resource "google_project_iam_member" "management_queueheartbeat_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_queueheartbeat.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/queueHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_queueheartbeat[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "management_kvheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_kvHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-kvHeartbeat", var.stack_name)), 0, 8))
   title       = "Kv Heartbeat"
@@ -428,11 +440,12 @@ resource "google_project_iam_custom_role" "management_kvheartbeat" {
 
 resource "google_project_iam_member" "management_kvheartbeat_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_kvheartbeat.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/kvHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_kvheartbeat[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "management_vaultdatawrite" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
   role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
   title       = "Vault Data Write"
@@ -449,7 +462,7 @@ resource "google_project_iam_custom_role" "management_vaultdatawrite" {
 
 resource "google_project_iam_member" "management_vaultdatawrite_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.management_vaultdatawrite.name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_vaultdatawrite[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 

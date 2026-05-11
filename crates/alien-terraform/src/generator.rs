@@ -649,6 +649,11 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
+        blocks.push(nested(bool_variable_block(
+            "gcp_use_existing_custom_roles",
+            "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles.",
+            Some(false),
+        )));
     }
     if matches!(target.platform(), alien_core::Platform::Azure) {
         blocks.push(nested(variable_block(
@@ -740,6 +745,21 @@ fn list_variable_block(name: &str, description: &str, default: Option<Vec<String
             "default",
             Expression::Array(default.into_iter().map(Expression::String).collect()),
         ));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(name.to_string())],
+        body: Body::from(body),
+    }
+}
+
+fn bool_variable_block(name: &str, description: &str, default: Option<bool>) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("bool")),
+        attr("description", Expression::String(description.to_string())),
+    ];
+    if let Some(default) = default {
+        body.push(attr("default", Expression::Bool(default)));
     }
     Block {
         identifier: Identifier::sanitized("variable"),
