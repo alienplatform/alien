@@ -162,9 +162,10 @@ Resources:
             - ecr:GetDownloadUrlForLayer
             - ecr:ListImages
             Resource:
-              Fn::GetAtt:
+            - Fn::GetAtt:
               - RegistryRepository
               - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: alien.dev/managed-by
         Value: alien
@@ -215,9 +216,10 @@ Resources:
             - ecr:PutImage
             - ecr:UploadLayerPart
             Resource:
-              Fn::GetAtt:
+            - Fn::GetAtt:
               - RegistryRepository
               - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: alien.dev/managed-by
         Value: alien

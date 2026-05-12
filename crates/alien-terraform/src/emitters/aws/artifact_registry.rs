@@ -202,7 +202,12 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
                     ("Action", Expression::Array(actions)),
                     (
                         "Resource",
-                        expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
+                        Expression::Array(vec![
+                            expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
+                            expr::raw(format!(
+                                "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
+                            )),
+                        ]),
                     ),
                 ]),
             ]),

@@ -155,13 +155,13 @@ resource "aws_iam_role" "registry_push" {
 resource "aws_iam_role_policy" "registry_pull_policy" {
   name   = "ecr-pull"
   role   = aws_iam_role.registry_pull.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = aws_ecr_repository.registry.arn }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }] })
 }
 
 resource "aws_iam_role_policy" "registry_push_policy" {
   name   = "ecr-push-pull"
   role   = aws_iam_role.registry_push.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = aws_ecr_repository.registry.arn }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }] })
 }
 
 === import.tf ===

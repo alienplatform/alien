@@ -352,16 +352,17 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
         return Ok(None);
     };
 
-    let text = std::fs::read_to_string(path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let text = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: format!("Failed to read deployment config {}", path.display()),
-        })?;
-    let config = toml::from_str(&text)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to parse deployment config {}", path.display()),
-        })?;
+        },
+    )?;
+    let config =
+        toml::from_str(&text)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to parse deployment config {}", path.display()),
+            })?;
     Ok(Some(config))
 }
 
@@ -378,7 +379,8 @@ fn resolve_deployment_info(
     if let Some(name) = requested_name {
         let tracker = DeploymentTracker::new()?;
         if let Some(tracked) = tracker.get(name) {
-            let token = resolve_token(args, embedded_config).unwrap_or_else(|_| tracked.token.clone());
+            let token =
+                resolve_token(args, embedded_config).unwrap_or_else(|_| tracked.token.clone());
             let manager_url = args
                 .manager_url
                 .clone()

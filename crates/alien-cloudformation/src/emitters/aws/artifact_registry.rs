@@ -161,6 +161,7 @@ fn ecr_role_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
 fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression> {
     let logical_id = required_logical_id(ctx)?;
     let repository_id = format!("{logical_id}Repository");
+    let registry = resource_config::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
     let mut repository_actions = vec![
         "ecr:BatchCheckLayerAvailability",
         "ecr:BatchGetImage",
@@ -198,7 +199,16 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
                         "Action",
                         CfExpression::list(repository_actions.into_iter().map(CfExpression::from)),
                     ),
-                    ("Resource", CfExpression::get_att(repository_id, "Arn")),
+                    (
+                        "Resource",
+                        CfExpression::list([
+                            CfExpression::get_att(repository_id, "Arn"),
+                            CfExpression::sub(format!(
+                                "arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*",
+                                registry.id()
+                            )),
+                        ]),
+                    ),
                 ]),
             ]),
         ),
