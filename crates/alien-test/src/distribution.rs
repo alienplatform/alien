@@ -1378,33 +1378,12 @@ fn terraform_tfvars(
                 .azure_target
                 .as_ref()
                 .context("Azure target missing")?;
-            vars.insert(
-                "azure_subscription_id".to_string(),
-                Value::String(azure_target.subscription_id.clone()),
+            insert_azure_tfvars(
+                &mut vars,
+                azure_target,
+                prepared.config.azure_mgmt.as_ref(),
+                target,
             );
-            vars.insert(
-                "azure_location".to_string(),
-                Value::String(azure_target.region.clone()),
-            );
-            vars.insert(
-                "azure_resource_group_name".to_string(),
-                Value::String(format!(
-                    "alien-e2e-{}",
-                    &uuid::Uuid::new_v4().to_string()[..8]
-                )),
-            );
-            if let Some(mgmt) = prepared.config.azure_mgmt.as_ref() {
-                vars.insert(
-                    "azure_managing_tenant_id".to_string(),
-                    Value::String(mgmt.tenant_id.clone()),
-                );
-            }
-            if target == alien_terraform::TerraformTarget::Aks {
-                vars.insert(
-                    "aks_oidc_issuer_url".to_string(),
-                    Value::String(String::new()),
-                );
-            }
         }
         _ => {}
     }
@@ -1417,6 +1396,61 @@ fn terraform_tfvars(
     }
 
     Ok(Value::Object(vars))
+}
+
+fn insert_azure_tfvars(
+    vars: &mut serde_json::Map<String, Value>,
+    azure_target: &AzureConfig,
+    azure_mgmt: Option<&AzureConfig>,
+    target: alien_terraform::TerraformTarget,
+) {
+    vars.insert(
+        "azure_subscription_id".to_string(),
+        Value::String(azure_target.subscription_id.clone()),
+    );
+    vars.insert(
+        "azure_location".to_string(),
+        Value::String(azure_target.region.clone()),
+    );
+    vars.insert(
+        "azure_resource_group_name".to_string(),
+        Value::String(format!(
+            "alien-e2e-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        )),
+    );
+    if let Some(mgmt) = azure_mgmt {
+        vars.insert(
+            "azure_managing_tenant_id".to_string(),
+            Value::String(mgmt.tenant_id.clone()),
+        );
+        if let Some(issuer) = &mgmt.oidc_issuer {
+            vars.insert(
+                "azure_oidc_issuer".to_string(),
+                Value::String(issuer.clone()),
+            );
+        }
+        if let Some(subject) = &mgmt.oidc_subject {
+            vars.insert(
+                "azure_oidc_subject".to_string(),
+                Value::String(subject.clone()),
+            );
+        }
+        if mgmt.oidc_issuer.is_none() {
+            if let Some(principal_id) = &mgmt.management_sp_object_id {
+                vars.insert(
+                    "azure_management_principal_id".to_string(),
+                    Value::String(principal_id.clone()),
+                );
+            }
+        }
+    }
+    if target == alien_terraform::TerraformTarget::Aks {
+        vars.insert(
+            "aks_oidc_issuer_url".to_string(),
+            Value::String(String::new()),
+        );
+    }
 }
 
 fn aws_env(config: &AwsConfig) -> Vec<(String, String)> {
@@ -1540,6 +1574,28 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use alien_core::ResourceLifecycle;
 
+    fn azure_config(
+        subscription_id: &str,
+        tenant_id: &str,
+        region: &str,
+        oidc_issuer: Option<&str>,
+        oidc_subject: Option<&str>,
+        management_sp_object_id: Option<&str>,
+    ) -> AzureConfig {
+        AzureConfig {
+            subscription_id: subscription_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            client_id: "client-id".to_string(),
+            client_secret: "client-secret".to_string(),
+            region: region.to_string(),
+            oidc_issuer: oidc_issuer.map(ToString::to_string),
+            oidc_subject: oidc_subject.map(ToString::to_string),
+            management_sp_client_id: None,
+            management_sp_client_secret: None,
+            management_sp_object_id: management_sp_object_id.map(ToString::to_string),
+        }
+    }
+
     #[tokio::test]
     async fn gcp_distribution_render_grants_live_function_provision() {
         let stack = Stack::new("distribution-gcp".to_string())
@@ -1584,5 +1640,73 @@ mod tests {
         assert!(rendered.contains("\"resourcemanager.projects.get\""));
         assert!(rendered.contains("\"run.services.create\""));
         assert!(rendered.contains("\"iam.serviceAccounts.actAs\""));
+    }
+
+    #[test]
+    fn azure_tfvars_include_oidc_federated_identity_inputs() {
+        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None, None);
+        let azure_mgmt = azure_config(
+            "mgmt-sub",
+            "mgmt-tenant",
+            "eastus2",
+            Some("https://issuer.example.com"),
+            Some("system:serviceaccount:alien:manager"),
+            Some("fallback-principal"),
+        );
+        let mut vars = serde_json::Map::new();
+
+        insert_azure_tfvars(
+            &mut vars,
+            &azure_target,
+            Some(&azure_mgmt),
+            alien_terraform::TerraformTarget::Azure,
+        );
+
+        assert_eq!(
+            vars.get("azure_subscription_id").and_then(Value::as_str),
+            Some("target-sub")
+        );
+        assert_eq!(
+            vars.get("azure_managing_tenant_id").and_then(Value::as_str),
+            Some("mgmt-tenant")
+        );
+        assert_eq!(
+            vars.get("azure_oidc_issuer").and_then(Value::as_str),
+            Some("https://issuer.example.com")
+        );
+        assert_eq!(
+            vars.get("azure_oidc_subject").and_then(Value::as_str),
+            Some("system:serviceaccount:alien:manager")
+        );
+        assert!(vars.get("azure_management_principal_id").is_none());
+    }
+
+    #[test]
+    fn azure_tfvars_include_local_fallback_principal_without_oidc() {
+        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None, None);
+        let azure_mgmt = azure_config(
+            "mgmt-sub",
+            "mgmt-tenant",
+            "eastus2",
+            None,
+            None,
+            Some("fallback-principal"),
+        );
+        let mut vars = serde_json::Map::new();
+
+        insert_azure_tfvars(
+            &mut vars,
+            &azure_target,
+            Some(&azure_mgmt),
+            alien_terraform::TerraformTarget::Azure,
+        );
+
+        assert_eq!(
+            vars.get("azure_management_principal_id")
+                .and_then(Value::as_str),
+            Some("fallback-principal")
+        );
+        assert!(vars.get("azure_oidc_issuer").is_none());
+        assert!(vars.get("azure_oidc_subject").is_none());
     }
 }

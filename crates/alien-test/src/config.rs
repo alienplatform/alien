@@ -111,8 +111,8 @@ pub struct SharedContainerEnvConfig {
     pub resource_group: String,
     pub default_domain: String,
     pub static_ip: Option<String>,
-    /// Role definition ID for `managedEnvironments/join/action` on this
-    /// environment. Created by Terraform, assigned per-deployment in test setup.
+    /// Role definition ID for using this shared environment. Created by
+    /// Terraform, assigned per-deployment in test setup.
     pub join_role_definition_id: Option<String>,
 }
 

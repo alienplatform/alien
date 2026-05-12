@@ -83,9 +83,9 @@ resource "azurerm_container_app_environment" "shared_target" {
   location            = azurerm_resource_group.shared_target.location
 }
 
-# Custom role that allows joining the shared environment. Created once here;
-# the test harness assigns it to each deployment's management UAMI after
-# InitialSetup (when the UAMI exists but before Provisioning needs it).
+# Custom role that allows using the shared environment. Created once here; the
+# test harness assigns it to each deployment's management UAMI after InitialSetup
+# (when the UAMI exists but before Provisioning needs it).
 resource "azurerm_role_definition" "shared_env_join" {
   provider = azurerm.target
   name     = "alien-e2e-env-join-${random_id.suffix.hex}"
@@ -95,6 +95,9 @@ resource "azurerm_role_definition" "shared_env_join" {
     actions = [
       "Microsoft.App/managedEnvironments/read",
       "Microsoft.App/managedEnvironments/join/action",
+      "Microsoft.App/managedEnvironments/daprComponents/delete",
+      "Microsoft.App/managedEnvironments/daprComponents/read",
+      "Microsoft.App/managedEnvironments/daprComponents/write",
     ]
   }
 

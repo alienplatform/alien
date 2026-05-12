@@ -67,9 +67,9 @@ pub async fn setup_target(
     .map_err(|e| anyhow::anyhow!("push_initial_setup failed: {}", e))?;
 
     // For Azure with shared (external) Container Apps Environment: the management
-    // UAMI now exists but lacks `managedEnvironments/join/action` on the shared
-    // environment (which is in a different resource group). Grant it here using
-    // target credentials, before the manager's Provisioning phase starts.
+    // UAMI now exists but lacks permissions on the shared environment (which is
+    // in a different resource group). Grant them here using target credentials,
+    // before the manager's Provisioning phase starts.
     if platform == Platform::Azure {
         if let Some(ref shared_env) = config.azure_resources.shared_container_env {
             grant_shared_env_join_permission(
@@ -567,8 +567,8 @@ fn build_direct_target_config(
     }
 }
 
-/// Grant the deployment's management UAMI `managedEnvironments/join/action`
-/// on the shared Container Apps Environment.
+/// Grant the deployment's management UAMI permissions on the shared Container
+/// Apps Environment.
 ///
 /// The shared environment is in a different resource group than the deployment,
 /// so the management UAMI's RG-scoped role doesn't cover it. The role
@@ -625,7 +625,7 @@ async fn grant_shared_env_join_permission(
     info!(
         principal_id = %mgmt_principal_id,
         shared_env = %shared_env.environment_name,
-        "Granting managedEnvironments/join on shared environment for management UAMI"
+        "Granting shared environment permissions for management UAMI"
     );
 
     // Create role assignment using the Terraform-provisioned role definition
@@ -668,7 +668,7 @@ async fn grant_shared_env_join_permission(
                     condition: None,
                     condition_version: None,
                     delegated_managed_identity_resource_id: None,
-                    description: Some("E2E test: management UAMI join shared env".into()),
+                    description: Some("E2E test: management UAMI shared env access".into()),
                     created_by: None,
                     created_on: None,
                     updated_by: None,
@@ -681,7 +681,7 @@ async fn grant_shared_env_join_permission(
 
     info!(
         principal_id = %mgmt_principal_id,
-        "Shared environment join permission granted"
+        "Shared environment permissions granted"
     );
 
     Ok(())
