@@ -267,8 +267,13 @@ fn build_cross_account_access(
         }
         EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) => {
             let service_account_emails = rsm_access.into_iter().collect();
+            let project_numbers = if project_number.is_empty() {
+                Vec::new()
+            } else {
+                vec![project_number.clone()]
+            };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
-                project_numbers: vec![project_number.clone()],
+                project_numbers,
                 allowed_service_types: vec![ComputeServiceType::Function],
                 service_account_emails,
             }))

@@ -1325,6 +1325,13 @@ expression: schemas
         "description": "Project ID containing the management service account.",
         "type": "string"
       },
+      "projectNumber": {
+        "description": "Numeric project number containing the management service account.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "serviceAccountEmail": {
         "description": "Service account email the manager impersonates.",
         "type": "string"

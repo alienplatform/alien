@@ -42,7 +42,8 @@ use alien_error::AlienError;
 use super::{auth, AppState};
 use crate::auth::{Scope, Subject};
 use crate::error::ErrorData;
-use crate::traits::{CreateImportedDeploymentParams, ReleaseRecord};
+use crate::ids;
+use crate::traits::{CreateImportedDeploymentParams, CreateTokenParams, ReleaseRecord, TokenType};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/v1/stack/import", post(stack_import))
@@ -222,9 +223,11 @@ pub async fn stack_import(
         .into_response();
     }
 
+    let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
+
     let params = CreateImportedDeploymentParams {
         name: deployment_name,
-        deployment_group_id,
+        deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
         stack_settings: req.stack_settings.clone(),
         stack_state: stack_state.clone(),
@@ -233,7 +236,7 @@ pub async fn stack_import(
         status: "provisioning".to_string(),
         current_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
-        deployment_token: None,
+        deployment_token: Some(raw_token.clone()),
         management_config: Some(req.management_config.clone()),
     };
 
@@ -245,6 +248,20 @@ pub async fn stack_import(
         Ok(d) => d,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(e) = state
+        .token_store
+        .create_token(CreateTokenParams {
+            token_type: TokenType::Deployment,
+            key_prefix,
+            key_hash,
+            deployment_group_id: Some(deployment_group_id),
+            deployment_id: Some(created.id.clone()),
+        })
+        .await
+    {
+        return e.into_response();
+    }
 
     (
         StatusCode::CREATED,
@@ -274,7 +291,7 @@ fn infer_import_environment_info(req: &StackImportRequest) -> Option<Environment
         }),
         Platform::Gcp => infer_gcp_project_id(req).map(|project_id| {
             EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-                project_number: String::new(),
+                project_number: infer_gcp_project_number(req).unwrap_or_default(),
                 project_id,
                 region: req.region.clone(),
             })
@@ -288,6 +305,12 @@ fn infer_gcp_project_id(req: &StackImportRequest) -> Option<String> {
     req.resources
         .iter()
         .find_map(|resource| string_field(&resource.import_data, "projectId"))
+}
+
+fn infer_gcp_project_number(req: &StackImportRequest) -> Option<String> {
+    req.resources
+        .iter()
+        .find_map(|resource| string_field(&resource.import_data, "projectNumber"))
 }
 
 fn infer_azure_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {

@@ -57,6 +57,7 @@ use alien_manager::traits::{
 struct Fixture {
     state: AppState,
     deployment_store: Arc<dyn DeploymentStore>,
+    token_store: Arc<dyn TokenStore>,
     deployment_group_id: String,
     /// Raw bearer token to send in the `Authorization` header.
     dg_token: String,
@@ -191,6 +192,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
     Fixture {
         state,
         deployment_store,
+        token_store,
         deployment_group_id: dg.id,
         dg_token,
         admin_token,
@@ -316,6 +318,7 @@ fn gcp_remote_management_import_request(
     region: &str,
     resource_id: &str,
     project_id: &str,
+    project_number: Option<&str>,
 ) -> StackImportRequest {
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
@@ -334,6 +337,7 @@ fn gcp_remote_management_import_request(
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
             import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
                 project_id: project_id.to_string(),
+                project_number: project_number.map(ToString::to_string),
                 service_account_email: format!(
                     "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
                 ),
@@ -483,6 +487,26 @@ async fn happy_path_creates_imported_deployment() {
         persisted.current_release_id.is_some(),
         "imported deployment must pin the release that produced it"
     );
+    let deployment_token = persisted
+        .deployment_token
+        .as_ref()
+        .expect("imported deployments must persist a deployment token for proxy pulls");
+    let token_hash = {
+        let mut h = Sha256::new();
+        h.update(deployment_token.as_bytes());
+        format!("{:x}", h.finalize())
+    };
+    let token_record = fixture
+        .token_store
+        .validate_token(&token_hash)
+        .await
+        .unwrap()
+        .expect("deployment token must be registered for proxy auth");
+    assert_eq!(token_record.token_type, TokenType::Deployment);
+    assert_eq!(
+        token_record.deployment_id.as_deref(),
+        Some(parsed.deployment_id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -533,6 +557,7 @@ async fn gcp_import_persists_target_environment_info() {
         "us-central1",
         "remote-stack-management",
         "customer-project",
+        Some("123456789012"),
     );
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
@@ -552,7 +577,7 @@ async fn gcp_import_persists_target_environment_info() {
     assert_eq!(
         persisted.environment_info,
         Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-            project_number: String::new(),
+            project_number: "123456789012".to_string(),
             project_id: "customer-project".to_string(),
             region: "us-central1".to_string(),
         }))

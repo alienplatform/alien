@@ -16,7 +16,7 @@
 //!    pure-OSS scenarios where there's no central manager.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
         downcast, emit_custom_role_and_bindings, permission_context, required_label,
@@ -56,6 +56,11 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                     ),
                 ),
             ],
+        ));
+        fragment.data_blocks.push(data_block(
+            "google_project",
+            "current",
+            [attr("project_id", expr::raw("var.gcp_project"))],
         ));
 
         // Per-permission-set custom roles + bindings, derived from the
@@ -115,6 +120,10 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         let label = required_label(ctx)?;
         Ok(expr::object([
             ("projectId", expr::raw("var.gcp_project")),
+            (
+                "projectNumber",
+                expr::traversal(["data", "google_project", "current", "number"]),
+            ),
             (
                 "serviceAccountEmail",
                 expr::traversal(["google_service_account", label, "email"]),

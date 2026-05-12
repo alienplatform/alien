@@ -120,6 +120,7 @@ locals {
       type = "remote-stack-management"
       importData = {
         projectId                    = var.gcp_project
+        projectNumber                = data.google_project.current.number
         serviceAccountEmail          = google_service_account.management.email
         serviceAccountUniqueId       = google_service_account.management.unique_id
         managementPermissionsApplied = true
@@ -285,6 +286,10 @@ resource "google_project_iam_member" "execution_sa_queuedatawrite_binding_0" {
 }
 
 === management.tf ===
+data "google_project" "current" {
+  project_id = var.gcp_project
+}
+
 resource "google_service_account" "management" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", var.stack_name)), "_", "-")), 0, 8))

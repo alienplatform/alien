@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub struct GcpRemoteStackManagementImportData {
     /// Project ID containing the management service account.
     pub project_id: String,
+    /// Numeric project number containing the management service account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_number: Option<String>,
     /// Service account email the manager impersonates.
     pub service_account_email: String,
     /// Stable unique id Google assigns to the service account.
