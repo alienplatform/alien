@@ -27,7 +27,9 @@ use alien_core::import::{
 };
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
-    AwsStorageImportData, EnvironmentInfo, ManagementConfig, Platform, RemoteStackManagement,
+    AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
+    AzureRemoteStackManagementImportData, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
+    GcpRemoteStackManagementImportData, ManagementConfig, Platform, RemoteStackManagement,
     ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
 };
 use alien_manager::auth::Authz;
@@ -66,6 +68,10 @@ struct Fixture {
 /// Build a fresh fixture: temp DB, seeded release matching the import payload,
 /// and a deployment-group token for the caller.
 async fn make_fixture(seeded_stack: Option<Stack>) -> Fixture {
+    make_fixture_for_platform(Platform::Aws, seeded_stack).await
+}
+
+async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stack>) -> Fixture {
     // Use a temp directory because turso's WAL mode needs a real file path.
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
@@ -114,7 +120,7 @@ async fn make_fixture(seeded_stack: Option<Stack>) -> Fixture {
                     &alien_manager::auth::Subject::system(),
                     CreateReleaseParams {
                         project_id: "default".to_string(),
-                        stacks: HashMap::from([(Platform::Aws, stack)]),
+                        stacks: HashMap::from([(platform, stack)]),
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
@@ -305,6 +311,81 @@ fn aws_remote_management_import_request(
     }
 }
 
+fn gcp_remote_management_import_request(
+    deployment_name: &str,
+    region: &str,
+    resource_id: &str,
+    project_id: &str,
+) -> StackImportRequest {
+    StackImportRequest {
+        deployment_group_token: "ignored".to_string(),
+        deployment_name: deployment_name.to_string(),
+        stack_prefix: deployment_name.to_string(),
+        source_kind: Some(ImportSourceKind::Terraform),
+        release_id: None,
+        platform: Platform::Gcp,
+        region: region.to_string(),
+        stack_settings: StackSettings::default(),
+        management_config: ManagementConfig::Gcp(GcpManagementConfig {
+            service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
+        }),
+        resources: vec![ImportedResource {
+            id: resource_id.to_string(),
+            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
+                project_id: project_id.to_string(),
+                service_account_email: format!(
+                    "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
+                ),
+                service_account_unique_id: "1234567890".to_string(),
+                management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
+    }
+}
+
+fn azure_remote_management_import_request(
+    deployment_name: &str,
+    region: &str,
+    resource_id: &str,
+    subscription_id: &str,
+    tenant_id: &str,
+) -> StackImportRequest {
+    StackImportRequest {
+        deployment_group_token: "ignored".to_string(),
+        deployment_name: deployment_name.to_string(),
+        stack_prefix: deployment_name.to_string(),
+        source_kind: Some(ImportSourceKind::Terraform),
+        release_id: None,
+        platform: Platform::Azure,
+        region: region.to_string(),
+        stack_settings: StackSettings::default(),
+        management_config: ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: tenant_id.to_string(),
+            oidc_issuer: None,
+            oidc_subject: None,
+            management_principal_id: None,
+        }),
+        resources: vec![ImportedResource {
+            id: resource_id.to_string(),
+            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(AzureRemoteStackManagementImportData {
+                subscription_id: subscription_id.to_string(),
+                resource_group: format!("{deployment_name}-rg"),
+                tenant_id: tenant_id.to_string(),
+                identity_id: format!(
+                    "/subscriptions/{subscription_id}/resourceGroups/{deployment_name}-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{deployment_name}-management"
+                ),
+                principal_id: "00000000-0000-0000-0000-000000000001".to_string(),
+                client_id: "00000000-0000-0000-0000-000000000002".to_string(),
+                management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
+    }
+}
+
 async fn post_import(
     fixture: &Fixture,
     bearer: Option<&str>,
@@ -436,6 +517,83 @@ async fn aws_import_persists_target_environment_info() {
         Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
             account_id: "210987654321".to_string(),
             region: "us-west-2".to_string(),
+        }))
+    );
+}
+
+#[tokio::test]
+async fn gcp_import_persists_target_environment_info() {
+    let fixture = make_fixture_for_platform(
+        Platform::Gcp,
+        Some(stack_with_remote_management("remote-stack-management")),
+    )
+    .await;
+    let body = gcp_remote_management_import_request(
+        "acme-prod",
+        "us-central1",
+        "remote-stack-management",
+        "customer-project",
+    );
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    assert_eq!(
+        persisted.environment_info,
+        Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+            project_number: String::new(),
+            project_id: "customer-project".to_string(),
+            region: "us-central1".to_string(),
+        }))
+    );
+}
+
+#[tokio::test]
+async fn azure_import_persists_target_environment_info() {
+    let fixture = make_fixture_for_platform(
+        Platform::Azure,
+        Some(stack_with_remote_management("remote-stack-management")),
+    )
+    .await;
+    let body = azure_remote_management_import_request(
+        "acme-prod",
+        "eastus",
+        "remote-stack-management",
+        "00000000-0000-0000-0000-000000000123",
+        "00000000-0000-0000-0000-000000000456",
+    );
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    assert_eq!(
+        persisted.environment_info,
+        Some(EnvironmentInfo::Azure(AzureEnvironmentInfo {
+            tenant_id: "00000000-0000-0000-0000-000000000456".to_string(),
+            subscription_id: "00000000-0000-0000-0000-000000000123".to_string(),
+            location: "eastus".to_string(),
         }))
     );
 }

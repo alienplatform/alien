@@ -11,8 +11,9 @@ use alien_azure_clients::{
 };
 use alien_core::{
     import::{
-        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData, ImportSourceKind,
-        ImportedResource, StackImportRequest, StackImportResponse,
+        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
+        GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
+        StackImportResponse,
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
@@ -20,7 +21,7 @@ use alien_core::{
     GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState,
 };
-use alien_gcp_clients::{CloudRunApi, CloudRunClient, GcpClientConfigExt, ResourceManagerApi};
+use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -1153,33 +1154,48 @@ async fn terraform_output_json(workdir: &Path, env: &[(String, String)]) -> anyh
     serde_json::from_slice(&output.stdout).context("Failed to parse terraform output JSON")
 }
 
-/// Terraform can finish before GCP custom roles and IAM bindings are visible
-/// to Cloud Run. Probe the imported management identity before deployment
-/// starts so Terraform distribution tests do not spend the deployment timeout
-/// retrying predictable 403s.
+/// Terraform can finish before GCP custom roles and IAM bindings are visible.
+/// Probe the same two-hop chain the manager uses before deployment starts:
+/// management credentials -> configured manager SA -> imported stack management SA.
 async fn wait_for_gcp_management_permissions(
     config: &TestConfig,
     outputs: &Value,
 ) -> anyhow::Result<()> {
     let target = config.gcp_target.as_ref().context("GCP target missing")?;
+    let management_source = config.gcp_mgmt.as_ref();
     let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
         outputs,
         "deployment_management_config",
     )?)?;
-    let service_account_email = match management_config {
+    let management_service_account_email = match management_config {
         ManagementConfig::Gcp(config) => config.service_account_email,
         other => {
             anyhow::bail!("expected GCP management config, got {other:?}");
         }
     };
+    if management_service_account_email.is_empty() {
+        warn!("Skipping GCP management permission probe because no management service account is configured");
+        return Ok(());
+    }
+    let resources: Vec<ImportedResource> =
+        serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
+    let remote_management = terraform_import_data::<GcpRemoteStackManagementImportData>(
+        &resources,
+        "remote-stack-management",
+    )?;
 
-    let Some(credentials_json) = target.credentials_json.clone() else {
+    let Some(management_source) = management_source else {
+        warn!("Skipping GCP management permission probe because GCP management config is missing");
+        return Ok(());
+    };
+    let Some(credentials_json) = management_source.credentials_json.clone() else {
+        warn!("Skipping GCP management permission probe because GCP management credentials are missing");
         return Ok(());
     };
 
     let base_config = GcpClientConfig {
-        project_id: target.project_id.clone(),
-        region: target.region.clone(),
+        project_id: management_source.project_id.clone(),
+        region: management_source.region.clone(),
         credentials: GcpCredentials::ServiceAccountKey {
             json: credentials_json,
         },
@@ -1187,36 +1203,15 @@ async fn wait_for_gcp_management_permissions(
         project_number: None,
     };
     let http = reqwest::Client::new();
-    let probe_name = format!(
-        "{}-iam-propagation-probe",
-        terraform_output_string(outputs, "deployment_stack_prefix")?
-    );
-    let probe_service = alien_gcp_clients::gcp::cloudrun::Service {
-        description: Some("Alien Terraform IAM propagation probe".to_string()),
-        template: Some(alien_gcp_clients::gcp::cloudrun::RevisionTemplate {
-            containers: vec![alien_gcp_clients::gcp::cloudrun::Container {
-                image: "us-docker.pkg.dev/cloudrun/container/hello".to_string(),
-                ports: vec![alien_gcp_clients::gcp::cloudrun::ContainerPort {
-                    name: Some("http1".to_string()),
-                    container_port: Some(8080),
-                }],
-                ..Default::default()
-            }],
-            timeout: Some("60s".to_string()),
-            ..Default::default()
-        }),
-        invoker_iam_disabled: Some(true),
-        ..Default::default()
-    };
 
     let timeout = Duration::from_secs(300);
     let started = tokio::time::Instant::now();
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let impersonated_config = match base_config
+        let management_config = match base_config
             .impersonate(GcpImpersonationConfig {
-                service_account_email: service_account_email.clone(),
+                service_account_email: management_service_account_email.clone(),
                 target_project_id: Some(target.project_id.clone()),
                 target_region: Some(target.region.clone()),
                 ..GcpImpersonationConfig::default()
@@ -1227,11 +1222,11 @@ async fn wait_for_gcp_management_permissions(
             Err(error) if gcp_management_permission_probe_should_retry(&error) => {
                 if started.elapsed() >= timeout {
                     anyhow::bail!(
-                        "GCP management service account impersonation did not propagate for {service_account_email} within {timeout:?}: {error}"
+                        "GCP management service account impersonation did not propagate for {management_service_account_email} within {timeout:?}: {error}"
                     );
                 }
                 warn!(
-                    %service_account_email,
+                    service_account_email = %management_service_account_email,
                     attempt,
                     %error,
                     "GCP management service account impersonation is not ready yet"
@@ -1243,41 +1238,52 @@ async fn wait_for_gcp_management_permissions(
                 anyhow::bail!("GCP management service account impersonation probe failed: {error}");
             }
         };
+        let impersonated_config = match management_config
+            .impersonate(GcpImpersonationConfig {
+                service_account_email: remote_management.service_account_email.clone(),
+                target_project_id: Some(target.project_id.clone()),
+                target_region: Some(target.region.clone()),
+                ..GcpImpersonationConfig::default()
+            })
+            .await
+        {
+            Ok(config) => config,
+            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
+                if started.elapsed() >= timeout {
+                    anyhow::bail!(
+                        "GCP remote stack management service account impersonation did not propagate for {} within {timeout:?}: {error}",
+                        remote_management.service_account_email
+                    );
+                }
+                warn!(
+                    service_account_email = %remote_management.service_account_email,
+                    management_service_account_email = %management_service_account_email,
+                    attempt,
+                    %error,
+                    "GCP remote stack management service account impersonation is not ready yet"
+                );
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+            Err(error) => {
+                anyhow::bail!(
+                    "GCP remote stack management service account impersonation probe failed: {error}"
+                );
+            }
+        };
 
         let resource_manager = alien_gcp_clients::ResourceManagerClient::new(
             http.clone(),
             impersonated_config.clone(),
         );
-        let cloud_run = CloudRunClient::new(http.clone(), impersonated_config);
-        let project_result = resource_manager
+        let result = resource_manager
             .get_project_metadata(target.project_id.clone())
             .await;
-        let result = match project_result {
-            Ok(_) => {
-                cloud_run
-                    .create_service(
-                        target.region.clone(),
-                        probe_name.clone(),
-                        probe_service.clone(),
-                        Some(true),
-                    )
-                    .await
-            }
-            Err(error) => Err(error),
-        };
 
         match result {
             Ok(_) => {
                 info!(
-                    %service_account_email,
-                    attempts = attempt,
-                    "GCP management IAM permissions are ready"
-                );
-                return Ok(());
-            }
-            Err(error) if gcp_management_permission_probe_passed_auth(&error) => {
-                info!(
-                    %service_account_email,
+                    service_account_email = %remote_management.service_account_email,
                     attempts = attempt,
                     "GCP management IAM permissions are ready"
                 );
@@ -1286,11 +1292,12 @@ async fn wait_for_gcp_management_permissions(
             Err(error) if gcp_management_permission_probe_should_retry(&error) => {
                 if started.elapsed() >= timeout {
                     anyhow::bail!(
-                        "GCP management IAM permissions did not propagate for {service_account_email} within {timeout:?}: {error}"
+                        "GCP management IAM permissions did not propagate for {} within {timeout:?}: {error}",
+                        remote_management.service_account_email
                     );
                 }
                 warn!(
-                    %service_account_email,
+                    service_account_email = %remote_management.service_account_email,
                     attempt,
                     %error,
                     "GCP management IAM permissions are not ready yet"
@@ -1302,13 +1309,6 @@ async fn wait_for_gcp_management_permissions(
             }
         }
     }
-}
-
-fn gcp_management_permission_probe_passed_auth(error: &alien_gcp_clients::Error) -> bool {
-    matches!(
-        error.code.as_str(),
-        "INVALID_INPUT" | "REMOTE_RESOURCE_CONFLICT"
-    )
 }
 
 fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error) -> bool {
@@ -1333,11 +1333,11 @@ async fn wait_for_azure_management_permissions(
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
 
-    let management = azure_import_data::<AzureRemoteStackManagementImportData>(
+    let management = terraform_import_data::<AzureRemoteStackManagementImportData>(
         &resources,
         "remote-stack-management",
     )?;
-    let service_bus = azure_import_data::<AzureServiceBusNamespaceImportData>(
+    let service_bus = terraform_import_data::<AzureServiceBusNamespaceImportData>(
         &resources,
         "azure_service_bus_namespace",
     )?;
@@ -1446,7 +1446,10 @@ async fn wait_for_azure_management_permissions(
     }
 }
 
-fn azure_import_data<T>(resources: &[ImportedResource], resource_type: &str) -> anyhow::Result<T>
+fn terraform_import_data<T>(
+    resources: &[ImportedResource],
+    resource_type: &str,
+) -> anyhow::Result<T>
 where
     T: serde::de::DeserializeOwned,
 {

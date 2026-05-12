@@ -14,7 +14,9 @@ use alien_core::{
 
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
-use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
+use crate::infra_requirements::azure_utils::{
+    azure_resource_group_resource_id, azure_service_bus_namespace_resource_id,
+};
 use crate::infra_requirements::{
     AzureContainerAppsEnvironmentController, AzureContainerAppsEnvironmentState,
     AzureResourceGroupController, AzureResourceGroupState, AzureServiceBusNamespaceController,
@@ -143,12 +145,16 @@ impl ResourceImporter for AzureServiceBusNamespaceImporter {
         data: AzureServiceBusNamespaceImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        let _ = data.subscription_id;
-        let _ = data.resource_group;
+        let resource_id = azure_service_bus_namespace_resource_id(
+            &data.subscription_id,
+            &data.resource_group,
+            &data.namespace_name,
+        );
         let controller = AzureServiceBusNamespaceController {
             state: AzureServiceBusNamespaceState::Ready,
             namespace_name: Some(data.namespace_name),
-            resource_id: None,
+            resource_group_name: Some(data.resource_group),
+            resource_id: Some(resource_id),
             fqdn: Some(data.endpoint.clone()),
             endpoint: Some(data.endpoint),
             _internal_stay_count: None,

@@ -279,7 +279,6 @@ impl AzureFunctionController {
 
         // Derive deterministic resource names.
         let container_app_name = get_azure_container_app_name(ctx.resource_prefix, &func_cfg.id);
-        let resource_group_name = get_resource_group_name(ctx.state)?;
 
         // Pre-create commands infrastructure BEFORE the Container App so the Dapr
         // sidecar starts with the component already defined AND the RBAC roles already
@@ -287,14 +286,8 @@ impl AzureFunctionController {
         // This eliminates the race condition where the sidecar starts before permissions exist.
         self.container_app_name = Some(container_app_name.clone());
         if func_cfg.commands_enabled {
-            self.setup_commands_infrastructure(
-                ctx,
-                azure_cfg,
-                func_cfg,
-                &resource_group_name,
-                &container_app_name,
-            )
-            .await?;
+            self.setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
+                .await?;
         }
 
         // Wait in a real controller state for Azure RBAC propagation. A
@@ -954,9 +947,6 @@ impl AzureFunctionController {
         }
 
         let azure_config = ctx.get_azure_config()?;
-        // The Service Bus namespace lives in the deployment's resource group.
-        let deployment_resource_group =
-            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         // Dapr components live on the Container Apps Environment, which may be in a
         // different resource group than the deployment (shared/external environments).
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -979,6 +969,7 @@ impl AzureFunctionController {
                 })
             })?
             .clone();
+        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
 
         let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1001,7 +992,7 @@ impl AzureFunctionController {
         );
 
         mgmt.create_or_update_queue(
-            deployment_resource_group.clone(),
+            service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
             alien_azure_clients::models::queue::SbQueueProperties {
@@ -1143,7 +1134,7 @@ impl AzureFunctionController {
             .assign_commands_sender_role(
                 ctx,
                 azure_config,
-                &deployment_resource_group,
+                &service_bus_resource_group,
                 &namespace_name,
                 func_cfg,
             )
@@ -2025,7 +2016,16 @@ impl AzureFunctionController {
             self.commands_namespace_name.take(),
             self.commands_queue_name.take(),
         ) {
-            let resource_group_name = get_resource_group_name(ctx.state)?;
+            let namespace_ref = ResourceRef::new(
+                alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+                "default-service-bus-namespace",
+            );
+            let resource_group_name = match ctx
+                .require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)
+            {
+                Ok(controller) => controller.resource_group_name(ctx)?,
+                Err(_) => get_resource_group_name(ctx.state)?,
+            };
             info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
             let mgmt = ctx
                 .service_provider
@@ -2365,7 +2365,6 @@ impl AzureFunctionController {
         ctx: &ResourceControllerContext<'_>,
         azure_config: &alien_azure_clients::AzureClientConfig,
         func_cfg: &alien_core::Function,
-        deployment_resource_group: &str,
         container_app_name: &str,
     ) -> Result<()> {
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -2388,6 +2387,7 @@ impl AzureFunctionController {
                 })
             })?
             .clone();
+        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
 
         // Create commands queue
         let queue_name = format!("{}-rq", container_app_name);
@@ -2403,7 +2403,7 @@ impl AzureFunctionController {
         );
 
         mgmt.create_or_update_queue(
-            deployment_resource_group.to_string(),
+            service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
             alien_azure_clients::models::queue::SbQueueProperties::default(),
@@ -2515,7 +2515,7 @@ impl AzureFunctionController {
             .assign_commands_sender_role(
                 ctx,
                 azure_config,
-                deployment_resource_group,
+                &service_bus_resource_group,
                 &namespace_name,
                 func_cfg,
             )

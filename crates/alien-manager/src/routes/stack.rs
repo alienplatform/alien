@@ -34,8 +34,8 @@ use axum::{
 
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
-    AwsEnvironmentInfo, EnvironmentInfo, Platform, RuntimeMetadata, Stack, StackResourceState,
-    StackState,
+    AwsEnvironmentInfo, AzureEnvironmentInfo, EnvironmentInfo, GcpEnvironmentInfo, Platform,
+    RuntimeMetadata, Stack, StackResourceState, StackState,
 };
 use alien_error::AlienError;
 
@@ -272,8 +272,40 @@ fn infer_import_environment_info(req: &StackImportRequest) -> Option<Environment
                 region: req.region.clone(),
             })
         }),
+        Platform::Gcp => infer_gcp_project_id(req).map(|project_id| {
+            EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_number: String::new(),
+                project_id,
+                region: req.region.clone(),
+            })
+        }),
+        Platform::Azure => infer_azure_environment_info(req),
         _ => None,
     }
+}
+
+fn infer_gcp_project_id(req: &StackImportRequest) -> Option<String> {
+    req.resources
+        .iter()
+        .find_map(|resource| string_field(&resource.import_data, "projectId"))
+}
+
+fn infer_azure_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
+    let subscription_id = req
+        .resources
+        .iter()
+        .find_map(|resource| string_field(&resource.import_data, "subscriptionId"))?;
+    let tenant_id = req
+        .resources
+        .iter()
+        .find_map(|resource| string_field(&resource.import_data, "tenantId"))
+        .unwrap_or_default();
+
+    Some(EnvironmentInfo::Azure(AzureEnvironmentInfo {
+        tenant_id,
+        subscription_id,
+        location: req.region.clone(),
+    }))
 }
 
 fn infer_aws_account_id(req: &StackImportRequest) -> Option<String> {
