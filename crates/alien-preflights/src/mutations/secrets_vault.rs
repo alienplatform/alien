@@ -205,7 +205,7 @@ fn add_vault_read_permissions_to_compute_profiles(
 
 /// Add vault/data-write permission to management profile
 /// This allows the management service to sync secrets to the vault during deployment
-fn add_vault_write_permission_to_management(stack: &mut Stack, _vault_name: &str) -> Result<()> {
+fn add_vault_write_permission_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
     // Get current management permissions
@@ -222,23 +222,27 @@ fn add_vault_write_permission_to_management(stack: &mut Stack, _vault_name: &str
                 _ => PermissionProfile::new(),
             };
 
-            // Add vault/data-write to global scope
             if let Some(global_permissions) = management_profile.0.get_mut("*") {
-                if !global_permissions
-                    .iter()
-                    .any(|p| p.id() == "vault/data-write")
-                {
-                    global_permissions.push(vault_write_permission);
-                    debug!("Added vault/data-write to management profile");
+                global_permissions.retain(|p| p.id() != "vault/data-write");
+                if global_permissions.is_empty() {
+                    management_profile.0.swap_remove("*");
                 }
-            } else {
-                // Create global scope if it doesn't exist
-                management_profile
-                    .0
-                    .insert("*".to_string(), vec![vault_write_permission]);
-                debug!("Added vault/data-write to new global scope in management profile");
             }
 
+            let vault_permissions = management_profile
+                .0
+                .entry(vault_name.to_string())
+                .or_default();
+            if !vault_permissions
+                .iter()
+                .any(|p| p.id() == "vault/data-write")
+            {
+                vault_permissions.push(vault_write_permission);
+                debug!(
+                    vault_name = %vault_name,
+                    "Added vault/data-write to management profile for vault resource"
+                );
+            }
             stack.permissions.management = ManagementPermissions::Extend(management_profile);
         }
         ManagementPermissions::Override(_) => {
@@ -599,15 +603,74 @@ mod tests {
         let mutation = SecretsVaultMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Check that management profile has vault/data-write
+        // Check that management profile has vault/data-write scoped to the secrets vault.
+        match result_stack.permissions.management {
+            ManagementPermissions::Extend(profile) => {
+                assert!(
+                    profile.0.get("*").map_or(true, |permissions| !permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write")),
+                    "Management profile should not have global vault/data-write"
+                );
+                let vault_permissions = profile.0.get("secrets").unwrap();
+                assert!(
+                    vault_permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write"),
+                    "Management profile should have vault/data-write for secrets vault"
+                );
+            }
+            _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_migrates_global_vault_data_write_to_secrets_vault() {
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources: IndexMap::new(),
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Extend(
+                    PermissionProfile::new().global(["vault/data-write", "storage/heartbeat"]),
+                ),
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutation = SecretsVaultMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
         match result_stack.permissions.management {
             ManagementPermissions::Extend(profile) => {
                 let global_permissions = profile.0.get("*").unwrap();
                 assert!(
                     global_permissions
                         .iter()
+                        .any(|p| p.id() == "storage/heartbeat"),
+                    "Unrelated global permissions should be preserved"
+                );
+                assert!(
+                    !global_permissions
+                        .iter()
                         .any(|p| p.id() == "vault/data-write"),
-                    "Management profile should have vault/data-write"
+                    "Global vault/data-write should be removed"
+                );
+                assert!(
+                    profile
+                        .0
+                        .get("secrets")
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write"),
+                    "vault/data-write should move to the secrets vault resource"
                 );
             }
             _ => panic!("Expected Extend management permissions"),

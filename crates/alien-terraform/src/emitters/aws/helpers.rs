@@ -263,13 +263,55 @@ pub fn emit_iam_role_policy(
     policy_label_index: usize,
     context: &PermissionContext,
 ) -> Result<()> {
+    emit_iam_role_policy_for_target(
+        fragment,
+        role_label,
+        permission_set,
+        policy_label_index,
+        context,
+        BindingTarget::Stack,
+    )
+}
+
+pub fn emit_iam_role_policy_for_target(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    permission_set: &PermissionSet,
+    policy_label_index: usize,
+    context: &PermissionContext,
+    target: BindingTarget,
+) -> Result<()> {
+    emit_iam_role_policy_for_target_with_label(
+        fragment,
+        role_label,
+        permission_set,
+        &format!("{role_label}_set_{policy_label_index}"),
+        &format!(
+            "{}-{}",
+            iam_policy_name_sanitize(&permission_set.id),
+            policy_label_index
+        ),
+        context,
+        target,
+    )
+}
+
+pub fn emit_iam_role_policy_for_target_with_label(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    permission_set: &PermissionSet,
+    policy_label: &str,
+    policy_name: &str,
+    context: &PermissionContext,
+    target: BindingTarget,
+) -> Result<()> {
     if permission_set.platforms.aws.is_none() {
         return Ok(());
     }
 
     let generator = AwsRuntimePermissionsGenerator::new();
     let policy = generator
-        .generate_policy(permission_set, BindingTarget::Stack, context)
+        .generate_policy(permission_set, target, context)
         .context(ErrorData::GenericError {
             message: format!(
                 "failed to generate AWS Terraform policy for permission set '{}'",
@@ -283,19 +325,11 @@ pub fn emit_iam_role_policy(
         },
     )?;
     let policy_expr = jsonencode_policy_value(policy_value);
-    let policy_label = format!("{role_label}_set_{policy_label_index}");
     fragment.resource_blocks.push(resource_block(
         "aws_iam_role_policy",
-        &policy_label,
+        policy_label,
         [
-            attr(
-                "name",
-                Expression::String(format!(
-                    "{}-{}",
-                    iam_policy_name_sanitize(&permission_set.id),
-                    policy_label_index
-                )),
-            ),
+            attr("name", Expression::String(policy_name.to_string())),
             attr("role", expr::traversal(["aws_iam_role", role_label, "id"])),
             attr("policy", policy_expr),
         ],

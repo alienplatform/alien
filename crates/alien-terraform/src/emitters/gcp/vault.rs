@@ -7,18 +7,53 @@
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
-    emitters::gcp::helpers::{downcast, required_label},
+    emitters::gcp::helpers::{
+        downcast, emit_custom_role_and_bindings_for_target, permission_context, required_label,
+        service_account_member_for_label,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, Result, Vault};
+use alien_core::{
+    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    Vault,
+};
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpVaultEmitter;
 
 impl TfEmitter for GcpVaultEmitter {
-    fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        Ok(TfFragment::empty())
+    fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
+        let Some(management_label) = remote_stack_management_label(ctx) else {
+            return Ok(TfFragment::empty());
+        };
+
+        let member = service_account_member_for_label(management_label);
+        let context = permission_context(management_label)
+            .with_resource_name(format!("${{var.stack_name}}-{}", vault.id()));
+        let mut fragment = TfFragment::default();
+
+        for permission_set_ref in management_permission_refs(ctx) {
+            if let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            {
+                if permission_set.id.ends_with("/provision") {
+                    continue;
+                }
+                emit_custom_role_and_bindings_for_target(
+                    &mut fragment,
+                    management_label,
+                    &member,
+                    &permission_set,
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
+        }
+
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -43,4 +78,42 @@ impl TfEmitter for GcpVaultEmitter {
             ),
         ])))
     }
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
+}
+
+fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
+    let Some(profile) = ctx.stack.management().profile() else {
+        return Vec::new();
+    };
+    let mut refs = Vec::new();
+    refs.extend(resource_permission_refs(profile, ctx.resource_id));
+    refs.extend(
+        profile
+            .0
+            .get("*")
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .filter(|reference| reference.id().starts_with("vault/")),
+    );
+    refs
+}
+
+fn resource_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    profile
+        .0
+        .get(resource_id)
+        .map(|refs| refs.iter().collect())
+        .unwrap_or_default()
 }

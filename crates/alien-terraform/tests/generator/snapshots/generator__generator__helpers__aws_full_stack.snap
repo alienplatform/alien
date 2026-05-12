@@ -370,12 +370,6 @@ resource "aws_iam_role_policy" "management_set_3" {
   policy = jsonencode({ Statement = [{ Action = ["dynamodb:DescribeTable", "dynamodb:ListTables", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups"], Effect = "Allow", Resource = ["arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${var.stack_name}-*"], Sid = "KvHeartbeat" }], Version = "2012-10-17" })
 }
 
-resource "aws_iam_role_policy" "management_set_4" {
-  name   = "vault-data-write-4"
-  role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Effect = "Allow", Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.stack_name}-*"], Sid = "VaultDataWrite" }], Version = "2012-10-17" })
-}
-
 resource "aws_iam_role_policy" "management_self_read" {
   name   = "alien-management-self-read"
   role   = aws_iam_role.management.id
@@ -489,6 +483,13 @@ resource "aws_dynamodb_table" "metadata" {
   }
 }
 
+=== secrets.tf ===
+resource "aws_iam_role_policy" "management_vault_secrets_set_0" {
+  name   = "alien-mgmt-secrets-vault-data-write"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Statement = [{ Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Effect = "Allow", Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.stack_name}-secrets-*"], Sid = "VaultDataWrite" }], Version = "2012-10-17" })
+}
+
 === registry.tf ===
 resource "aws_ecr_repository" "registry" {
   name                 = "${var.stack_name}-registry"
@@ -586,7 +587,6 @@ resource "terraform_data" "deployment_stack_import" {
     aws_iam_role_policy.management_set_1,
     aws_iam_role_policy.management_set_2,
     aws_iam_role_policy.management_set_3,
-    aws_iam_role_policy.management_set_4,
     aws_iam_role_policy.management_self_read,
     aws_s3_bucket.assets,
     aws_s3_bucket_server_side_encryption_configuration.assets,
@@ -596,6 +596,7 @@ resource "terraform_data" "deployment_stack_import" {
     aws_s3_bucket_versioning.assets,
     aws_sqs_queue.jobs,
     aws_dynamodb_table.metadata,
+    aws_iam_role_policy.management_vault_secrets_set_0,
     aws_ecr_repository.registry,
     aws_ecr_lifecycle_policy.registry,
     aws_iam_role.registry_pull,

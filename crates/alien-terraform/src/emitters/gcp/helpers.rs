@@ -207,6 +207,7 @@ pub fn permission_context(label: &str) -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("${var.stack_name}".to_string())
         .with_project_name("${var.gcp_project}".to_string())
+        .with_project_number("${data.google_project.current.number}".to_string())
         .with_region("${var.gcp_region}".to_string())
         .with_service_account_name(label.to_string())
 }
@@ -234,6 +235,24 @@ pub fn emit_custom_role_and_bindings(
     member_override: &Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
+) -> Result<()> {
+    emit_custom_role_and_bindings_for_target(
+        fragment,
+        sa_label,
+        member_override,
+        permission_set,
+        context,
+        BindingTarget::Stack,
+    )
+}
+
+pub fn emit_custom_role_and_bindings_for_target(
+    fragment: &mut TfFragment,
+    sa_label: &str,
+    member_override: &Expression,
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    target: BindingTarget,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -287,7 +306,7 @@ pub fn emit_custom_role_and_bindings(
     ));
 
     let bindings = generator
-        .generate_bindings(permission_set, BindingTarget::Stack, context)
+        .generate_bindings(permission_set, target, context)
         .context(ErrorData::GenericError {
             message: format!(
                 "failed to generate GCP IAM bindings for permission set '{}'",
@@ -339,8 +358,8 @@ fn push_iam_member(
         // The expression has already been interpolated by
         // `GcpRuntimePermissionsGenerator` against the Terraform-side
         // permission context (`var.stack_name` / `var.gcp_project` /
-        // `var.gcp_region`), so we just emit it as a quoted template
-        // and HCL takes care of the apply-time interpolation.
+        // `var.gcp_region`). Escape CEL string quotes but leave Terraform
+        // `${...}` interpolation intact for apply time.
         body.push(nested(block(
             "condition",
             [
@@ -349,7 +368,10 @@ fn push_iam_member(
                     "description",
                     Expression::String(condition.description.clone()),
                 ),
-                attr("expression", expr::template(condition.expression.clone())),
+                attr(
+                    "expression",
+                    expr::template(escape_template_string_body(&condition.expression)),
+                ),
             ],
         )));
     }
@@ -360,4 +382,8 @@ fn push_iam_member(
         body,
     ));
     Ok(())
+}
+
+fn escape_template_string_body(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }

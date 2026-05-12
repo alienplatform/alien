@@ -449,28 +449,6 @@ resource "google_project_iam_member" "management_kvheartbeat_binding_0" {
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_project_iam_custom_role" "management_vaultdatawrite" {
-  count       = var.gcp_use_existing_custom_roles ? 0 : 1
-  project     = var.gcp_project
-  role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
-  title       = "Vault Data Write"
-  description = "Allows creating, updating, and deleting individual secrets within vault"
-  stage       = "GA"
-  permissions = [
-    "secretmanager.versions.access",
-    "secretmanager.secrets.get",
-    "secretmanager.secrets.create",
-    "secretmanager.versions.add",
-    "secretmanager.secrets.delete"
-  ]
-}
-
-resource "google_project_iam_member" "management_vaultdatawrite_binding_0" {
-  project = var.gcp_project
-  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_vaultdatawrite[0].name
-  member  = "serviceAccount:${google_service_account.management.email}"
-}
-
 resource "google_service_account_iam_member" "management_manager_token_creator" {
   for_each           = toset(compact([var.managing_service_account_email]))
   service_account_id = google_service_account.management.id
@@ -550,6 +528,35 @@ resource "google_firestore_database" "metadata" {
   deletion_policy             = "DELETE"
 }
 
+=== secrets.tf ===
+resource "google_project_iam_custom_role" "management_vaultdatawrite" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
+  title       = "Vault Data Write"
+  description = "Allows creating, updating, and deleting individual secrets within vault"
+  stage       = "GA"
+  permissions = [
+    "secretmanager.versions.access",
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.create",
+    "secretmanager.versions.add",
+    "secretmanager.secrets.delete"
+  ]
+}
+
+resource "google_project_iam_member" "management_vaultdatawrite_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_vaultdatawrite[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecrets"
+    description = "Limit to ResourceVaultSecrets"
+    expression  = "resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${var.stack_name}-secrets-\")"
+  }
+}
+
 === registry.tf ===
 resource "google_artifact_registry_repository" "registry" {
   project       = var.gcp_project
@@ -609,10 +616,10 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.management_queueheartbeat_binding_0,
     google_project_iam_custom_role.management_kvheartbeat,
     google_project_iam_member.management_kvheartbeat_binding_0,
-    google_project_iam_custom_role.management_vaultdatawrite,
-    google_project_iam_member.management_vaultdatawrite_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
-    google_service_account_iam_member.management_manager_user
+    google_service_account_iam_member.management_manager_user,
+    google_project_iam_custom_role.management_vaultdatawrite,
+    google_project_iam_member.management_vaultdatawrite_binding_0
   ]
 }
 
@@ -648,14 +655,14 @@ resource "terraform_data" "deployment_stack_import" {
     google_project_iam_member.management_queueheartbeat_binding_0,
     google_project_iam_custom_role.management_kvheartbeat,
     google_project_iam_member.management_kvheartbeat_binding_0,
-    google_project_iam_custom_role.management_vaultdatawrite,
-    google_project_iam_member.management_vaultdatawrite_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     google_storage_bucket.assets,
     google_pubsub_topic.jobs,
     google_pubsub_subscription.jobs,
     google_firestore_database.metadata,
+    google_project_iam_custom_role.management_vaultdatawrite,
+    google_project_iam_member.management_vaultdatawrite_binding_0,
     google_artifact_registry_repository.registry,
     google_service_account.registry_pull,
     google_artifact_registry_repository_iam_member.registry_pull_iam,

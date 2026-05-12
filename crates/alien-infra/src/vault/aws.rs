@@ -4,6 +4,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
+use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
 
@@ -43,8 +44,18 @@ impl AwsVaultController {
 
         let account_id = aws_cfg.account_id.to_string();
 
+        let vault_prefix = format!("{}-{}", ctx.resource_prefix, config.id);
+
+        ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            &vault_prefix,
+            "vault",
+        )
+        .await?;
+
         // Store the vault prefix using resource_prefix-config.id pattern
-        self.vault_prefix = Some(format!("{}-{}", ctx.resource_prefix, config.id));
+        self.vault_prefix = Some(vault_prefix);
 
         info!(
             vault_id = %config.id,

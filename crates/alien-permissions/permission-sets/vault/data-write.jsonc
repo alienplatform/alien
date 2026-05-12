@@ -14,7 +14,7 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
             ]
           }
         }
@@ -33,10 +33,18 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackVaultSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
           },
           "resource": {
-            "scope": "projects/${projectName}/secrets/${resourceName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceVaultSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+            }
           }
         }
       }
@@ -56,7 +64,7 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}"
           }
         }
       }

@@ -110,28 +110,11 @@ impl AzurePermissionsHelper {
             }
         }
 
-        // Process management SA permissions at resource-group scope (not resource scope).
-        // Management operations often involve linked resources (e.g., Container Apps
-        // need `managedEnvironments/join/action` on the environment, not the app itself).
-        // Using RG scope ensures the management SA can act on all related resources.
-        let rg_scope = match &resource_scope {
-            Scope::Resource {
-                resource_group_name,
-                ..
-            }
-            | Scope::ResourceGroup {
-                resource_group_name,
-            } => Scope::ResourceGroup {
-                resource_group_name: resource_group_name.clone(),
-            },
-            // For subscription scope, keep as-is
-            other => other.clone(),
-        };
         Self::apply_management_permissions(
             ctx,
             resource_id,
             resource_type,
-            &rg_scope,
+            &resource_scope,
             permission_context,
         )
         .await?;
@@ -477,7 +460,7 @@ impl AzurePermissionsHelper {
                 let mut azure_role_definition = generator
                     .generate_role_definition(
                         &permission_set,
-                        BindingTarget::Stack,
+                        BindingTarget::Resource,
                         permission_context,
                     )
                     .context(ErrorData::CloudPlatformError {
@@ -545,14 +528,11 @@ impl AzurePermissionsHelper {
                     role_definition_id
                 );
 
-                // UUID excludes resource_id because management assignments are at RG scope:
-                // multiple resources sharing the same (role_definition, principal, scope)
-                // must use the SAME assignment UUID to avoid Azure 409 RoleAssignmentExists.
                 let role_assignment_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "alien:azure:mgmt-rg-role-assign:{}:{}",
-                        ctx.resource_prefix, permission_set.id
+                        "alien:azure:mgmt-res-role-assign:{}:{}:{}",
+                        ctx.resource_prefix, resource_id, permission_set.id
                     )
                     .as_bytes(),
                 )

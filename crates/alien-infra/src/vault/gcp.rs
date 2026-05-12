@@ -4,8 +4,12 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
+use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_gcp_clients::iam::{Binding, IamPolicy};
+use alien_gcp_clients::resource_manager::GetPolicyOptions;
+use alien_permissions::{generators::GcpRuntimePermissionsGenerator, PermissionContext};
 
 /// GCP Vault controller.
 ///
@@ -42,11 +46,23 @@ impl GcpVaultController {
             "Setting up GCP Secret Manager vault reference"
         );
 
+        let vault_prefix = format!("{}-{}", ctx.resource_prefix, config.id);
+
+        ResourcePermissionsHelper::ensure_gcp_resource_custom_roles(
+            ctx,
+            &config.id,
+            &vault_prefix,
+            "vault",
+        )
+        .await?;
+        self.apply_management_permissions(ctx, &config.id, &vault_prefix)
+            .await?;
+
         // The Secret Manager API should be enabled via infra requirements
         // Here we set up the vault reference
         self.project_id = Some(gcp_cfg.project_id.clone());
         self.location = Some(gcp_cfg.region.clone());
-        self.vault_prefix = Some(format!("{}-{}", ctx.resource_prefix, config.id));
+        self.vault_prefix = Some(vault_prefix);
 
         info!(
             vault_id = %config.id,
@@ -191,6 +207,147 @@ impl GcpVaultController {
             ))
         } else {
             Ok(None)
+        }
+    }
+}
+
+impl GcpVaultController {
+    async fn apply_management_permissions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vault_id: &str,
+        vault_prefix: &str,
+    ) -> Result<()> {
+        let Some(management_profile) = ctx.desired_stack.management().profile() else {
+            return Ok(());
+        };
+
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut management_refs = Vec::new();
+        if let Some(permission_set_refs) = management_profile.0.get(vault_id) {
+            for permission_set_ref in permission_set_refs {
+                if seen_ids.insert(permission_set_ref.id().to_string()) {
+                    management_refs.push(permission_set_ref.clone());
+                }
+            }
+        }
+        if let Some(wildcard_refs) = management_profile.0.get("*") {
+            for permission_set_ref in wildcard_refs
+                .iter()
+                .filter(|r| r.id().starts_with("vault/"))
+            {
+                if seen_ids.insert(permission_set_ref.id().to_string()) {
+                    management_refs.push(permission_set_ref.clone());
+                }
+            }
+        }
+
+        if management_refs.is_empty() {
+            return Ok(());
+        }
+
+        let gcp_config = ctx.get_gcp_config()?;
+        let project_number = gcp_config.project_number.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "GCP project number is required to scope vault management permissions"
+                    .to_string(),
+                resource_id: Some(vault_id.to_string()),
+            })
+        })?;
+        let permission_context = PermissionContext::new()
+            .with_project_name(gcp_config.project_id.clone())
+            .with_project_number(project_number.clone())
+            .with_region(gcp_config.region.clone())
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_name(vault_prefix.to_string());
+
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let mut new_bindings = Vec::new();
+        ResourcePermissionsHelper::collect_gcp_management_bindings_for(
+            ctx,
+            vault_id,
+            vault_prefix,
+            &management_refs,
+            &generator,
+            &permission_context,
+            &mut new_bindings,
+        )
+        .await?;
+
+        if new_bindings.is_empty() {
+            return Ok(());
+        }
+
+        let rm_client = ctx
+            .service_provider
+            .get_gcp_resource_manager_client(gcp_config)?;
+        let current_policy = rm_client
+            .get_project_iam_policy(
+                gcp_config.project_id.clone(),
+                Some(GetPolicyOptions {
+                    requested_policy_version: Some(3),
+                }),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get project IAM policy before binding vault management roles"
+                    .to_string(),
+                resource_id: Some(vault_id.to_string()),
+            })?;
+
+        let mut all_bindings = current_policy.bindings;
+        merge_iam_bindings(&mut all_bindings, new_bindings);
+
+        let new_policy = IamPolicy::builder()
+            .version(3)
+            .bindings(all_bindings)
+            .maybe_etag(current_policy.etag)
+            .maybe_kind(current_policy.kind)
+            .maybe_resource_id(current_policy.resource_id)
+            .build();
+
+        rm_client
+            .set_project_iam_policy(gcp_config.project_id.clone(), new_policy, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to bind vault management roles at project level".to_string(),
+                resource_id: Some(vault_id.to_string()),
+            })?;
+
+        info!(
+            vault_id = %vault_id,
+            vault_prefix = %vault_prefix,
+            "GCP vault management permissions applied"
+        );
+
+        Ok(())
+    }
+}
+
+fn merge_iam_bindings(existing_bindings: &mut Vec<Binding>, new_bindings: Vec<Binding>) {
+    for binding in existing_bindings.iter_mut() {
+        binding.members.retain(|m| !m.starts_with("deleted:"));
+    }
+    existing_bindings.retain(|binding| !binding.members.is_empty());
+
+    for new_binding in new_bindings {
+        let existing = existing_bindings.iter_mut().find(|binding| {
+            binding.role == new_binding.role
+                && match (&binding.condition, &new_binding.condition) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a.expression == b.expression,
+                    _ => false,
+                }
+        });
+
+        if let Some(existing) = existing {
+            for member in new_binding.members {
+                if !existing.members.contains(&member) {
+                    existing.members.push(member);
+                }
+            }
+        } else {
+            existing_bindings.push(new_binding);
         }
     }
 }

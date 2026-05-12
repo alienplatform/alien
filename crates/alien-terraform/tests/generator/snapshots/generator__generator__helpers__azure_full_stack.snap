@@ -749,6 +749,42 @@ resource "azurerm_key_vault" "secrets" {
   ]
 }
 
+resource "azurerm_role_definition" "management_management_vault_data_write" {
+  name               = "Vault Data Write (${var.stack_name}) [mgmt]"
+  role_definition_id = uuidv5("oid", "alien:azure:mgmt-res-role-def:${var.stack_name}:vault/data-write")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows creating, updating, and deleting individual secrets within vault"
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/secrets/delete",
+      "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+      "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+      "Microsoft.KeyVault/vaults/secrets/setSecret/action"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "secrets_management_management_vault_data_write_assignment" {
+  name               = uuidv5("oid", "alien:azure:mgmt-res-role-assign:${var.stack_name}:secrets:vault/data-write")
+  scope              = azurerm_key_vault.secrets.id
+  role_definition_id = azurerm_role_definition.management_management_vault_data_write.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 === registry.tf ===
 resource "azurerm_container_registry" "registry" {
   name                = substr(replace(lower("${var.stack_name}registry"), "-", ""), 0, 50)
@@ -861,6 +897,8 @@ resource "terraform_data" "deployment_stack_import" {
     azurerm_cosmosdb_sql_database.metadata_db,
     azurerm_cosmosdb_sql_container.metadata_container,
     azurerm_key_vault.secrets,
+    azurerm_role_definition.management_management_vault_data_write,
+    azurerm_role_assignment.secrets_management_management_vault_data_write_assignment,
     azurerm_container_registry.registry,
     azurerm_user_assigned_identity.registry_pull,
     azurerm_role_assignment.registry_pull_role,

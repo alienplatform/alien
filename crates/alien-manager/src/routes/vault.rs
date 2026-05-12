@@ -7,6 +7,8 @@
 //! `PUT  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — set a secret
 //! `GET  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — get a secret
 
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
+use alien_core::{bindings::VaultBinding, Platform, StackState};
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Path, State},
@@ -15,6 +17,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use tracing::info;
 
 use super::auth;
@@ -46,10 +49,7 @@ async fn load_vault_for_deployment(
     caller: &crate::auth::Subject,
     deployment_id: &str,
     vault_name: &str,
-) -> Result<std::sync::Arc<dyn alien_bindings::traits::Vault>> {
-    use alien_bindings::BindingsProvider;
-    use std::collections::HashMap;
-
+) -> Result<Arc<dyn alien_bindings::traits::Vault>> {
     // 1. Look up the deployment.
     let deployment = match state
         .deployment_store
@@ -70,35 +70,9 @@ async fn load_vault_for_deployment(
         ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
     })?;
 
-    let resource_prefix = &stack_state.resource_prefix;
     let platform = deployment.platform;
 
-    // 3. Construct the vault binding config based on platform.
-    let vault_prefix = format!("{}-{}", resource_prefix, vault_name);
-
-    let vault_binding = match platform {
-        alien_core::Platform::Aws => {
-            alien_core::bindings::VaultBinding::parameter_store(&vault_prefix)
-        }
-        alien_core::Platform::Gcp => {
-            alien_core::bindings::VaultBinding::secret_manager(&vault_prefix)
-        }
-        alien_core::Platform::Azure => alien_core::bindings::VaultBinding::key_vault(&vault_prefix),
-        other => {
-            return Err(ErrorData::bad_request(format!(
-                "Vault API not supported for platform: {}",
-                other
-            )));
-        }
-    };
-
-    let binding_json = serde_json::to_value(&vault_binding)
-        .into_alien_error()
-        .context(ErrorData::InternalError {
-            message: "Failed to serialize vault binding".to_string(),
-        })?;
-
-    // 4. Resolve credentials for the deployment.
+    // 3. Resolve credentials for the deployment.
     let client_config = state
         .credential_resolver
         .resolve(&deployment)
@@ -107,17 +81,19 @@ async fn load_vault_for_deployment(
             message: "Failed to resolve credentials for vault operation".to_string(),
         })?;
 
-    // 5. Build a BindingsProvider with the credentials + vault binding.
+    // 4. Build a BindingsProvider with the credentials + vault binding.
     let mut bindings = HashMap::new();
-    bindings.insert(vault_name.to_string(), binding_json);
+    bindings.insert(
+        vault_name.to_string(),
+        vault_binding_params(stack_state, platform, vault_name)?,
+    );
 
     let provider =
         BindingsProvider::new(client_config, bindings).context(ErrorData::InternalError {
             message: "Failed to create bindings provider for vault operation".to_string(),
         })?;
 
-    // 6. Load the vault.
-    use alien_bindings::BindingsProviderApi;
+    // 5. Load the vault.
     let vault = provider
         .load_vault(vault_name)
         .await
@@ -126,6 +102,38 @@ async fn load_vault_for_deployment(
         })?;
 
     Ok(vault)
+}
+
+fn vault_binding_params(
+    stack_state: &StackState,
+    platform: Platform,
+    vault_name: &str,
+) -> Result<serde_json::Value> {
+    if let Some(binding_params) = stack_state
+        .resource(vault_name)
+        .and_then(|resource| resource.remote_binding_params.as_ref())
+    {
+        return Ok(binding_params.clone());
+    }
+
+    let vault_prefix = format!("{}-{}", stack_state.resource_prefix, vault_name);
+    let vault_binding = match platform {
+        Platform::Aws => VaultBinding::parameter_store(&vault_prefix),
+        Platform::Gcp => VaultBinding::secret_manager(&vault_prefix),
+        Platform::Azure => VaultBinding::key_vault(&vault_prefix),
+        other => {
+            return Err(ErrorData::bad_request(format!(
+                "Vault API not supported for platform: {}",
+                other
+            )));
+        }
+    };
+
+    serde_json::to_value(vault_binding)
+        .into_alien_error()
+        .context(ErrorData::InternalError {
+            message: "Failed to serialize vault binding".to_string(),
+        })
 }
 
 async fn set_secret(
@@ -196,4 +204,48 @@ async fn get_secret(
         })?;
 
     Ok(Json(GetSecretResponse { value }))
+}
+
+#[cfg(test)]
+mod tests {
+    use alien_core::{bindings::VaultBinding, Resource, ResourceStatus, StackResourceState, Vault};
+
+    use super::*;
+
+    #[test]
+    fn vault_binding_params_prefers_stack_state_binding() {
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Azure, "alien-e2e-46143711".to_string());
+        let binding = VaultBinding::key_vault("alien-e2e-46143711-ali");
+        let resource_state = StackResourceState::builder()
+            .resource_type(Vault::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(Resource::new(Vault {
+                id: "alien-vault".to_string(),
+            }))
+            .remote_binding_params(serde_json::to_value(&binding).unwrap())
+            .dependencies(Vec::new())
+            .build();
+        stack_state
+            .resources
+            .insert("alien-vault".to_string(), resource_state);
+
+        let actual = vault_binding_params(&stack_state, Platform::Azure, "alien-vault").unwrap();
+
+        assert_eq!(actual, serde_json::to_value(binding).unwrap());
+    }
+
+    #[test]
+    fn vault_binding_params_falls_back_to_legacy_synthetic_binding() {
+        let stack_state =
+            StackState::with_resource_prefix(Platform::Azure, "alien-e2e-46143711".to_string());
+
+        let actual = vault_binding_params(&stack_state, Platform::Azure, "alien-vault").unwrap();
+
+        assert_eq!(
+            actual,
+            serde_json::to_value(VaultBinding::key_vault("alien-e2e-46143711-alien-vault"))
+                .unwrap()
+        );
+    }
 }

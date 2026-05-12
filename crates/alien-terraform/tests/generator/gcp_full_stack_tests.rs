@@ -71,13 +71,14 @@ fn gcp_full_stack_renders_audit_ready_module() {
 
     let stack = Stack::new("full-gcp".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global([
-                "function/management",
-                "storage/heartbeat",
-                "queue/heartbeat",
-                "kv/heartbeat",
-                "vault/data-write",
-            ]),
+            PermissionProfile::new()
+                .global([
+                    "function/management",
+                    "storage/heartbeat",
+                    "queue/heartbeat",
+                    "kv/heartbeat",
+                ])
+                .resource("secrets", ["vault/data-write"]),
         ))
         .add(
             Network::new("default-network".to_string())
