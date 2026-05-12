@@ -193,6 +193,7 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.Authorization/roleAssignments/read",
       "Microsoft.Authorization/roleAssignments/write",
       "Microsoft.Authorization/roleDefinitions/read",
+      "Microsoft.Authorization/roleDefinitions/write",
       "Microsoft.ContainerRegistry/registries/delete",
       "Microsoft.ContainerRegistry/registries/importImage/action",
       "Microsoft.ContainerRegistry/registries/metadata/read",

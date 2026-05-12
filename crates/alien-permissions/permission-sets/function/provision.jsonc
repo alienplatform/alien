@@ -462,6 +462,7 @@
             "Microsoft.ServiceBus/namespaces/queues/write",
             "Microsoft.ServiceBus/namespaces/queues/delete",
             "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleDefinitions/write",
             "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete"

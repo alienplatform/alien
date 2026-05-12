@@ -6,12 +6,19 @@
 
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
+use alien_azure_clients::{
+    AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
+};
 use alien_core::{
-    import::{ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse},
-    AwsManagementConfig, AzureManagementConfig, DeploymentConfig,
-    DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
-    Function, FunctionCode, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
-    GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState,
+    import::{
+        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData, ImportSourceKind,
+        ImportedResource, StackImportRequest, StackImportResponse,
+    },
+    AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
+    DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
+    ExternalBindings, Function, FunctionCode, GcpClientConfig, GcpCredentials,
+    GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
+    StackState,
 };
 use alien_gcp_clients::{CloudRunApi, CloudRunClient, GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
@@ -765,6 +772,9 @@ async fn apply_terraform_and_import(
         if target.platform() == Platform::Gcp {
             wait_for_gcp_management_permissions(&prepared.config, &outputs).await?;
         }
+        if target.platform() == Platform::Azure {
+            wait_for_azure_management_permissions(&prepared.config, &outputs).await?;
+        }
         let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
         let deployment = import_stack(prepared, request).await?;
         Ok::<_, anyhow::Error>((deployment, outputs))
@@ -1176,24 +1186,7 @@ async fn wait_for_gcp_management_permissions(
         service_overrides: None,
         project_number: None,
     };
-    let impersonated_config = base_config
-        .impersonate(GcpImpersonationConfig {
-            service_account_email: service_account_email.clone(),
-            target_project_id: Some(target.project_id.clone()),
-            target_region: Some(target.region.clone()),
-            ..GcpImpersonationConfig::default()
-        })
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "GCP management service account impersonation was not ready for {service_account_email}: {error}"
-            )
-        })?;
-
     let http = reqwest::Client::new();
-    let resource_manager =
-        alien_gcp_clients::ResourceManagerClient::new(http.clone(), impersonated_config.clone());
-    let cloud_run = CloudRunClient::new(http, impersonated_config);
     let probe_name = format!(
         "{}-iam-propagation-probe",
         terraform_output_string(outputs, "deployment_stack_prefix")?
@@ -1221,6 +1214,41 @@ async fn wait_for_gcp_management_permissions(
     let mut attempt = 0;
     loop {
         attempt += 1;
+        let impersonated_config = match base_config
+            .impersonate(GcpImpersonationConfig {
+                service_account_email: service_account_email.clone(),
+                target_project_id: Some(target.project_id.clone()),
+                target_region: Some(target.region.clone()),
+                ..GcpImpersonationConfig::default()
+            })
+            .await
+        {
+            Ok(config) => config,
+            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
+                if started.elapsed() >= timeout {
+                    anyhow::bail!(
+                        "GCP management service account impersonation did not propagate for {service_account_email} within {timeout:?}: {error}"
+                    );
+                }
+                warn!(
+                    %service_account_email,
+                    attempt,
+                    %error,
+                    "GCP management service account impersonation is not ready yet"
+                );
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+            Err(error) => {
+                anyhow::bail!("GCP management service account impersonation probe failed: {error}");
+            }
+        };
+
+        let resource_manager = alien_gcp_clients::ResourceManagerClient::new(
+            http.clone(),
+            impersonated_config.clone(),
+        );
+        let cloud_run = CloudRunClient::new(http.clone(), impersonated_config);
         let project_result = resource_manager
             .get_project_metadata(target.project_id.clone())
             .await;
@@ -1287,6 +1315,159 @@ fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error
     matches!(
         error.code.as_str(),
         "REMOTE_ACCESS_DENIED" | "RATE_LIMIT_EXCEEDED" | "REMOTE_SERVICE_UNAVAILABLE" | "TIMEOUT"
+    )
+}
+
+/// Terraform can finish before Azure federated credentials and role
+/// assignments are visible to ARM. Probe the imported management identity
+/// against the first live function dependency so deployment starts only after
+/// the same identity can perform the Service Bus control-plane operation.
+async fn wait_for_azure_management_permissions(
+    config: &TestConfig,
+    outputs: &Value,
+) -> anyhow::Result<()> {
+    let target = config
+        .azure_target
+        .as_ref()
+        .context("Azure target missing")?;
+    let resources: Vec<ImportedResource> =
+        serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
+
+    let management = azure_import_data::<AzureRemoteStackManagementImportData>(
+        &resources,
+        "remote-stack-management",
+    )?;
+    let service_bus = azure_import_data::<AzureServiceBusNamespaceImportData>(
+        &resources,
+        "azure_service_bus_namespace",
+    )?;
+
+    let Some(token_file) = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        warn!("Skipping Azure management permission probe because AZURE_FEDERATED_TOKEN_FILE is not set");
+        return Ok(());
+    };
+
+    let azure_config = AzureClientConfig {
+        subscription_id: management.subscription_id.clone(),
+        tenant_id: management.tenant_id.clone(),
+        region: Some(target.region.clone()),
+        credentials: AzureCredentials::WorkloadIdentity {
+            client_id: management.client_id.clone(),
+            tenant_id: management.tenant_id.clone(),
+            federated_token_file: token_file,
+            authority_host: std::env::var("AZURE_AUTHORITY_HOST")
+                .unwrap_or_else(|_| "https://login.microsoftonline.com/".to_string()),
+        },
+        service_overrides: None,
+    };
+    let service_bus_client = AzureServiceBusManagementClient::new(
+        reqwest::Client::new(),
+        AzureTokenCache::new(azure_config),
+    );
+    let probe_queue_name = format!(
+        "{}-iam-probe",
+        terraform_output_string(outputs, "deployment_stack_prefix")?
+    );
+
+    let timeout = Duration::from_secs(300);
+    let started = tokio::time::Instant::now();
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let create_result = service_bus_client
+            .create_or_update_queue(
+                service_bus.resource_group.clone(),
+                service_bus.namespace_name.clone(),
+                probe_queue_name.clone(),
+                alien_azure_clients::models::queue::SbQueueProperties::default(),
+            )
+            .await;
+
+        match create_result {
+            Ok(_) => {
+                match service_bus_client
+                    .delete_queue(
+                        service_bus.resource_group.clone(),
+                        service_bus.namespace_name.clone(),
+                        probe_queue_name.clone(),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        info!(
+                            client_id = %management.client_id,
+                            attempts = attempt,
+                            "Azure management IAM permissions are ready"
+                        );
+                        return Ok(());
+                    }
+                    Err(error) if azure_management_permission_probe_should_retry(&error) => {
+                        if started.elapsed() >= timeout {
+                            anyhow::bail!(
+                                "Azure management IAM delete permissions did not propagate for {} within {timeout:?}: {error}",
+                                management.client_id
+                            );
+                        }
+                        warn!(
+                            client_id = %management.client_id,
+                            attempt,
+                            %error,
+                            "Azure management IAM delete permissions are not ready yet"
+                        );
+                    }
+                    Err(error) => {
+                        anyhow::bail!("Azure management IAM delete probe failed: {error}");
+                    }
+                }
+            }
+            Err(error) if azure_management_permission_probe_should_retry(&error) => {
+                if started.elapsed() >= timeout {
+                    anyhow::bail!(
+                        "Azure management IAM permissions did not propagate for {} within {timeout:?}: {error}",
+                        management.client_id
+                    );
+                }
+                warn!(
+                    client_id = %management.client_id,
+                    attempt,
+                    %error,
+                    "Azure management IAM permissions are not ready yet"
+                );
+            }
+            Err(error) => {
+                anyhow::bail!("Azure management IAM permission probe failed: {error}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
+fn azure_import_data<T>(resources: &[ImportedResource], resource_type: &str) -> anyhow::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let resource = resources
+        .iter()
+        .find(|resource| resource.resource_type.as_ref() == resource_type)
+        .with_context(|| format!("Terraform output missing {resource_type} import resource"))?;
+    serde_json::from_value(resource.import_data.clone())
+        .with_context(|| format!("Failed to parse {resource_type} import data"))
+}
+
+fn azure_management_permission_probe_should_retry(error: &alien_azure_clients::Error) -> bool {
+    matches!(
+        error.code.as_str(),
+        "AUTHENTICATION_ERROR"
+            | "AUTHENTICATION_FAILED"
+            | "HTTP_RESPONSE_ERROR"
+            | "REMOTE_ACCESS_DENIED"
+            | "REMOTE_SERVICE_UNAVAILABLE"
+            | "TIMEOUT"
+            | "RATE_LIMIT_EXCEEDED"
     )
 }
 
