@@ -29,8 +29,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionSet, ResourceDefinition, ResourceRef, ResourceType,
-    Result, ServiceAccount,
+    import::EmitContext, BindingValue, ContainerAppsEnvironmentBinding, ErrorData, PermissionSet,
+    ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -124,6 +124,58 @@ pub fn service_account_principal_id(
     ]))
 }
 
+/// Return an external Container Apps Environment binding for `resource_id`,
+/// when the caller supplied one in stack settings.
+pub fn container_apps_environment_binding<'a>(
+    ctx: &'a EmitContext<'_>,
+    resource_id: &str,
+) -> Result<Option<&'a ContainerAppsEnvironmentBinding>> {
+    let Some(bindings) = &ctx.stack_settings.external_bindings else {
+        return Ok(None);
+    };
+    bindings.get_container_apps_environment(resource_id)
+}
+
+/// Convert a binding value into a Terraform string expression.
+///
+/// Terraform modules currently only support concrete external binding values.
+/// Secret refs and template expressions are runtime-controller concepts; letting
+/// them through here would render invalid or misleading HCL.
+pub fn binding_string_expr(
+    resource_id: &str,
+    field_name: &str,
+    value: &BindingValue<String>,
+) -> Result<Expression> {
+    match value {
+        BindingValue::Value(value) => Ok(Expression::String(value.clone())),
+        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => Err(AlienError::new(
+            ErrorData::GenericError {
+                message: format!(
+                    "Terraform external binding for resource '{resource_id}' field '{field_name}' must be a concrete string value"
+                ),
+            },
+        )),
+    }
+}
+
+/// Extract a concrete string from a binding value for HCL templates.
+pub fn binding_string_value(
+    resource_id: &str,
+    field_name: &str,
+    value: &BindingValue<String>,
+) -> Result<String> {
+    match value {
+        BindingValue::Value(value) => Ok(value.clone()),
+        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => Err(AlienError::new(
+            ErrorData::GenericError {
+                message: format!(
+                    "Terraform external binding for resource '{resource_id}' field '{field_name}' must be a concrete string value"
+                ),
+            },
+        )),
+    }
+}
+
 /// Build a `PermissionContext` shared by every generator call. `label` is
 /// the SA's terraform label and is used as `service_account_name` so
 /// generators that mention `${variable.service_account_name}` resolve
@@ -195,6 +247,8 @@ pub fn storage_account_name_local() -> Expression {
 pub fn emit_role_definition_and_assignments(
     fragment: &mut TfFragment,
     sa_label: &str,
+    service_account_id: &str,
+    role_index: usize,
     principal_id_expr: Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
@@ -214,12 +268,19 @@ pub fn emit_role_definition_and_assignments(
         })?;
 
     let role_label = format!("{sa_label}_{}", sanitize_role_label(&permission_set.id));
+    let role_name = format!("${{var.stack_name}}-{service_account_id}-{role_index}");
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
         &role_label,
         [
-            attr("name", expr::template(role_definition.name.clone())),
+            attr("name", expr::raw(&format!("\"{role_name}\""))),
+            attr(
+                "role_definition_id",
+                expr::raw(&format!(
+                    "uuidv5(\"oid\", \"alien:azure:stack-role-def:{role_name}\")"
+                )),
+            ),
             attr(
                 "scope",
                 expr::raw(
@@ -296,8 +357,7 @@ pub fn emit_role_definition_and_assignments(
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"dns\", \"${{var.stack_name}}-{}-${{{}}}\")",
-                    permission_set.id,
+                    "uuidv5(\"oid\", \"alien:azure:stack-role-assign:${{azurerm_role_definition.{role_label}.role_definition_resource_id}}:${{{}}}\")",
                     render_expression_for_uuidv5(&principal_id_expr)
                 )),
             ),

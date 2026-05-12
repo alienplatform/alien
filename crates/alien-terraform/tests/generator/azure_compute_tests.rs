@@ -9,6 +9,7 @@ use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Function,
     FunctionCode, Ingress, ResourceLifecycle, Stack, StackSettings,
 };
+use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
 
 fn resource_group() -> AzureResourceGroup {
@@ -97,4 +98,54 @@ fn azure_function_public_ingress_enables_external_ingress() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_function_public", &module);
     assert_terraform_valid(&module, "azure_function_public");
+}
+
+#[test]
+fn azure_function_reuses_external_container_apps_environment() {
+    let stack = Stack::new("acme-fn-shared-env".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(container_apps_environment(), ResourceLifecycle::Frozen)
+        .add(
+            Function::new("api".to_string())
+                .code(FunctionCode::Image {
+                    image: "acmeprod.azurecr.io/api:1".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let mut external_bindings = ExternalBindings::new();
+    external_bindings.insert(
+        "default-container-apps-environment",
+        ExternalBinding::ContainerAppsEnvironment(ContainerAppsEnvironmentBinding::new(
+            "shared-env",
+            "/subscriptions/sub-123/resourceGroups/shared-rg/providers/Microsoft.App/managedEnvironments/shared-env",
+            "shared-rg",
+            "shared.example.azurecontainerapps.io",
+        )),
+    );
+    let module = render(
+        &stack,
+        TerraformTarget::Azure,
+        StackSettings {
+            external_bindings: Some(external_bindings),
+            ..StackSettings::default()
+        },
+    );
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(!rendered.contains("azurerm_container_app_environment"));
+    assert!(!rendered.contains("azurerm_log_analytics_workspace"));
+    assert!(rendered.contains(
+        "/subscriptions/sub-123/resourceGroups/shared-rg/providers/Microsoft.App/managedEnvironments/shared-env"
+    ));
+    assert!(rendered.contains("environmentName = \"shared-env\""));
+    assert!(rendered.contains("resourceGroup   = \"shared-rg\""));
+    assert!(rendered.contains("resourceGroupName"));
+    assert!(rendered.contains("defaultDomain   = \"shared.example.azurecontainerapps.io\""));
+    assert_terraform_valid(&module, "azure_function_shared_env");
 }

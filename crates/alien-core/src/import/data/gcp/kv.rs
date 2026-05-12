@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// GCP KV ImportData — a Firestore database in Datastore mode.
+/// GCP KV ImportData — a Firestore Native database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]

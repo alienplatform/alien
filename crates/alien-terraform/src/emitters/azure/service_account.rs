@@ -58,10 +58,13 @@ impl TfEmitter for AzureServiceAccountEmitter {
             expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]);
         let context = permission_context(label);
 
-        for permission_set in &service_account.stack_permission_sets {
+        for (role_index, permission_set) in service_account.stack_permission_sets.iter().enumerate()
+        {
             emit_role_definition_and_assignments(
                 &mut fragment,
                 label,
+                &service_account.id,
+                role_index,
                 principal_id_expr.clone(),
                 permission_set,
                 &context,

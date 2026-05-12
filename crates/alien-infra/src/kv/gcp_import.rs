@@ -1,4 +1,4 @@
-//! Importer for GCP KV (Firestore database in Datastore mode).
+//! Importer for GCP KV (Firestore Native database).
 
 use alien_core::{
     import::{data::GcpKvImportData, ImportContext},

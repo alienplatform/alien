@@ -1,8 +1,8 @@
-//! GCP KV — Firestore database in Datastore mode.
+//! GCP KV — Firestore Native database.
 //!
-//! GCP exposes Firestore as the native key-value primitive; we run it
-//! in Datastore mode for compatibility with the controller's
-//! single-collection schema. CMEK opt-in lives on the resource later.
+//! GCP exposes Firestore as the native key-value primitive. The runtime
+//! binding uses Firestore document APIs, so Terraform must provision the
+//! same Native-mode database that the runtime controller creates.
 
 use crate::{
     block::{attr, resource_block},
@@ -28,7 +28,7 @@ impl TfEmitter for GcpKvEmitter {
                 attr("name", stack_name_template(kv.id())),
                 attr("project", expr::raw("var.gcp_project")),
                 attr("location_id", expr::raw("var.gcp_region")),
-                attr("type", Expression::String("DATASTORE_MODE".to_string())),
+                attr("type", Expression::String("FIRESTORE_NATIVE".to_string())),
                 attr(
                     "concurrency_mode",
                     Expression::String("OPTIMISTIC".to_string()),

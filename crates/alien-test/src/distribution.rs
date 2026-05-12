@@ -17,7 +17,7 @@ use alien_core::{
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBindings, Function, FunctionCode, GcpClientConfig, GcpCredentials,
+    ExternalBinding, ExternalBindings, Function, FunctionCode, GcpClientConfig, GcpCredentials,
     GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState,
 };
@@ -352,6 +352,38 @@ fn stack_settings_for_flow(model: DeploymentModel) -> StackSettings {
     if model == DeploymentModel::Pull {
         settings.deployment_model = StackDeploymentModel::Pull;
     }
+    settings
+}
+
+fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> StackSettings {
+    let mut settings = stack_settings_for_flow(prepared.model);
+    if prepared.platform != Platform::Azure {
+        return settings;
+    }
+
+    let Some(shared_env) = &prepared.config.azure_resources.shared_container_env else {
+        return settings;
+    };
+
+    let binding = alien_core::ContainerAppsEnvironmentBinding::new(
+        shared_env.environment_name.as_str(),
+        shared_env.resource_id.as_str(),
+        shared_env.resource_group.as_str(),
+        shared_env.default_domain.as_str(),
+    );
+    let binding = if let Some(static_ip) = &shared_env.static_ip {
+        binding.with_static_ip(static_ip.as_str())
+    } else {
+        binding
+    };
+
+    let mut external_bindings = settings.external_bindings.unwrap_or_default();
+    external_bindings.insert(
+        "default-container-env",
+        ExternalBinding::ContainerAppsEnvironment(binding),
+    );
+    settings.external_bindings = Some(external_bindings);
+    info!("Injected shared Container Apps Environment into Terraform stack settings");
     settings
 }
 
@@ -726,12 +758,13 @@ async fn apply_terraform_and_import(
 ) -> anyhow::Result<TerraformApplyResult> {
     let workdir = tempfile::tempdir().context("Failed to create Terraform workdir")?;
     let registry = alien_terraform::TfRegistry::built_in();
+    let stack_settings = stack_settings_for_terraform(prepared);
     let module = alien_terraform::generate_terraform_module(
         &prepared.rendered_stack,
         target,
         alien_terraform::TerraformOptions {
             registry: &registry,
-            stack_settings: stack_settings_for_flow(prepared.model),
+            stack_settings,
             registration: None,
         },
     )
@@ -770,6 +803,9 @@ async fn apply_terraform_and_import(
         .await?;
 
         let outputs = terraform_output_json(&workdir_path, &env).await?;
+        if target.platform() == Platform::Azure {
+            grant_terraform_shared_env_join_permission(&prepared.config, &outputs).await?;
+        }
         if target.platform() == Platform::Gcp {
             wait_for_gcp_management_permissions(&prepared.config, &outputs).await?;
         }
@@ -1110,6 +1146,107 @@ fn parse_json_output<T: serde::de::DeserializeOwned>(
         .get(key)
         .with_context(|| format!("{key} output missing"))?;
     serde_json::from_str(value).with_context(|| format!("Failed to parse {key}"))
+}
+
+async fn grant_terraform_shared_env_join_permission(
+    config: &TestConfig,
+    outputs: &Value,
+) -> anyhow::Result<()> {
+    let Some(shared_env) = &config.azure_resources.shared_container_env else {
+        return Ok(());
+    };
+
+    use alien_azure_clients::authorization::{AuthorizationApi, Scope};
+    use alien_azure_clients::models::authorization_role_assignments::{
+        RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
+    };
+    use alien_azure_clients::AzureAuthorizationClient;
+
+    let join_role_id = shared_env
+        .join_role_definition_id
+        .as_ref()
+        .context("AZURE_SHARED_CONTAINER_ENV_JOIN_ROLE_ID not set - run terraform apply")?;
+    let target = config
+        .azure_target
+        .as_ref()
+        .context("Azure target missing")?;
+    let resources: Vec<ImportedResource> =
+        serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
+    let management = terraform_import_data::<AzureRemoteStackManagementImportData>(
+        &resources,
+        "remote-stack-management",
+    )?;
+    let stack_prefix = terraform_output_string(outputs, "deployment_stack_prefix")?;
+
+    let azure_config = AzureClientConfig {
+        subscription_id: target.subscription_id.clone(),
+        tenant_id: target.tenant_id.clone(),
+        region: Some(target.region.clone()),
+        credentials: AzureCredentials::ServicePrincipal {
+            client_id: target.client_id.clone(),
+            client_secret: target.client_secret.clone(),
+        },
+        service_overrides: None,
+    };
+    let auth_client = AzureAuthorizationClient::new(
+        reqwest::Client::new(),
+        AzureTokenCache::new(azure_config.clone()),
+    );
+    let env_scope = Scope::Resource {
+        resource_group_name: shared_env.resource_group.clone(),
+        resource_provider: "Microsoft.App".to_string(),
+        parent_resource_path: None,
+        resource_type: "managedEnvironments".to_string(),
+        resource_name: shared_env.environment_name.clone(),
+    };
+    let scope = env_scope.to_scope_string(&azure_config);
+
+    let assignment_id = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!(
+            "alien:e2e:tf-env-join-assign:{stack_prefix}:{}",
+            management.principal_id
+        )
+        .as_bytes(),
+    )
+    .to_string();
+    let full_assignment_id = auth_client.build_role_assignment_id(&env_scope, assignment_id);
+
+    auth_client
+        .create_or_update_role_assignment_by_id(
+            full_assignment_id,
+            &RoleAssignment {
+                id: None,
+                name: None,
+                type_: None,
+                properties: Some(RoleAssignmentProperties {
+                    principal_id: management.principal_id.clone(),
+                    role_definition_id: join_role_id.clone(),
+                    scope: Some(scope),
+                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                    condition: None,
+                    condition_version: None,
+                    delegated_managed_identity_resource_id: None,
+                    description: Some(
+                        "E2E test: Terraform management UAMI shared env access".into(),
+                    ),
+                    created_by: None,
+                    created_on: None,
+                    updated_by: None,
+                    updated_on: None,
+                }),
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to assign shared env join role: {error}"))?;
+
+    info!(
+        principal_id = %management.principal_id,
+        shared_env = %shared_env.environment_name,
+        "Terraform shared environment permissions granted"
+    );
+
+    Ok(())
 }
 
 fn terraform_import_request_from_outputs(

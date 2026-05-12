@@ -1196,7 +1196,7 @@ expression: schemas
   "gcp_kv": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "GCP KV ImportData — a Firestore database in Datastore mode.",
+    "description": "GCP KV ImportData — a Firestore Native database.",
     "properties": {
       "databaseId": {
         "description": "Firestore database ID (`(default)` when this is the default database).",

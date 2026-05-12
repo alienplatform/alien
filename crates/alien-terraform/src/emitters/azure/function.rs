@@ -15,7 +15,10 @@
 use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::azure::helpers::{
+        binding_string_value, container_apps_environment_binding, downcast, required_label,
+        stack_name_template, tags,
+    },
     emitters::function_environment::{function_environment, AzureFunctionEnvironmentRenderer},
     expr,
     registry::TfRegistry,
@@ -56,9 +59,17 @@ impl TfEmitter for AzureFunctionEmitter {
             }));
         };
         let label = required_label(ctx)?;
-        let env_label = parent_environment_label(ctx)?.to_string();
+        let (env_id, env_label) = parent_environment(ctx)?;
+        let env_label = env_label.to_string();
         let client_config_label = format!("{label}_current");
         let service_account_label = sa_label_for(ctx, &function.permissions);
+        let container_app_environment_id =
+            if let Some(binding) = container_apps_environment_binding(ctx, env_id)? {
+                binding_string_value(env_id, "resource_id", &binding.resource_id)
+                    .map(Expression::String)?
+            } else {
+                expr::traversal(["azurerm_container_app_environment", &env_label, "id"])
+            };
 
         // Container env-var blocks (one per K/V pair).
         let env_renderer = AzureFunctionEnvironmentRenderer {
@@ -125,10 +136,7 @@ impl TfEmitter for AzureFunctionEmitter {
                 "resource_group_name",
                 expr::raw("var.azure_resource_group_name"),
             ),
-            attr(
-                "container_app_environment_id",
-                expr::traversal(["azurerm_container_app_environment", &env_label, "id"]),
-            ),
+            attr("container_app_environment_id", container_app_environment_id),
             attr("revision_mode", Expression::String("Single".to_string())),
             nested(block("template", template_body)),
             nested(block("ingress", ingress_body)),
@@ -192,10 +200,18 @@ impl TfEmitter for AzureFunctionEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let function = downcast::<Function>(ctx, Function::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
-        let env_label = parent_environment_label(ctx)?.to_string();
-        let private_url = expr::template(format!(
-            "https://${{azurerm_container_app.{label}.name}}.${{azurerm_container_app_environment.{env_label}.default_domain}}"
-        ));
+        let (env_id, env_label) = parent_environment(ctx)?;
+        let private_url = if let Some(binding) = container_apps_environment_binding(ctx, env_id)? {
+            let default_domain =
+                binding_string_value(env_id, "default_domain", &binding.default_domain)?;
+            expr::template(format!(
+                "https://${{azurerm_container_app.{label}.name}}.{default_domain}"
+            ))
+        } else {
+            expr::template(format!(
+                "https://${{azurerm_container_app.{label}.name}}.${{azurerm_container_app_environment.{env_label}.default_domain}}"
+            ))
+        };
         let mut fields = vec![
             (
                 "service".to_string(),
@@ -231,7 +247,7 @@ impl TfEmitter for AzureFunctionEmitter {
     }
 }
 
-fn parent_environment_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
+fn parent_environment<'a>(ctx: &EmitContext<'a>) -> Result<(&'a str, &'a str)> {
     for (id, entry) in ctx.stack.resources() {
         if entry
             .config
@@ -239,7 +255,7 @@ fn parent_environment_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
             .is_some()
         {
             if let Some(label) = ctx.name_for(id) {
-                return Ok(label);
+                return Ok((id, label));
             }
         }
     }

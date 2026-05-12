@@ -16,7 +16,9 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, tags},
+    emitters::azure::helpers::{
+        binding_string_expr, container_apps_environment_binding, downcast, required_label, tags,
+    },
     expr,
 };
 use alien_core::{import::EmitContext, AzureContainerAppsEnvironment, Result};
@@ -31,6 +33,9 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             ctx,
             AzureContainerAppsEnvironment::RESOURCE_TYPE,
         )?;
+        if container_apps_environment_binding(ctx, ctx.resource_id)?.is_some() {
+            return Ok(TfFragment::empty());
+        }
         let label = required_label(ctx)?;
         let workspace_label = format!("{label}_logs");
 
@@ -86,6 +91,40 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+        if let Some(binding) = container_apps_environment_binding(ctx, ctx.resource_id)? {
+            return Ok(expr::object([
+                ("subscriptionId", expr::raw("var.azure_subscription_id")),
+                (
+                    "resourceGroup",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "resource_group_name",
+                        &binding.resource_group_name,
+                    )?,
+                ),
+                (
+                    "environmentName",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "environment_name",
+                        &binding.environment_name,
+                    )?,
+                ),
+                (
+                    "resourceId",
+                    binding_string_expr(ctx.resource_id, "resource_id", &binding.resource_id)?,
+                ),
+                (
+                    "defaultDomain",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "default_domain",
+                        &binding.default_domain,
+                    )?,
+                ),
+            ]));
+        }
+
         let label = required_label(ctx)?;
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
@@ -106,6 +145,39 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
+        if let Some(binding) = container_apps_environment_binding(ctx, ctx.resource_id)? {
+            return Ok(Some(expr::object([
+                (
+                    "environmentName",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "environment_name",
+                        &binding.environment_name,
+                    )?,
+                ),
+                (
+                    "resourceId",
+                    binding_string_expr(ctx.resource_id, "resource_id", &binding.resource_id)?,
+                ),
+                (
+                    "resourceGroupName",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "resource_group_name",
+                        &binding.resource_group_name,
+                    )?,
+                ),
+                (
+                    "defaultDomain",
+                    binding_string_expr(
+                        ctx.resource_id,
+                        "default_domain",
+                        &binding.default_domain,
+                    )?,
+                ),
+            ])));
+        }
+
         let label = required_label(ctx)?;
         Ok(Some(expr::object([
             (
