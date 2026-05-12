@@ -45,6 +45,7 @@ impl ResourceImporter for AzureFunctionImporter {
             commands_dapr_component: None,
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
+            commands_infrastructure_auth_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,

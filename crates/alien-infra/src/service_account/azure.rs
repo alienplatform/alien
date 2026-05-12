@@ -33,12 +33,12 @@ fn get_azure_custom_role_name(prefix: &str, name: &str) -> String {
 }
 
 #[cfg(not(test))]
-const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 30;
+const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 10;
 #[cfg(test)]
 const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 0;
 
 #[cfg(not(test))]
-const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
+const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 60;
 #[cfg(test)]
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 

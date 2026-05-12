@@ -41,9 +41,14 @@ const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 60;
 const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 0;
 
 #[cfg(not(test))]
-const AZURE_READY_RBAC_WAIT_SECS: u64 = 300;
+const AZURE_READY_RBAC_WAIT_SECS: u64 = 60;
 #[cfg(test)]
 const AZURE_READY_RBAC_WAIT_SECS: u64 = 0;
+
+#[cfg(not(test))]
+const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 300;
+#[cfg(test)]
+const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 0;
 
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
@@ -71,6 +76,77 @@ fn rbac_wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
             remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
         ))
     }
+}
+
+fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -> bool {
+    const AUTHORIZATION_MESSAGE_MARKERS: &[&str] = &[
+        "AuthorizationFailed",
+        "Unauthorized",
+        "does not have authorization",
+        "refresh your credentials",
+        "HTTP 401",
+        "HTTP 403",
+    ];
+
+    fn context_http_status(context: Option<&serde_json::Value>) -> Option<u16> {
+        context
+            .and_then(|value| value.get("http_status"))
+            .and_then(|value| value.as_u64())
+            .and_then(|status| u16::try_from(status).ok())
+    }
+
+    fn context_contains_auth_marker(context: Option<&serde_json::Value>) -> bool {
+        context.is_some_and(|value| {
+            let context_text = value.to_string();
+            AUTHORIZATION_MESSAGE_MARKERS
+                .iter()
+                .any(|marker| context_text.contains(marker))
+        })
+    }
+
+    fn matches_layer(
+        code: &str,
+        message: &str,
+        http_status_code: Option<u16>,
+        context: Option<&serde_json::Value>,
+    ) -> bool {
+        let http_status_code = http_status_code.or_else(|| context_http_status(context));
+        let authorization_status = matches!(http_status_code, Some(401 | 403));
+        let authorization_code = matches!(
+            code,
+            "REMOTE_ACCESS_DENIED" | "AUTHENTICATION_ERROR" | "HTTP_RESPONSE_ERROR"
+        );
+        let authorization_message = AUTHORIZATION_MESSAGE_MARKERS
+            .iter()
+            .any(|marker| message.contains(marker))
+            || context_contains_auth_marker(context);
+
+        (authorization_status || authorization_code) && authorization_message
+    }
+
+    if matches_layer(
+        &error.code,
+        &error.message,
+        error.http_status_code,
+        error.context.as_ref(),
+    ) {
+        return true;
+    }
+
+    let mut source = error.source.as_deref();
+    while let Some(layer) = source {
+        if matches_layer(
+            &layer.code,
+            &layer.message,
+            layer.http_status_code,
+            layer.context.as_ref(),
+        ) {
+            return true;
+        }
+        source = layer.source.as_deref();
+    }
+
+    false
 }
 
 /// Get the Key Vault name for importing certificates.
@@ -229,6 +305,9 @@ pub struct AzureFunctionController {
     /// Role assignment ID for Service Bus Data Receiver on the execution UAMI (for cleanup)
     pub(crate) commands_receiver_role_assignment_id: Option<String>,
 
+    /// Deadline for retrying commands infrastructure creation while Azure IAM grants propagate.
+    #[serde(default)]
+    pub(crate) commands_infrastructure_auth_wait_until_epoch_secs: Option<u64>,
     /// Deadline before creating the Container App after pre-created RBAC assignments.
     #[serde(default)]
     pub(crate) pre_container_app_rbac_wait_until_epoch_secs: Option<u64>,
@@ -258,6 +337,7 @@ impl AzureFunctionController {
 
         self.pre_container_app_rbac_wait_until_epoch_secs = None;
         self.ready_rbac_wait_until_epoch_secs = None;
+        self.commands_infrastructure_auth_wait_until_epoch_secs = None;
         self.update_rbac_wait_required = false;
 
         // Product limitation: Only allow at most one queue trigger per function
@@ -286,8 +366,36 @@ impl AzureFunctionController {
         // This eliminates the race condition where the sidecar starts before permissions exist.
         self.container_app_name = Some(container_app_name.clone());
         if func_cfg.commands_enabled {
-            self.setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
-                .await?;
+            match self
+                .setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
+                .await
+            {
+                Ok(()) => {
+                    self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+                }
+                Err(e) if is_azure_authorization_propagation_error(&e) => {
+                    let deadline = ensure_rbac_wait_deadline(
+                        &mut self.commands_infrastructure_auth_wait_until_epoch_secs,
+                        AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS,
+                    );
+
+                    if let Some(delay) = rbac_wait_delay(deadline) {
+                        warn!(
+                            name=%func_cfg.id,
+                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                            error=%e,
+                            "Azure authorization is not ready for commands infrastructure; retrying"
+                        );
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(delay),
+                        });
+                    }
+
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         // Wait in a real controller state for Azure RBAC propagation. A
@@ -1130,26 +1238,14 @@ impl AzureFunctionController {
         // Azure separates management plane (Contributor) from data plane — the identity
         // that creates the queue cannot send messages without an explicit data-plane role.
         // This is Azure-specific; AWS/GCP don't have this separation.
-        match self
-            .assign_commands_sender_role(
-                ctx,
-                azure_config,
-                &service_bus_resource_group,
-                &namespace_name,
-                func_cfg,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => {
-                warn!(
-                    function=%func_cfg.id,
-                    error=%e,
-                    "Failed to assign Service Bus Data Sender to deploying identity \
-                     (commands dispatch may fail with 401)"
-                );
-            }
-        }
+        self.assign_commands_sender_role(
+            ctx,
+            azure_config,
+            &service_bus_resource_group,
+            &namespace_name,
+            func_cfg,
+        )
+        .await?;
 
         info!(function=%func_cfg.id, "Commands Service Bus infrastructure created");
 
@@ -2510,26 +2606,15 @@ impl AzureFunctionController {
         self.commands_queue_name = Some(queue_name);
         self.commands_dapr_component = Some(component_name);
 
-        // Assign roles BEFORE Container App starts, giving RBAC time to propagate
-        match self
-            .assign_commands_sender_role(
-                ctx,
-                azure_config,
-                &service_bus_resource_group,
-                &namespace_name,
-                func_cfg,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => {
-                warn!(
-                    function=%func_cfg.id,
-                    error=%e,
-                    "Failed to assign Service Bus roles for commands (commands dispatch may fail)"
-                );
-            }
-        }
+        // Assign roles BEFORE Container App starts, giving RBAC time to propagate.
+        self.assign_commands_sender_role(
+            ctx,
+            azure_config,
+            &service_bus_resource_group,
+            &namespace_name,
+            func_cfg,
+        )
+        .await?;
 
         info!(function=%func_cfg.id, "Commands infrastructure pre-created successfully");
         Ok(())
@@ -3614,6 +3699,7 @@ impl AzureFunctionController {
             commands_dapr_component: None,
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
+            commands_infrastructure_auth_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
@@ -3643,17 +3729,52 @@ mod tests {
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{Function, FunctionOutputs, Ingress, Platform, ResourceStatus};
-    use alien_error::AlienError;
+    use alien_error::{AlienError, ContextError};
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{current_unix_timestamp_secs, AZURE_RBAC_WAIT_POLL_SECS};
+    use super::{
+        current_unix_timestamp_secs, is_azure_authorization_propagation_error,
+        AZURE_RBAC_WAIT_POLL_SECS,
+    };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::error::ErrorData;
     use crate::function::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
         AzureFunctionController,
     };
     use crate::AzureFunctionState;
+
+    #[test]
+    fn detects_azure_authorization_propagation_error_from_http_context() {
+        let http_error = AlienError::new(CloudClientErrorData::HttpResponseError {
+            message: "Azure CreateOrUpdateDaprComponent failed: HTTP 403 Forbidden".to_string(),
+            url: "https://management.azure.com/test".to_string(),
+            http_status: 403,
+            http_request_text: None,
+            http_response_text: Some(
+                "{\"error\":{\"code\":\"AuthorizationFailed\",\"message\":\"The client does not have authorization to perform action. If access was recently granted, please refresh your credentials.\"}}"
+                    .to_string(),
+            ),
+        });
+
+        let error = http_error.context(ErrorData::CloudPlatformError {
+            message: "Failed to create commands Dapr component".to_string(),
+            resource_id: Some("alien-rs-fn".to_string()),
+        });
+
+        assert!(is_azure_authorization_propagation_error(&error));
+    }
+
+    #[test]
+    fn ignores_non_authorization_cloud_platform_errors() {
+        let error = AlienError::new(ErrorData::CloudPlatformError {
+            message: "Failed to create commands Dapr component".to_string(),
+            resource_id: Some("alien-rs-fn".to_string()),
+        });
+
+        assert!(!is_azure_authorization_propagation_error(&error));
+    }
 
     fn create_successful_container_app_response(app_name: &str, has_url: bool) -> ContainerApp {
         let fqdn = if has_url {
@@ -4793,6 +4914,7 @@ mod tests {
             commands_dapr_component: None,
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
+            commands_infrastructure_auth_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
