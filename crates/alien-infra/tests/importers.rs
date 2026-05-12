@@ -255,6 +255,16 @@ fn gcp_kv_round_trip() {
         &gcp_management_config(),
     );
     assert_running_with_internal_state(&state);
+    assert_eq!(internal_state(&state)["collectionName"], "settings");
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "firestore",
+            "projectId": "my-project",
+            "databaseId": "alien-stack-settings",
+            "collectionName": "settings",
+        }))
+    );
 }
 
 #[test]

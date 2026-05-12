@@ -70,7 +70,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         attr("location", expr::raw("upper(var.gcp_region)")),
         attr("storage_class", Expression::String("STANDARD".to_string())),
         attr("uniform_bucket_level_access", Expression::Bool(true)),
-        attr("force_destroy", Expression::Bool(false)),
+        attr("force_destroy", Expression::Bool(true)),
         attr(
             "public_access_prevention",
             Expression::String(if storage.public_read {

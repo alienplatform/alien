@@ -106,7 +106,7 @@ resource "google_storage_bucket" "audit" {
   location                    = upper(var.gcp_region)
   storage_class               = "STANDARD"
   uniform_bucket_level_access = true
-  force_destroy               = false
+  force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
     "managed-by"          = "alien-dev"
