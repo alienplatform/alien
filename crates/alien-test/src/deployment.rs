@@ -268,14 +268,14 @@ impl TestDeployment {
 
     /// Destroy this deployment via the SDK.
     pub async fn destroy(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.destroy_with_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::Full)
+        self.destroy_with_scope(alien_manager_api::types::DeleteScope::Full)
             .await
     }
 
     /// Destroy this deployment via the SDK with an explicit delete scope.
     pub async fn destroy_with_scope(
         &self,
-        delete_scope: alien_manager_api::types::DeleteDeploymentDeleteScope,
+        delete_scope: alien_manager_api::types::DeleteScope,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.manager
             .client()

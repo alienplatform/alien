@@ -359,9 +359,9 @@ impl TestContext {
         // those flows Alien should delete only Live resources; the setup tool
         // cleanup below owns Frozen resources.
         let delete_scope = if self.distribution_cleanups.is_empty() {
-            alien_manager_api::types::DeleteDeploymentDeleteScope::Full
+            alien_manager_api::types::DeleteScope::Full
         } else {
-            alien_manager_api::types::DeleteDeploymentDeleteScope::LiveOnly
+            alien_manager_api::types::DeleteScope::LiveOnly
         };
         let destroy_enqueued = match self.deployment.destroy_with_scope(delete_scope).await {
             Ok(()) => true,
