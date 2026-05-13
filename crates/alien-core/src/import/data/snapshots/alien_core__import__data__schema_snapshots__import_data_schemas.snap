@@ -612,40 +612,35 @@ expression: schemas
   "azure_kv": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "Azure KV ImportData — a Cosmos DB account in NoSQL mode plus its container.",
+    "description": "Azure KV ImportData — a table in the stack's shared Azure Storage account.",
     "properties": {
-      "accountName": {
-        "description": "Cosmos DB account name.",
-        "type": "string"
-      },
-      "containerName": {
-        "description": "Container name within the database.",
-        "type": "string"
-      },
-      "databaseName": {
-        "description": "Database name.",
-        "type": "string"
-      },
-      "endpoint": {
-        "description": "Primary endpoint URL.",
-        "type": "string"
-      },
       "resourceGroup": {
-        "description": "Resource group containing the Cosmos DB account.",
+        "description": "Resource group containing the Storage account.",
+        "type": "string"
+      },
+      "storageAccountName": {
+        "description": "Storage account name.",
         "type": "string"
       },
       "subscriptionId": {
-        "description": "Subscription ID containing the Cosmos DB account.",
+        "description": "Subscription ID containing the Storage account.",
+        "type": "string"
+      },
+      "tableEndpoint": {
+        "description": "Primary Table endpoint URL.",
+        "type": "string"
+      },
+      "tableName": {
+        "description": "Azure Table name.",
         "type": "string"
       }
     },
     "required": [
-      "accountName",
-      "containerName",
-      "databaseName",
-      "endpoint",
       "resourceGroup",
-      "subscriptionId"
+      "storageAccountName",
+      "subscriptionId",
+      "tableEndpoint",
+      "tableName"
     ],
     "title": "AzureKvImportData",
     "type": "object"

@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, DeploymentConfig, Function, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState, Vault,
+    Container, DeploymentConfig, Function, RemoteStackManagement, ResourceEntry, ResourceLifecycle,
+    ResourceRef, Stack, StackState, Vault,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -210,6 +210,18 @@ fn add_vault_read_permissions_to_compute_profiles(
 fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
+    if !stack
+        .resources
+        .values()
+        .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+    {
+        debug!(
+            vault_name = %vault_name,
+            "Skipping secrets vault management permissions because remote stack management is not present"
+        );
+        return Ok(());
+    }
+
     // Get current management permissions
     let current_management = stack.permissions.management.clone();
 
@@ -279,6 +291,17 @@ mod tests {
         }
     }
 
+    fn remote_stack_management_entry() -> ResourceEntry {
+        ResourceEntry {
+            config: alien_core::Resource::new(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
     #[tokio::test]
     async fn test_adds_secrets_vault_and_links_to_function() {
         let function = Function::new("test-function".to_string())
@@ -297,6 +320,10 @@ mod tests {
                 dependencies: Vec::new(),
                 remote_access: false,
             },
+        );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
         );
 
         let mut profiles = IndexMap::new();
@@ -585,6 +612,10 @@ mod tests {
                 remote_access: false,
             },
         );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
+        );
 
         let mut profiles = IndexMap::new();
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
@@ -652,6 +683,10 @@ mod tests {
                 dependencies: Vec::new(),
                 remote_access: false,
             },
+        );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
         );
 
         let stack = Stack {
@@ -784,5 +819,58 @@ mod tests {
             }
             _ => panic!("Expected Override management permissions"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_skips_management_permissions_without_remote_stack_management() {
+        let function = Function::new("test-function".to_string())
+            .code(FunctionCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test-profile".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "test-function".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(function),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let mut profiles = IndexMap::new();
+        profiles.insert("test-profile".to_string(), PermissionProfile::new());
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Local);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutation = SecretsVaultMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
+        assert!(result_stack.resources.contains_key("secrets"));
+        assert!(
+            matches!(
+                result_stack.permissions.management,
+                ManagementPermissions::Auto
+            ),
+            "Local stacks without remote stack management should not get resource-scoped management permissions"
+        );
     }
 }

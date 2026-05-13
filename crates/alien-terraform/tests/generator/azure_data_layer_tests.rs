@@ -105,9 +105,10 @@ fn azure_storage_public_read_uses_blob_access_type() {
 }
 
 #[test]
-fn azure_kv_renders_cosmos_db_database_and_container() {
+fn azure_kv_renders_storage_table() {
     let stack = Stack::new("acme-kv".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
         .add(
             Kv::new("metadata".to_string()).build(),
             ResourceLifecycle::Frozen,

@@ -116,15 +116,25 @@ locals {
       }
     },
     {
+      id   = "default-storage-account"
+      type = "azure_storage_account"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        blobEndpoint       = azurerm_storage_account.default_storage_account.primary_blob_endpoint
+        queueEndpoint      = azurerm_storage_account.default_storage_account.primary_queue_endpoint
+      }
+    },
+    {
       id   = "metadata"
       type = "kv"
       importData = {
-        subscriptionId = var.azure_subscription_id
-        resourceGroup  = var.azure_resource_group_name
-        accountName    = azurerm_cosmosdb_account.metadata.name
-        databaseName   = azurerm_cosmosdb_sql_database.metadata_db.name
-        containerName  = azurerm_cosmosdb_sql_container.metadata_container.name
-        endpoint       = azurerm_cosmosdb_account.metadata.endpoint
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        tableName          = azurerm_storage_table.metadata.name
+        tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
       }
     }
   ]
@@ -142,60 +152,39 @@ resource "azurerm_resource_group" "default_resource_group" {
   }
 }
 
-=== metadata.tf ===
-resource "azurerm_cosmosdb_account" "metadata" {
-  name                          = lower("${var.stack_name}-metadata")
-  resource_group_name           = var.azure_resource_group_name
-  location                      = var.azure_location
-  offer_type                    = "Standard"
-  kind                          = "GlobalDocumentDB"
-  local_authentication_disabled = true
-
-  consistency_policy {
-    consistency_level = "Session"
-  }
-
-  geo_location {
-    location          = var.azure_location
-    failover_priority = 0
-  }
-
-  backup {
-    type                = "Periodic"
-    interval_in_minutes = 240
-    retention_in_hours  = 8
-    storage_redundancy  = "Local"
-  }
-
+=== default_storage_account.tf ===
+resource "azurerm_storage_account" "default_storage_account" {
+  name                            = substr(replace(lower("${var.stack_name}default"), "-", ""), 0, 24)
+  resource_group_name             = var.azure_resource_group_name
+  location                        = var.azure_location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  account_kind                    = "StorageV2"
+  access_tier                     = "Hot"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
   tags = {
     "managed-by"          = "alien-dev"
     "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "metadata"
-    "alien-resource-type" = "kv"
+    "alien-resource-id"   = "default-storage-account"
+    "alien-resource-type" = "storage-account"
   }
+
+  blob_properties {
+    versioning_enabled  = false
+    change_feed_enabled = false
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
-resource "azurerm_cosmosdb_sql_database" "metadata_db" {
-  name                = "${var.stack_name}-metadata-db"
-  resource_group_name = azurerm_cosmosdb_account.metadata.resource_group_name
-  account_name        = azurerm_cosmosdb_account.metadata.name
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_cosmosdb_sql_container" "metadata_container" {
-  name                = "${var.stack_name}-metadata"
-  resource_group_name = azurerm_cosmosdb_account.metadata.resource_group_name
-  account_name        = azurerm_cosmosdb_account.metadata.name
-  database_name       = azurerm_cosmosdb_sql_database.metadata_db.name
-  partition_key_paths = [
-    "/pk"
-  ]
-  partition_key_version = 2
+=== metadata.tf ===
+resource "azurerm_storage_table" "metadata" {
+  name                 = substr(lower(replace("kv${var.stack_name}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
+  storage_account_name = azurerm_storage_account.default_storage_account.name
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -215,9 +204,8 @@ resource "terraform_data" "deployment_stack_import" {
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
-    azurerm_cosmosdb_account.metadata,
-    azurerm_cosmosdb_sql_database.metadata_db,
-    azurerm_cosmosdb_sql_container.metadata_container
+    azurerm_storage_account.default_storage_account,
+    azurerm_storage_table.metadata
   ]
 }
 
