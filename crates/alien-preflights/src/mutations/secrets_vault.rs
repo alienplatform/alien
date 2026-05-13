@@ -19,7 +19,7 @@ use tracing::{debug, info};
 /// 1. Add "secrets" vault resource (if not present)
 /// 2. Link vault to all Functions and Containers
 /// 3. Add vault/data-read to compute resource profiles
-/// 4. Add vault/data-write to management profile
+/// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
 pub struct SecretsVaultMutation;
 
 #[async_trait]
@@ -74,9 +74,10 @@ impl StackMutation for SecretsVaultMutation {
         // This allows Functions and Containers to read secrets from the vault
         add_vault_read_permissions_to_compute_profiles(&mut stack, secrets_vault_id)?;
 
-        // Step 4: Add vault/data-write permission to management profile
-        // This allows the control plane to sync secrets during deployment
-        add_vault_write_permission_to_management(&mut stack, secrets_vault_id)?;
+        // Step 4: Add vault data permissions to management profile for the secrets vault.
+        // This allows the control plane to sync secret environment variables without
+        // granting access to user-declared vaults.
+        add_vault_permissions_to_management(&mut stack, secrets_vault_id)?;
 
         Ok(stack)
     }
@@ -203,9 +204,10 @@ fn add_vault_read_permissions_to_compute_profiles(
     Ok(())
 }
 
-/// Add vault/data-write permission to management profile
-/// This allows the management service to sync secrets to the vault during deployment
-fn add_vault_write_permission_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
+/// Add vault data permissions to the management profile for the secrets vault.
+/// This allows the management service to sync Alien-managed secrets without
+/// granting access to user-declared vaults.
+fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
     // Get current management permissions
@@ -213,8 +215,9 @@ fn add_vault_write_permission_to_management(stack: &mut Stack, vault_name: &str)
 
     match current_management {
         ManagementPermissions::Auto | ManagementPermissions::Extend(_) => {
-            // For Auto or Extend, we need to add vault/data-write to the management profile
+            // For Auto or Extend, add data access only to the Alien-managed secrets vault.
             // This will be merged with auto-generated permissions by ManagementPermissionProfileMutation
+            let vault_read_permission = PermissionSetReference::from_name("vault/data-read");
             let vault_write_permission = PermissionSetReference::from_name("vault/data-write");
 
             let mut management_profile = match current_management {
@@ -222,17 +225,20 @@ fn add_vault_write_permission_to_management(stack: &mut Stack, vault_name: &str)
                 _ => PermissionProfile::new(),
             };
 
-            if let Some(global_permissions) = management_profile.0.get_mut("*") {
-                global_permissions.retain(|p| p.id() != "vault/data-write");
-                if global_permissions.is_empty() {
-                    management_profile.0.swap_remove("*");
-                }
-            }
-
             let vault_permissions = management_profile
                 .0
                 .entry(vault_name.to_string())
                 .or_default();
+            if !vault_permissions
+                .iter()
+                .any(|p| p.id() == "vault/data-read")
+            {
+                vault_permissions.push(vault_read_permission);
+                debug!(
+                    vault_name = %vault_name,
+                    "Added vault/data-read to management profile for secrets vault resource"
+                );
+            }
             if !vault_permissions
                 .iter()
                 .any(|p| p.id() == "vault/data-write")
@@ -240,14 +246,14 @@ fn add_vault_write_permission_to_management(stack: &mut Stack, vault_name: &str)
                 vault_permissions.push(vault_write_permission);
                 debug!(
                     vault_name = %vault_name,
-                    "Added vault/data-write to management profile for vault resource"
+                    "Added vault/data-write to management profile for secrets vault resource"
                 );
             }
             stack.permissions.management = ManagementPermissions::Extend(management_profile);
         }
         ManagementPermissions::Override(_) => {
-            // Don't modify override - user has full control
-            debug!("Skipping vault/data-write addition - management permissions are overridden");
+            // Don't modify override - user has full control.
+            debug!("Skipping secrets vault management permissions - management permissions are overridden");
         }
     }
 
@@ -561,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_adds_vault_data_write_to_management() {
+    async fn test_adds_vault_data_permissions_to_management() {
         let function = Function::new("test-function".to_string())
             .code(FunctionCode::Image {
                 image: "test:latest".to_string(),
@@ -603,7 +609,7 @@ mod tests {
         let mutation = SecretsVaultMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Check that management profile has vault/data-write scoped to the secrets vault.
+        // Check that management profile has vault data permissions scoped to the secrets vault.
         match result_stack.permissions.management {
             ManagementPermissions::Extend(profile) => {
                 assert!(
@@ -616,8 +622,18 @@ mod tests {
                 assert!(
                     vault_permissions
                         .iter()
+                        .any(|p| p.id() == "vault/data-read"),
+                    "Management profile should have vault/data-read for secrets vault"
+                );
+                assert!(
+                    vault_permissions
+                        .iter()
                         .any(|p| p.id() == "vault/data-write"),
                     "Management profile should have vault/data-write for secrets vault"
+                );
+                assert!(
+                    profile.0.get("alien-vault").is_none(),
+                    "Management profile should not get vault/data-write for user vaults by default"
                 );
             }
             _ => panic!("Expected Extend management permissions"),
@@ -625,10 +641,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_migrates_global_vault_data_write_to_secrets_vault() {
+    async fn test_preserves_explicit_global_vault_data_write_and_adds_secrets_scope() {
+        let user_vault = Vault::new("alien-vault".to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "alien-vault".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(user_vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
         let stack = Stack {
             id: "test-stack".to_string(),
-            resources: IndexMap::new(),
+            resources,
             permissions: PermissionsConfig {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Extend(
@@ -658,10 +686,19 @@ mod tests {
                     "Unrelated global permissions should be preserved"
                 );
                 assert!(
-                    !global_permissions
+                    global_permissions
                         .iter()
                         .any(|p| p.id() == "vault/data-write"),
-                    "Global vault/data-write should be removed"
+                    "Explicit global vault/data-write should be preserved"
+                );
+                assert!(
+                    profile
+                        .0
+                        .get("secrets")
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.id() == "vault/data-read"),
+                    "vault/data-read should be added to the secrets vault resource"
                 );
                 assert!(
                     profile
@@ -670,7 +707,11 @@ mod tests {
                         .unwrap()
                         .iter()
                         .any(|p| p.id() == "vault/data-write"),
-                    "vault/data-write should move to the secrets vault resource"
+                    "vault/data-write should be added to the secrets vault resource"
+                );
+                assert!(
+                    profile.0.get("alien-vault").is_none(),
+                    "user vaults should not receive resource-specific management vault/data-write by default"
                 );
             }
             _ => panic!("Expected Extend management permissions"),

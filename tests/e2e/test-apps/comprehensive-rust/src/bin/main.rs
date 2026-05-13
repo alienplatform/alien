@@ -399,8 +399,8 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::service_account::test_service_account),
         )
         .route(
-            "/external-secret",
-            get(handlers::vault::get_external_secret),
+            "/managed-secret",
+            get(handlers::vault::get_managed_secret),
         )
         // Event verification endpoints (for tests to check received events)
         // Note: {*...} captures paths with slashes like "test/data-xxx.zip" or "arn:aws:events:.../rule/..."

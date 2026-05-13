@@ -15,10 +15,6 @@ use alien_azure_clients::models::keyvault::{
 };
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
 
-/// Azure built-in role ID for "Key Vault Secrets Officer"
-/// Grants full access to manage Key Vault secrets.
-const KEY_VAULT_SECRETS_OFFICER_ROLE_ID: &str = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7";
-
 /// Azure Vault controller.
 ///
 /// Azure Key Vault is an actual Azure resource that needs to be created.
@@ -72,7 +68,7 @@ impl AzureVaultController {
         );
 
         // Create the Azure Key Vault
-        self.create_azure_key_vault(ctx, azure_config)
+        self.create_azure_key_vault(azure_config)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
@@ -88,10 +84,6 @@ impl AzureVaultController {
             vault_uri = %self.vault_uri.as_deref().unwrap_or("unknown"),
             "Azure Key Vault created successfully"
         );
-
-        // Assign Key Vault Secrets Officer to the controller's identity so it can
-        // manage secrets (e.g., sync deployment env vars) in this vault.
-        self.assign_controller_vault_role(ctx, azure_config).await?;
 
         Ok(HandlerAction::Continue {
             state: ApplyingPermissions,
@@ -290,7 +282,6 @@ impl AzureVaultController {
     /// Create an Azure Key Vault with proper access policies
     async fn create_azure_key_vault(
         &self,
-        ctx: &ResourceControllerContext<'_>,
         azure_config: &alien_azure_clients::AzureClientConfig,
     ) -> Result<()> {
         let vault_name = self.vault_name.as_ref().ok_or_else(|| {
@@ -382,119 +373,6 @@ impl AzureVaultController {
                 message: format!("Azure Key Vault creation failed for vault '{}'", vault_name),
                 resource_id: Some(vault_name.clone()),
             })?;
-
-        Ok(())
-    }
-
-    /// Assign the Key Vault Secrets Officer built-in role to the controller's
-    /// own service principal so it can sync secrets to this vault.
-    async fn assign_controller_vault_role(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
-    ) -> Result<()> {
-        use alien_azure_clients::authorization::{AuthorizationApi, Scope};
-        use alien_azure_clients::extract_oid_from_token;
-        use alien_azure_clients::models::authorization_role_assignments::{
-            RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-        };
-        use alien_azure_clients::AzureClientConfigExt;
-
-        let vault_name = self.vault_name.as_deref().unwrap_or("unknown");
-        let resource_group_name = self.resource_group_name.as_deref().unwrap_or("unknown");
-
-        // Get a management token and extract the caller's object ID
-        let token =
-            azure_config
-                .get_bearer_token()
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get bearer token for controller identity".to_string(),
-                    resource_id: Some(vault_name.to_string()),
-                })?;
-
-        let controller_oid =
-            extract_oid_from_token(&token).context(ErrorData::CloudPlatformError {
-                message: "Failed to extract controller object ID from token".to_string(),
-                resource_id: Some(vault_name.to_string()),
-            })?;
-
-        info!(
-            vault_name = %vault_name,
-            controller_oid = %controller_oid,
-            "Assigning Key Vault Secrets Officer role to controller"
-        );
-
-        let auth_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-
-        let scope = Scope::Resource {
-            resource_group_name: resource_group_name.to_string(),
-            resource_provider: "Microsoft.KeyVault".to_string(),
-            parent_resource_path: None,
-            resource_type: "vaults".to_string(),
-            resource_name: vault_name.to_string(),
-        };
-
-        let full_role_definition_id = format!(
-            "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-            azure_config.subscription_id, KEY_VAULT_SECRETS_OFFICER_ROLE_ID
-        );
-
-        let assignment_name = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!(
-                "alien:azure:vault-controller-role:{}:{}",
-                vault_name, controller_oid
-            )
-            .as_bytes(),
-        )
-        .to_string();
-
-        let role_assignment_id = auth_client.build_role_assignment_id(&scope, assignment_name);
-
-        let role_assignment = RoleAssignment {
-            id: None,
-            name: None,
-            properties: Some(RoleAssignmentProperties {
-                condition: None,
-                condition_version: None,
-                created_by: None,
-                created_on: None,
-                delegated_managed_identity_resource_id: None,
-                description: Some(format!(
-                    "Alien controller Key Vault Secrets Officer for vault {}",
-                    vault_name
-                )),
-                principal_id: controller_oid.clone(),
-                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                role_definition_id: full_role_definition_id,
-                scope: Some(format!(
-                    "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{}",
-                    azure_config.subscription_id, resource_group_name, vault_name
-                )),
-                updated_by: None,
-                updated_on: None,
-            }),
-            type_: None,
-        };
-
-        auth_client
-            .create_or_update_role_assignment_by_id(role_assignment_id, &role_assignment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to assign Key Vault Secrets Officer to controller on vault '{}'",
-                    vault_name
-                ),
-                resource_id: Some(vault_name.to_string()),
-            })?;
-
-        info!(
-            vault_name = %vault_name,
-            "Controller Key Vault Secrets Officer role assigned successfully"
-        );
 
         Ok(())
     }

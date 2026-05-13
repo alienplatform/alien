@@ -19,7 +19,7 @@ use alien_core::{
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
     ExternalBinding, ExternalBindings, Function, FunctionCode, GcpClientConfig, GcpCredentials,
     GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
-    StackState,
+    StackState, Vault,
 };
 use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
@@ -1024,30 +1024,32 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             Platform::Aws | Platform::Gcp | Platform::Azure
         )
     {
-        provision_external_secret(&ctx.manager, &ctx.deployment).await?;
+        provision_managed_test_secret(&ctx.manager, &ctx.deployment).await?;
     }
     Ok(())
 }
 
-async fn provision_external_secret(
+async fn provision_managed_test_secret(
     manager: &Arc<TestManager>,
     deployment: &TestDeployment,
 ) -> anyhow::Result<()> {
+    let vault_name = "secrets";
+    let secret_key = "MANAGED_TEST_SECRET";
     let url = format!(
-        "{}/v1/deployments/{}/vault/alien-vault/secrets/EXTERNAL_TEST_SECRET",
-        manager.url, deployment.id
+        "{}/v1/deployments/{}/vault/{}/secrets/{}",
+        manager.url, deployment.id, vault_name, secret_key
     );
     let response = manager
         .http_client()
         .put(&url)
-        .json(&serde_json::json!({ "value": "e2e-test-external-secret-value" }))
+        .json(&serde_json::json!({ "value": "e2e-test-managed-secret-value" }))
         .send()
         .await
         .context("Failed to call vault set secret API")?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to provision external secret ({status}): {body}");
+        anyhow::bail!("Failed to provision managed test secret ({status}): {body}");
     }
     Ok(())
 }
@@ -1961,6 +1963,59 @@ mod tests {
         assert!(rendered.contains("\"resourcemanager.projects.get\""));
         assert!(rendered.contains("\"run.services.create\""));
         assert!(rendered.contains("\"iam.serviceAccounts.actAs\""));
+    }
+
+    #[tokio::test]
+    async fn gcp_distribution_render_scopes_vault_management_roles_per_vault() {
+        let stack = Stack::new("distribution-gcp-vaults".to_string())
+            .add(
+                Vault::new("alien-vault".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Push);
+
+        let rendered_stack = apply_render_mutations(stack, Platform::Gcp, &stack_settings)
+            .await
+            .expect("distribution render mutations should succeed");
+        let registry = alien_terraform::TfRegistry::built_in();
+        let module = alien_terraform::generate_terraform_module(
+            &rendered_stack,
+            alien_terraform::TerraformTarget::Gcp,
+            alien_terraform::TerraformOptions {
+                registry: &registry,
+                stack_settings,
+                registration: None,
+            },
+        )
+        .expect("Terraform generation should succeed");
+        let rendered = module
+            .iter()
+            .map(|(_, contents)| contents)
+            .collect::<String>();
+        let custom_role_declarations = rendered
+            .lines()
+            .filter(|line| line.contains("resource \"google_project_iam_custom_role\""))
+            .collect::<Vec<_>>();
+        let unique_custom_role_declarations = custom_role_declarations
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(
+            unique_custom_role_declarations.len(),
+            custom_role_declarations.len(),
+            "GCP custom role declarations should be unique: {custom_role_declarations:?}"
+        );
+        assert_eq!(
+            rendered
+                .matches(
+                    "resource \"google_project_iam_custom_role\" \"remote_stack_management_vaultheartbeat\"",
+                )
+                .count(),
+            1,
+            "global management vault heartbeat role should be emitted once"
+        );
     }
 
     #[test]

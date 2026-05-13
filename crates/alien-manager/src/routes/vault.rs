@@ -8,8 +8,8 @@
 //! `GET  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — get a secret
 
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{bindings::VaultBinding, Platform, StackState};
-use alien_error::{Context, ContextError, IntoAlienError};
+use alien_core::{bindings::VaultBinding, ManagementPermissions, Platform, Stack, StackState};
+use alien_error::{Context, IntoAlienError};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -23,6 +23,7 @@ use tracing::info;
 use super::auth;
 use super::AppState;
 use crate::error::{ErrorData, Result};
+use crate::traits::DeploymentRecord;
 
 /// Request body for setting a secret.
 #[derive(Debug, Deserialize)]
@@ -46,42 +47,26 @@ pub fn router() -> Router<AppState> {
 /// Build a vault binding and load a vault instance for the given deployment and vault name.
 async fn load_vault_for_deployment(
     state: &AppState,
-    caller: &crate::auth::Subject,
-    deployment_id: &str,
+    deployment: &DeploymentRecord,
     vault_name: &str,
 ) -> Result<Arc<dyn alien_bindings::traits::Vault>> {
-    // 1. Look up the deployment.
-    let deployment = match state
-        .deployment_store
-        .get_deployment(caller, deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => return Err(ErrorData::not_found_deployment(deployment_id)),
-        Err(e) => {
-            return Err(e.context(ErrorData::InternalError {
-                message: "Failed to get deployment".to_string(),
-            }))
-        }
-    };
-
-    // 2. Get the resource_prefix from stack_state.
+    // 1. Get the resource_prefix from stack_state.
     let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
         ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
     })?;
 
     let platform = deployment.platform;
 
-    // 3. Resolve credentials for the deployment.
+    // 2. Resolve credentials for the deployment.
     let client_config = state
         .credential_resolver
-        .resolve(&deployment)
+        .resolve(deployment)
         .await
         .context(ErrorData::InternalError {
             message: "Failed to resolve credentials for vault operation".to_string(),
         })?;
 
-    // 4. Build a BindingsProvider with the credentials + vault binding.
+    // 3. Build a BindingsProvider with the credentials + vault binding.
     let mut bindings = HashMap::new();
     bindings.insert(
         vault_name.to_string(),
@@ -93,7 +78,7 @@ async fn load_vault_for_deployment(
             message: "Failed to create bindings provider for vault operation".to_string(),
         })?;
 
-    // 5. Load the vault.
+    // 4. Load the vault.
     let vault = provider
         .load_vault(vault_name)
         .await
@@ -102,6 +87,79 @@ async fn load_vault_for_deployment(
         })?;
 
     Ok(vault)
+}
+
+async fn ensure_manager_vault_access(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    vault_name: &str,
+    permission_set_id: &str,
+) -> Result<()> {
+    if vault_name == "secrets" {
+        return Ok(());
+    }
+
+    let release_id = deployment
+        .desired_release_id
+        .as_ref()
+        .or(deployment.current_release_id.as_ref())
+        .ok_or_else(|| {
+            ErrorData::bad_request(format!(
+                "Deployment {} has no release attached",
+                deployment.id
+            ))
+        })?;
+
+    let system = crate::auth::Subject::system();
+    let release = state
+        .release_store
+        .get_release(&system, release_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to load release for vault authorization".to_string(),
+        })?
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::ReleaseNotFound {
+                release_id: release_id.clone(),
+            })
+        })?;
+
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Release {} has no stack for platform {}",
+            release_id, deployment.platform
+        ))
+    })?;
+
+    if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
+        return Ok(());
+    }
+
+    Err(ErrorData::forbidden(format!(
+        "Management identity is not allowed to use {} on vault '{}'",
+        permission_set_id, vault_name
+    )))
+}
+
+fn stack_management_allows_vault_access(
+    stack: &Stack,
+    vault_name: &str,
+    permission_set_id: &str,
+) -> bool {
+    let profile = match stack.management() {
+        ManagementPermissions::Auto => return false,
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile
+        }
+    };
+
+    ["*", vault_name].iter().any(|scope| {
+        profile.0.get(*scope).is_some_and(|permission_refs| {
+            permission_refs
+                .iter()
+                .any(|permission_ref| permission_ref.id() == permission_set_id)
+        })
+    })
 }
 
 fn vault_binding_params(
@@ -156,10 +214,11 @@ async fn set_secret(
             "Access denied: cannot mutate vault for this deployment",
         ));
     }
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Setting vault secret");
 
-    let vault = load_vault_for_deployment(&state, &subject, &deployment_id, &vault_name).await?;
+    let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
     vault
         .set_secret(&key, &body.value)
@@ -191,10 +250,11 @@ async fn get_secret(
             "Access denied: cannot read vault for this deployment",
         ));
     }
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-read").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Getting vault secret");
 
-    let vault = load_vault_for_deployment(&state, &subject, &deployment_id, &vault_name).await?;
+    let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
     let value = vault
         .get_secret(&key)
@@ -208,7 +268,10 @@ async fn get_secret(
 
 #[cfg(test)]
 mod tests {
-    use alien_core::{bindings::VaultBinding, Resource, ResourceStatus, StackResourceState, Vault};
+    use alien_core::{
+        bindings::VaultBinding, permissions::PermissionProfile, Resource, ResourceStatus, Stack,
+        StackResourceState, Vault,
+    };
 
     use super::*;
 
@@ -247,5 +310,58 @@ mod tests {
             serde_json::to_value(VaultBinding::key_vault("alien-e2e-46143711-alien-vault"))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn stack_management_allows_separately_scoped_vault_access() {
+        let stack = Stack::new("test".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().resource("alien-vault", ["vault/data-write"]),
+            ))
+            .build();
+
+        assert!(stack_management_allows_vault_access(
+            &stack,
+            "alien-vault",
+            "vault/data-write"
+        ));
+        assert!(!stack_management_allows_vault_access(
+            &stack,
+            "other-vault",
+            "vault/data-write"
+        ));
+        assert!(!stack_management_allows_vault_access(
+            &stack,
+            "alien-vault",
+            "vault/data-read"
+        ));
+    }
+
+    #[test]
+    fn stack_management_allows_explicit_global_vault_access() {
+        let stack = Stack::new("test".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["vault/data-write"]),
+            ))
+            .build();
+
+        assert!(stack_management_allows_vault_access(
+            &stack,
+            "alien-vault",
+            "vault/data-write"
+        ));
+    }
+
+    #[test]
+    fn stack_management_auto_does_not_allow_user_vault_access() {
+        let stack = Stack::new("test".to_string())
+            .management(ManagementPermissions::Auto)
+            .build();
+
+        assert!(!stack_management_allows_vault_access(
+            &stack,
+            "alien-vault",
+            "vault/data-write"
+        ));
     }
 }

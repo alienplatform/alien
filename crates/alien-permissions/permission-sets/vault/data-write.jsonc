@@ -24,7 +24,6 @@
       {
         "grant": {
           "permissions": [
-            "secretmanager.versions.access",
             "secretmanager.secrets.get",
             "secretmanager.secrets.create",
             "secretmanager.versions.add",
@@ -53,7 +52,6 @@
       {
         "grant": {
           "dataActions": [
-            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
             "Microsoft.KeyVault/vaults/secrets/setSecret/action",
             "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
             "Microsoft.KeyVault/vaults/secrets/delete"

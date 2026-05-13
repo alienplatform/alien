@@ -117,43 +117,43 @@ pub async fn test_vault(
     }))
 }
 
-/// Get an external secret (pre-populated by test framework)
+/// Get a managed test secret from Alien's internal `secrets` vault.
 #[utoipa::path(
     get,
-    path = "/external-secret",
+    path = "/managed-secret",
     tag = "vault",
     responses(
-        (status = 200, description = "External secret retrieved", body = serde_json::Value),
+        (status = 200, description = "Managed secret retrieved", body = serde_json::Value),
         (status = 500, description = "Failed to retrieve secret", body = AlienError),
     ),
-    operation_id = "get_external_secret",
-    summary = "Get external secret",
-    description = "Tests reading an external secret that was set using platform-native tools (SSM/Secret Manager/Key Vault/K8s Secrets)"
+    operation_id = "get_managed_secret",
+    summary = "Get managed secret",
+    description = "Tests reading a secret seeded into Alien's internal secrets vault by the test harness"
 )]
-pub async fn get_external_secret(
+pub async fn get_managed_secret(
     State(app_state): State<AppState>,
 ) -> Result<Json<serde_json::Value>> {
-    info!("Attempting to read EXTERNAL_TEST_SECRET from alien-vault");
+    info!("Attempting to read MANAGED_TEST_SECRET from secrets vault");
 
     let vault_instance = app_state
         .ctx
         .get_bindings()
-        .load_vault("alien-vault")
+        .load_vault("secrets")
         .await
         .context(ErrorData::BindingNotFound {
-            binding_name: "alien-vault".to_string(),
+            binding_name: "secrets".to_string(),
         })?;
 
-    match vault_instance.get_secret("EXTERNAL_TEST_SECRET").await {
+    match vault_instance.get_secret("MANAGED_TEST_SECRET").await {
         Ok(value) => {
-            info!("Successfully read external secret");
+            info!("Successfully read managed secret");
             Ok(Json(serde_json::json!({
                 "exists": true,
                 "value": value,
             })))
         }
         Err(_) => {
-            info!("External secret not found");
+            info!("Managed secret not found");
             Ok(Json(serde_json::json!({
                 "exists": false,
             })))

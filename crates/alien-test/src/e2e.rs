@@ -146,8 +146,8 @@ pub enum Binding {
     Environment,
     /// Request echo (POST /inspect)
     Inspect,
-    /// External secret retrieval (cloud only)
-    ExternalSecret,
+    /// Managed secret retrieval from the internal `secrets` vault (cloud only)
+    ManagedSecret,
     /// Event handler verification
     Events,
     /// Build execution (CodeBuild, Cloud Build, ACA Jobs)
@@ -173,7 +173,7 @@ impl std::fmt::Display for Binding {
             Binding::Sse => write!(f, "sse"),
             Binding::Environment => write!(f, "environment"),
             Binding::Inspect => write!(f, "inspect"),
-            Binding::ExternalSecret => write!(f, "external-secret"),
+            Binding::ManagedSecret => write!(f, "managed-secret"),
             Binding::Events => write!(f, "events"),
             Binding::Build => write!(f, "build"),
             Binding::ArtifactRegistry => write!(f, "artifact-registry"),
@@ -211,11 +211,11 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             bindings.push(Binding::Build);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
-            // Test infrastructure limitation: in pull mode the test harness can't
-            // provision User Vault secrets from the management account. In real
-            // deployments the agent has vault access via its own credentials.
+            // Test infrastructure limitation: in pull mode the manager does not
+            // seed the internal `secrets` vault; the runtime path manages its
+            // own secret sync.
             if model == DeploymentModel::Push {
-                bindings.push(Binding::ExternalSecret);
+                bindings.push(Binding::ManagedSecret);
             }
         }
         Platform::Kubernetes => {
@@ -1265,20 +1265,20 @@ pub fn is_platform_available(
 }
 
 // ---------------------------------------------------------------------------
-// External secret provisioning
+// Managed test secret provisioning
 // ---------------------------------------------------------------------------
 
-/// Provision the `EXTERNAL_TEST_SECRET` in the deployment's `alien-vault` vault
-/// via the manager's vault API. This must be called after the deployment reaches
-/// Running (so the vault resource is provisioned in the cloud).
-async fn provision_external_secret(
+/// Provision the `MANAGED_TEST_SECRET` in the deployment's preflight-managed
+/// `secrets` vault via the manager's vault API. This is an Alien-managed test
+/// secret, not a customer-owned external vault secret.
+async fn provision_managed_test_secret(
     manager: &Arc<TestManager>,
     deployment: &TestDeployment,
 ) -> anyhow::Result<()> {
     let http = manager.http_client();
-    let vault_name = "alien-vault";
-    let secret_key = "EXTERNAL_TEST_SECRET";
-    let secret_value = "e2e-test-external-secret-value";
+    let vault_name = "secrets";
+    let secret_key = "MANAGED_TEST_SECRET";
+    let secret_value = "e2e-test-managed-secret-value";
 
     let url = format!(
         "{}/v1/deployments/{}/vault/{}/secrets/{}",
@@ -1289,7 +1289,7 @@ async fn provision_external_secret(
         deployment_id = %deployment.id,
         vault_name,
         secret_key,
-        "Provisioning external test secret via manager vault API"
+        "Provisioning managed test secret via manager vault API"
     );
 
     let resp = http
@@ -1302,12 +1302,16 @@ async fn provision_external_secret(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to provision external secret ({}): {}", status, body);
+        anyhow::bail!(
+            "Failed to provision managed test secret ({}): {}",
+            status,
+            body
+        );
     }
 
     info!(
         deployment_id = %deployment.id,
-        "External test secret provisioned"
+        "Managed test secret provisioned"
     );
 
     Ok(())
@@ -1519,13 +1523,13 @@ pub async fn setup(
         "Deployment is running"
     );
 
-    // Provision the external test secret via the manager vault API.
+    // Provision the managed test secret via the manager vault API.
     // Only for push mode — pull-mode agents manage secrets directly.
     if model == DeploymentModel::Push
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
-        if let Err(e) = provision_external_secret(&manager, &deployment).await {
-            tracing::warn!(error = %e, "Failed to provision external secret, cleaning up");
+        if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
+            tracing::warn!(error = %e, "Failed to provision managed test secret, cleaning up");
             cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
             return Err(e);
         }
