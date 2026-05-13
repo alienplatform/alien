@@ -66,6 +66,16 @@ pub enum ErrorData {
         deployment_group_id: String,
     },
 
+    /// Imported deployment setup fingerprint mismatch or non-idempotent re-import
+    #[error(
+        code = "IMPORTED_DEPLOYMENT_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ImportedDeploymentConflict { reason: String },
+
     /// Deployment group has reached max deployments
     #[error(
         code = "MAX_DEPLOYMENTS_REACHED",

@@ -7,7 +7,7 @@
 //! Microsoft.DocumentDB, ...).
 //! The AzureRM provider registers required resource providers itself. Emitting
 //! `azurerm_resource_provider_registration` conflicts with subscriptions where
-//! the provider is already registered, so Terraform distributions only report
+//! the provider is already registered, so Terraform setup modules only report
 //! the activation in Alien import metadata.
 
 use crate::{

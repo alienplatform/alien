@@ -88,6 +88,7 @@ use utoipa::OpenApi;
         crate::routes::health::HealthResponse,
         // Core types
         alien_core::Platform,
+        alien_core::DeleteScope,
     )),
     tags(
         (name = "health", description = "Health check"),
@@ -95,7 +96,7 @@ use utoipa::OpenApi;
         (name = "deployments", description = "Deployment lifecycle management"),
         (name = "releases", description = "Release management"),
         (name = "deployment-groups", description = "Deployment group management"),
-        (name = "stack-import", description = "Distribution-artifact stack import (CFN, TF, Helm)"),
+        (name = "stack-import", description = "Setup artifact stack import (CFN, TF, Helm)"),
         (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),

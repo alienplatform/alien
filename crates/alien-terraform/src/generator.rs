@@ -83,6 +83,9 @@ pub struct TerraformRegistration {
     /// `provider_name` to form the full Terraform type, e.g.
     /// `<provider_name>_<resource_type>`.
     pub resource_type: String,
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
 }
 
 impl TerraformRegistration {
@@ -967,6 +970,20 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
             ),
             attr("stack_prefix", expr::raw("var.stack_name")),
+            attr(
+                "setup_target",
+                Expression::String(registration.setup_target.clone()),
+            ),
+            attr(
+                "setup_fingerprint",
+                Expression::String(registration.setup_fingerprint.clone()),
+            ),
+            attr(
+                "setup_fingerprint_version",
+                Expression::Number(hcl::Number::from(i64::from(
+                    registration.setup_fingerprint_version,
+                ))),
+            ),
             attr("platform", expr::raw("local.deployment_platform")),
             attr("region", expr::raw("local.deployment_region")),
             attr("manager_url", expr::raw("var.manager_url")),
@@ -1003,6 +1020,22 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
             ),
             ("stack_prefix", expr::raw("var.stack_name")),
+            (
+                "setup_target",
+                Expression::String(registration.map(|r| r.setup_target.clone()).unwrap_or_default()),
+            ),
+            (
+                "setup_fingerprint",
+                Expression::String(registration.map(|r| r.setup_fingerprint.clone()).unwrap_or_default()),
+            ),
+            (
+                "setup_fingerprint_version",
+                Expression::Number(hcl::Number::from(i64::from(
+                    registration
+                        .map(|r| r.setup_fingerprint_version)
+                        .unwrap_or_default(),
+                ))),
+            ),
             ("manager_url", expr::raw("var.manager_url")),
             (
                 "management_config",
@@ -1047,6 +1080,33 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "deployment_region",
             expr::raw("local.deployment_region"),
             "Target cloud region or location.",
+        ),
+        (
+            "deployment_setup_target",
+            Expression::String(
+                registration
+                    .map(|registration| registration.setup_target.clone())
+                    .unwrap_or_default(),
+            ),
+            "Setup target.",
+        ),
+        (
+            "deployment_setup_fingerprint",
+            Expression::String(
+                registration
+                    .map(|registration| registration.setup_fingerprint.clone())
+                    .unwrap_or_default(),
+            ),
+            "Setup compatibility fingerprint.",
+        ),
+        (
+            "deployment_setup_fingerprint_version",
+            Expression::Number(hcl::Number::from(i64::from(
+                registration
+                    .map(|registration| registration.setup_fingerprint_version)
+                    .unwrap_or_default(),
+            ))),
+            "Setup fingerprint algorithm version.",
         ),
         (
             "deployment_management_config",
@@ -1112,7 +1172,7 @@ fn readme_md(
     let registration_note = registration
         .map(|registration| {
             format!(
-                "Self-registering distributions create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
+                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
                 registration.provider_resource_type()
             )
         })
@@ -1144,6 +1204,9 @@ mod tests {
             provider_source: "registry.example.com/acme/example-app".to_string(),
             provider_version: "1.0.2".to_string(),
             resource_type: "deployment".to_string(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "fp-test".to_string(),
+            setup_fingerprint_version: 1,
         };
 
         let versions = render_body(versions_body(

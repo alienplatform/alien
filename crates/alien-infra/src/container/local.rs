@@ -1,6 +1,6 @@
 //! Local Container controller.
 //!
-//! On the Local platform, containers run via Docker directly (not Horizon).
+//! On the Local platform, containers run via Docker directly.
 //! The LocalContainerManager handles Docker API calls.
 
 use std::time::Duration;
@@ -20,7 +20,7 @@ use alien_macros::controller;
 /// Local Container controller.
 ///
 /// Manages containerized workloads on the Local platform using Docker.
-/// Unlike cloud platforms, there's no Horizon - containers run directly
+/// Unlike cloud platforms, containers run directly
 /// via the Docker daemon.
 #[controller]
 pub struct LocalContainerController {

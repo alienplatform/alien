@@ -1027,7 +1027,7 @@ pub struct InstanceSelection {
 /// Ephemeral storage threshold above which storage-optimized instances are selected.
 const STORAGE_OPTIMIZED_THRESHOLD: u64 = 200 * GI;
 
-/// Maximum number of machines per cluster (Horizon limit).
+/// Maximum number of machines per cluster.
 const MAX_MACHINES_PER_CLUSTER: u32 = 10;
 
 /// Hard cap on vCPUs for non-GPU/non-storage workloads. Equivalent to AWS 2xlarge.

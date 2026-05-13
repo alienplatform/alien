@@ -669,8 +669,8 @@ mod tests {
         assert_eq!(id, "nd3ef88e-execution-sa");
         assert!(id.len() <= 30);
 
-        let id = get_gcp_service_account_id("nd3ef88e", "deepstore-sa");
-        assert_eq!(id, "nd3ef88e-deepstore-sa");
+        let id = get_gcp_service_account_id("nd3ef88e", "runtime-sa");
+        assert_eq!(id, "nd3ef88e-runtime-sa");
         assert!(id.len() <= 30);
     }
 }

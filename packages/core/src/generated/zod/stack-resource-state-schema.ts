@@ -25,7 +25,6 @@ get "dependencies"(){
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
-"isExternallyProvisioned": z.optional(z.boolean().describe("True if the resource was provisioned by an external system (e.g., CloudFormation).\nDefaults to false, indicating dynamic provisioning by the executor.")),
 "lastFailedState": z.optional(z.any().describe("Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core.")),
 get "lifecycle"(){
                 return z.union([ResourceLifecycleSchema, z.null()]).optional()

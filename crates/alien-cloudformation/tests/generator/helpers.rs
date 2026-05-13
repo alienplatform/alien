@@ -30,13 +30,16 @@ pub fn render_built_ins(
         CloudFormationOptions {
             registry: &registry,
             stack_settings: settings,
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration,
             description: Some(description.to_string()),
         },
     )
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_test_kit::linters::cfn_lint(&yaml).assert_ok(description);
+    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
     yaml
 }
 
@@ -56,13 +59,16 @@ pub fn render_sample(
         CloudFormationOptions {
             registry: &registry,
             stack_settings: settings,
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration,
             description: Some(description.to_string()),
         },
     )
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_test_kit::linters::cfn_lint(&yaml).assert_ok(description);
+    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
     yaml
 }
 

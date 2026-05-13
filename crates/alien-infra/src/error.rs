@@ -384,10 +384,10 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
-    /// Horizon API call failed.
+    /// Managed container API call failed.
     #[error(
         code = "HORIZON_API_ERROR",
-        message = "Horizon API call failed: {message}",
+        message = "Managed container API call failed: {message}",
         retryable = "true",
         internal = "false"
     )]

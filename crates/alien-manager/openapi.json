@@ -750,6 +750,15 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "deleteScope",
+            "in": "query",
+            "description": "Delete scope: full or liveOnly",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeleteScope"
+            }
           }
         ],
         "responses": {
@@ -1996,6 +2005,14 @@
           }
         }
       },
+      "DeleteScope": {
+        "type": "string",
+        "description": "Scope for a delete operation.\n\nFull deletes are setup/admin owned and may remove both Frozen and Live\nresources. Live-only deletes are used by setup handoff resources\n(Terraform/CloudFormation) so Alien removes only the resources it owns\nbefore setup tears down Frozen resources.",
+        "enum": [
+          "full",
+          "liveOnly"
+        ]
+      },
       "DeploymentGroupMinimal": {
         "type": "object",
         "required": [
@@ -2382,7 +2399,7 @@
       },
       "ImportSourceKind": {
         "type": "string",
-        "description": "Distribution source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
+        "description": "Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
         "enum": [
           "cloud-formation",
           "terraform",
@@ -2953,6 +2970,14 @@
             "type": "string"
           },
           "state": {},
+          "suggestedDelayMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
           "updateHeartbeat": {
             "type": "boolean"
           }
@@ -3193,6 +3218,9 @@
           "stackPrefix",
           "platform",
           "region",
+          "setupTarget",
+          "setupFingerprint",
+          "setupFingerprintVersion",
           "stackSettings",
           "managementConfig",
           "resources"
@@ -3204,7 +3232,7 @@
           },
           "deploymentName": {
             "type": "string",
-            "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each distribution adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
+            "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
           },
           "managementConfig": {
             "$ref": "#/components/schemas/ManagementConfig",
@@ -3216,14 +3244,14 @@
           },
           "region": {
             "type": "string",
-            "description": "Region or location reported by the distribution artifact."
+            "description": "Region or location reported by the setup artifact."
           },
           "releaseId": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Optional release id that produced the distribution artifact. When\nomitted, the manager imports against the latest release."
+            "description": "Optional release id that produced the setup package. When\nomitted, the manager imports against the latest release."
           },
           "resources": {
             "type": "array",
@@ -3232,6 +3260,20 @@
             },
             "description": "Imported resources with typed per-resource payloads."
           },
+          "setupFingerprint": {
+            "type": "string",
+            "description": "Setup compatibility fingerprint embedded in the package."
+          },
+          "setupFingerprintVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Setup fingerprint algorithm version embedded in the package.",
+            "minimum": 0
+          },
+          "setupTarget": {
+            "type": "string",
+            "description": "Setup target this package was generated for."
+          },
           "sourceKind": {
             "oneOf": [
               {
@@ -3239,17 +3281,17 @@
               },
               {
                 "$ref": "#/components/schemas/ImportSourceKind",
-                "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which distribution artifact emitted the payload."
+                "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload."
               }
             ]
           },
           "stackPrefix": {
             "type": "string",
-            "description": "Stable physical-name prefix used by the distribution artifact for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."
+            "description": "Stable physical-name prefix used by the setup package for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
-            "description": "Resolved stack settings supplied by the distribution artifact."
+            "description": "Resolved stack settings supplied by the setup artifact."
           }
         },
         "additionalProperties": false
@@ -3603,7 +3645,7 @@
     },
     {
       "name": "stack-import",
-      "description": "Distribution-artifact stack import (CFN, TF, Helm)"
+      "description": "Setup artifact stack import (CFN, TF, Helm)"
     },
     {
       "name": "sync",

@@ -206,7 +206,8 @@ run();
 * [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
+* [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
+* [acceptCloudFormationCallback](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -347,13 +348,14 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+- [`deploymentsAcceptCloudFormationCallback`](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 - [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
-- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
+- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.

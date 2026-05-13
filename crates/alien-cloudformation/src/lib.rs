@@ -16,6 +16,8 @@ pub mod emitters;
 mod generator;
 mod registry;
 mod template;
+#[doc(hidden)]
+pub mod test_utils;
 
 pub use emitter::CfEmitter;
 pub use generator::{

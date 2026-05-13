@@ -4019,6 +4019,10 @@ export type SyncReconcileRequest = {
    * Update heartbeat timestamp (for successful health checks)
    */
   updateHeartbeat?: boolean | undefined;
+  /**
+   * Delay before this deployment should be acquired again.
+   */
+  suggestedDelayMs?: number | undefined;
 };
 
 /** @internal */
@@ -12122,6 +12126,7 @@ export type SyncReconcileRequest$Outbound = {
   state: SyncReconcileRequestState$Outbound;
   error?: SyncReconcileRequestError$Outbound | null | undefined;
   updateHeartbeat?: boolean | undefined;
+  suggestedDelayMs?: number | undefined;
 };
 
 /** @internal */
@@ -12135,6 +12140,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   error: z.nullable(z.lazy(() => SyncReconcileRequestError$outboundSchema))
     .optional(),
   updateHeartbeat: z.boolean().optional(),
+  suggestedDelayMs: z.int().optional(),
 });
 
 export function syncReconcileRequestToJSON(

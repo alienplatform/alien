@@ -22,8 +22,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 /// Telemetry (monitoring) mode for a deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MonitoringMode {
-    /// Automatically use the best available OTLP config: the parent manager's built-in
-    /// DeepStore endpoint, or the manager's external OTLP integration (e.g. Axiom, Datadog).
+    /// Automatically use the best available OTLP config: the parent manager's
+    /// built-in log store or external OTLP integration (e.g. Axiom, Datadog).
     Auto,
     /// Disable all monitoring — no OTLP logs for containers or worker VMs.
     Off,
@@ -84,7 +84,7 @@ pub enum DeploymentsCmd {
         no_heartbeat: bool,
 
         /// Telemetry / monitoring mode.
-        /// "auto" (default) uses the parent manager's built-in DeepStore or external OTLP integration.
+        /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
         /// "off" disables all monitoring.
         #[arg(long, value_enum, default_value_t = MonitoringMode::Auto)]
         monitoring: MonitoringMode,
@@ -421,7 +421,7 @@ async fn delete_deployment_task(
     client
         .delete_deployment()
         .id(&deployment.id)
-        .delete_scope(alien_manager_api::types::DeleteDeploymentDeleteScope::Full)
+        .delete_scope(alien_manager_api::types::DeleteScope::Full)
         .send()
         .await
         .into_sdk_error()

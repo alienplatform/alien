@@ -15,7 +15,7 @@ import {
 } from "./persistimporteddeploymentrequest.js";
 
 /**
- * Request schema for importing a deployment from resolved distribution infrastructure
+ * Request schema for importing a deployment from resolved setup infrastructure
  */
 export type ImportDeploymentRequest =
   | PersistImportedDeploymentRequest

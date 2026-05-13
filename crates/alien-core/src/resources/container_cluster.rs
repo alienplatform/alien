@@ -32,7 +32,7 @@ pub struct GpuSpec {
 ///
 /// Represents the hardware specifications for machines in a capacity group.
 /// These are hardware totals (what the instance type advertises), not allocatable
-/// capacity. Horizon's scheduler internally subtracts system reserves for planning.
+/// capacity. The managed container scheduler internally subtracts system reserves for planning.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -199,7 +199,7 @@ pub struct CapacityGroupStatus {
     pub group_id: String,
     /// Current number of machines
     pub current_machines: u32,
-    /// Desired number of machines (from Horizon's capacity plan)
+    /// Desired number of machines (from the managed container capacity plan)
     pub desired_machines: u32,
     /// Instance type being used
     pub instance_type: String,
@@ -210,9 +210,9 @@ pub struct CapacityGroupStatus {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerClusterOutputs {
-    /// Horizon cluster ID (workspace/project/agent/resourceid format)
+    /// Managed container cluster ID (workspace/project/deployment/resourceid format)
     pub cluster_id: String,
-    /// Whether the Horizon cluster is ready
+    /// Whether the managed container cluster is ready
     pub horizon_ready: bool,
     /// Status of each capacity group
     pub capacity_group_statuses: Vec<CapacityGroupStatus>,

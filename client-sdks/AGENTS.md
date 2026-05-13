@@ -32,4 +32,4 @@ pnpm run generate:platform-api     # Regenerate platform TypeScript SDK from che
 
 - Don't edit generated code — regenerate from the OpenAPI spec
 - Don't use "agent" in new fields — use "deployment"
-- Don't reference platform/, deepstore/, or horizon/ — this is OSS code
+- Don't reference private workspace repo paths — this is OSS code

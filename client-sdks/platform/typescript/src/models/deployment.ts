@@ -1831,7 +1831,7 @@ export type DeploymentRuntimeMetadata = {
 };
 
 /**
- * Distribution source that imported this deployment
+ * Setup source that imported this deployment
  */
 export const DeploymentImportSource = {
   Cloudformation: "cloudformation",
@@ -1839,7 +1839,7 @@ export const DeploymentImportSource = {
   Helm: "helm",
 } as const;
 /**
- * Distribution source that imported this deployment
+ * Setup source that imported this deployment
  */
 export type DeploymentImportSource = ClosedEnum<typeof DeploymentImportSource>;
 
@@ -2023,9 +2023,21 @@ export type Deployment = {
    */
   pinnedReleaseId?: string | null | undefined;
   /**
-   * Distribution source that imported this deployment
+   * Setup source that imported this deployment
    */
   importSource?: DeploymentImportSource | null | undefined;
+  /**
+   * Imported setup target for compatibility checks
+   */
+  setupTarget?: string | null | undefined;
+  /**
+   * Imported setup compatibility fingerprint
+   */
+  setupFingerprint?: string | null | undefined;
+  /**
+   * Imported setup fingerprint algorithm version
+   */
+  setupFingerprintVersion?: number | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -4618,6 +4630,9 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     desiredReleaseId: z.nullable(z.string()).optional(),
     pinnedReleaseId: z.nullable(z.string()).optional(),
     importSource: z.nullable(DeploymentImportSource$inboundSchema).optional(),
+    setupTarget: z.nullable(z.string()).optional(),
+    setupFingerprint: z.nullable(z.string()).optional(),
+    setupFingerprintVersion: z.nullable(z.int()).optional(),
     retryRequested: z.boolean(),
     lastHeartbeatAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),

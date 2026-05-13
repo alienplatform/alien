@@ -1,6 +1,6 @@
 # ImportSourceKind
 
-Distribution source that produced an import request. Observability label
+Package source that produced an import request. Observability label
 only — the manager does not branch on this value, and any new deployment
 pathway can omit it without affecting import behavior.
 

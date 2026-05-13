@@ -104,7 +104,7 @@ fn aws_function_public_ingress_emits_apigw_v2() {
 fn aws_container_cluster_without_platform_extension_errors_cleanly() {
     // OSS no longer registers `ContainerCluster` — Phase 6c moved the
     // emitter to `alien-cloudformationx`. Plugins (or the platform
-    // distribution) wire it back in via `register_platform_extensions`.
+    // setup package) wire it back in via `register_platform_extensions`.
     // Confirm the OSS error path is the typed `ImportRegistrationMissing`
     // a third-party plugin author would also see when forgetting to
     // register their emitter.
@@ -142,6 +142,9 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
             stack_settings: settings,
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
         },

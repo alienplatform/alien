@@ -66,7 +66,7 @@ pub struct DeployArgs {
     pub no_heartbeat: bool,
 
     /// Telemetry / monitoring mode.
-    /// "auto" (default) uses the parent AM's built-in DeepStore or external OTLP integration.
+    /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
     /// "off" disables all monitoring.
     #[arg(long, value_enum, default_value_t = MonitoringMode::Auto)]
     pub monitoring: MonitoringMode,

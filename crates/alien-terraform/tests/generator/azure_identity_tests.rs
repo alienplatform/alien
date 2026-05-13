@@ -40,6 +40,46 @@ fn azure_service_account_with_permission_set_emits_role_definitions() {
 }
 
 #[test]
+fn azure_service_account_storage_data_write_emits_blob_write_actions() {
+    let sa = ServiceAccount::new("execution-sa".to_string())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("storage/data-write")
+                .expect("storage/data-write permission set")
+                .clone(),
+        )
+        .build();
+    let stack = Stack::new("acme-storage-write".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(sa, ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered
+            .contains("\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write\""),
+        "storage/data-write should emit Azure Blob write data action"
+    );
+    assert!(
+        rendered
+            .contains("\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete\""),
+        "storage/data-write should emit Azure Blob delete data action"
+    );
+    assert!(
+        rendered.contains(
+            "\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action\""
+        ),
+        "storage/data-write should emit Azure Blob add data action"
+    );
+
+    assert_terraform_valid(&module, "azure_service_account_storage_data_write");
+}
+
+#[test]
 fn azure_remote_stack_management_emits_uami_with_federated_credential() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(

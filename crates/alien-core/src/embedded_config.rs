@@ -33,7 +33,7 @@ pub struct DeployCliConfig {
     /// Branded environment variable that contains the deployment token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env_var: Option<String>,
-    // --- Branding (for rebranded distributions) ---
+    // --- Branding (for rebranded binaries) ---
     /// Binary name (e.g., "acme-deploy").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -59,7 +59,7 @@ pub struct AgentConfig {
     /// Sync interval in seconds (default: 30).
     #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,
-    // --- Branding (for rebranded distributions) ---
+    // --- Branding (for rebranded binaries) ---
     /// Binary name (e.g., "acme-agent").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

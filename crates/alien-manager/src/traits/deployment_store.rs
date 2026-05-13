@@ -29,9 +29,15 @@ pub struct DeploymentRecord {
     pub runtime_metadata: Option<RuntimeMetadata>,
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
-    /// Distribution source that created this deployment, if it was imported.
+    /// Setup source that created this deployment, if it was imported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_source: Option<ImportSourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_fingerprint_version: Option<u32>,
     pub user_environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Management config from the platform API (platform mode only).
     /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.
@@ -65,6 +71,9 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("current_release_id", &self.current_release_id)
             .field("desired_release_id", &self.desired_release_id)
             .field("import_source", &self.import_source)
+            .field("setup_target", &self.setup_target)
+            .field("setup_fingerprint", &self.setup_fingerprint)
+            .field("setup_fingerprint_version", &self.setup_fingerprint_version)
             .field(
                 "user_environment_variables",
                 &self.user_environment_variables,
@@ -97,7 +106,7 @@ pub struct CreateDeploymentParams {
 }
 
 /// Parameters for creating a deployment whose layer-2 stack state was produced
-/// by a distribution artifact (CloudFormation, Terraform, Helm).
+/// by a setup artifact (CloudFormation, Terraform, Helm).
 #[derive(Debug, Clone)]
 pub struct CreateImportedDeploymentParams {
     pub name: String,
@@ -112,6 +121,9 @@ pub struct CreateImportedDeploymentParams {
     pub status: String,
     pub current_release_id: Option<String>,
     pub import_source: Option<ImportSourceKind>,
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
     pub deployment_token: Option<String>,
     pub management_config: Option<ManagementConfig>,
 }
@@ -164,6 +176,7 @@ pub struct ReconcileData {
     pub state: DeploymentState,
     pub update_heartbeat: bool,
     pub error: Option<serde_json::Value>,
+    pub suggested_delay_ms: Option<u64>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -192,9 +205,9 @@ pub trait DeploymentStore: Send + Sync {
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
-    /// Persist a deployment whose stack state was produced by a distribution
-    /// artifact (CloudFormation Custom Resource, Terraform provider, Helm
-    /// bootstrap chart). Same idempotency contract as
+    /// Persist a deployment whose stack state was produced by a setup artifact
+    /// (CloudFormation custom resource, Terraform provider, or Helm chart).
+    /// Same idempotency contract as
     /// [`Self::get_deployment_by_name`] — callers should look up the existing
     /// record first; this method only handles the "doesn't exist yet" path.
     ///
@@ -208,13 +221,13 @@ pub trait DeploymentStore: Send + Sync {
         params: CreateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
-    /// Replace `stack_state` (and pin `current_release_id`) on an existing
+    /// Merge import-owned `stack_state` resources (and pin
+    /// `current_release_id`) on an existing
     /// imported deployment. Used by `POST /v1/stack/import` when the request
     /// re-imports a deployment that was created by an earlier call —
     /// CloudFormation Update events, Terraform refresh+apply cycles, and Helm
-    /// upgrades all fire this path. Implementations must overwrite
-    /// `stack_state` and `runtime_metadata` wholesale (the import payload and
-    /// release stack are the source of truth) and leave fields outside the
+    /// upgrades all fire this path. Implementations must update only
+    /// import-owned fields/resources from the import payload and leave fields outside the
     /// import contract (status, deployment token, environment variables, …)
     /// untouched.
     async fn update_imported_stack_state(
@@ -225,6 +238,9 @@ pub trait DeploymentStore: Send + Sync {
         environment_info: Option<EnvironmentInfo>,
         runtime_metadata: RuntimeMetadata,
         current_release_id: Option<String>,
+        setup_target: String,
+        setup_fingerprint: String,
+        setup_fingerprint_version: u32,
     ) -> Result<DeploymentRecord, AlienError>;
 
     async fn get_deployment(

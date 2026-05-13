@@ -1,13 +1,13 @@
-//! Horizon container binding implementation
+//! Managed cloud container binding implementation
 //!
-//! For containers managed by Horizon on AWS/GCP/Azure cloud platforms.
+//! For containers managed on AWS/GCP/Azure cloud platforms.
 
 use crate::error::Result;
 use crate::traits::{Binding, Container};
 use alien_core::bindings::HorizonContainerBinding;
 use async_trait::async_trait;
 
-/// Horizon container binding implementation
+/// Managed cloud container binding implementation
 #[derive(Debug)]
 pub struct HorizonContainer {
     container_name: String,
@@ -16,7 +16,7 @@ pub struct HorizonContainer {
 }
 
 impl HorizonContainer {
-    /// Create a new Horizon container binding
+    /// Create a new managed cloud container binding
     pub fn new(binding: HorizonContainerBinding) -> Result<Self> {
         use crate::error::ErrorData;
         use alien_error::Context;

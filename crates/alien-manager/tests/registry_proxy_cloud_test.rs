@@ -442,6 +442,7 @@ impl CloudProxyTest {
                     state,
                     update_heartbeat: false,
                     error: None,
+                    suggested_delay_ms: None,
                 },
             )
             .await

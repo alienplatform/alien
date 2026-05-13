@@ -174,9 +174,6 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
 ///   each resource within the stack appears as a distinct `service.name` in
 ///   logs (drives the dashboard's "Resource" column). Skipped if the user
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
-///
-/// deepstore-* resources are skipped: they manage their own telemetry pipeline
-/// and receive OTLP config via a different mechanism.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
@@ -184,16 +181,6 @@ pub fn inject_monitoring_environment_variables(
     info!("Injecting OTLP monitoring env vars into compute resources");
 
     for (resource_name, resource_entry) in &mut stack.resources {
-        // Skip deepstore resources — they run DeepStore itself and must not
-        // receive the OTLP endpoint that points back into their own storage.
-        if resource_name.starts_with("deepstore-") {
-            debug!(
-                "Skipping OTLP injection for deepstore resource '{}'",
-                resource_name
-            );
-            continue;
-        }
-
         let resource_type = resource_entry.config.resource_type();
 
         let environment = if resource_type == alien_core::Function::RESOURCE_TYPE {
@@ -402,18 +389,6 @@ fn inject_into_compute_resource(
     let secret_keys: Vec<String> = applicable_vars
         .iter()
         .filter(|v| v.var_type == EnvironmentVariableType::Secret)
-        .filter(|v| {
-            // Skip OTEL_EXPORTER secrets for deepstore-* resources
-            if resource_name.starts_with("deepstore-") && v.name.starts_with("OTEL_EXPORTER") {
-                debug!(
-                    "Skipping OTEL secret '{}' for deepstore resource '{}'",
-                    v.name, resource_name
-                );
-                false
-            } else {
-                true
-            }
-        })
         .map(|v| v.name.clone())
         .collect();
 

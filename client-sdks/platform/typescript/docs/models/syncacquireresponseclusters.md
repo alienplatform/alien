@@ -3,7 +3,7 @@
 Configuration for a single container worker cluster.
 
 Contains the cluster ID and management token needed to interact with
-the Horizon control plane API for container operations.
+the managed container control plane API for container operations.
 
 ## Example Usage
 

@@ -489,6 +489,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 state,
                 update_heartbeat: false,
                 error: None,
+                suggested_delay_ms: None,
             },
         )
         .await

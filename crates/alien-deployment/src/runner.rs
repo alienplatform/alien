@@ -129,7 +129,14 @@ pub async fn run_step_loop(
 
         // Reconcile after every step
         match transport
-            .reconcile_step(deployment_id, state, config, step_error, update_heartbeat)
+            .reconcile_step(
+                deployment_id,
+                state,
+                config,
+                step_error,
+                update_heartbeat,
+                suggested_delay_ms,
+            )
             .await
         {
             Ok(reconciled) => {

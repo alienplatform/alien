@@ -73,6 +73,8 @@ pub struct ReconcileRequest {
     pub update_heartbeat: bool,
     #[serde(default)]
     pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub suggested_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -313,6 +315,7 @@ async fn reconcile(
                 state: final_state.clone(),
                 update_heartbeat: req.update_heartbeat,
                 error: req.error,
+                suggested_delay_ms: req.suggested_delay_ms,
             },
         )
         .await
@@ -458,6 +461,7 @@ async fn agent_sync(
                             state: agent_state.clone(),
                             update_heartbeat: true,
                             error: None,
+                            suggested_delay_ms: None,
                         },
                     )
                     .await

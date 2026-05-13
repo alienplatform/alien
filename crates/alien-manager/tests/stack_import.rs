@@ -247,6 +247,9 @@ fn aws_s3_import_request(
         release_id: None,
         platform: Platform::Aws,
         region: region.to_string(),
+        setup_target: "aws".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
@@ -296,6 +299,9 @@ fn aws_remote_management_import_request(
         release_id: None,
         platform: Platform::Aws,
         region: region.to_string(),
+        setup_target: "aws".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
@@ -328,6 +334,9 @@ fn gcp_remote_management_import_request(
         release_id: None,
         platform: Platform::Gcp,
         region: region.to_string(),
+        setup_target: "gcp".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: ManagementConfig::Gcp(GcpManagementConfig {
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
@@ -364,6 +373,9 @@ fn azure_remote_management_import_request(
         release_id: None,
         platform: Platform::Azure,
         region: region.to_string(),
+        setup_target: "azure".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: tenant_id.to_string(),

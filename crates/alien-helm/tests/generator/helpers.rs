@@ -39,11 +39,11 @@ pub fn snapshot_chart(name: &str, chart: &HelmChart) {
 /// for both bootstrap paths (manager-fetch + external-bindings initialize).
 pub fn assert_helm_valid(chart: &HelmChart, context: &str) {
     let files = linter_files(chart);
-    alien_test_kit::linters::helm_lint(&files).assert_ok(format!("{context} helm lint"));
-    alien_test_kit::linters::helm_template_and_validate(&files, None)
+    alien_helm::test_utils::helm_lint(&files).assert_ok(format!("{context} helm lint"));
+    alien_helm::test_utils::helm_template_and_validate(&files, None)
         .assert_ok(format!("{context} helm template manager-fetch"));
     if let Some(local_values) = files.get("examples/onprem.yaml") {
-        alien_test_kit::linters::helm_template_and_validate(&files, Some(local_values)).assert_ok(
+        alien_helm::test_utils::helm_template_and_validate(&files, Some(local_values)).assert_ok(
             format!("{context} helm template external-bindings initialize"),
         );
     }

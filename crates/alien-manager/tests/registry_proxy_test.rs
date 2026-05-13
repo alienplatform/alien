@@ -334,6 +334,7 @@ async fn setup() -> TestSetup {
                     state,
                     update_heartbeat: false,
                     error: None,
+                    suggested_delay_ms: None,
                 },
             )
             .await
@@ -805,6 +806,7 @@ async fn test_proxy_push_then_pull() {
                     state,
                     update_heartbeat: false,
                     error: None,
+                    suggested_delay_ms: None,
                 },
             )
             .await

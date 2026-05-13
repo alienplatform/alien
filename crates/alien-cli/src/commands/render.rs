@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Render distribution artifacts for review.
+/// Render setup artifacts for review.
 #[derive(Parser, Debug, Clone)]
 pub struct RenderArgs {
     /// Artifact format to render.
@@ -186,6 +186,9 @@ fn render_cloudformation(
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
             stack_settings: stack_settings.clone(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "render-preview".to_string(),
+            setup_fingerprint_version: 1,
             registration,
             description: None,
         },

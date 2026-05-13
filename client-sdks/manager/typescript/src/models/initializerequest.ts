@@ -4,16 +4,23 @@
 
 import * as z from "zod/v4";
 import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
+import {
+  StackSettings,
+  StackSettings$Outbound,
+  StackSettings$outboundSchema,
+} from "./stacksettings.js";
 
 export type InitializeRequest = {
   name?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
+  stackSettings?: StackSettings | null | undefined;
 };
 
 /** @internal */
 export type InitializeRequest$Outbound = {
   name?: string | null | undefined;
   platform?: string | null | undefined;
+  stackSettings?: StackSettings$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -23,6 +30,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
 > = z.object({
   name: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
 
 export function initializeRequestToJSON(

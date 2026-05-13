@@ -58,8 +58,8 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
 /// module. Pass the test scenario as `context` for diagnostics.
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     let files = linter_files(module);
-    alien_test_kit::linters::terraform_fmt_check(&files)
+    alien_terraform::test_utils::terraform_fmt_check(&files)
         .assert_ok(format!("{context} terraform fmt -check"));
-    alien_test_kit::linters::terraform_validate(&files)
+    alien_terraform::test_utils::terraform_validate(&files)
         .assert_ok(format!("{context} terraform validate"));
 }

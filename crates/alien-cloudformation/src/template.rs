@@ -3,7 +3,7 @@
 //! These types live in this crate (not `alien-core`) because they're CF-shaped
 //! \u2014 PascalCase serde, intrinsic-function-aware expressions \u2014 and only this
 //! crate's generator + emitters use them. Keep `alien-core` agnostic of any
-//! one distribution format.
+//! one setup artifact format.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};

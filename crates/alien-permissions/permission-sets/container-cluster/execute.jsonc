@@ -1,6 +1,6 @@
 {
   "id": "container-cluster/execute",
-  "description": "Runtime permissions for Horizon VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
+  "description": "Runtime permissions for managed container VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
   "platforms": {
     "aws": [
       // Cross-account ECR image pull from managing account's registry
@@ -90,7 +90,7 @@
           }
         }
       },
-      // ELB target registration: horizond registers/deregisters container instances
+      // ELB target registration: the container runtime registers/deregisters container instances
       // with ALB/NLB target groups for load-balanced containers.
       {
         "grant": {
@@ -158,7 +158,7 @@
           }
         }
       },
-      // Disk attach/detach for persistent storage containers (horizond runtime)
+      // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {
           "permissions": [
@@ -177,7 +177,7 @@
           }
         }
       },
-      // NEG target registration for load-balanced containers (horizond runtime)
+      // NEG target registration for load-balanced containers (container runtime)
       {
         "grant": {
           "permissions": [
@@ -214,7 +214,7 @@
           }
         }
       },
-      // Disk attach/detach for persistent storage containers (horizond runtime)
+      // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {
           "actions": [
@@ -232,7 +232,7 @@
           }
         }
       },
-      // Load balancer backend pool registration (horizond runtime)
+      // Load balancer backend pool registration (container runtime)
       {
         "grant": {
           "actions": [

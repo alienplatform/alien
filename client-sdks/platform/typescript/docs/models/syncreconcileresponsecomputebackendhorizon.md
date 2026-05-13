@@ -3,7 +3,7 @@
 Compute backend for Container and Function resources.
 
 Determines how compute workloads are orchestrated on cloud platforms.
-When None, the platform default is used (Horizon for cloud platforms).
+When None, the platform default is used for cloud platforms.
 
 ## Example Usage
 

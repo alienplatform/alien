@@ -1,6 +1,6 @@
 # DeploymentImportSource
 
-Distribution source that imported this deployment
+Setup source that imported this deployment
 
 ## Example Usage
 

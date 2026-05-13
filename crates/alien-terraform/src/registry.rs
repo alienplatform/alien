@@ -30,7 +30,7 @@ impl TfRegistry {
         Self::default()
     }
 
-    /// Built-in emitters across every cloud the distribution rebuild ships.
+    /// Built-in emitters across every cloud the Terraform generator supports.
     pub fn built_in() -> Self {
         let mut registry = Self::default();
         crate::built_ins::register_all(&mut registry);

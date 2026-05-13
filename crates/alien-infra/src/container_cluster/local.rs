@@ -2,7 +2,7 @@
 //!
 //! On the Local platform, ContainerCluster is minimal - it just ensures
 //! the Docker network exists. There's no machine provisioning, autoscaling,
-//! or Horizon integration.
+//! or managed container control plane integration.
 
 use std::time::Duration;
 use tracing::{debug, info};
@@ -24,7 +24,7 @@ use alien_macros::controller;
 ///
 /// Unlike cloud platforms, there's no:
 /// - Machine provisioning (ASGs, VMs)
-/// - Horizon cluster creation
+/// - Managed container cluster creation
 /// - Machine autoscaling
 #[controller]
 pub struct LocalContainerClusterController {
@@ -205,7 +205,7 @@ impl LocalContainerClusterController {
     fn build_outputs(&self) -> Option<CoreResourceOutputs> {
         self.network_name.as_ref().map(|_network| {
             CoreResourceOutputs::new(ContainerClusterOutputs {
-                // On local platform, we use Docker directly (no Horizon)
+                // On local platform, we use Docker directly.
                 cluster_id: "local-docker".to_string(),
                 horizon_ready: true,                 // Local is always "ready"
                 capacity_group_statuses: Vec::new(), // No capacity groups on local

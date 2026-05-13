@@ -8,8 +8,8 @@ import { Workspace } from "@alienplatform/platform-api/models";
 let value: Workspace = {
   id: "ws_It13CUaGEhLLAB87simX0",
   name: "my-workspace",
-  onboardingDismissedAt: new Date("2025-09-06T14:20:55.891Z"),
-  createdAt: new Date("2025-12-30T03:33:44.776Z"),
+  onboardingDismissedAt: new Date("2025-12-30T03:33:44.776Z"),
+  createdAt: new Date("2025-12-21T04:19:27.983Z"),
 };
 ```
 

@@ -16,6 +16,8 @@ mod emitter;
 mod emitters;
 mod generator;
 mod registry;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 pub use emitter::{HelmEmitter, HelmFragment, InfrastructureValue, ServiceAccountIdentity};
 pub use generator::{generate_helm_chart, HelmChart, HelmOptions};

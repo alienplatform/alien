@@ -31,6 +31,9 @@ fn plugin_can_extend_registry_alongside_built_ins() {
         CloudFormationOptions {
             registry: &registry,
             stack_settings: StackSettings::default(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: Some("plugin extension".to_string()),
         },
@@ -38,7 +41,7 @@ fn plugin_can_extend_registry_alongside_built_ins() {
     .expect("template should render");
 
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_test_kit::linters::cfn_lint(&yaml).assert_ok("plugin extension");
+    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("plugin extension");
 
     assert!(
         template.resources.contains_key("Data"),

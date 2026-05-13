@@ -3914,7 +3914,7 @@ export type SyncAcquireResponseCurrent = {
  * @remarks
  *
  * Contains the cluster ID and management token needed to interact with
- * the Horizon control plane API for container operations.
+ * the managed container control plane API for container operations.
  */
 export type SyncAcquireResponseClusters = {
   /**
@@ -3943,7 +3943,7 @@ export type SyncAcquireResponseComputeBackendType = ClosedEnum<
  * @remarks
  *
  * Determines how compute workloads are orchestrated on cloud platforms.
- * When None, the platform default is used (Horizon for cloud platforms).
+ * When None, the platform default is used for cloud platforms.
  */
 export type SyncAcquireResponseComputeBackendHorizon = {
   /**

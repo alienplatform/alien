@@ -1,7 +1,7 @@
-//! Stack import endpoint for distribution artifacts.
+//! Stack import endpoint for setup artifacts.
 //!
-//! `POST /v1/stack/import` is the manager-side ingress for the distribution
-//! rebuild (ALIEN-121). A CloudFormation Custom Resource, the Terraform
+//! `POST /v1/stack/import` is the manager-side ingress for setup-driver
+//! import payloads. A CloudFormation custom resource, the Terraform
 //! provider's `alien_deployment` resource, or the Helm bootstrap chart sends
 //! a [`StackImportRequest`] containing every resource it has just provisioned
 //! along with its typed `ImportData` payload. The handler:
@@ -12,14 +12,14 @@
 //! 3. Dispatches each `ImportedResource` through
 //!    [`alien_infra::ImporterRegistry`] to produce a typed
 //!    [`StackResourceState`] form.
-//! 4. Persists or replaces an imported deployment's stack state. New imports
-//!    start at `provisioning` so the manager can complete layer-3 work.
+//! 4. Merges setup-owned state into the imported deployment's stack state. New
+//!    imports start at `provisioning` so the manager can complete Live work.
 //!
 //! Naming. The caller supplies `deploymentName` for the deployment row and
-//! `stackPrefix` for physical resource names. Distribution adapters typically
+//! `stackPrefix` for physical resource names. Setup drivers typically
 //! use the same value, but the manager treats them as separate contracts. If a
 //! deployment with that name already exists in the deployment group and was
-//! also imported, the handler replaces its imported stack state. A collision
+//! also imported, the handler merges setup state. A collision
 //! with a native deployment returns 409.
 
 use std::collections::HashMap;
@@ -43,7 +43,9 @@ use super::{auth, AppState};
 use crate::auth::{Scope, Subject};
 use crate::error::ErrorData;
 use crate::ids;
-use crate::traits::{CreateImportedDeploymentParams, CreateTokenParams, ReleaseRecord, TokenType};
+use crate::traits::{
+    CreateImportedDeploymentParams, CreateTokenParams, DeploymentRecord, ReleaseRecord, TokenType,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/v1/stack/import", post(stack_import))
@@ -85,8 +87,8 @@ pub async fn stack_import(
     // The import endpoint is intentionally narrow: a deployment-group token is
     // the only credential class that has a meaningful "import into this group"
     // semantic. Workspace/admin tokens could be allowed here too, but every
-    // existing call-site (CFN Custom Resource, TF provider, Helm bootstrap)
-    // mints a DG token at distribution time, so widening would only weaken
+    // existing call-site (CloudFormation custom resource, Terraform provider,
+    // Helm bootstrap) mints a DG token at setup time, so widening would only weaken
     // the audit trail without adding new flows.
     let deployment_group_id = match &subject.scope {
         Scope::DeploymentGroup {
@@ -139,7 +141,7 @@ pub async fn stack_import(
             Ok(None) => {
                 return ErrorData::bad_request(
                     "No release exists in this project — run `alien release` before \
-                     importing a stack from a distribution artifact",
+                     importing a stack from a setup artifact",
                 )
                 .into_response();
             }
@@ -176,6 +178,32 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
+            if !setup_contract_lane_matches(&existing, &req) {
+                return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' was installed for a different setup target or setup fingerprint version. Import it as a different deployment.",
+                        existing.id
+                    ),
+                })
+                .into_response();
+            }
+            if !can_accept_reimport(&existing, &stack_state, &release.id, &req) {
+                return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' is not in a re-importable state and the payload is not idempotent",
+                        existing.id
+                    ),
+                })
+                .into_response();
+            }
+            let should_reconcile = import_changes_deployment(
+                &existing,
+                &stack_state,
+                &environment_info,
+                &runtime_metadata,
+                &release.id,
+                &req,
+            );
             let updated = match state
                 .deployment_store
                 .update_imported_stack_state(
@@ -185,11 +213,40 @@ pub async fn stack_import(
                     environment_info.clone(),
                     runtime_metadata.clone(),
                     Some(release.id.clone()),
+                    req.setup_target.clone(),
+                    req.setup_fingerprint.clone(),
+                    req.setup_fingerprint_version,
                 )
                 .await
             {
                 Ok(d) => d,
                 Err(e) => return e.into_response(),
+            };
+
+            let updated = if should_reconcile
+                && can_reconcile_after_import(&existing)
+                && !reconciliation_already_scheduled(&updated)
+            {
+                if let Err(e) = state
+                    .deployment_store
+                    .set_redeploy(&subject, &existing.id)
+                    .await
+                {
+                    return e.into_response();
+                }
+                match state
+                    .deployment_store
+                    .get_deployment(&subject, &existing.id)
+                    .await
+                {
+                    Ok(Some(d)) => d,
+                    Ok(None) => {
+                        return ErrorData::not_found_deployment(&existing.id).into_response();
+                    }
+                    Err(e) => return e.into_response(),
+                }
+            } else {
+                updated
             };
 
             return (
@@ -236,6 +293,9 @@ pub async fn stack_import(
         status: "provisioning".to_string(),
         current_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
+        setup_target: req.setup_target.clone(),
+        setup_fingerprint: req.setup_fingerprint.clone(),
+        setup_fingerprint_version: req.setup_fingerprint_version,
         deployment_token: Some(raw_token.clone()),
         management_config: Some(req.management_config.clone()),
     };
@@ -272,6 +332,84 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn setup_contract_lane_matches(existing: &DeploymentRecord, req: &StackImportRequest) -> bool {
+    existing.setup_target.as_deref() == Some(req.setup_target.as_str())
+        && existing.setup_fingerprint_version == Some(req.setup_fingerprint_version)
+}
+
+fn can_accept_reimport(
+    existing: &DeploymentRecord,
+    imported_stack_state: &StackState,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> bool {
+    let idempotent = existing.current_release_id.as_deref() == Some(release_id)
+        && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
+        && imported_resources_are_unchanged(existing, imported_stack_state);
+
+    if matches!(
+        existing.status.as_str(),
+        "initial-setup" | "provisioning" | "update-pending" | "updating"
+    ) {
+        return idempotent;
+    }
+
+    matches!(
+        existing.status.as_str(),
+        "running" | "update-failed" | "refresh-failed"
+    ) || idempotent
+}
+
+fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
+    matches!(
+        existing.status.as_str(),
+        "running" | "update-failed" | "refresh-failed"
+    )
+}
+
+fn reconciliation_already_scheduled(deployment: &DeploymentRecord) -> bool {
+    matches!(
+        deployment.status.as_str(),
+        "provisioning" | "update-pending" | "updating"
+    )
+}
+
+fn import_changes_deployment(
+    existing: &DeploymentRecord,
+    imported_stack_state: &StackState,
+    environment_info: &Option<EnvironmentInfo>,
+    runtime_metadata: &RuntimeMetadata,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> bool {
+    existing.current_release_id.as_deref() != Some(release_id)
+        || existing.setup_target.as_deref() != Some(req.setup_target.as_str())
+        || existing.setup_fingerprint.as_deref() != Some(req.setup_fingerprint.as_str())
+        || existing.setup_fingerprint_version != Some(req.setup_fingerprint_version)
+        || existing.stack_settings != req.stack_settings
+        || existing.environment_info.as_ref() != environment_info.as_ref()
+        || existing.runtime_metadata.as_ref() != Some(runtime_metadata)
+        || !imported_resources_are_unchanged(existing, imported_stack_state)
+}
+
+fn imported_resources_are_unchanged(
+    existing: &DeploymentRecord,
+    imported_stack_state: &StackState,
+) -> bool {
+    let Some(existing_stack_state) = existing.stack_state.as_ref() else {
+        return false;
+    };
+
+    imported_stack_state.resources.iter().all(|(id, imported)| {
+        existing_stack_state
+            .resources
+            .get(id)
+            .is_some_and(|existing| {
+                serde_json::to_value(existing).ok() == serde_json::to_value(imported).ok()
+            })
+    })
 }
 
 fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
@@ -397,7 +535,7 @@ fn resolve_stack(
 /// and assemble the resulting `(resource_id → StackResourceState)` map into
 /// a [`StackState`]. Errors here are surfaced verbatim — they are typed
 /// `ImportRegistrationMissing` / `JsonDeserializationFailed` so the caller
-/// gets enough context to fix the distribution artifact without log spelunking.
+/// gets enough context to fix the setup artifact without log spelunking.
 fn build_stack_state(
     state: &AppState,
     _subject: &Subject,

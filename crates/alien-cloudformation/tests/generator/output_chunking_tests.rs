@@ -26,6 +26,9 @@ fn outputs_fallback_chunks_large_resource_payload() {
         CloudFormationOptions {
             registry: &registry,
             stack_settings: StackSettings::default(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: Some("chunked resources".to_string()),
         },
@@ -57,7 +60,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
     assert_eq!(resource_count, 80);
 
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_test_kit::linters::cfn_lint(&yaml).assert_ok("chunked outputs");
+    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("chunked outputs");
 }
 
 #[test]
@@ -68,6 +71,9 @@ fn small_payload_emits_single_resources_output() {
         CloudFormationOptions {
             registry: &registry,
             stack_settings: StackSettings::default(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
         },
@@ -107,6 +113,9 @@ fn source_function_returns_typed_error() {
         CloudFormationOptions {
             registry: &registry,
             stack_settings: StackSettings::default(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
         },

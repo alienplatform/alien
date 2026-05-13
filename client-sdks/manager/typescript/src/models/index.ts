@@ -27,6 +27,7 @@ export * from "./createreleaserequest.js";
 export * from "./createtokenresponse.js";
 export * from "./customcertificateconfig.js";
 export * from "./customdomainconfig.js";
+export * from "./deletescope.js";
 export * from "./deploymentgroupminimal.js";
 export * from "./deploymentgroupresponse.js";
 export * from "./deploymentinforesponse.js";

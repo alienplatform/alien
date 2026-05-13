@@ -1,7 +1,7 @@
 //! Local container manager using Docker via bollard.
 //!
 //! Manages containers on the local platform using Docker. Unlike cloud platforms
-//! that use Horizon for orchestration, the Local platform uses Docker directly.
+//! that use managed container orchestration, the Local platform uses Docker directly.
 //!
 //! # Features
 //! - Creates a Docker network for inter-container communication

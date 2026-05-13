@@ -114,7 +114,7 @@ pub enum Commands {
     Build(BuildArgs),
     /// Push images and create a release
     Release(ReleaseArgs),
-    /// Render distribution artifacts for review
+    /// Render setup artifacts for review
     Render(RenderArgs),
     /// Create a deployment group and generate a deployment link
     Onboard(OnboardArgs),

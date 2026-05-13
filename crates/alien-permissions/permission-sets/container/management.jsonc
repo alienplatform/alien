@@ -1,6 +1,6 @@
 {
   "id": "container/management",
-  "description": "Allows managing containers and inspecting their cloud infrastructure (LB targets, volumes). Container orchestration itself is via Horizon API.",
+  "description": "Allows managing containers and inspecting their cloud infrastructure (LB targets, volumes). Container orchestration itself is via the managed container API.",
   "platforms": {
     "aws": [
       // Read-only inspection of LB health and volume status for operational visibility

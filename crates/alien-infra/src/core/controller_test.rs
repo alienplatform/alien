@@ -314,7 +314,7 @@ pub struct SingleControllerExecutor {
     stack_settings: StackSettings,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
-    // Compute backend configuration for Horizon
+    // Compute backend configuration for managed containers
     compute_backend: Option<ComputeBackend>,
     // Environment variables snapshot for deployment config
     environment_variables: EnvironmentVariablesSnapshot,

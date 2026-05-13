@@ -378,7 +378,7 @@ export type ImportSourceManagementConfigUnion =
   | ImportSourceManagementConfigKubernetes;
 
 /**
- * Resolved distribution import payload
+ * Resolved setup import payload
  */
 export type ImportSource = {
   /**
@@ -386,7 +386,7 @@ export type ImportSource = {
    */
   deploymentName: string;
   /**
-   * Stable physical-name prefix used by the distribution artifact.
+   * Stable physical-name prefix used by the setup artifact.
    */
   stackPrefix: string;
   /**
@@ -394,7 +394,7 @@ export type ImportSource = {
    */
   sourceKind?: ImportSourceKind | undefined;
   /**
-   * Release that produced the distribution artifact. Defaults to latest.
+   * Release that produced the setup artifact. Defaults to latest.
    */
   releaseId?: string | undefined;
   /**
@@ -402,9 +402,12 @@ export type ImportSource = {
    */
   platform: ImportSourcePlatformEnum;
   /**
-   * Region or location reported by the distribution artifact
+   * Region or location reported by the setup artifact
    */
   region: string;
+  setupTarget: string;
+  setupFingerprint: string;
+  setupFingerprintVersion: number;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -1099,6 +1102,9 @@ export type ImportSource$Outbound = {
   releaseId?: string | undefined;
   platform: string;
   region: string;
+  setupTarget: string;
+  setupFingerprint: string;
+  setupFingerprintVersion: number;
   stackSettings: ImportSourceStackSettings$Outbound;
   managementConfig:
     | ImportSourceManagementConfigAws$Outbound
@@ -1119,6 +1125,9 @@ export const ImportSource$outboundSchema: z.ZodType<
   releaseId: z.string().optional(),
   platform: ImportSourcePlatformEnum$outboundSchema,
   region: z.string(),
+  setupTarget: z.string(),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
   stackSettings: z.lazy(() => ImportSourceStackSettings$outboundSchema),
   managementConfig: z.union([
     z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),

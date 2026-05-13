@@ -67,7 +67,7 @@ impl StackState {
     }
 
     /// Creates an empty StackState for resources whose physical prefix was
-    /// already chosen by an external distribution artifact.
+    /// already chosen by an external setup artifact.
     pub fn with_resource_prefix(platform: Platform, resource_prefix: String) -> Self {
         StackState {
             platform,

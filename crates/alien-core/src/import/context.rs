@@ -12,7 +12,7 @@ pub struct EmitContext<'a> {
     pub resource_id: &'a str,
     /// Target platform for this emission pass.
     pub platform: Platform,
-    /// User-selected stack settings for the distribution artifact.
+    /// User-selected stack settings for the setup artifact.
     pub stack_settings: &'a StackSettings,
     /// Stable names precomputed by the outer generator.
     pub names: &'a IndexMap<String, String>,
@@ -32,9 +32,9 @@ pub struct ImportContext<'a> {
     pub resource_id: &'a str,
     /// Target platform for this imported resource.
     pub platform: Platform,
-    /// Region or location reported by the distribution artifact.
+    /// Region or location reported by the setup artifact.
     pub region: &'a str,
-    /// Stack settings supplied by the distribution artifact.
+    /// Stack settings supplied by the setup artifact.
     pub stack_settings: &'a StackSettings,
     /// Platform-derived management configuration.
     pub management_config: &'a ManagementConfig,

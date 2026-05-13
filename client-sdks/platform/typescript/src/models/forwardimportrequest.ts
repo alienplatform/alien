@@ -32,7 +32,7 @@ export type ForwardImportRequest = {
    */
   managerId?: string | undefined;
   /**
-   * Resolved distribution import payload
+   * Resolved setup import payload
    */
   source: ImportSource;
 };

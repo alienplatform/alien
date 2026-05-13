@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 /**
- * Distribution source that produced an import request. Observability label
+ * Package source that produced an import request. Observability label
  *
  * @remarks
  * only — the manager does not branch on this value, and any new deployment
@@ -18,7 +18,7 @@ export const ImportSourceKind = {
   Helm: "helm",
 } as const;
 /**
- * Distribution source that produced an import request. Observability label
+ * Package source that produced an import request. Observability label
  *
  * @remarks
  * only — the manager does not branch on this value, and any new deployment

@@ -65,7 +65,7 @@ pub struct AppState {
     /// Routing table mapping repo path prefixes to upstream registries.
     pub registry_routing_table: Arc<registry_proxy::RegistryRoutingTable>,
     /// Registry of per-`(ResourceType, Platform)` importers used by the
-    /// stack-import endpoint to translate distribution-artifact payloads
+    /// stack-import endpoint to translate setup-artifact payloads
     /// (CFN Custom Resource, Terraform provider, Helm chart) into typed
     /// `StackResourceState`. Built once at startup with
     /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
@@ -112,7 +112,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(deployments::router())
         // Releases
         .merge(releases::router())
-        // Stack import (distribution artifacts: CFN, TF, Helm)
+        // Stack import (setup artifacts: CloudFormation, Terraform, Helm)
         .merge(stack::router())
         // Deployment groups
         .merge(deployment_groups::router())

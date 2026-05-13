@@ -24,6 +24,9 @@ pub(crate) enum Deployments {
     CurrentReleaseId,
     DesiredReleaseId,
     ImportSource,
+    SetupTarget,
+    SetupFingerprint,
+    SetupFingerprintVersion,
     RetryRequested,
     EnvironmentVariables,
     DeploymentToken,
@@ -119,6 +122,9 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Deployments::CurrentReleaseId).text())
             .col(ColumnDef::new(Deployments::DesiredReleaseId).text())
             .col(ColumnDef::new(Deployments::ImportSource).text())
+            .col(ColumnDef::new(Deployments::SetupTarget).text())
+            .col(ColumnDef::new(Deployments::SetupFingerprint).text())
+            .col(ColumnDef::new(Deployments::SetupFingerprintVersion).integer())
             .col(ColumnDef::new(Deployments::EnvironmentVariables).text())
             .col(ColumnDef::new(Deployments::DeploymentToken).text())
             .col(

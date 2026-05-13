@@ -195,7 +195,7 @@ export type DeploymentListItemResponseEnvironmentInfoUnion =
   | any;
 
 /**
- * Distribution source that imported this deployment
+ * Setup source that imported this deployment
  */
 export const DeploymentListItemResponseImportSource = {
   Cloudformation: "cloudformation",
@@ -203,7 +203,7 @@ export const DeploymentListItemResponseImportSource = {
   Helm: "helm",
 } as const;
 /**
- * Distribution source that imported this deployment
+ * Setup source that imported this deployment
  */
 export type DeploymentListItemResponseImportSource = ClosedEnum<
   typeof DeploymentListItemResponseImportSource
@@ -334,9 +334,21 @@ export type DeploymentListItemResponse = {
    */
   pinnedReleaseId?: string | null | undefined;
   /**
-   * Distribution source that imported this deployment
+   * Setup source that imported this deployment
    */
   importSource?: DeploymentListItemResponseImportSource | null | undefined;
+  /**
+   * Imported setup target for compatibility checks
+   */
+  setupTarget?: string | null | undefined;
+  /**
+   * Imported setup compatibility fingerprint
+   */
+  setupFingerprint?: string | null | undefined;
+  /**
+   * Imported setup fingerprint version
+   */
+  setupFingerprintVersion?: number | null | undefined;
   /**
    * Timestamp of the last received heartbeat
    */
@@ -614,6 +626,9 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   pinnedReleaseId: z.nullable(z.string()).optional(),
   importSource: z.nullable(DeploymentListItemResponseImportSource$inboundSchema)
     .optional(),
+  setupTarget: z.nullable(z.string()).optional(),
+  setupFingerprint: z.nullable(z.string()).optional(),
+  setupFingerprintVersion: z.nullable(z.int()).optional(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

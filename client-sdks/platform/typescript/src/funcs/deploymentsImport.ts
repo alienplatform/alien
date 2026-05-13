@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Import a deployment from resolved distribution infrastructure such as CloudFormation, Terraform, or Helm.
+ * Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
  */
 export function deploymentsImport(
   client: AlienCore,

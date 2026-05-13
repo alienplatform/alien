@@ -31,7 +31,7 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_frozen_changes: bool,
     /// Compute backend for Container and Function resources.
-    /// When None, the platform default is used (Horizon for cloud platforms).
+    /// When None, the platform default is used for cloud platforms.
     /// Contains cluster IDs and management tokens for container orchestration.
     /// Worker runtime credentials are provided through cloud identity and vault-backed secrets.
     #[serde(skip_serializing_if = "Option::is_none")]

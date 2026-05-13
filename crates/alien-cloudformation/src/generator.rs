@@ -40,11 +40,14 @@ const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_STACK_PREFIX: &str = "DeploymentStackPrefix";
 const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
 const OUTPUT_REGION: &str = "DeploymentRegion";
+const OUTPUT_SETUP_TARGET: &str = "DeploymentSetupTarget";
+const OUTPUT_SETUP_FINGERPRINT: &str = "DeploymentSetupFingerprint";
+const OUTPUT_SETUP_FINGERPRINT_VERSION: &str = "DeploymentSetupFingerprintVersion";
 const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
-const STANDARD_OUTPUT_COUNT: usize = 6;
+const STANDARD_OUTPUT_COUNT: usize = 9;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 
 /// Registration behavior for the generated CloudFormation template.
@@ -82,6 +85,9 @@ pub struct CloudFormationOptions<'a> {
     /// passing.
     pub registry: &'a CfRegistry,
     pub stack_settings: StackSettings,
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
     pub registration: RegistrationMode,
     pub description: Option<String>,
 }
@@ -168,12 +174,19 @@ pub fn generate_cloudformation_template(
             lambda_arn,
             management_config.clone(),
             stack_settings.clone(),
+            &options,
             resources.clone(),
         );
     }
 
     if options.registration.emits_outputs() {
-        add_outputs(&mut template, management_config, stack_settings, resources)?;
+        add_outputs(
+            &mut template,
+            management_config,
+            stack_settings,
+            &options,
+            resources,
+        )?;
     }
 
     Ok(template)
@@ -247,7 +260,7 @@ fn validate_stack_settings(settings: &StackSettings) -> Result<()> {
     if settings.external_bindings.is_some() {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "generate_cloudformation_template".to_string(),
-            reason: "CloudFormation distribution does not accept external bindings".to_string(),
+            reason: "CloudFormation templates do not accept external bindings".to_string(),
         }));
     }
 
@@ -257,7 +270,7 @@ fn validate_stack_settings(settings: &StackSettings) -> Result<()> {
     ) {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "generate_cloudformation_template".to_string(),
-            reason: "CloudFormation distribution supports only AWS network settings".to_string(),
+            reason: "CloudFormation templates support only AWS network settings".to_string(),
         }));
     }
 
@@ -681,6 +694,7 @@ fn add_custom_resource(
     lambda_arn: &str,
     management_config: CfExpression,
     stack_settings: CfExpression,
+    options: &CloudFormationOptions<'_>,
     resources: CfExpression,
 ) {
     let depends_on = template
@@ -709,6 +723,9 @@ fn add_custom_resource(
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
         "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
+        "SetupTarget".to_string() => CfExpression::from(options.setup_target.clone()),
+        "SetupFingerprint".to_string() => CfExpression::from(options.setup_fingerprint.clone()),
+        "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version.to_string()),
         "ManagementConfig".to_string() => management_config,
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
@@ -722,14 +739,12 @@ fn add_outputs(
     template: &mut CfTemplate,
     management_config: CfExpression,
     stack_settings: CfExpression,
+    options: &CloudFormationOptions<'_>,
     resources: CfExpression,
 ) -> Result<()> {
     template.outputs.insert(
         OUTPUT_SOURCE_KIND.to_string(),
-        output(
-            "Distribution source kind.",
-            CfExpression::from("cloudformation"),
-        ),
+        output("Setup source kind.", CfExpression::from("cloudformation")),
     );
     template.outputs.insert(
         OUTPUT_STACK_PREFIX.to_string(),
@@ -748,6 +763,27 @@ fn add_outputs(
     template.outputs.insert(
         OUTPUT_REGION.to_string(),
         output("AWS region.", CfExpression::ref_("AWS::Region")),
+    );
+    template.outputs.insert(
+        OUTPUT_SETUP_TARGET.to_string(),
+        output(
+            "Setup target.",
+            CfExpression::from(options.setup_target.clone()),
+        ),
+    );
+    template.outputs.insert(
+        OUTPUT_SETUP_FINGERPRINT.to_string(),
+        output(
+            "Setup compatibility fingerprint.",
+            CfExpression::from(options.setup_fingerprint.clone()),
+        ),
+    );
+    template.outputs.insert(
+        OUTPUT_SETUP_FINGERPRINT_VERSION.to_string(),
+        output(
+            "Setup fingerprint algorithm version.",
+            CfExpression::from(options.setup_fingerprint_version.to_string()),
+        ),
     );
     template.outputs.insert(
         OUTPUT_MANAGEMENT_CONFIG.to_string(),

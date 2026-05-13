@@ -1,4 +1,4 @@
-//! Typed distribution import contract.
+//! Typed setup import contract.
 //!
 //! `alien-core` owns the request shape every CloudFormation / Terraform /
 //! Helm generator and every importer (manager-side or agent-side) speaks:

@@ -11,6 +11,7 @@ default = []
 # Pull in the alien-core jsonschema feature so generated modules stay aligned with the
 # typed ImportData JsonSchema snapshots.
 jsonschema = ["alien-core/jsonschema"]
+test-utils = []
 
 [dependencies]
 alien-core = { workspace = true }
@@ -23,6 +24,5 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
-alien-test-kit = { workspace = true, features = ["linters"] }
 indexmap = { workspace = true }
 insta = { workspace = true, features = ["json"] }

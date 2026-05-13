@@ -8,9 +8,8 @@
 //! (downcast, tags, IAM principal_id resolution, role-definition
 //! emission) live in [`helpers`].
 //!
-//! See `internal-docs/alien/distribution/HANDOFF-2026-05-04.md` for the
-//! per-resource design notes (storage-account naming convergence,
-//! cross-tenant federated-identity trust, AKS overlay activation).
+//! Per-resource design notes cover storage-account naming convergence,
+//! cross-tenant federated-identity trust, and AKS overlay activation.
 
 pub mod artifact_registry;
 pub mod build;

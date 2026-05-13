@@ -18,7 +18,7 @@ fn schema_accepts_manager_fetch_default_values() {
         .build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files;
-    alien_test_kit::linters::helm_template_and_validate(&files, None)
+    alien_helm::test_utils::helm_template_and_validate(&files, None)
         .assert_ok("manager-fetch path");
 }
 
@@ -52,7 +52,7 @@ fn schema_accepts_external_bindings_initialize_onprem_values() {
         .get("examples/onprem.yaml")
         .expect("onprem example")
         .clone();
-    alien_test_kit::linters::helm_template_and_validate(&files, Some(&local_values))
+    alien_helm::test_utils::helm_template_and_validate(&files, Some(&local_values))
         .assert_ok("external-bindings initialize path");
 
     let values: serde_yaml::Value =

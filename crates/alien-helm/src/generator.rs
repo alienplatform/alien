@@ -821,13 +821,10 @@ mod tests {
         .expect("chart should render");
 
         let files = chart.files.clone();
-        alien_test_kit::linters::helm_lint(&files).assert_ok("helm chart");
-        alien_test_kit::linters::helm_template_and_validate(&files, None)
+        crate::test_utils::helm_lint(&files).assert_ok("helm chart");
+        crate::test_utils::helm_template_and_validate(&files, None)
             .assert_ok("helm template manager-fetch path");
-        alien_test_kit::linters::helm_template_and_validate(
-            &files,
-            Some(&files["examples/onprem.yaml"]),
-        )
-        .assert_ok("helm template external-bindings initialize path");
+        crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
+            .assert_ok("helm template external-bindings initialize path");
     }
 }

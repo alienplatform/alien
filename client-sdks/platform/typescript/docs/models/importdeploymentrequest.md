@@ -1,6 +1,6 @@
 # ImportDeploymentRequest
 
-Request schema for importing a deployment from resolved distribution infrastructure
+Request schema for importing a deployment from resolved setup infrastructure
 
 
 ## Supported Types
@@ -17,12 +17,25 @@ const value: models.ForwardImportRequest = {
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "kubernetes",
     region: "<value>",
+    setupTarget: "<value>",
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 171752,
     stackSettings: {},
     managementConfig: {
       managingRoleArn: "<value>",
       platform: "aws",
     },
-    resources: [],
+    resources: [
+      {
+        id: "<id>",
+        type: "<value>",
+        importData: {
+          "key": "<value>",
+          "key1": "<value>",
+          "key2": "<value>",
+        },
+      },
+    ],
   },
 };
 ```
@@ -39,6 +52,9 @@ const value: models.PersistImportedDeploymentRequest = {
   stackSettings: {},
   runtimeMetadata: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  setupTarget: "<value>",
+  setupFingerprint: "<value>",
+  setupFingerprintVersion: 75885,
 };
 ```
 

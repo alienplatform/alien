@@ -185,7 +185,7 @@ Resources:
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
-    Description: Distribution source kind.
+    Description: Setup source kind.
   DeploymentStackPrefix:
     Value:
       Ref: AWS::StackName
@@ -197,6 +197,15 @@ Outputs:
     Value:
       Ref: AWS::Region
     Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupFingerprintVersion:
+    Value: '1'
+    Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:

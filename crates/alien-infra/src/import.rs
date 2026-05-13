@@ -90,7 +90,7 @@ impl ImporterRegistry {
         Self::default()
     }
 
-    /// Built-in importers across every cloud the distribution rebuild
+    /// Built-in importers across every cloud the setup import path
     /// ships, **OSS subset only**.
     ///
     /// Compiled clouds depend on Cargo features:

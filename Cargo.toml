@@ -27,8 +27,6 @@ members = [
   "crates/alien-cloudformation",
   "crates/alien-terraform",
   "crates/alien-helm",
-  "crates/alien-terraform-provider",
-  "crates/alien-test-kit",
   "crates/alien-manager",
   "crates/alien-agent",
   "crates/alien-deploy-cli",
@@ -84,13 +82,10 @@ alien-local = { path = "crates/alien-local", version = "1.3.5" }
 alien-cloudformation = { path = "crates/alien-cloudformation", version = "1.3.5" }
 alien-terraform = { path = "crates/alien-terraform", version = "1.3.5" }
 alien-helm = { path = "crates/alien-helm", version = "1.3.5" }
-alien-terraform-provider = { path = "crates/alien-terraform-provider", version = "1.3.5" }
-alien-test-kit = { path = "crates/alien-test-kit", version = "1.3.5" }
 alien-manager = { path = "crates/alien-manager", version = "1.3.5" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "1.3.5", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "1.3.5", default-features = false, features = ["rustls"] }
-deepstore-client = { version = "1.1.1" }
 
 # External dependencies
 anyhow = "1.0"

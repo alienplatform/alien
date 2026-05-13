@@ -6,7 +6,7 @@ use std::collections::HashMap;
 /// Configuration for a single container worker cluster.
 ///
 /// Contains the cluster ID and management token needed to interact with
-/// the Horizon control plane API for container operations.
+/// the managed container control plane API for container operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -21,8 +21,8 @@ pub struct HorizonClusterConfig {
 
 /// Worker control-plane configuration for container orchestration.
 ///
-/// Contains all the information needed for Alien to interact with Horizon
-/// clusters during deployment. Each ContainerCluster resource gets its own
+/// Contains all the information needed for Alien to interact with managed
+/// container clusters during deployment. Each ContainerCluster resource gets its own
 /// entry in the clusters map.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -47,7 +47,7 @@ pub struct HorizonConfig {
 /// Compute backend for Container and Function resources.
 ///
 /// Determines how compute workloads are orchestrated on cloud platforms.
-/// When None, the platform default is used (Horizon for cloud platforms).
+/// When None, the platform default is used for cloud platforms.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "camelCase")]

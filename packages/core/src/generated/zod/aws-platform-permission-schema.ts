@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { AwsPermissionEffectSchema } from "./aws-permission-effect-schema.js";
 import { BindingConfigurationAwsBindingSpecSchema } from "./binding-configuration-aws-binding-spec-schema.js";
 import { PermissionGrantSchema } from "./permission-grant-schema.js";
 
@@ -13,6 +14,9 @@ import { PermissionGrantSchema } from "./permission-grant-schema.js";
 export const AwsPlatformPermissionSchema = z.object({
     get "binding"(){
                 return BindingConfigurationAwsBindingSpecSchema.describe("Generic binding configuration for permissions")
+              },
+get "effect"(){
+                return AwsPermissionEffectSchema.describe("IAM effect. Defaults to Allow.").optional()
               },
 get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")

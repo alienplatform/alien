@@ -1,8 +1,8 @@
-//! Distribution artifact E2E setup.
+//! Setup artifact E2E setup.
 //!
 //! This module is intentionally separate from the native `e2e::setup` path so
 //! CloudFormation/Terraform/Helm tests cannot accidentally validate controller
-//! provisioning instead of the distribution import path.
+//! provisioning instead of the setup import path.
 
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
@@ -117,7 +117,7 @@ impl DistributionArtifactCleanup {
             DistributionArtifactCleanup::Terraform { workdir, env } => {
                 info!(
                     workdir = %workdir.path().display(),
-                    "destroying Terraform distribution artifacts"
+                    "destroying Terraform setup artifacts"
                 );
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
@@ -130,7 +130,7 @@ impl DistributionArtifactCleanup {
                     apply_env(&mut cmd, &env);
                     match run_command(cmd, "terraform destroy").await {
                         Ok(()) => {
-                            info!("Terraform distribution artifacts destroyed");
+                            info!("Terraform setup artifacts destroyed");
                             break;
                         }
                         Err(error) if attempt < 3 => {
@@ -526,6 +526,9 @@ async fn run_cloudformation_aws(
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
             stack_settings: stack_settings_for_flow(prepared.model),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
             registration: alien_cloudformation::RegistrationMode::OutputsFallback,
             description: Some(format!("Alien E2E distribution stack {stack_name}")),
         },
@@ -1097,6 +1100,19 @@ async fn cloudformation_import_request(
         .get("DeploymentRegion")
         .cloned()
         .context("DeploymentRegion output missing")?;
+    let setup_target = values
+        .get("DeploymentSetupTarget")
+        .cloned()
+        .context("DeploymentSetupTarget output missing")?;
+    let setup_fingerprint = values
+        .get("DeploymentSetupFingerprint")
+        .cloned()
+        .context("DeploymentSetupFingerprint output missing")?;
+    let setup_fingerprint_version: u32 = values
+        .get("DeploymentSetupFingerprintVersion")
+        .context("DeploymentSetupFingerprintVersion output missing")?
+        .parse()
+        .context("DeploymentSetupFingerprintVersion output is invalid")?;
     let management_config =
         parse_json_output::<ManagementConfig>(&values, "DeploymentManagementConfig")?;
     let stack_settings = parse_json_output::<StackSettings>(&values, "DeploymentStackSettings")?;
@@ -1110,6 +1126,9 @@ async fn cloudformation_import_request(
         release_id: None,
         platform,
         region,
+        setup_target,
+        setup_fingerprint,
+        setup_fingerprint_version,
         stack_settings,
         management_config,
         resources,
@@ -1270,6 +1289,10 @@ fn terraform_import_request_from_outputs(
     )?)?;
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
+    let setup_target = terraform_output_string(output, "deployment_setup_target")?;
+    let setup_fingerprint = terraform_output_string(output, "deployment_setup_fingerprint")?;
+    let setup_fingerprint_version: u32 =
+        terraform_output_string(output, "deployment_setup_fingerprint_version")?.parse()?;
 
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
@@ -1279,6 +1302,9 @@ fn terraform_import_request_from_outputs(
         release_id: None,
         platform,
         region,
+        setup_target,
+        setup_fingerprint,
+        setup_fingerprint_version,
         stack_settings,
         management_config,
         resources,

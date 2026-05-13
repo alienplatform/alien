@@ -35,7 +35,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 22] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 25] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -48,6 +48,9 @@ impl SqliteDeploymentStore {
         Deployments::CurrentReleaseId,
         Deployments::DesiredReleaseId,
         Deployments::ImportSource,
+        Deployments::SetupTarget,
+        Deployments::SetupFingerprint,
+        Deployments::SetupFingerprintVersion,
         Deployments::EnvironmentVariables,
         Deployments::DeploymentToken,
         Deployments::RetryRequested,
@@ -76,9 +79,9 @@ impl SqliteDeploymentStore {
             })?;
 
         let user_environment_variables: Option<Vec<EnvironmentVariable>> =
-            p.optional_json(12, "environment_variables")?;
+            p.optional_json(15, "environment_variables")?;
 
-        let retry_requested_int: i64 = p.optional_i64(14, "retry_requested")?.unwrap_or(0);
+        let retry_requested_int: i64 = p.optional_i64(17, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
             id: p.string(0, "id")?,
@@ -93,20 +96,25 @@ impl SqliteDeploymentStore {
             current_release_id: p.optional_string(9, "current_release_id")?,
             desired_release_id: p.optional_string(10, "desired_release_id")?,
             import_source,
+            setup_target: p.optional_string(12, "setup_target")?,
+            setup_fingerprint: p.optional_string(13, "setup_fingerprint")?,
+            setup_fingerprint_version: p
+                .optional_i64(14, "setup_fingerprint_version")?
+                .map(|value| value as u32),
             user_environment_variables,
-            deployment_token: p.optional_string(13, "deployment_token")?,
+            deployment_token: p.optional_string(16, "deployment_token")?,
             management_config: None,
             retry_requested: retry_requested_int != 0,
-            locked_by: p.optional_string(15, "locked_by")?,
-            locked_at: p.optional_datetime(16, "locked_at")?,
-            created_at: p.datetime(17, "created_at")?,
-            updated_at: p.optional_datetime(18, "updated_at")?,
-            error: p.optional_json(19, "error")?,
+            locked_by: p.optional_string(18, "locked_by")?,
+            locked_at: p.optional_datetime(19, "locked_at")?,
+            created_at: p.datetime(20, "created_at")?,
+            updated_at: p.optional_datetime(21, "updated_at")?,
+            error: p.optional_json(22, "error")?,
             workspace_id: p
-                .optional_string(20, "workspace_id")?
+                .optional_string(23, "workspace_id")?
                 .unwrap_or_else(|| "default".to_string()),
             project_id: p
-                .optional_string(21, "project_id")?
+                .optional_string(24, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
     }
@@ -225,6 +233,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             current_release_id: None,
             desired_release_id: None,
             import_source: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
             user_environment_variables: params.environment_variables,
             deployment_token: params.deployment_token,
             management_config: None,
@@ -293,6 +304,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::StackSettings,
                 Deployments::StackState,
                 Deployments::RuntimeMetadata,
+                Deployments::SetupTarget,
+                Deployments::SetupFingerprint,
+                Deployments::SetupFingerprintVersion,
                 Deployments::RetryRequested,
                 Deployments::CreatedAt,
             ];
@@ -305,6 +319,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 stack_settings_json.into(),
                 stack_state_json.into(),
                 runtime_metadata_json.into(),
+                params.setup_target.clone().into(),
+                params.setup_fingerprint.clone().into(),
+                (params.setup_fingerprint_version as i64).into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
             ];
@@ -359,6 +376,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             current_release_id: params.current_release_id,
             desired_release_id: None,
             import_source: params.import_source,
+            setup_target: Some(params.setup_target),
+            setup_fingerprint: Some(params.setup_fingerprint),
+            setup_fingerprint_version: Some(params.setup_fingerprint_version),
             user_environment_variables: None,
             deployment_token: params.deployment_token,
             management_config: params.management_config,
@@ -379,8 +399,23 @@ impl DeploymentStore for SqliteDeploymentStore {
         environment_info: Option<EnvironmentInfo>,
         runtime_metadata: RuntimeMetadata,
         current_release_id: Option<String>,
+        setup_target: String,
+        setup_fingerprint: String,
+        setup_fingerprint_version: u32,
     ) -> Result<DeploymentRecord, AlienError> {
-        let stack_state_json = serde_json::to_string(&stack_state)
+        let mut merged_stack_state = stack_state;
+        if let Some(existing) = self.get_deployment(caller, deployment_id).await? {
+            if let Some(mut existing_stack_state) = existing.stack_state {
+                for (resource_id, resource_state) in merged_stack_state.resources {
+                    existing_stack_state
+                        .resources
+                        .insert(resource_id, resource_state);
+                }
+                merged_stack_state = existing_stack_state;
+            }
+        }
+
+        let stack_state_json = serde_json::to_string(&merged_stack_state)
             .into_alien_error()
             .context(GenericError {
                 message: "Failed to serialize imported stack_state".to_string(),
@@ -408,6 +443,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .value(Deployments::StackState, stack_state_json)
                 .value(Deployments::EnvironmentInfo, environment_info_json)
                 .value(Deployments::RuntimeMetadata, runtime_metadata_json)
+                .value(Deployments::SetupTarget, setup_target)
+                .value(Deployments::SetupFingerprint, setup_fingerprint)
+                .value(
+                    Deployments::SetupFingerprintVersion,
+                    setup_fingerprint_version as i64,
+                )
                 .value(Deployments::UpdatedAt, now.to_rfc3339())
                 .and_where(Expr::col(Deployments::Id).eq(deployment_id));
 

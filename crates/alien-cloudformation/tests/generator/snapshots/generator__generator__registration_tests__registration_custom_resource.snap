@@ -115,6 +115,9 @@ Resources:
       Platform: aws
       Region:
         Ref: AWS::Region
+      SetupTarget: aws
+      SetupFingerprint: test
+      SetupFingerprintVersion: '1'
       ManagementConfig:
         platform: aws
         managingRoleArn:

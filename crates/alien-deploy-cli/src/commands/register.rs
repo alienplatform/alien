@@ -147,6 +147,9 @@ struct CfnOutputs {
     platform: Option<String>,
     region: Option<String>,
     stack_prefix: Option<String>,
+    setup_target: Option<String>,
+    setup_fingerprint: Option<String>,
+    setup_fingerprint_version: Option<u32>,
     management_config: Option<JsonValue>,
     stack_settings: Option<JsonValue>,
     /// Resources may be split across `DeploymentResources0`..`DeploymentResourcesN`
@@ -204,6 +207,18 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
                 }
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
                 "DeploymentRegion" => outputs.region = Some(value.to_string()),
+                "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
+                "DeploymentSetupFingerprint" => outputs.setup_fingerprint = Some(value.to_string()),
+                "DeploymentSetupFingerprintVersion" => {
+                    let version = value.parse().map_err(|reason| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "DeploymentSetupFingerprintVersion output '{value}' is invalid: {reason}"
+                            ),
+                        })
+                    })?;
+                    outputs.setup_fingerprint_version = Some(version);
+                }
                 "DeploymentManagementConfig" => {
                     outputs.management_config = Some(parse_json_output(key, value)?);
                 }
@@ -276,6 +291,21 @@ fn build_import_request(
             message: format!("DeploymentStackPrefix output not found in stack '{stack_name}'"),
         })
     })?;
+    let setup_target = outputs.setup_target.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DeploymentSetupTarget output not found in stack".to_string(),
+        })
+    })?;
+    let setup_fingerprint = outputs.setup_fingerprint.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DeploymentSetupFingerprint output not found in stack".to_string(),
+        })
+    })?;
+    let setup_fingerprint_version = outputs.setup_fingerprint_version.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "DeploymentSetupFingerprintVersion output not found in stack".to_string(),
+        })
+    })?;
 
     let management_config_value = outputs.management_config.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
@@ -331,6 +361,9 @@ fn build_import_request(
         release_id: None,
         platform,
         region,
+        setup_target,
+        setup_fingerprint,
+        setup_fingerprint_version,
         stack_settings,
         management_config,
         resources,

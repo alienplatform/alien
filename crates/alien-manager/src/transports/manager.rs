@@ -52,6 +52,7 @@ impl DeploymentLoopTransport for ManagerTransport {
         _config: &alien_core::DeploymentConfig,
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
+        suggested_delay_ms: Option<u64>,
     ) -> Result<StepReconcileResult, AlienError> {
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
@@ -81,6 +82,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                     state: updated_state.clone(),
                     update_heartbeat,
                     error: error_value,
+                    suggested_delay_ms,
                 },
             )
             .await?;

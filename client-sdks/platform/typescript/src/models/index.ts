@@ -5,6 +5,7 @@
 export * from "./apierror.js";
 export * from "./apikey.js";
 export * from "./billingauditlogrow.js";
+export * from "./cloudformationcallbackrequest.js";
 export * from "./command.js";
 export * from "./commanddeploymentgroupinfo.js";
 export * from "./commanddeploymentinfo.js";
@@ -83,6 +84,7 @@ export * from "./role.js";
 export * from "./scope.js";
 export * from "./security.js";
 export * from "./serviceaccountsubject.js";
+export * from "./setupfingerprintinfo.js";
 export * from "./stackbyplatform.js";
 export * from "./subject.js";
 export * from "./subjectscope.js";

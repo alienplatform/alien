@@ -82,7 +82,7 @@ pub fn service_account_id_template(suffix: &str) -> Expression {
 }
 
 /// GCP custom role ids are project-global. Scope every generated role id to
-/// the stack name and owning resource label so parallel distribution tests,
+/// the stack name and owning resource label so parallel setup tests,
 /// repeated applies, and multiple identities in one stack do not try to create
 /// the same `storageDataRead`/`functionExecute` role in the target project.
 fn custom_role_id_template(owner_label: &str, role_id: &str) -> Expression {

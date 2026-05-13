@@ -23,6 +23,8 @@ mod k8s_identity;
 mod naming;
 mod registry;
 mod target;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 pub use emitter::{TfEmitter, TfFragment};
 pub use generator::{

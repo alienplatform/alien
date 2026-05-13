@@ -1,6 +1,7 @@
 pub mod azure;
 pub mod compatibility;
 pub mod compile_time;
+pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
 pub mod runner;
@@ -109,18 +110,35 @@ pub trait CompileTimeCheck: Send + Sync {
     /// Condition to determine if this check should run
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool;
 
-    /// Whether this check validates deployment prerequisites rather than template structure.
-    ///
-    /// Deployment prerequisite checks (e.g., "Horizon cluster required", "DNS/TLS required")
-    /// validate that the deployment environment has the necessary infrastructure. These are
-    /// skipped during CloudFormation template generation since the platform provisions
-    /// that infrastructure separately.
-    fn is_deployment_prerequisite(&self) -> bool {
-        false
-    }
-
     /// Run the check without cloud access
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult>;
+}
+
+/// Validates that the deployment target provides required environment capabilities.
+///
+/// Unlike compile-time checks, these checks need `DeploymentConfig` and therefore
+/// run only during deployment preflights after stack mutations have added any
+/// implicit infrastructure resources.
+#[async_trait::async_trait]
+pub trait DeploymentPrerequisiteCheck: Send + Sync {
+    /// User-facing description of what this check validates
+    fn description(&self) -> &'static str;
+
+    /// Condition to determine if this check should run
+    fn should_run(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> bool;
+
+    /// Run the check without cloud access
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult>;
 }
 
 /// Validates cloud environment readiness with cloud client access.
@@ -183,6 +201,7 @@ pub trait StackMutation: Send + Sync {
 /// Registry of all available checks and mutations
 pub struct PreflightRegistry {
     compile_time_checks: Vec<Box<dyn CompileTimeCheck>>,
+    deployment_prerequisite_checks: Vec<Box<dyn DeploymentPrerequisiteCheck>>,
     #[cfg(feature = "runtime-checks")]
     runtime_checks: Vec<Box<dyn RuntimeCheck>>,
     compatibility_checks: Vec<Box<dyn StackCompatibilityCheck>>,
@@ -194,6 +213,7 @@ impl PreflightRegistry {
     pub fn new() -> Self {
         Self {
             compile_time_checks: Vec::new(),
+            deployment_prerequisite_checks: Vec::new(),
             #[cfg(feature = "runtime-checks")]
             runtime_checks: Vec::new(),
             compatibility_checks: Vec::new(),
@@ -226,9 +246,17 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::CapacityGroupProfileCheck));
-        registry.add_compile_time_check(Box::new(compile_time::HorizonRequiredCheck));
-        registry.add_compile_time_check(Box::new(compile_time::DnsTlsRequiredCheck));
         registry.add_compile_time_check(Box::new(compile_time::FunctionMemoryCheck));
+
+        // Add deployment prerequisite checks. These validate the concrete
+        // deployment target/config, so they run only after deployment-time
+        // mutations have produced the final stack shape.
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ManagedContainerBackendRequiredCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::DomainMetadataRequiredCheck,
+        ));
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
@@ -304,6 +332,14 @@ impl PreflightRegistry {
         self.compile_time_checks.push(check);
     }
 
+    /// Add a deployment prerequisite check
+    pub fn add_deployment_prerequisite_check(
+        &mut self,
+        check: Box<dyn DeploymentPrerequisiteCheck>,
+    ) {
+        self.deployment_prerequisite_checks.push(check);
+    }
+
     /// Add a runtime check
     #[cfg(feature = "runtime-checks")]
     pub fn add_runtime_check(&mut self, check: Box<dyn RuntimeCheck>) {
@@ -333,12 +369,7 @@ impl PreflightRegistry {
             .collect()
     }
 
-    /// Get compile-time checks for template generation (excludes deployment prerequisites).
-    ///
-    /// Deployment prerequisite checks (Horizon required, DNS/TLS required) validate that the
-    /// deployment environment has necessary infrastructure. These are irrelevant during
-    /// CloudFormation template generation since the platform provisions that infrastructure
-    /// separately via domain_metadata and compute_backend.
+    /// Get compile-time checks for template generation.
     pub fn get_template_checks(
         &self,
         stack: &Stack,
@@ -346,9 +377,21 @@ impl PreflightRegistry {
     ) -> Vec<&dyn CompileTimeCheck> {
         self.compile_time_checks
             .iter()
-            .filter(|check| {
-                check.should_run(stack, platform) && !check.is_deployment_prerequisite()
-            })
+            .filter(|check| check.should_run(stack, platform))
+            .map(|check| check.as_ref())
+            .collect()
+    }
+
+    /// Get deployment prerequisite checks that should run for the final stack/config.
+    pub fn get_deployment_prerequisite_checks(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Vec<&dyn DeploymentPrerequisiteCheck> {
+        self.deployment_prerequisite_checks
+            .iter()
+            .filter(|check| check.should_run(stack, stack_state, config))
             .map(|check| check.as_ref())
             .collect()
     }

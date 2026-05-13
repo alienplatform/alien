@@ -37,7 +37,7 @@ export type StackImportRequest = {
    *
    * @remarks
    * group; the manager returns 409 on collision rather than silently
-   * resolving to an existing deployment. Each distribution adapter picks
+   * resolving to an existing deployment. Each setup adapter picks
    * the natural source: CloudFormation defaults to the CFN stack name,
    * Helm to `{namespace}/{release}`, Terraform requires an explicit
    * `name` attribute on the `alien_deployment` resource.
@@ -57,11 +57,11 @@ export type StackImportRequest = {
    */
   platform: PlatformEnum;
   /**
-   * Region or location reported by the distribution artifact.
+   * Region or location reported by the setup artifact.
    */
   region: string;
   /**
-   * Optional release id that produced the distribution artifact. When
+   * Optional release id that produced the setup package. When
    *
    * @remarks
    * omitted, the manager imports against the latest release.
@@ -71,9 +71,21 @@ export type StackImportRequest = {
    * Imported resources with typed per-resource payloads.
    */
   resources: Array<ImportedResource>;
+  /**
+   * Setup compatibility fingerprint embedded in the package.
+   */
+  setupFingerprint: string;
+  /**
+   * Setup fingerprint algorithm version embedded in the package.
+   */
+  setupFingerprintVersion: number;
+  /**
+   * Setup target this package was generated for.
+   */
+  setupTarget: string;
   sourceKind?: ImportSourceKind | null | undefined;
   /**
-   * Stable physical-name prefix used by the distribution artifact for
+   * Stable physical-name prefix used by the setup package for
    *
    * @remarks
    * generated resources. This is the Alien stack prefix, not merely a UI
@@ -104,6 +116,9 @@ export type StackImportRequest$Outbound = {
   region: string;
   releaseId?: string | null | undefined;
   resources: Array<ImportedResource$Outbound>;
+  setupFingerprint: string;
+  setupFingerprintVersion: number;
+  setupTarget: string;
   sourceKind?: string | null | undefined;
   stackPrefix: string;
   stackSettings: StackSettings$Outbound;
@@ -121,6 +136,9 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   region: z.string(),
   releaseId: z.nullable(z.string()).optional(),
   resources: z.array(ImportedResource$outboundSchema),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
+  setupTarget: z.string(),
   sourceKind: z.nullable(ImportSourceKind$outboundSchema).optional(),
   stackPrefix: z.string(),
   stackSettings: StackSettings$outboundSchema,

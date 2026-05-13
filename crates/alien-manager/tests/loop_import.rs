@@ -1,6 +1,6 @@
 //! Integration tests for imported deployment persistence and acquisition.
 //!
-//! Distribution-imported deployments — produced by the
+//! Setup-imported deployments — produced by the
 //! `POST /v1/stack/import` endpoint — start at `provisioning` so the manager
 //! can complete layer-3 lifecycle work with management credentials. The test
 //! exercises the `DeploymentStore::acquire` contract directly with the same
@@ -131,6 +131,9 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
                 status: "provisioning".to_string(),
                 current_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_target: "aws".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
             },
@@ -179,6 +182,9 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
                 status: "provisioning".to_string(),
                 current_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_target: "aws".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
             },
@@ -233,6 +239,9 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 status: "update-pending".to_string(),
                 current_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
+                setup_target: "aws".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
                 deployment_token: None,
                 management_config: None,
             },

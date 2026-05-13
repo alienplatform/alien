@@ -25,7 +25,7 @@ use crate::manager::TestManager;
 pub enum DeploymentModel {
     /// Serverless / function-based deployment (Lambda, Cloud Run function, etc.)
     Push,
-    /// Container-based deployment (Horizon, Kubernetes, local Docker)
+    /// Container-based deployment (managed cloud, Kubernetes, local Docker)
     Pull,
 }
 
@@ -258,7 +258,7 @@ pub fn exclusion_reason(
 ) -> Option<&'static str> {
     match binding {
         Binding::Function => Some("Function binding test app endpoint not yet implemented"),
-        Binding::Container => Some("Container binding requires Horizon (not OSS)"),
+        Binding::Container => Some("Container binding requires managed container infrastructure"),
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
             Some("Local service account binding not yet wired up")
@@ -376,7 +376,7 @@ impl TestContext {
         };
 
         if !destroy_enqueued {
-            // Still run distribution artifact cleanup below. It is the owner of
+            // Still run setup artifact cleanup below. It is the owner of
             // setup-created resources and should not depend on manager cleanup.
             self.deployment.kill_foreground_agent().await;
 

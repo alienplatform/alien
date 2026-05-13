@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  SetupFingerprintInfo,
+  SetupFingerprintInfo$inboundSchema,
+} from "./setupfingerprintinfo.js";
 
 /**
  * Types of packages that can be built
@@ -363,6 +367,18 @@ export type Package = {
    * Package version (e.g., '1.0.0', 'rel_abc123')
    */
   version: string;
+  /**
+   * Release used as package build input
+   */
+  sourceReleaseId: string;
+  /**
+   * Per-target setup compatibility fingerprints copied from the source release
+   */
+  setupFingerprints: { [k: string]: SetupFingerprintInfo };
+  /**
+   * Package generator contract/hash version used to decide rebuild compatibility
+   */
+  packageGeneratorContractVersion: string;
   /**
    * Type-specific configuration
    */
@@ -776,6 +792,9 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   type: PackageTypeEnum$inboundSchema,
   status: PackageStatus$inboundSchema,
   version: z.string(),
+  sourceReleaseId: z.string(),
+  setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
+  packageGeneratorContractVersion: z.string(),
   config: z.union([
     z.lazy(() => ConfigCli$inboundSchema),
     z.lazy(() => ConfigCloudformation$inboundSchema),

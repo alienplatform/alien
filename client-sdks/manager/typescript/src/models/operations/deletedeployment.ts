@@ -3,19 +3,7 @@
  */
 
 import * as z from "zod/v4";
-import { ClosedEnum } from "../../types/enums.js";
-
-/**
- * Delete scope: full or liveOnly
- */
-export const DeleteScope = {
-  Full: "full",
-  LiveOnly: "liveOnly",
-} as const;
-/**
- * Delete scope: full or liveOnly
- */
-export type DeleteScope = ClosedEnum<typeof DeleteScope>;
+import * as models from "../index.js";
 
 export type DeleteDeploymentRequest = {
   /**
@@ -29,13 +17,8 @@ export type DeleteDeploymentRequest = {
   /**
    * Delete scope: full or liveOnly
    */
-  deleteScope?: DeleteScope | undefined;
+  deleteScope?: models.DeleteScope | undefined;
 };
-
-/** @internal */
-export const DeleteScope$outboundSchema: z.ZodEnum<typeof DeleteScope> = z.enum(
-  DeleteScope,
-);
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
@@ -51,7 +34,7 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   force: z.boolean().optional(),
-  deleteScope: DeleteScope$outboundSchema.optional(),
+  deleteScope: models.DeleteScope$outboundSchema.optional(),
 });
 
 export function deleteDeploymentRequestToJSON(

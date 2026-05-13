@@ -20,7 +20,7 @@ export type Workspace = {
   /**
    * When the Getting Started walkthrough was dismissed or completed for this workspace. Null means it has never been dismissed; the dashboard auto-promotes the walkthrough until this is set.
    */
-  onboardingDismissedAt: Date;
+  onboardingDismissedAt: Date | null;
   createdAt: Date;
 };
 
@@ -29,8 +29,8 @@ export const Workspace$inboundSchema: z.ZodType<Workspace, unknown> = z.object({
   id: z.string(),
   name: z.string(),
   logoUrl: z.nullable(z.string()).optional(),
-  onboardingDismissedAt: z.iso.datetime({ offset: true }).transform(v =>
-    new Date(v)
+  onboardingDismissedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });

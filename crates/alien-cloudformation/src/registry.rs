@@ -27,7 +27,7 @@ impl CfRegistry {
         Self::default()
     }
 
-    /// Built-in AWS emitters for every distribution-supported resource.
+    /// Built-in AWS emitters for every CloudFormation-supported resource.
     pub fn built_in() -> Self {
         let mut registry = Self::default();
         crate::built_ins::register_aws(&mut registry);

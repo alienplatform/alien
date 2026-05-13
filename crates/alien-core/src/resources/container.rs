@@ -4,7 +4,7 @@
 //! It defines the container image, resource requirements, scaling configuration,
 //! and networking settings.
 //!
-//! Containers are orchestrated by Horizon, which handles:
+//! Containers are orchestrated by the managed container backend, which handles:
 //! - Replica scheduling across machines
 //! - Autoscaling based on CPU, memory, or HTTP metrics
 //! - Health checking and crash recovery
@@ -175,8 +175,8 @@ pub struct ContainerPort {
 /// Container resource for running long-running container workloads.
 ///
 /// A Container defines a deployable unit that runs on a ContainerCluster.
-/// Horizon handles scheduling replicas across machines, autoscaling based on
-/// various metrics, and service discovery.
+/// The managed container backend handles scheduling replicas across machines,
+/// autoscaling based on various metrics, and service discovery.
 ///
 /// ## Example
 ///
@@ -362,7 +362,7 @@ impl<S: container_builder::State> ContainerBuilder<S> {
     }
 }
 
-/// Container status in Horizon.
+/// Container status in the managed container backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -400,7 +400,7 @@ pub struct ReplicaStatus {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerOutputs {
-    /// Container name in Horizon
+    /// Container name in the managed container backend
     pub name: String,
     /// Current container status
     pub status: ContainerStatus,

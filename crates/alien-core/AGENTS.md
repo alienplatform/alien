@@ -4,7 +4,7 @@
 
 ### `src/import/`
 
-`alien-core` owns **only** the request shape for distribution import:
+`alien-core` owns **only** the request shape for setup import:
 
 - `data/<cloud>/<resource>.rs` — typed `Aws*ImportData` / `Gcp*ImportData` / `Azure*ImportData` structs. Pure data + JsonSchema, camelCase serde. No methods.
 - `request.rs` — `StackImportRequest` / `ImportedResource` / `StackImportResponse` / `ImportSourceKind`. The HTTP request / response types of `POST /v1/stack/import`.
@@ -21,6 +21,6 @@ Importers live in `alien-infra` next to the controllers (since they produce cont
 - `alien_infra::ResourceImporter` trait, registered into `ImporterRegistry::built_in()`.
 - Per-resource impls at `alien-infra/src/<resource>/<cloud>_import.rs`.
 
-When changing any `*ImportData` field, run the schema snapshot under `import/data/snapshots/` (`cargo test -p alien-core --features jsonschema --lib import`) and review the diff — every distribution adapter and importer needs to know.
+When changing any `*ImportData` field, run the schema snapshot under `import/data/snapshots/` (`cargo test -p alien-core --features jsonschema --lib import`) and review the diff — every setup adapter and importer needs to know.
 
 `alien-core` MUST NOT depend on `alien-infra` or any format crate.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Distribution-artifact stack import (CFN, TF, Helm)
+Setup artifact stack import (CFN, TF, Helm)
 
 ### Available Operations
 
@@ -39,6 +39,9 @@ async function run() {
     platform: "gcp",
     region: "<value>",
     resources: [],
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 325467,
+    setupTarget: "<value>",
     stackPrefix: "<value>",
     stackSettings: {},
   });
@@ -75,6 +78,9 @@ async function run() {
     platform: "gcp",
     region: "<value>",
     resources: [],
+    setupFingerprint: "<value>",
+    setupFingerprintVersion: 325467,
+    setupTarget: "<value>",
     stackPrefix: "<value>",
     stackSettings: {},
   });

@@ -338,6 +338,134 @@ export type PersistImportedDeploymentRequestStackSettings = {
   updates?: PersistImportedDeploymentRequestUpdates | undefined;
 };
 
+export const PersistImportedDeploymentRequestPlatformTest = {
+  Test: "test",
+} as const;
+export type PersistImportedDeploymentRequestPlatformTest = ClosedEnum<
+  typeof PersistImportedDeploymentRequestPlatformTest
+>;
+
+/**
+ * Test platform environment information (mock)
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoTest = {
+  /**
+   * Test identifier for this environment
+   */
+  testId: string;
+  platform: PersistImportedDeploymentRequestPlatformTest;
+};
+
+export const PersistImportedDeploymentRequestPlatformLocal = {
+  Local: "local",
+} as const;
+export type PersistImportedDeploymentRequestPlatformLocal = ClosedEnum<
+  typeof PersistImportedDeploymentRequestPlatformLocal
+>;
+
+/**
+ * Local platform environment information
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoLocal = {
+  /**
+   * Architecture (e.g., "x86_64", "aarch64")
+   */
+  arch: string;
+  /**
+   * Hostname of the machine running the deployment
+   */
+  hostname: string;
+  /**
+   * Operating system (e.g., "linux", "macos", "windows")
+   */
+  os: string;
+  platform: PersistImportedDeploymentRequestPlatformLocal;
+};
+
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure = {
+  Azure: "azure",
+} as const;
+export type PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure
+  >;
+
+/**
+ * Azure-specific environment information
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoAzure = {
+  /**
+   * Azure location/region
+   */
+  location: string;
+  /**
+   * Azure subscription ID
+   */
+  subscriptionId: string;
+  /**
+   * Azure tenant ID
+   */
+  tenantId: string;
+  platform: PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure;
+};
+
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp =
+  ClosedEnum<typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp>;
+
+/**
+ * GCP-specific environment information
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoGcp = {
+  /**
+   * GCP project ID (e.g., "my-project")
+   */
+  projectId: string;
+  /**
+   * GCP project number (e.g., "123456789012")
+   */
+  projectNumber: string;
+  /**
+   * GCP region
+   */
+  region: string;
+  platform: PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp;
+};
+
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformAws = {
+  Aws: "aws",
+} as const;
+export type PersistImportedDeploymentRequestEnvironmentInfoPlatformAws =
+  ClosedEnum<typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformAws>;
+
+/**
+ * AWS-specific environment information
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoAws = {
+  /**
+   * AWS account ID
+   */
+  accountId: string;
+  /**
+   * AWS region
+   */
+  region: string;
+  platform: PersistImportedDeploymentRequestEnvironmentInfoPlatformAws;
+};
+
+/**
+ * Platform-specific environment information
+ */
+export type PersistImportedDeploymentRequestEnvironmentInfoUnion =
+  | PersistImportedDeploymentRequestEnvironmentInfoGcp
+  | PersistImportedDeploymentRequestEnvironmentInfoAzure
+  | PersistImportedDeploymentRequestEnvironmentInfoLocal
+  | PersistImportedDeploymentRequestEnvironmentInfoAws
+  | PersistImportedDeploymentRequestEnvironmentInfoTest
+  | any;
+
 /**
  * Scope for a delete operation.
  *
@@ -1615,6 +1743,18 @@ export type PersistImportedDeploymentRequest = {
   stackSettings: PersistImportedDeploymentRequestStackSettings;
   stackState?: any | null | undefined;
   /**
+   * Platform-specific environment information
+   */
+  environmentInfo?:
+    | PersistImportedDeploymentRequestEnvironmentInfoGcp
+    | PersistImportedDeploymentRequestEnvironmentInfoAzure
+    | PersistImportedDeploymentRequestEnvironmentInfoLocal
+    | PersistImportedDeploymentRequestEnvironmentInfoAws
+    | PersistImportedDeploymentRequestEnvironmentInfoTest
+    | any
+    | null
+    | undefined;
+  /**
    * Runtime metadata for deployment
    *
    * @remarks
@@ -1631,6 +1771,18 @@ export type PersistImportedDeploymentRequest = {
    */
   currentReleaseId?: string | undefined;
   importSource?: ImportSourceKind | undefined;
+  /**
+   * Stable target key for the setup contract, e.g. aws/us-east-1
+   */
+  setupTarget: string;
+  /**
+   * Deterministic setup contract fingerprint for one setup target
+   */
+  setupFingerprint: string;
+  /**
+   * Setup fingerprint algorithm version
+   */
+  setupFingerprintVersion: number;
   deploymentToken?: string | undefined;
   /**
    * Management configuration for different cloud platforms.
@@ -2317,6 +2469,230 @@ export function persistImportedDeploymentRequestStackSettingsToJSON(
   return JSON.stringify(
     PersistImportedDeploymentRequestStackSettings$outboundSchema.parse(
       persistImportedDeploymentRequestStackSettings,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestPlatformTest$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestPlatformTest> = z.enum(
+    PersistImportedDeploymentRequestPlatformTest,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoTest$Outbound = {
+  testId: string;
+  platform: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoTest$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoTest$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoTest
+  > = z.object({
+    testId: z.string(),
+    platform: PersistImportedDeploymentRequestPlatformTest$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestEnvironmentInfoTestToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoTest:
+    PersistImportedDeploymentRequestEnvironmentInfoTest,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoTest$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoTest,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestPlatformLocal$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestPlatformLocal> = z.enum(
+    PersistImportedDeploymentRequestPlatformLocal,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoLocal$Outbound = {
+  arch: string;
+  hostname: string;
+  os: string;
+  platform: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoLocal$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoLocal$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoLocal
+  > = z.object({
+    arch: z.string(),
+    hostname: z.string(),
+    os: z.string(),
+    platform: PersistImportedDeploymentRequestPlatformLocal$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestEnvironmentInfoLocalToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoLocal:
+    PersistImportedDeploymentRequestEnvironmentInfoLocal,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoLocal$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoLocal,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure
+  > = z.enum(PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure);
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoAzure$Outbound = {
+  location: string;
+  subscriptionId: string;
+  tenantId: string;
+  platform: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoAzure$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoAzure$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoAzure
+  > = z.object({
+    location: z.string(),
+    subscriptionId: z.string(),
+    tenantId: z.string(),
+    platform:
+      PersistImportedDeploymentRequestEnvironmentInfoPlatformAzure$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestEnvironmentInfoAzureToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoAzure:
+    PersistImportedDeploymentRequestEnvironmentInfoAzure,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoAzure$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoAzure,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp> =
+    z.enum(PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp);
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoGcp$Outbound = {
+  projectId: string;
+  projectNumber: string;
+  region: string;
+  platform: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoGcp$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoGcp$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoGcp
+  > = z.object({
+    projectId: z.string(),
+    projectNumber: z.string(),
+    region: z.string(),
+    platform:
+      PersistImportedDeploymentRequestEnvironmentInfoPlatformGcp$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestEnvironmentInfoGcpToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoGcp:
+    PersistImportedDeploymentRequestEnvironmentInfoGcp,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoGcp$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoGcp,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoPlatformAws$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestEnvironmentInfoPlatformAws> =
+    z.enum(PersistImportedDeploymentRequestEnvironmentInfoPlatformAws);
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoAws$Outbound = {
+  accountId: string;
+  region: string;
+  platform: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoAws$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoAws$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoAws
+  > = z.object({
+    accountId: z.string(),
+    region: z.string(),
+    platform:
+      PersistImportedDeploymentRequestEnvironmentInfoPlatformAws$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestEnvironmentInfoAwsToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoAws:
+    PersistImportedDeploymentRequestEnvironmentInfoAws,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoAws$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoAws,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestEnvironmentInfoUnion$Outbound =
+  | PersistImportedDeploymentRequestEnvironmentInfoGcp$Outbound
+  | PersistImportedDeploymentRequestEnvironmentInfoAzure$Outbound
+  | PersistImportedDeploymentRequestEnvironmentInfoLocal$Outbound
+  | PersistImportedDeploymentRequestEnvironmentInfoAws$Outbound
+  | PersistImportedDeploymentRequestEnvironmentInfoTest$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestEnvironmentInfoUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEnvironmentInfoUnion$Outbound,
+    PersistImportedDeploymentRequestEnvironmentInfoUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestEnvironmentInfoGcp$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestEnvironmentInfoAzure$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestEnvironmentInfoLocal$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestEnvironmentInfoAws$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestEnvironmentInfoTest$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestEnvironmentInfoUnionToJSON(
+  persistImportedDeploymentRequestEnvironmentInfoUnion:
+    PersistImportedDeploymentRequestEnvironmentInfoUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnvironmentInfoUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestEnvironmentInfoUnion,
     ),
   );
 }
@@ -4957,10 +5333,22 @@ export type PersistImportedDeploymentRequest$Outbound = {
   platform: string;
   stackSettings: PersistImportedDeploymentRequestStackSettings$Outbound;
   stackState?: any | null | undefined;
+  environmentInfo?:
+    | PersistImportedDeploymentRequestEnvironmentInfoGcp$Outbound
+    | PersistImportedDeploymentRequestEnvironmentInfoAzure$Outbound
+    | PersistImportedDeploymentRequestEnvironmentInfoLocal$Outbound
+    | PersistImportedDeploymentRequestEnvironmentInfoAws$Outbound
+    | PersistImportedDeploymentRequestEnvironmentInfoTest$Outbound
+    | any
+    | null
+    | undefined;
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata$Outbound;
   status: string;
   currentReleaseId?: string | undefined;
   importSource?: string | undefined;
+  setupTarget: string;
+  setupFingerprint: string;
+  setupFingerprintVersion: number;
   deploymentToken?: string | undefined;
   managementConfig?:
     | PersistImportedDeploymentRequestManagementConfigAws$Outbound
@@ -4984,6 +5372,26 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
     PersistImportedDeploymentRequestStackSettings$outboundSchema
   ),
   stackState: z.nullable(z.any()).optional(),
+  environmentInfo: z.nullable(
+    z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestEnvironmentInfoGcp$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestEnvironmentInfoAzure$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestEnvironmentInfoLocal$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestEnvironmentInfoAws$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestEnvironmentInfoTest$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
   runtimeMetadata: z.lazy(() =>
     PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema
   ),
@@ -4992,6 +5400,9 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   ),
   currentReleaseId: z.string().optional(),
   importSource: ImportSourceKind$outboundSchema.optional(),
+  setupTarget: z.string(),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
   deploymentToken: z.string().optional(),
   managementConfig: z.union([
     z.lazy(() =>

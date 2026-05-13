@@ -1,7 +1,7 @@
 //! Container binding implementations
 //!
 //! This module provides container implementations for different platforms:
-//! - Horizon: For containers managed by Horizon on AWS/GCP/Azure
+//! - Managed cloud: For containers on AWS/GCP/Azure
 //! - Local: For containers running in Docker during local development
 //! - Kubernetes: For containers running as Kubernetes Services
 

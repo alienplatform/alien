@@ -6,14 +6,18 @@ authors.workspace = true
 description = "Helm chart generation for Alien stacks"
 license-file.workspace = true
 
+[features]
+default = []
+test-utils = ["dep:tempfile"]
+
 [dependencies]
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
-alien-test-kit = { workspace = true, features = ["linters"] }
 insta = { workspace = true }
 serde_yaml = { workspace = true }

@@ -637,7 +637,7 @@ pub trait Container: Binding {
     /// in the same network can use to communicate with this container.
     ///
     /// Platform implementations:
-    /// - Horizon (AWS/GCP/Azure): Returns internal DNS URL (e.g., "http://api.svc:8080")
+    /// - Managed cloud (AWS/GCP/Azure): Returns internal DNS URL (e.g., "http://api.svc:8080")
     /// - Local (Docker): Returns Docker network DNS URL (e.g., "http://api.svc:3000")
     fn get_internal_url(&self) -> &str;
 
@@ -647,7 +647,7 @@ pub trait Container: Binding {
     /// from outside the cluster/network.
     ///
     /// Platform implementations:
-    /// - Horizon: Returns load balancer URL if exposed publicly
+    /// - Managed cloud: Returns load balancer URL if exposed publicly
     /// - Local: Returns localhost URL with mapped port (e.g., "http://localhost:62844")
     fn get_public_url(&self) -> Option<&str>;
 
