@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tracing::{debug, error};
 
+use crate::auth::Subject;
 use crate::config::ManagerConfig;
 use crate::traits::deployment_store::DeploymentFilter;
 use crate::traits::DeploymentStore;
@@ -45,7 +46,11 @@ impl HeartbeatLoop {
             ..Default::default()
         };
 
-        match self.deployment_store.list_deployments(&filter).await {
+        // Internal loop: no inbound caller. `Subject::system()` carries an
+        // empty `bearer_token` — the documented signal to embedders that
+        // no caller passthrough is available.
+        let caller = Subject::system();
+        match self.deployment_store.list_deployments(&caller, &filter).await {
             Ok(deployments) => {
                 if !deployments.is_empty() {
                     debug!(

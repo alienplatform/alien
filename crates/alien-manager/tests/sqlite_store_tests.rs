@@ -43,10 +43,13 @@ async fn fresh_db() -> Arc<SqliteDatabase> {
 /// Helper to create a deployment group and return its ID.
 async fn create_test_group(store: &SqliteDeploymentStore) -> String {
     let group = store
-        .create_deployment_group(CreateDeploymentGroupParams {
-            name: "test-group".to_string(),
-            max_deployments: 100,
-        })
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "test-group".to_string(),
+                max_deployments: 100,
+            },
+        )
         .await
         .unwrap();
     group.id
@@ -60,14 +63,17 @@ async fn create_test_deployment(
     platform: Platform,
 ) -> DeploymentRecord {
     store
-        .create_deployment(CreateDeploymentParams {
-            name: name.to_string(),
-            deployment_group_id: group_id.to_string(),
-            platform,
-            stack_settings: StackSettings::default(),
-            environment_variables: None,
-            deployment_token: None,
-        })
+        .create_deployment(
+            &test_subject(),
+            CreateDeploymentParams {
+                name: name.to_string(),
+                deployment_group_id: group_id.to_string(),
+                platform,
+                stack_settings: StackSettings::default(),
+                environment_variables: None,
+                deployment_token: None,
+            },
+        )
         .await
         .unwrap()
 }
@@ -97,7 +103,7 @@ async fn create_and_get_deployment() {
     assert!(created.locked_by.is_none());
 
     // Get by ID
-    let fetched = store.get_deployment(&created.id).await.unwrap().unwrap();
+    let fetched = store.get_deployment(&test_subject(), &created.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, created.id);
     assert_eq!(fetched.name, "my-deploy");
     assert_eq!(fetched.platform, Platform::Aws);
@@ -117,12 +123,12 @@ async fn list_by_status() {
     // Move dep1 to "running" status via set_redeploy (which sets update-pending)
     // For a cleaner test, let's use the reconcile to set status, but that's complex.
     // Instead, use set_redeploy which sets "update-pending"
-    store.set_redeploy(&dep1.id).await.unwrap();
-    store.set_delete_pending(&dep2.id).await.unwrap();
+    store.set_redeploy(&test_subject(), &dep1.id).await.unwrap();
+    store.set_delete_pending(&test_subject(), &dep2.id).await.unwrap();
 
     // Filter by "pending" status
     let pending = store
-        .list_deployments(&DeploymentFilter {
+        .list_deployments(&test_subject(), &DeploymentFilter {
             statuses: Some(vec!["pending".to_string()]),
             ..Default::default()
         })
@@ -133,7 +139,7 @@ async fn list_by_status() {
 
     // Filter by multiple statuses
     let mixed = store
-        .list_deployments(&DeploymentFilter {
+        .list_deployments(&test_subject(), &DeploymentFilter {
             statuses: Some(vec![
                 "update-pending".to_string(),
                 "delete-pending".to_string(),
@@ -151,7 +157,7 @@ async fn list_by_deployment_group() {
     let store = SqliteDeploymentStore::new(db);
 
     let group_a = store
-        .create_deployment_group(CreateDeploymentGroupParams {
+        .create_deployment_group(&test_subject(), CreateDeploymentGroupParams {
             name: "group-a".to_string(),
             max_deployments: 10,
         })
@@ -159,7 +165,7 @@ async fn list_by_deployment_group() {
         .unwrap();
 
     let group_b = store
-        .create_deployment_group(CreateDeploymentGroupParams {
+        .create_deployment_group(&test_subject(), CreateDeploymentGroupParams {
             name: "group-b".to_string(),
             max_deployments: 10,
         })
@@ -171,7 +177,7 @@ async fn list_by_deployment_group() {
     create_test_deployment(&store, &group_b.id, "dep-b1", Platform::Gcp).await;
 
     let group_a_deps = store
-        .list_deployments(&DeploymentFilter {
+        .list_deployments(&test_subject(), &DeploymentFilter {
             deployment_group_id: Some(group_a.id.clone()),
             ..Default::default()
         })
@@ -180,7 +186,7 @@ async fn list_by_deployment_group() {
     assert_eq!(group_a_deps.len(), 2);
 
     let group_b_deps = store
-        .list_deployments(&DeploymentFilter {
+        .list_deployments(&test_subject(), &DeploymentFilter {
             deployment_group_id: Some(group_b.id.clone()),
             ..Default::default()
         })
@@ -199,26 +205,26 @@ async fn update_status() {
     let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
 
     // set_delete_pending
-    store.set_delete_pending(&dep.id).await.unwrap();
-    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    store.set_delete_pending(&test_subject(), &dep.id).await.unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep.id).await.unwrap().unwrap();
     assert_eq!(fetched.status, "delete-pending");
 
     // set_delete_pending again should fail (already delete-pending)
-    let result = store.set_delete_pending(&dep.id).await;
+    let result = store.set_delete_pending(&test_subject(), &dep.id).await;
     assert!(result.is_err());
 
     // Create another deployment for retry and redeploy
     let dep2 = create_test_deployment(&store, &group_id, "dep2", Platform::Aws).await;
 
     // set_retry_requested
-    store.set_retry_requested(&dep2.id).await.unwrap();
-    let fetched = store.get_deployment(&dep2.id).await.unwrap().unwrap();
+    store.set_retry_requested(&test_subject(), &dep2.id).await.unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep2.id).await.unwrap().unwrap();
     assert!(fetched.retry_requested);
 
     // set_redeploy
     let dep3 = create_test_deployment(&store, &group_id, "dep3", Platform::Aws).await;
-    store.set_redeploy(&dep3.id).await.unwrap();
-    let fetched = store.get_deployment(&dep3.id).await.unwrap().unwrap();
+    store.set_redeploy(&test_subject(), &dep3.id).await.unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep3.id).await.unwrap().unwrap();
     assert_eq!(fetched.status, "update-pending");
 }
 
@@ -253,11 +259,11 @@ async fn set_desired_release() {
         .unwrap();
 
     store
-        .set_deployment_desired_release(&dep.id, &release.id)
+        .set_deployment_desired_release(&test_subject(), &dep.id, &release.id)
         .await
         .unwrap();
 
-    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep.id).await.unwrap().unwrap();
     assert_eq!(
         fetched.desired_release_id.as_deref(),
         Some(release.id.as_str())
@@ -275,7 +281,7 @@ async fn acquire_and_release() {
 
     // Acquire should pick it up
     let acquired = store
-        .acquire("session-1", &DeploymentFilter::default(), 10)
+        .acquire(&test_subject(), "session-1", &DeploymentFilter::default(), 10)
         .await
         .unwrap();
 
@@ -287,14 +293,14 @@ async fn acquire_and_release() {
     );
 
     // Verify lock is persisted
-    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep.id).await.unwrap().unwrap();
     assert_eq!(fetched.locked_by.as_deref(), Some("session-1"));
     assert!(fetched.locked_at.is_some());
 
     // Release the lock
-    store.release(&dep.id, "session-1").await.unwrap();
+    store.release(&test_subject(), &dep.id, "session-1").await.unwrap();
 
-    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep.id).await.unwrap().unwrap();
     assert!(fetched.locked_by.is_none());
     assert!(fetched.locked_at.is_none());
 }
@@ -309,14 +315,14 @@ async fn concurrent_acquire() {
 
     // First session acquires
     let acquired_1 = store
-        .acquire("session-1", &DeploymentFilter::default(), 10)
+        .acquire(&test_subject(), "session-1", &DeploymentFilter::default(), 10)
         .await
         .unwrap();
     assert_eq!(acquired_1.len(), 1);
 
     // Second session tries to acquire - should get nothing (already locked)
     let acquired_2 = store
-        .acquire("session-2", &DeploymentFilter::default(), 10)
+        .acquire(&test_subject(), "session-2", &DeploymentFilter::default(), 10)
         .await
         .unwrap();
     assert_eq!(acquired_2.len(), 0);
@@ -340,7 +346,7 @@ async fn stale_lock_broken() {
 
     // New session should be able to acquire (stale lock gets broken)
     let acquired = store
-        .acquire("new-session", &DeploymentFilter::default(), 10)
+        .acquire(&test_subject(), "new-session", &DeploymentFilter::default(), 10)
         .await
         .unwrap();
     assert_eq!(acquired.len(), 1);
@@ -364,7 +370,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
 
     // Session A holds the lock.
     let acquired = store
-        .acquire("session-A", &DeploymentFilter::default(), 10)
+        .acquire(&test_subject(), "session-A", &DeploymentFilter::default(), 10)
         .await
         .unwrap();
     assert_eq!(acquired.len(), 1);
@@ -383,7 +389,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
     store
-        .reconcile(ReconcileData {
+        .reconcile(&test_subject(), ReconcileData {
             deployment_id: dep.id.clone(),
             session: "agent-sync".to_string(),
             state,
@@ -394,7 +400,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
         .expect("reconcile must succeed even when another session holds the lock");
 
     // The UPDATE applied — status is the new value.
-    let fetched = store.get_deployment(&dep.id).await.unwrap().unwrap();
+    let fetched = store.get_deployment(&test_subject(), &dep.id).await.unwrap().unwrap();
     assert_eq!(fetched.status, "running");
     // The lock is unaffected — still held by session-A.
     assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
@@ -409,13 +415,13 @@ async fn delete_deployment() {
     let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
 
     // Verify it exists
-    assert!(store.get_deployment(&dep.id).await.unwrap().is_some());
+    assert!(store.get_deployment(&test_subject(), &dep.id).await.unwrap().is_some());
 
     // Delete it
-    store.delete_deployment(&dep.id).await.unwrap();
+    store.delete_deployment(&test_subject(), &dep.id).await.unwrap();
 
     // Verify it's gone
-    assert!(store.get_deployment(&dep.id).await.unwrap().is_none());
+    assert!(store.get_deployment(&test_subject(), &dep.id).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -424,7 +430,7 @@ async fn group_count_computed() {
     let store = SqliteDeploymentStore::new(db);
 
     let group = store
-        .create_deployment_group(CreateDeploymentGroupParams {
+        .create_deployment_group(&test_subject(), CreateDeploymentGroupParams {
             name: "counted-group".to_string(),
             max_deployments: 100,
         })
@@ -433,7 +439,7 @@ async fn group_count_computed() {
 
     // Initially 0
     let fetched = store
-        .get_deployment_group(&group.id)
+        .get_deployment_group(&test_subject(), &group.id)
         .await
         .unwrap()
         .unwrap();
@@ -444,24 +450,24 @@ async fn group_count_computed() {
     create_test_deployment(&store, &group.id, "dep-2", Platform::Gcp).await;
 
     let fetched = store
-        .get_deployment_group(&group.id)
+        .get_deployment_group(&test_subject(), &group.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(fetched.deployment_count, 2);
 
     // Delete one
-    store.delete_deployment(&dep1.id).await.unwrap();
+    store.delete_deployment(&test_subject(), &dep1.id).await.unwrap();
 
     let fetched = store
-        .get_deployment_group(&group.id)
+        .get_deployment_group(&test_subject(), &group.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(fetched.deployment_count, 1);
 
     // Verify list_deployment_groups also computes counts
-    let groups = store.list_deployment_groups().await.unwrap();
+    let groups = store.list_deployment_groups(&test_subject()).await.unwrap();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].deployment_count, 1);
 }
@@ -471,7 +477,7 @@ async fn deployment_not_found() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);
 
-    let result = store.get_deployment("dep_nonexistent").await.unwrap();
+    let result = store.get_deployment(&test_subject(), "dep_nonexistent").await.unwrap();
     assert!(result.is_none());
 }
 

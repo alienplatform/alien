@@ -120,9 +120,11 @@ impl CommandRegistry for SqliteCommandRegistry {
 
         let state_str = serialize_enum(&initial_state);
         // Look up deployment and require it to be fully running before accepting commands.
+        // SQLite-backed (single-tenant) registry — caller is unused; use system.
+        let caller = crate::auth::Subject::system();
         let deployment = self
             .deployment_store
-            .get_deployment(deployment_id)
+            .get_deployment(&caller, deployment_id)
             .await
             .map_err(|e| {
                 alien_error::AlienError::new(CommandErrorData::Other {

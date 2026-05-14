@@ -125,9 +125,11 @@ async fn build_standalone_server(
         .await
         .expect("Failed to build alien-manager");
 
-    // Clean up stale deployment locks from previous runs
+    // Clean up stale deployment locks from previous runs. Startup hook —
+    // `Subject::system()` is the synthetic operator (single-tenant OSS mode).
     let deployment_store = server.deployment_store();
-    match deployment_store.cleanup_stale_locks().await {
+    let startup_caller = alien_manager::auth::Subject::system();
+    match deployment_store.cleanup_stale_locks(&startup_caller).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(count = n, "Cleaned up stale deployment locks"),
         Err(e) => tracing::warn!(error = %e, "Failed to clean up stale deployment locks"),

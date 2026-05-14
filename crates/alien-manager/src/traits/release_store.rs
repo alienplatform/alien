@@ -8,6 +8,7 @@ use alien_error::AlienError;
 
 /// A release record. Contains stacks for one or more platforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReleaseRecord {
     pub id: String,
     /// Workspace this release belongs to. Always `"default"` in OSS.

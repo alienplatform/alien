@@ -112,10 +112,11 @@ impl SqliteDeploymentStore {
 impl DeploymentStore for SqliteDeploymentStore {
     async fn create_deployment(
         &self,
+        caller: &crate::auth::Subject,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError> {
         if let Some(_existing) = self
-            .get_deployment_by_name(&params.deployment_group_id, &params.name)
+            .get_deployment_by_name(caller, &params.deployment_group_id, &params.name)
             .await?
         {
             return Err(AlienError::new(ErrorData::DeploymentNameConflict {
@@ -214,7 +215,11 @@ impl DeploymentStore for SqliteDeploymentStore {
         })
     }
 
-    async fn get_deployment(&self, id: &str) -> Result<Option<DeploymentRecord>, AlienError> {
+    async fn get_deployment(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<Option<DeploymentRecord>, AlienError> {
         let sql = Query::select()
             .columns(Self::DEPLOYMENT_COLUMNS)
             .from(Deployments::Table)
@@ -240,6 +245,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn get_deployment_by_name(
         &self,
+        _caller: &crate::auth::Subject,
         deployment_group_id: &str,
         name: &str,
     ) -> Result<Option<DeploymentRecord>, AlienError> {
@@ -269,6 +275,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn list_deployments(
         &self,
+        _caller: &crate::auth::Subject,
         filter: &DeploymentFilter,
     ) -> Result<Vec<DeploymentRecord>, AlienError> {
         let sql = {
@@ -313,7 +320,11 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(results)
     }
 
-    async fn delete_deployment(&self, id: &str) -> Result<(), AlienError> {
+    async fn delete_deployment(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError> {
         let sql = Query::delete()
             .from_table(Deployments::Table)
             .and_where(Expr::col(Deployments::Id).eq(id))
@@ -321,9 +332,13 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
-    async fn set_delete_pending(&self, id: &str) -> Result<(), AlienError> {
+    async fn set_delete_pending(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError> {
         let deployment = self
-            .get_deployment(id)
+            .get_deployment(caller, id)
             .await?
             .ok_or_else(|| db_error(&format!("Deployment {} not found", id)))?;
 
@@ -344,7 +359,11 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
-    async fn set_retry_requested(&self, id: &str) -> Result<(), AlienError> {
+    async fn set_retry_requested(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::RetryRequested, 1i64)
@@ -353,7 +372,11 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
-    async fn set_redeploy(&self, id: &str) -> Result<(), AlienError> {
+    async fn set_redeploy(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "update-pending")
@@ -364,6 +387,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn set_deployment_desired_release(
         &self,
+        _caller: &crate::auth::Subject,
         deployment_id: &str,
         release_id: &str,
     ) -> Result<(), AlienError> {
@@ -377,6 +401,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn set_desired_release(
         &self,
+        _caller: &crate::auth::Subject,
         release_id: &str,
         platform: Option<Platform>,
     ) -> Result<(), AlienError> {
@@ -403,6 +428,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn acquire(
         &self,
+        _caller: &crate::auth::Subject,
         session: &str,
         filter: &DeploymentFilter,
         limit: u32,
@@ -544,7 +570,11 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(acquired)
     }
 
-    async fn reconcile(&self, data: ReconcileData) -> Result<DeploymentRecord, AlienError> {
+    async fn reconcile(
+        &self,
+        caller: &crate::auth::Subject,
+        data: ReconcileData,
+    ) -> Result<DeploymentRecord, AlienError> {
         let now = Utc::now();
         let state = &data.state;
 
@@ -586,7 +616,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             .unwrap_or_else(|_| "pending".to_string());
 
         // Check if deployment completed (current matches desired)
-        let deployment = self.get_deployment(&data.deployment_id).await?;
+        let deployment = self.get_deployment(caller, &data.deployment_id).await?;
         let deployment_completed = deployment
             .as_ref()
             .and_then(|d| d.desired_release_id.as_ref())
@@ -663,12 +693,17 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await?;
 
         // Fetch and return the updated deployment
-        self.get_deployment(&data.deployment_id)
+        self.get_deployment(caller, &data.deployment_id)
             .await?
             .ok_or_else(|| db_error("Deployment not found after reconcile"))
     }
 
-    async fn release(&self, deployment_id: &str, session: &str) -> Result<(), AlienError> {
+    async fn release(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        session: &str,
+    ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::LockedBy, Option::<String>::None)
@@ -683,6 +718,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn create_deployment_group(
         &self,
+        _caller: &crate::auth::Subject,
         params: CreateDeploymentGroupParams,
     ) -> Result<DeploymentGroupRecord, AlienError> {
         let id = alien_core::new_id(alien_core::IdType::DeploymentGroup);
@@ -721,6 +757,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn create_deployment_group_with_id(
         &self,
+        _caller: &crate::auth::Subject,
         id: &str,
         params: CreateDeploymentGroupParams,
     ) -> Result<DeploymentGroupRecord, AlienError> {
@@ -759,6 +796,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn get_deployment_group(
         &self,
+        _caller: &crate::auth::Subject,
         id: &str,
     ) -> Result<Option<DeploymentGroupRecord>, AlienError> {
         // Compute deployment_count via LEFT JOIN instead of stored column
@@ -820,7 +858,10 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
     }
 
-    async fn cleanup_stale_locks(&self) -> Result<u64, AlienError> {
+    async fn cleanup_stale_locks(
+        &self,
+        _caller: &crate::auth::Subject,
+    ) -> Result<u64, AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::LockedBy, Option::<String>::None)
@@ -837,7 +878,10 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(rows)
     }
 
-    async fn list_deployment_groups(&self) -> Result<Vec<DeploymentGroupRecord>, AlienError> {
+    async fn list_deployment_groups(
+        &self,
+        _caller: &crate::auth::Subject,
+    ) -> Result<Vec<DeploymentGroupRecord>, AlienError> {
         // Compute deployment_count via LEFT JOIN for each group
         let sql = Query::select()
             .expr_as(

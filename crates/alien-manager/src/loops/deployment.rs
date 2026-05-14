@@ -25,6 +25,7 @@ use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::LocalBindingsProvider;
 
+use crate::auth::Subject;
 use crate::config::ManagerConfig;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
@@ -139,7 +140,15 @@ impl DeploymentLoop {
             ..Default::default()
         };
 
-        match self.deployment_store.acquire(&session, &filter, 10).await {
+        // Internal loop: no inbound caller. `Subject::system()` carries an
+        // empty `bearer_token` — the documented signal to embedders that
+        // no caller passthrough is available.
+        let caller = Subject::system();
+        match self
+            .deployment_store
+            .acquire(&caller, &session, &filter, 10)
+            .await
+        {
             Ok(acquired) => {
                 if !acquired.is_empty() {
                     debug!(count = acquired.len(), session = %session, "Acquired deployments");
@@ -169,8 +178,13 @@ impl DeploymentLoop {
             );
         }
 
-        // Release lock unconditionally.
-        if let Err(e) = self.deployment_store.release(&deployment_id, session).await {
+        // Release lock unconditionally. Loop context, no inbound caller.
+        let caller = Subject::system();
+        if let Err(e) = self
+            .deployment_store
+            .release(&caller, &deployment_id, session)
+            .await
+        {
             error!(
                 deployment_id = %deployment_id,
                 error = %e,
@@ -293,10 +307,13 @@ impl DeploymentLoop {
             protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
 
-        // Clear retry_requested flag before running.
+        // Clear retry_requested flag before running. Loop context — no
+        // inbound caller; `Subject::system()` is the documented synthetic
+        // operator for these calls.
         if deployment.retry_requested {
+            let caller = Subject::system();
             self.deployment_store
-                .set_retry_requested(&deployment_id)
+                .set_retry_requested(&caller, &deployment_id)
                 .await?;
             state.retry_requested = true;
         }
@@ -446,12 +463,14 @@ impl DeploymentLoop {
             }
         }
 
-        // 8. Handle deleted deployments — clean up the record.
+        // 8. Handle deleted deployments — clean up the record. Loop
+        // context — no inbound caller; pass `Subject::system()`.
         if state.status == DeploymentStatus::Deleted {
             info!(deployment_id = %deployment_id, "Deployment deleted, removing record");
+            let caller = Subject::system();
             if let Err(e) = self
                 .deployment_store
-                .delete_deployment(&deployment_id)
+                .delete_deployment(&caller, &deployment_id)
                 .await
             {
                 error!(

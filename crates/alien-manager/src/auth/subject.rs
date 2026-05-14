@@ -102,8 +102,10 @@ impl Scope {
 impl Subject {
     /// Synthetic system subject for internal manager loops (deployment loop,
     /// sync handler, command dispatcher) that aren't tied to an incoming
-    /// request. `bearer_token` is empty; stores that need a real bearer must
-    /// fall back to their own auth path in this case.
+    /// request. `bearer_token` is empty by design — embedders that proxy
+    /// outbound calls must opt into their own service credential by checking
+    /// [`Self::is_system`], not by treating an empty bearer as a generic
+    /// fallback signal.
     pub fn system() -> Self {
         Self {
             kind: SubjectKind::ServiceAccount {
@@ -114,6 +116,20 @@ impl Subject {
             role: Role::WorkspaceAdmin,
             bearer_token: String::new(),
         }
+    }
+
+    /// True iff this `Subject` is the exact shape produced by
+    /// [`Self::system`]. Embedders use this as the **only** signal that an
+    /// outbound call may use their own service credential — any other
+    /// empty-bearer subject (a buggy validator, a partially-initialized test
+    /// helper) must fail loudly rather than silently inherit elevated
+    /// privilege.
+    pub fn is_system(&self) -> bool {
+        self.bearer_token.is_empty()
+            && self.workspace_id == "default"
+            && matches!(self.scope, Scope::Workspace)
+            && self.role == Role::WorkspaceAdmin
+            && matches!(&self.kind, SubjectKind::ServiceAccount { id } if id == "system")
     }
 
     /// True for callers who should be treated as the OSS operator: workspace-
@@ -173,6 +189,40 @@ mod tests {
             },
         );
         assert_eq!(s.scope.project_id(), Some("p1"));
+    }
+
+    #[test]
+    fn system_subject_is_recognised() {
+        assert!(Subject::system().is_system());
+    }
+
+    #[test]
+    fn empty_bearer_alone_is_not_system() {
+        // A real validator could legitimately produce a Subject with every
+        // other field set but an empty bearer (e.g. a future token type that
+        // doesn't carry a passthrough credential). That must not be treated
+        // as `Subject::system()`, which is reserved for *internal* callers
+        // with no inbound request.
+        let s = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "tok-1".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Workspace,
+            role: Role::WorkspaceAdmin,
+            bearer_token: String::new(),
+        };
+        assert!(!s.is_system(), "non-system service account must not match");
+    }
+
+    #[test]
+    fn system_with_real_bearer_is_not_system() {
+        let mut s = Subject::system();
+        s.bearer_token = "bearer".to_string();
+        assert!(
+            !s.is_system(),
+            "Subject::system() with a non-empty bearer is not system anymore"
+        );
     }
 
     #[test]

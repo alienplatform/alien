@@ -269,10 +269,13 @@ async fn setup() -> TestSetup {
 
     // Create deployment group + deployment
     let dg = deployment_store
-        .create_deployment_group(CreateDeploymentGroupParams {
-            name: "test-group".to_string(),
-            max_deployments: 100,
-        })
+        .create_deployment_group(
+            &test_subject(),
+            CreateDeploymentGroupParams {
+                name: "test-group".to_string(),
+                max_deployments: 100,
+            },
+        )
         .await
         .unwrap();
 
@@ -283,17 +286,20 @@ async fn setup() -> TestSetup {
     );
 
     let dep = deployment_store
-        .create_deployment(CreateDeploymentParams {
-            name: "test-deployment".to_string(),
-            deployment_group_id: dg.id.clone(),
-            platform: Platform::Local,
-            stack_settings: alien_core::StackSettings {
-                deployment_model: alien_core::DeploymentModel::Pull,
-                ..Default::default()
+        .create_deployment(
+            &test_subject(),
+            CreateDeploymentParams {
+                name: "test-deployment".to_string(),
+                deployment_group_id: dg.id.clone(),
+                platform: Platform::Local,
+                stack_settings: alien_core::StackSettings {
+                    deployment_model: alien_core::DeploymentModel::Pull,
+                    ..Default::default()
+                },
+                environment_variables: None,
+                deployment_token: Some(deploy_raw.clone()),
             },
-            environment_variables: None,
-            deployment_token: Some(deploy_raw.clone()),
-        })
+        )
         .await
         .unwrap();
 
@@ -317,7 +323,7 @@ async fn setup() -> TestSetup {
             protocol_version: 0,
         };
         deployment_store
-            .reconcile(alien_manager::traits::ReconcileData {
+            .reconcile(&test_subject(), alien_manager::traits::ReconcileData {
                 deployment_id: dep.id.clone(),
                 session: "test-setup".to_string(),
                 state,
@@ -330,7 +336,7 @@ async fn setup() -> TestSetup {
 
     // Also set desired_release_id (so the proxy can find the release)
     deployment_store
-        .set_desired_release(&release.id, Some(Platform::Local))
+        .set_desired_release(&test_subject(), &release.id, Some(Platform::Local))
         .await
         .unwrap();
 
@@ -782,7 +788,7 @@ async fn test_proxy_push_then_pull() {
             protocol_version: 0,
         };
         s.deployment_store
-            .reconcile(alien_manager::traits::ReconcileData {
+            .reconcile(&test_subject(), alien_manager::traits::ReconcileData {
                 deployment_id: s.deployment_id.clone(),
                 session: "push-test".to_string(),
                 state,

@@ -10,6 +10,7 @@ use alien_error::AlienError;
 
 /// A deployment record as stored in the database.
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentRecord {
     pub id: String,
     /// Workspace this deployment belongs to. Always `"default"` in OSS.
@@ -90,6 +91,7 @@ pub struct CreateDeploymentParams {
 
 /// A deployment group record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentGroupRecord {
     pub id: String,
     /// Workspace this deployment group belongs to. Always `"default"` in OSS.
@@ -138,39 +140,78 @@ pub struct ReconcileData {
 }
 
 /// Persistence for deployments and deployment groups.
+///
+/// Every method takes `caller: &Subject`. Single-tenant impls
+/// (`SqliteDeploymentStore`) ignore it. Multi-tenant embedders that proxy
+/// through an upstream API can use `caller.bearer_token` to forward the
+/// original request's authentication, so cross-tenant calls remain gated
+/// by the inbound caller's scope rather than the embedder's own service
+/// credential. Internal callers without an inbound request (background
+/// loops, startup hooks) pass [`Subject::system`]; embedders that need to
+/// know whether to fall back to a service credential must check
+/// [`Subject::is_system`] explicitly — never use an empty `bearer_token`
+/// as an implicit fallback signal, since a buggy validator could otherwise
+/// silently escalate privilege.
+///
+/// `caller` is metadata-about-who; the per-method `params` / IDs are
+/// data-to-act-on — never conflate the two on a single struct.
 #[async_trait]
 pub trait DeploymentStore: Send + Sync {
     // --- Deployment CRUD ---
 
     async fn create_deployment(
         &self,
+        caller: &crate::auth::Subject,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
-    async fn get_deployment(&self, id: &str) -> Result<Option<DeploymentRecord>, AlienError>;
+    async fn get_deployment(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<Option<DeploymentRecord>, AlienError>;
 
     async fn get_deployment_by_name(
         &self,
+        caller: &crate::auth::Subject,
         deployment_group_id: &str,
         name: &str,
     ) -> Result<Option<DeploymentRecord>, AlienError>;
 
     async fn list_deployments(
         &self,
+        caller: &crate::auth::Subject,
         filter: &DeploymentFilter,
     ) -> Result<Vec<DeploymentRecord>, AlienError>;
 
-    async fn delete_deployment(&self, id: &str) -> Result<(), AlienError>;
+    async fn delete_deployment(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError>;
 
-    async fn set_delete_pending(&self, id: &str) -> Result<(), AlienError>;
+    async fn set_delete_pending(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError>;
 
-    async fn set_retry_requested(&self, id: &str) -> Result<(), AlienError>;
+    async fn set_retry_requested(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError>;
 
-    async fn set_redeploy(&self, id: &str) -> Result<(), AlienError>;
+    async fn set_redeploy(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<(), AlienError>;
 
     /// Set desired_release_id on a specific deployment.
     async fn set_deployment_desired_release(
         &self,
+        caller: &crate::auth::Subject,
         deployment_id: &str,
         release_id: &str,
     ) -> Result<(), AlienError>;
@@ -178,6 +219,7 @@ pub trait DeploymentStore: Send + Sync {
     /// Set desired_release_id on eligible deployments when a new release is created.
     async fn set_desired_release(
         &self,
+        caller: &crate::auth::Subject,
         release_id: &str,
         platform: Option<Platform>,
     ) -> Result<(), AlienError>;
@@ -187,41 +229,62 @@ pub trait DeploymentStore: Send + Sync {
     /// Acquire deployments that need processing. Sets locked_by on matched rows.
     async fn acquire(
         &self,
+        caller: &crate::auth::Subject,
         session: &str,
         filter: &DeploymentFilter,
         limit: u32,
     ) -> Result<Vec<AcquiredDeployment>, AlienError>;
 
     /// Write new state back after processing.
-    async fn reconcile(&self, data: ReconcileData) -> Result<DeploymentRecord, AlienError>;
+    async fn reconcile(
+        &self,
+        caller: &crate::auth::Subject,
+        data: ReconcileData,
+    ) -> Result<DeploymentRecord, AlienError>;
 
     /// Release lock on a deployment.
-    async fn release(&self, deployment_id: &str, session: &str) -> Result<(), AlienError>;
+    async fn release(
+        &self,
+        caller: &crate::auth::Subject,
+        deployment_id: &str,
+        session: &str,
+    ) -> Result<(), AlienError>;
 
     // --- Deployment groups ---
 
     async fn create_deployment_group(
         &self,
+        caller: &crate::auth::Subject,
         params: CreateDeploymentGroupParams,
     ) -> Result<DeploymentGroupRecord, AlienError>;
 
     /// Create a deployment group with a specific ID (for dev mode well-known IDs).
     async fn create_deployment_group_with_id(
         &self,
+        caller: &crate::auth::Subject,
         id: &str,
         params: CreateDeploymentGroupParams,
     ) -> Result<DeploymentGroupRecord, AlienError>;
 
     async fn get_deployment_group(
         &self,
+        caller: &crate::auth::Subject,
         id: &str,
     ) -> Result<Option<DeploymentGroupRecord>, AlienError>;
 
-    async fn list_deployment_groups(&self) -> Result<Vec<DeploymentGroupRecord>, AlienError>;
+    async fn list_deployment_groups(
+        &self,
+        caller: &crate::auth::Subject,
+    ) -> Result<Vec<DeploymentGroupRecord>, AlienError>;
 
-    /// Clean up stale locks from crashed sessions. Called on startup.
-    /// Default implementation is a no-op (platform store handles this differently).
-    async fn cleanup_stale_locks(&self) -> Result<u64, AlienError> {
+    /// Clean up stale locks from crashed sessions. Called on startup with
+    /// `Subject::system()` from the standalone binary; embedders that mount
+    /// the manager's startup hook into a request context can pass the request
+    /// caller instead.
+    async fn cleanup_stale_locks(
+        &self,
+        _caller: &crate::auth::Subject,
+    ) -> Result<u64, AlienError> {
         Ok(0)
     }
 }

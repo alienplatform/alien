@@ -307,25 +307,31 @@ impl CloudProxyTest {
 
         // Create deployment group + deployment
         let dg = deployment_store
-            .create_deployment_group(CreateDeploymentGroupParams {
-                name: "cloud-proxy-test".to_string(),
-                max_deployments: 100,
-            })
+            .create_deployment_group(
+                &test_subject(),
+                CreateDeploymentGroupParams {
+                    name: "cloud-proxy-test".to_string(),
+                    max_deployments: 100,
+                },
+            )
             .await
             .unwrap();
 
         let dep = deployment_store
-            .create_deployment(CreateDeploymentParams {
-                name: "cloud-proxy-deploy".to_string(),
-                deployment_group_id: dg.id.clone(),
-                platform,
-                stack_settings: StackSettings {
-                    deployment_model: DeploymentModel::Pull,
-                    ..Default::default()
+            .create_deployment(
+                &test_subject(),
+                CreateDeploymentParams {
+                    name: "cloud-proxy-deploy".to_string(),
+                    deployment_group_id: dg.id.clone(),
+                    platform,
+                    stack_settings: StackSettings {
+                        deployment_model: DeploymentModel::Pull,
+                        ..Default::default()
+                    },
+                    environment_variables: None,
+                    deployment_token: Some(deploy_raw.clone()),
                 },
-                environment_variables: None,
-                deployment_token: Some(deploy_raw.clone()),
-            })
+            )
             .await
             .unwrap();
 
@@ -403,7 +409,7 @@ impl CloudProxyTest {
 
         // Assign release to deployment
         deployment_store
-            .set_desired_release(&release.id, None)
+            .set_desired_release(&test_subject(), &release.id, None)
             .await
             .unwrap();
 
@@ -425,13 +431,16 @@ impl CloudProxyTest {
             protocol_version: 0,
         };
         deployment_store
-            .reconcile(ReconcileData {
-                deployment_id: self.deployment_id.clone(),
-                session: "cloud-proxy-test".to_string(),
-                state,
-                update_heartbeat: false,
-                error: None,
-            })
+            .reconcile(
+                &test_subject(),
+                ReconcileData {
+                    deployment_id: self.deployment_id.clone(),
+                    session: "cloud-proxy-test".to_string(),
+                    state,
+                    update_heartbeat: false,
+                    error: None,
+                },
+            )
             .await
             .unwrap();
 

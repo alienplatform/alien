@@ -213,6 +213,14 @@ fn record_to_response(
 
 // --- Handlers ---
 
+/// Every handler in this file runs `auth::require_auth(&state, &headers)`
+/// and then threads `&subject` into the `DeploymentStore` calls. Embedders
+/// that proxy to an upstream API can use the subject's `bearer_token` for
+/// passthrough; single-tenant impls ignore it. See the trait doc on
+/// [`DeploymentStore`] for the full convention.
+///
+/// `POST /v1/deployments` — Inbound: workspace / project / dg bearer (or
+/// authenticated user). Deployment-scoped tokens cannot create deployments.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/deployments",
@@ -247,7 +255,7 @@ async fn create_deployment(
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
             match &req.deployment_group_id {
                 Some(id) => id.clone(),
-                None => match state.deployment_store.list_deployment_groups().await {
+                None => match state.deployment_store.list_deployment_groups(&subject).await {
                     Ok(groups) if !groups.is_empty() => groups[0].id.clone(),
                     Ok(_) => {
                         return ErrorData::bad_request(
@@ -268,7 +276,7 @@ async fn create_deployment(
     // Verify deployment group exists
     let dg = match state
         .deployment_store
-        .get_deployment_group(&deployment_group_id)
+        .get_deployment_group(&subject, &deployment_group_id)
         .await
     {
         Ok(Some(dg)) => dg,
@@ -305,14 +313,17 @@ async fn create_deployment(
 
     let mut deployment = match state
         .deployment_store
-        .create_deployment(CreateDeploymentParams {
-            name: req.name,
-            deployment_group_id: deployment_group_id.clone(),
-            platform: req.platform,
-            stack_settings: req.stack_settings.unwrap_or_default(),
-            environment_variables: req.environment_variables,
-            deployment_token: Some(raw_token.clone()),
-        })
+        .create_deployment(
+            &subject,
+            CreateDeploymentParams {
+                name: req.name,
+                deployment_group_id: deployment_group_id.clone(),
+                platform: req.platform,
+                stack_settings: req.stack_settings.unwrap_or_default(),
+                environment_variables: req.environment_variables,
+                deployment_token: Some(raw_token.clone()),
+            },
+        )
         .await
     {
         Ok(d) => d,
@@ -340,7 +351,7 @@ async fn create_deployment(
     if let Some(ref release_id) = desired_release_id {
         if let Err(e) = state
             .deployment_store
-            .set_deployment_desired_release(&deployment.id, release_id)
+            .set_deployment_desired_release(&subject, &deployment.id, release_id)
             .await
         {
             return e.into_response();
@@ -404,7 +415,7 @@ async fn list_deployments(
         ..Default::default()
     };
 
-    let deployments = match state.deployment_store.list_deployments(&filter).await {
+    let deployments = match state.deployment_store.list_deployments(&subject, &filter).await {
         Ok(d) => d,
         Err(e) => return e.into_response(),
     };
@@ -422,7 +433,7 @@ async fn list_deployments(
             } else {
                 let minimal = match state
                     .deployment_store
-                    .get_deployment_group(&d.deployment_group_id)
+                    .get_deployment_group(&subject, &d.deployment_group_id)
                     .await
                 {
                     Ok(Some(dg)) => Some(DeploymentGroupMinimal {
@@ -471,7 +482,7 @@ async fn get_deployment(
         Err(e) => return e.into_response(),
     };
 
-    let deployment = match state.deployment_store.get_deployment(&id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -506,7 +517,7 @@ async fn get_deployment_info(
         Err(e) => return e.into_response(),
     };
 
-    let deployment = match state.deployment_store.get_deployment(&id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -578,7 +589,7 @@ async fn delete_deployment(
         Err(e) => return e.into_response(),
     };
 
-    let deployment = match state.deployment_store.get_deployment(&id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -587,11 +598,11 @@ async fn delete_deployment(
     }
 
     if query.force {
-        if let Err(e) = state.deployment_store.delete_deployment(&id).await {
+        if let Err(e) = state.deployment_store.delete_deployment(&subject, &id).await {
             return e.into_response();
         }
     } else {
-        if let Err(e) = state.deployment_store.set_delete_pending(&id).await {
+        if let Err(e) = state.deployment_store.set_delete_pending(&subject, &id).await {
             return e.into_response();
         }
     }
@@ -629,7 +640,7 @@ async fn retry_deployment(
         Err(e) => return e.into_response(),
     };
 
-    let deployment = match state.deployment_store.get_deployment(&id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -637,7 +648,7 @@ async fn retry_deployment(
         return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
-    if let Err(e) = state.deployment_store.set_retry_requested(&id).await {
+    if let Err(e) = state.deployment_store.set_retry_requested(&subject, &id).await {
         return e.into_response();
     }
 
@@ -668,7 +679,7 @@ async fn redeploy(
         Err(e) => return e.into_response(),
     };
 
-    let deployment = match state.deployment_store.get_deployment(&id).await {
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -676,7 +687,7 @@ async fn redeploy(
         return ErrorData::forbidden("Cannot redeploy").into_response();
     }
 
-    if let Err(e) = state.deployment_store.set_redeploy(&id).await {
+    if let Err(e) = state.deployment_store.set_redeploy(&subject, &id).await {
         return e.into_response();
     }
 

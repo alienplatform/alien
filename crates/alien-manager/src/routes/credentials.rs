@@ -62,7 +62,7 @@ async fn resolve_credentials(
     // authorization-guidelines.md).
     let deployment = match state
         .deployment_store
-        .get_deployment(&req.deployment_id)
+        .get_deployment(&subject, &req.deployment_id)
         .await
     {
         Ok(Some(d)) => d,

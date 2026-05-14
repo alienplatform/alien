@@ -597,9 +597,11 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
             reason: "Failed to build alien-manager".to_string(),
         })?;
 
-    // Clean up stale deployment locks
+    // Clean up stale deployment locks. Startup hook — `Subject::system()` is
+    // the synthetic operator (single-tenant standalone mode).
     let deployment_store = server.deployment_store().clone();
-    match deployment_store.cleanup_stale_locks().await {
+    let startup_caller = alien_manager::auth::Subject::system();
+    match deployment_store.cleanup_stale_locks(&startup_caller).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(count = n, "Cleaned up stale deployment locks"),
         Err(e) => tracing::warn!(error = %e, "Failed to clean up stale deployment locks"),
@@ -731,8 +733,10 @@ async fn watch_serve_deployments(
                 }
             }
             _ = interval.tick() => {
+                // Standalone CLI dev loop — single-tenant, synthetic operator.
+                let dev_caller = alien_manager::auth::Subject::system();
                 let deployments = match deployment_store
-                    .list_deployments(&DeploymentFilter::default())
+                    .list_deployments(&dev_caller, &DeploymentFilter::default())
                     .await
                 {
                     Ok(d) => d,
@@ -749,7 +753,7 @@ async fn watch_serve_deployments(
 
                 // Build group_id → group_name map for card labels
                 let group_names: std::collections::HashMap<String, String> =
-                    match deployment_store.list_deployment_groups().await {
+                    match deployment_store.list_deployment_groups(&dev_caller).await {
                         Ok(groups) => groups
                             .into_iter()
                             .map(|g| (g.id, g.name))
