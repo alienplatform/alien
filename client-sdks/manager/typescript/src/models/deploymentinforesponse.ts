@@ -7,7 +7,7 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { CommandsInfo, CommandsInfo$inboundSchema } from "./commandsinfo.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import { Platform, Platform$inboundSchema } from "./platform.js";
+import { PlatformEnum, PlatformEnum$inboundSchema } from "./platformenum.js";
 import { ResourceEntry, ResourceEntry$inboundSchema } from "./resourceentry.js";
 
 export type DeploymentInfoResponse = {
@@ -16,7 +16,7 @@ export type DeploymentInfoResponse = {
   /**
    * Represents the target cloud platform.
    */
-  platform: Platform;
+  platform: PlatformEnum;
   resources: { [k: string]: ResourceEntry };
   status: string;
 };
@@ -28,7 +28,7 @@ export const DeploymentInfoResponse$inboundSchema: z.ZodType<
 > = z.object({
   commands: CommandsInfo$inboundSchema,
   error: z.any().optional(),
-  platform: Platform$inboundSchema,
+  platform: PlatformEnum$inboundSchema,
   resources: z.record(z.string(), ResourceEntry$inboundSchema),
   status: z.string(),
 });

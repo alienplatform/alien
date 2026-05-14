@@ -8,7 +8,7 @@ import {
   EnvironmentVariable$Outbound,
   EnvironmentVariable$outboundSchema,
 } from "./environmentvariable.js";
-import { Platform, Platform$outboundSchema } from "./platform.js";
+import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
 import {
   StackSettings,
   StackSettings$Outbound,
@@ -22,7 +22,7 @@ export type CreateDeploymentRequest = {
   /**
    * Represents the target cloud platform.
    */
-  platform: Platform;
+  platform: PlatformEnum;
   stackSettings?: StackSettings | null | undefined;
 };
 
@@ -44,7 +44,7 @@ export const CreateDeploymentRequest$outboundSchema: z.ZodType<
   environmentVariables: z.nullable(z.array(EnvironmentVariable$outboundSchema))
     .optional(),
   name: z.string(),
-  platform: Platform$outboundSchema,
+  platform: PlatformEnum$outboundSchema,
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
 

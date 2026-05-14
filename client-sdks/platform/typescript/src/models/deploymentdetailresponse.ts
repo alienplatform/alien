@@ -46,6 +46,7 @@ export const DeploymentDetailResponseStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -799,6 +800,38 @@ export type DeploymentDetailResponseStackState = {
   resources: { [k: string]: DeploymentDetailResponseStackStateResources };
 };
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const DeploymentDetailResponseDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type DeploymentDetailResponseDeleteScopeEnum = ClosedEnum<
+  typeof DeploymentDetailResponseDeleteScopeEnum
+>;
+
+export type DeploymentDetailResponseDeleteScopeUnion =
+  | DeploymentDetailResponseDeleteScopeEnum
+  | any;
+
 export const DeploymentDetailResponseManagementEnum = {
   Auto: "auto",
 } as const;
@@ -849,6 +882,20 @@ export type DeploymentDetailResponseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseOverrideEffect = ClosedEnum<
+  typeof DeploymentDetailResponseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseOverrideAwGrant = {
@@ -874,6 +921,10 @@ export type DeploymentDetailResponseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1142,6 +1193,20 @@ export type DeploymentDetailResponseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseExtendEffect = ClosedEnum<
+  typeof DeploymentDetailResponseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseExtendAwGrant = {
@@ -1167,6 +1232,10 @@ export type DeploymentDetailResponseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1443,6 +1512,20 @@ export type DeploymentDetailResponseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponseProfileEffect = ClosedEnum<
+  typeof DeploymentDetailResponseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type DeploymentDetailResponseProfileAwGrant = {
@@ -1468,6 +1551,10 @@ export type DeploymentDetailResponseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: DeploymentDetailResponseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1743,7 +1830,6 @@ export type DeploymentDetailResponsePreparedStackDependency = {
 export const DeploymentDetailResponsePreparedStackLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1779,6 +1865,24 @@ export type DeploymentDetailResponsePreparedStackResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const DeploymentDetailResponseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentDetailResponseSupportedPlatform = ClosedEnum<
+  typeof DeploymentDetailResponseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type DeploymentDetailResponsePreparedStack = {
@@ -1794,6 +1898,13 @@ export type DeploymentDetailResponsePreparedStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: DeploymentDetailResponsePreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<DeploymentDetailResponseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 export type DeploymentDetailResponsePreparedStackUnion =
@@ -1804,6 +1915,11 @@ export type DeploymentDetailResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
+  deleteScope?:
+    | DeploymentDetailResponseDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -1816,7 +1932,31 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | any
     | null
     | undefined;
+  /**
+   * Whether cross-account registry access has been successfully granted.
+   *
+   * @remarks
+   * Set to true after the manager successfully sets the ECR/GAR repo policy
+   * for this deployment's target account. Prevents redundant API calls on
+   * every reconcile tick.
+   */
+  registryAccessGranted?: boolean | undefined;
 };
+
+/**
+ * Setup source that imported this deployment
+ */
+export const DeploymentDetailResponseImportSource = {
+  Cloudformation: "cloudformation",
+  Terraform: "terraform",
+  Helm: "helm",
+} as const;
+/**
+ * Setup source that imported this deployment
+ */
+export type DeploymentDetailResponseImportSource = ClosedEnum<
+  typeof DeploymentDetailResponseImportSource
+>;
 
 /**
  * Latest error information if the deployment is in a failed state
@@ -1997,6 +2137,22 @@ export type DeploymentDetailResponse = {
    * ID of the pinned release
    */
   pinnedReleaseId?: string | null | undefined;
+  /**
+   * Setup source that imported this deployment
+   */
+  importSource?: DeploymentDetailResponseImportSource | null | undefined;
+  /**
+   * Imported setup target for compatibility checks
+   */
+  setupTarget?: string | null | undefined;
+  /**
+   * Imported setup compatibility fingerprint
+   */
+  setupFingerprint?: string | null | undefined;
+  /**
+   * Imported setup fingerprint algorithm version
+   */
+  setupFingerprintVersion?: number | null | undefined;
   /**
    * Whether a retry has been requested for a failed deployment
    */
@@ -3029,6 +3185,33 @@ export function deploymentDetailResponseStackStateFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseDeleteScopeEnum
+> = z.enum(DeploymentDetailResponseDeleteScopeEnum);
+
+/** @internal */
+export const DeploymentDetailResponseDeleteScopeUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseDeleteScopeUnion,
+  unknown
+> = z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]);
+
+export function deploymentDetailResponseDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseDeleteScopeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseDeleteScopeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseDeleteScopeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof DeploymentDetailResponseManagementEnum
 > = z.enum(DeploymentDetailResponseManagementEnum);
@@ -3113,6 +3296,11 @@ export function deploymentDetailResponseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseOverrideEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseOverrideEffect
+> = z.enum(DeploymentDetailResponseOverrideEffect);
+
+/** @internal */
 export const DeploymentDetailResponseOverrideAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseOverrideAwGrant,
   unknown
@@ -3146,6 +3334,7 @@ export const DeploymentDetailResponseOverrideAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     DeploymentDetailResponseOverrideAwBinding$inboundSchema
   ),
+  effect: DeploymentDetailResponseOverrideEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseOverrideAwGrant$inboundSchema),
 });
 
@@ -3687,6 +3876,11 @@ export function deploymentDetailResponseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseExtendEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseExtendEffect
+> = z.enum(DeploymentDetailResponseExtendEffect);
+
+/** @internal */
 export const DeploymentDetailResponseExtendAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseExtendAwGrant,
   unknown
@@ -3713,6 +3907,7 @@ export const DeploymentDetailResponseExtendAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentDetailResponseExtendAwBinding$inboundSchema),
+  effect: DeploymentDetailResponseExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseExtendAwGrant$inboundSchema),
 });
 
@@ -4269,6 +4464,11 @@ export function deploymentDetailResponseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseProfileEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseProfileEffect
+> = z.enum(DeploymentDetailResponseProfileEffect);
+
+/** @internal */
 export const DeploymentDetailResponseProfileAwGrant$inboundSchema: z.ZodType<
   DeploymentDetailResponseProfileAwGrant,
   unknown
@@ -4295,6 +4495,7 @@ export const DeploymentDetailResponseProfileAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentDetailResponseProfileAwBinding$inboundSchema),
+  effect: DeploymentDetailResponseProfileEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentDetailResponseProfileAwGrant$inboundSchema),
 });
 
@@ -4860,6 +5061,11 @@ export function deploymentDetailResponsePreparedStackResourcesFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseSupportedPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseSupportedPlatform
+> = z.enum(DeploymentDetailResponseSupportedPlatform);
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
   DeploymentDetailResponsePreparedStack,
   unknown
@@ -4871,6 +5077,9 @@ export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => DeploymentDetailResponsePreparedStackResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(DeploymentDetailResponseSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentDetailResponsePreparedStackFromJSON(
@@ -4912,6 +5121,9 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deleteScope: z.nullable(
+    z.union([DeploymentDetailResponseDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
@@ -4919,6 +5131,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccessGranted: z.boolean().optional(),
 });
 
 export function deploymentDetailResponseRuntimeMetadataFromJSON(
@@ -4936,6 +5149,11 @@ export function deploymentDetailResponseRuntimeMetadataFromJSON(
     `Failed to parse 'DeploymentDetailResponseRuntimeMetadata' from JSON`,
   );
 }
+
+/** @internal */
+export const DeploymentDetailResponseImportSource$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseImportSource
+> = z.enum(DeploymentDetailResponseImportSource);
 
 /** @internal */
 export const DeploymentDetailResponseError$inboundSchema: z.ZodType<
@@ -5046,6 +5264,11 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   currentReleaseId: z.nullable(z.string()).optional(),
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
+  importSource: z.nullable(DeploymentDetailResponseImportSource$inboundSchema)
+    .optional(),
+  setupTarget: z.nullable(z.string()).optional(),
+  setupFingerprint: z.nullable(z.string()).optional(),
+  setupFingerprintVersion: z.nullable(z.int()).optional(),
   retryRequested: z.boolean(),
   lastHeartbeatAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

@@ -27,7 +27,13 @@ pub struct DeployCliConfig {
     /// Default platform for deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_platform: Option<String>,
-    // --- Branding (for rebranded distributions) ---
+    /// Platform API base URL used for manager discovery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_base_url: Option<String>,
+    /// Branded environment variable that contains the deployment token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_env_var: Option<String>,
+    // --- Branding (for rebranded binaries) ---
     /// Binary name (e.g., "acme-deploy").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -53,7 +59,7 @@ pub struct AgentConfig {
     /// Sync interval in seconds (default: 30).
     #[serde(default = "default_sync_interval")]
     pub sync_interval_secs: u64,
-    // --- Branding (for rebranded distributions) ---
+    // --- Branding (for rebranded binaries) ---
     /// Binary name (e.g., "acme-agent").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -161,10 +167,12 @@ mod tests {
     #[test]
     fn test_roundtrip_deploy_cli_config() {
         let config = DeployCliConfig {
-            token: Some("tok_abc123".into()),
+            token: Some("ax_dg_abc123".into()),
             deployment_group_id: Some("dg_xyz".into()),
             display_name: Some("Production".into()),
             default_platform: Some("aws".into()),
+            api_base_url: Some("https://api.example.com".into()),
+            token_env_var: Some("ACME_DEPLOYMENT_TOKEN".into()),
             name: Some("acme-deploy".into()),
         };
 
@@ -177,6 +185,9 @@ mod tests {
 
         assert_eq!(loaded.token, config.token);
         assert_eq!(loaded.deployment_group_id, config.deployment_group_id);
+        assert_eq!(loaded.default_platform, config.default_platform);
+        assert_eq!(loaded.api_base_url, config.api_base_url);
+        assert_eq!(loaded.token_env_var, config.token_env_var);
         assert_eq!(loaded.display_name, config.display_name);
         assert_eq!(loaded.name, config.name);
     }
@@ -192,7 +203,7 @@ mod tests {
     fn test_roundtrip_agent_config() {
         let config = AgentConfig {
             manager_url: Some("https://manager.example.com".into()),
-            token: Some("tok_agent123".into()),
+            token: Some("ax_dep_agent123".into()),
             deployment_id: Some("dep_abc".into()),
             sync_interval_secs: 60,
             name: Some("acme-agent".into()),

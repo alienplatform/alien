@@ -1,0 +1,98 @@
+//! Bulk registration of Azure [`crate::ResourceImporter`] implementations.
+//!
+//! See [`crate::aws_importers`] for the parent doc. `container-cluster`
+//! intentionally lives in `alien-platform-controllers`.
+//!
+//! Azure has additional **auxiliary** resources that the preflight stamps
+//! into the stack — `azure_resource_group`, `azure_storage_account`,
+//! `azure_container_apps_environment`, `azure_service_bus_namespace` — which
+//! get their own importers as well. They never appear in the user-authored
+//! stack but the typed payloads must round-trip the same as the rest.
+
+use alien_core::{
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Build, Function, Kv, Network, Platform, Queue, RemoteStackManagement,
+    ServiceAccount, ServiceActivation, Storage, Vault,
+};
+
+use crate::artifact_registry::AzureArtifactRegistryImporter;
+use crate::build::AzureBuildImporter;
+use crate::function::AzureFunctionImporter;
+use crate::kv::AzureKvImporter;
+use crate::network::AzureNetworkImporter;
+use crate::queue::AzureQueueImporter;
+use crate::remote_stack_management::AzureRemoteStackManagementImporter;
+use crate::service_account::AzureServiceAccountImporter;
+use crate::service_activation::AzureServiceActivationImporter;
+use crate::storage::{
+    AzureContainerAppsEnvironmentImporter, AzureResourceGroupImporter,
+    AzureServiceBusNamespaceImporter, AzureStorageAccountImporter, AzureStorageImporter,
+};
+use crate::vault::AzureVaultImporter;
+use crate::ImporterRegistry;
+
+/// Register every OSS Azure importer with `registry`.
+pub fn register(registry: &mut ImporterRegistry) {
+    registry
+        // Main resources
+        .register(
+            Storage::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureStorageImporter,
+        )
+        .register(Kv::RESOURCE_TYPE, Platform::Azure, AzureKvImporter)
+        .register(Vault::RESOURCE_TYPE, Platform::Azure, AzureVaultImporter)
+        .register(Queue::RESOURCE_TYPE, Platform::Azure, AzureQueueImporter)
+        .register(
+            Network::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureNetworkImporter,
+        )
+        .register(
+            ServiceAccount::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureServiceAccountImporter,
+        )
+        .register(
+            RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureRemoteStackManagementImporter,
+        )
+        .register(Build::RESOURCE_TYPE, Platform::Azure, AzureBuildImporter)
+        .register(
+            ArtifactRegistry::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureArtifactRegistryImporter,
+        )
+        .register(
+            Function::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureFunctionImporter,
+        )
+        .register(
+            ServiceActivation::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureServiceActivationImporter,
+        )
+        // Auxiliary preflight-injected resources
+        .register(
+            AzureResourceGroup::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureResourceGroupImporter,
+        )
+        .register(
+            AzureStorageAccount::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureStorageAccountImporter,
+        )
+        .register(
+            AzureContainerAppsEnvironment::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureContainerAppsEnvironmentImporter,
+        )
+        .register(
+            AzureServiceBusNamespace::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureServiceBusNamespaceImporter,
+        );
+}

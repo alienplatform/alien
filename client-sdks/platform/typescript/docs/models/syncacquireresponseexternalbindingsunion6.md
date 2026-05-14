@@ -21,7 +21,7 @@ const value: models.SyncAcquireResponseExternalBindingsUnion1 = {
 
 ```typescript
 const value: models.SyncAcquireResponseExternalBindingsUnion2 = {
-  service: "pubsub",
+  service: "servicebus",
   type: "queue",
 };
 ```
@@ -52,5 +52,14 @@ const value: models.SyncAcquireResponseExternalBindingsUnion5 = {
   service: "local-vault",
   type: "vault",
 };
+```
+
+### `models.SyncAcquireResponseExternalBindingsContainerAppsEnvironment`
+
+```typescript
+const value:
+  models.SyncAcquireResponseExternalBindingsContainerAppsEnvironment = {
+    type: "container_apps_environment",
+  };
 ```
 

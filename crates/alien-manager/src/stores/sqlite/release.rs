@@ -22,14 +22,14 @@ impl SqliteReleaseStore {
     /// SELECT column order. Indexes in `parse_release` MUST line up with
     /// this array — keep the two in sync.
     const RELEASE_COLUMNS: [Releases; 8] = [
-        Releases::Id,                // 0
-        Releases::Stack,             // 1
-        Releases::GitCommitSha,      // 2
-        Releases::GitCommitRef,      // 3
-        Releases::GitCommitMessage,  // 4
-        Releases::CreatedAt,         // 5
-        Releases::WorkspaceId,       // 6
-        Releases::ProjectId,         // 7
+        Releases::Id,               // 0
+        Releases::Stack,            // 1
+        Releases::GitCommitSha,     // 2
+        Releases::GitCommitRef,     // 3
+        Releases::GitCommitMessage, // 4
+        Releases::CreatedAt,        // 5
+        Releases::WorkspaceId,      // 6
+        Releases::ProjectId,        // 7
     ];
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {

@@ -66,6 +66,16 @@ impl StackState {
         }
     }
 
+    /// Creates an empty StackState for resources whose physical prefix was
+    /// already chosen by an external setup artifact.
+    pub fn with_resource_prefix(platform: Platform, resource_prefix: String) -> Self {
+        StackState {
+            platform,
+            resources: HashMap::new(),
+            resource_prefix,
+        }
+    }
+
     /// Returns a reference to the state of a specific resource if it exists.
     pub fn resource(&self, id: &str) -> Option<&StackResourceState> {
         self.resources.get(id)
@@ -252,12 +262,6 @@ pub struct StackResourceState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<AlienError>,
 
-    /// True if the resource was provisioned by an external system (e.g., CloudFormation).
-    /// Defaults to false, indicating dynamic provisioning by the executor.
-    #[serde(default, skip_serializing_if = "is_false")]
-    #[builder(default)]
-    pub is_externally_provisioned: bool,
-
     /// The lifecycle of the resource (Frozen or Live).
     /// Defaults to Live if not specified.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -300,7 +304,6 @@ impl StackResourceState {
             previous_config: None,
             retry_attempt: 0,
             error: None,
-            is_externally_provisioned: false,
             lifecycle,
             dependencies,
             last_failed_state: None,
@@ -331,11 +334,6 @@ impl StackResourceState {
 // Helper function for skip_serializing_if on retry_attempt
 fn is_zero(num: &u32) -> bool {
     *num == 0
-}
-
-// Helper function for skip_serializing_if on is_externally_provisioned
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 #[cfg(test)]
@@ -552,7 +550,6 @@ mod tests {
             previous_config: None,
             retry_attempt: 0,
             error: None,
-            is_externally_provisioned: false,
             lifecycle: None,
             dependencies: Vec::new(),
             last_failed_state: None,
@@ -909,7 +906,7 @@ mod tests {
 
             let mut stack_state = StackState::new(Platform::Azure);
 
-            // 1. Create the externally provisioned container env resource
+            // 1. Create the container env resource
             //    (mirrors what executor.step() does for external bindings)
             let env_config =
                 AzureContainerAppsEnvironment::new("default-container-env".to_string()).build();
@@ -929,7 +926,6 @@ mod tests {
             )
             .with_updates(|state| {
                 state.status = ResourceStatus::Running;
-                state.is_externally_provisioned = true;
                 state.outputs = Some(ResourceOutputs::new(env_outputs.clone()));
             });
 
@@ -1019,15 +1015,11 @@ mod tests {
             assert_eq!(outputs.resource_group_name, "shared-rg");
             assert_eq!(outputs.static_ip, Some("10.0.0.1".to_string()));
 
-            // 6. Verify externally_provisioned flag survived
+            // 6. Verify status and lifecycle survived
             let env_resource = deserialized_from_str
                 .resources
                 .get("default-container-env")
                 .unwrap();
-            assert!(
-                env_resource.is_externally_provisioned,
-                "is_externally_provisioned flag should survive roundtrip"
-            );
             assert_eq!(env_resource.status, ResourceStatus::Running);
             assert_eq!(env_resource.lifecycle, Some(ResourceLifecycle::Frozen));
         }
@@ -1059,7 +1051,6 @@ mod tests {
             )
             .with_updates(|state| {
                 state.status = ResourceStatus::Running;
-                state.is_externally_provisioned = true;
                 state.outputs = Some(ResourceOutputs::new(env_outputs));
             });
 

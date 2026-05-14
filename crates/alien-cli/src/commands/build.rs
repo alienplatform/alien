@@ -264,9 +264,7 @@ fn load_build_output(
         .iter()
         .map(|resource| resource.name.clone())
         .collect();
-    let build_dir = PathBuf::from(output_dir)
-        .join("build")
-        .join(platform);
+    let build_dir = PathBuf::from(output_dir).join("build").join(platform);
     let mut artifacts = HashMap::new();
     for resource_id in &resources {
         let artifact_path = build_dir.join(format!("{resource_id}.tar"));
@@ -392,8 +390,7 @@ mod tests {
         .unwrap();
         fs::write(build_dir.join("test-storage.tar"), "tarball").unwrap();
 
-        let output =
-            load_build_output("aws", &output_dir.display().to_string(), 1.25).unwrap();
+        let output = load_build_output("aws", &output_dir.display().to_string(), 1.25).unwrap();
 
         assert_eq!(output.stack_id, "stack-123");
         assert!(output.resources.contains(&"test-storage".to_string()));

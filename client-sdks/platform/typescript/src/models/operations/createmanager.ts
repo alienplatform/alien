@@ -34,85 +34,6 @@ export const Target = {
  */
 export type Target = ClosedEnum<typeof Target>;
 
-export const CreateManagerPlatformKubernetes = {
-  Kubernetes: "kubernetes",
-} as const;
-export type CreateManagerPlatformKubernetes = ClosedEnum<
-  typeof CreateManagerPlatformKubernetes
->;
-
-export type ManagementConfigKubernetes = {
-  platform: CreateManagerPlatformKubernetes;
-};
-
-export const CreateManagerPlatformAzure = {
-  Azure: "azure",
-} as const;
-export type CreateManagerPlatformAzure = ClosedEnum<
-  typeof CreateManagerPlatformAzure
->;
-
-/**
- * Azure management configuration extracted from stack settings
- */
-export type ManagementConfigAzure = {
-  /**
-   * The principal ID of the service principal in the management account
-   */
-  managementPrincipalId: string;
-  /**
-   * The managing Azure Tenant ID for cross-tenant access
-   */
-  managingTenantId: string;
-  platform: CreateManagerPlatformAzure;
-};
-
-export const CreateManagerPlatformGcp = {
-  Gcp: "gcp",
-} as const;
-export type CreateManagerPlatformGcp = ClosedEnum<
-  typeof CreateManagerPlatformGcp
->;
-
-/**
- * GCP management configuration extracted from stack settings
- */
-export type ManagementConfigGcp = {
-  /**
-   * Service account email for management roles
-   */
-  serviceAccountEmail: string;
-  platform: CreateManagerPlatformGcp;
-};
-
-export const CreateManagerPlatformAws = {
-  Aws: "aws",
-} as const;
-export type CreateManagerPlatformAws = ClosedEnum<
-  typeof CreateManagerPlatformAws
->;
-
-/**
- * AWS management configuration extracted from stack settings
- */
-export type ManagementConfigAws = {
-  /**
-   * The managing AWS IAM role ARN that can assume cross-account roles
-   */
-  managingRoleArn: string;
-  platform: CreateManagerPlatformAws;
-};
-
-/**
- * Management configuration for cross-account access (self-reported via heartbeat)
- */
-export type ManagementConfig =
-  | ManagementConfigAzure
-  | ManagementConfigAws
-  | ManagementConfigGcp
-  | ManagementConfigKubernetes
-  | any;
-
 /**
  * Runtime metrics (self-reported via heartbeat)
  */
@@ -153,16 +74,9 @@ export type CreateManagerResponse = {
    */
   url?: string | null | undefined;
   /**
-   * Management configuration for cross-account access (self-reported via heartbeat)
+   * Per-platform management configurations for cross-account access (self-reported via heartbeat)
    */
-  managementConfig?:
-    | ManagementConfigAzure
-    | ManagementConfigAws
-    | ManagementConfigGcp
-    | ManagementConfigKubernetes
-    | any
-    | null
-    | undefined;
+  managementConfigs: models.ManagerManagementConfigs;
   /**
    * Whether this is a system manager (Alien-hosted)
    */
@@ -240,124 +154,6 @@ export function createManagerRequestToJSON(
 export const Target$inboundSchema: z.ZodEnum<typeof Target> = z.enum(Target);
 
 /** @internal */
-export const CreateManagerPlatformKubernetes$inboundSchema: z.ZodEnum<
-  typeof CreateManagerPlatformKubernetes
-> = z.enum(CreateManagerPlatformKubernetes);
-
-/** @internal */
-export const ManagementConfigKubernetes$inboundSchema: z.ZodType<
-  ManagementConfigKubernetes,
-  unknown
-> = z.object({
-  platform: CreateManagerPlatformKubernetes$inboundSchema,
-});
-
-export function managementConfigKubernetesFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagementConfigKubernetes, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagementConfigKubernetes$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagementConfigKubernetes' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerPlatformAzure$inboundSchema: z.ZodEnum<
-  typeof CreateManagerPlatformAzure
-> = z.enum(CreateManagerPlatformAzure);
-
-/** @internal */
-export const ManagementConfigAzure$inboundSchema: z.ZodType<
-  ManagementConfigAzure,
-  unknown
-> = z.object({
-  managementPrincipalId: z.string(),
-  managingTenantId: z.string(),
-  platform: CreateManagerPlatformAzure$inboundSchema,
-});
-
-export function managementConfigAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagementConfigAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagementConfigAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerPlatformGcp$inboundSchema: z.ZodEnum<
-  typeof CreateManagerPlatformGcp
-> = z.enum(CreateManagerPlatformGcp);
-
-/** @internal */
-export const ManagementConfigGcp$inboundSchema: z.ZodType<
-  ManagementConfigGcp,
-  unknown
-> = z.object({
-  serviceAccountEmail: z.string(),
-  platform: CreateManagerPlatformGcp$inboundSchema,
-});
-
-export function managementConfigGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagementConfigGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagementConfigGcp' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerPlatformAws$inboundSchema: z.ZodEnum<
-  typeof CreateManagerPlatformAws
-> = z.enum(CreateManagerPlatformAws);
-
-/** @internal */
-export const ManagementConfigAws$inboundSchema: z.ZodType<
-  ManagementConfigAws,
-  unknown
-> = z.object({
-  managingRoleArn: z.string(),
-  platform: CreateManagerPlatformAws$inboundSchema,
-});
-
-export function managementConfigAwsFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagementConfigAws, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagementConfigAws' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagementConfig$inboundSchema: z.ZodType<
-  ManagementConfig,
-  unknown
-> = z.union([
-  z.lazy(() => ManagementConfigAzure$inboundSchema),
-  z.lazy(() => ManagementConfigAws$inboundSchema),
-  z.lazy(() => ManagementConfigGcp$inboundSchema),
-  z.lazy(() => ManagementConfigKubernetes$inboundSchema),
-  z.any(),
-]);
-
-export function managementConfigFromJSON(
-  jsonString: string,
-): SafeParseResult<ManagementConfig, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagementConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagementConfig' from JSON`,
-  );
-}
-
-/** @internal */
 export const CreateManagerMetrics$inboundSchema: z.ZodType<
   CreateManagerMetrics,
   unknown
@@ -387,15 +183,7 @@ export const CreateManagerResponse$inboundSchema: z.ZodType<
   name: z.string(),
   targets: z.array(Target$inboundSchema),
   url: z.nullable(z.string()).optional(),
-  managementConfig: z.nullable(
-    z.union([
-      z.lazy(() => ManagementConfigAzure$inboundSchema),
-      z.lazy(() => ManagementConfigAws$inboundSchema),
-      z.lazy(() => ManagementConfigGcp$inboundSchema),
-      z.lazy(() => ManagementConfigKubernetes$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
+  managementConfigs: models.ManagerManagementConfigs$inboundSchema,
   isSystem: z.boolean(),
   workspaceId: z.string(),
   status: models.ManagerStatus$inboundSchema,

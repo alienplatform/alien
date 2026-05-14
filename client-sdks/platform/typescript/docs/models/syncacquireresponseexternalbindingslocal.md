@@ -1,6 +1,10 @@
 # SyncAcquireResponseExternalBindingsLocal
 
-Local container registry binding configuration
+Local container registry binding configuration.
+
+The local registry runs on localhost only and does not require authentication.
+Security boundary is the OS process isolation on the customer's machine.
+External image access is secured by the manager's registry proxy (deployment tokens).
 
 ## Example Usage
 

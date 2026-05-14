@@ -44,6 +44,12 @@ pub struct AlienManagerBuilder {
             Arc<dyn alien_bindings::BindingsProviderApi>,
         >,
     >,
+    /// Optional override for the `/v1/stack/import` dispatch registry.
+    /// Defaults to [`alien_infra::ImporterRegistry::built_in`] (OSS resources
+    /// only). Platform-mode embedders extend the OSS registry with
+    /// proprietary controllers (`container`, `container-cluster`) before
+    /// passing it in here.
+    import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
 }
 
 impl AlienManagerBuilder {
@@ -66,6 +72,7 @@ impl AlienManagerBuilder {
             skip_install: false,
             bindings_provider_override: None,
             target_bindings_providers_override: None,
+            import_registry: None,
         }
     }
 
@@ -152,6 +159,23 @@ impl AlienManagerBuilder {
     /// Use this when binaries are distributed through a separate packages service.
     pub fn skip_install(mut self) -> Self {
         self.skip_install = true;
+        self
+    }
+
+    /// Inject a custom `/v1/stack/import` dispatch registry. Defaults to
+    /// [`alien_infra::ImporterRegistry::built_in`].
+    ///
+    /// Platform-mode embedders use this to layer proprietary importers
+    /// (`container`, `container-cluster`) on top of the OSS resource set
+    /// without forking the OSS registration helpers:
+    ///
+    /// ```ignore
+    /// let mut registry = alien_infra::ImporterRegistry::built_in();
+    /// alien_platform_controllers::register_platform_importers(&mut registry);
+    /// builder.import_registry(Arc::new(registry));
+    /// ```
+    pub fn import_registry(mut self, registry: Arc<alien_infra::ImporterRegistry>) -> Self {
+        self.import_registry = Some(registry);
         self
     }
 
@@ -247,28 +271,25 @@ impl AlienManagerBuilder {
                 if let Some(ref ar_val) = ar_binding {
                     bindings.insert(
                         "artifacts".to_string(),
-                        serde_json::to_value(ar_val)
-                            .into_alien_error()
-                            .context(ErrorData::ServerInitFailed {
-                                reason: format!(
-                                    "Failed to serialize {} AR binding",
-                                    platform
-                                ),
-                            })?,
+                        serde_json::to_value(ar_val).into_alien_error().context(
+                            ErrorData::ServerInitFailed {
+                                reason: format!("Failed to serialize {} AR binding", platform),
+                            },
+                        )?,
                     );
                 }
 
                 if let Some(ref imp_val) = imp_binding {
                     bindings.insert(
                         "management".to_string(),
-                        serde_json::to_value(imp_val)
-                            .into_alien_error()
-                            .context(ErrorData::ServerInitFailed {
+                        serde_json::to_value(imp_val).into_alien_error().context(
+                            ErrorData::ServerInitFailed {
                                 reason: format!(
                                     "Failed to serialize {} impersonation binding",
                                     platform
                                 ),
-                            })?,
+                            },
+                        )?,
                     );
                 }
 
@@ -288,10 +309,7 @@ impl AlienManagerBuilder {
                     })?;
                 let provider = BindingsProvider::new(config, bindings).context(
                     ErrorData::ServerInitFailed {
-                        reason: format!(
-                            "Failed to create {} target bindings provider",
-                            platform
-                        ),
+                        reason: format!("Failed to create {} target bindings provider", platform),
                     },
                 )?;
                 info!(platform = %platform, "Target bindings provider configured from TOML");
@@ -362,46 +380,46 @@ impl AlienManagerBuilder {
                 .unwrap_or_else(|| std::path::PathBuf::from("alien-data"));
 
             // -- Commands KV: from TOML config or local filesystem --
-            let kv: Arc<dyn alien_bindings::traits::Kv> =
-                if let Some(ref kv_binding) = toml_config.commands.kv {
-                    let mut bindings = HashMap::new();
-                    bindings.insert(
-                        "kv".to_string(),
-                        serde_json::to_value(kv_binding)
-                            .into_alien_error()
-                            .context(ErrorData::ServerInitFailed {
-                                reason: "Failed to serialize KV binding".to_string(),
-                            })?,
-                    );
-                    // Need a ClientConfig for the platform the KV binding targets
-                    let platform = kv_binding_platform(kv_binding);
-                    let config = alien_core::ClientConfig::from_std_env(platform)
+            let kv: Arc<dyn alien_bindings::traits::Kv> = if let Some(ref kv_binding) =
+                toml_config.commands.kv
+            {
+                let mut bindings = HashMap::new();
+                bindings.insert(
+                    "kv".to_string(),
+                    serde_json::to_value(kv_binding)
+                        .into_alien_error()
+                        .context(ErrorData::ServerInitFailed {
+                            reason: "Failed to serialize KV binding".to_string(),
+                        })?,
+                );
+                // Need a ClientConfig for the platform the KV binding targets
+                let platform = kv_binding_platform(kv_binding);
+                let config = alien_core::ClientConfig::from_std_env(platform)
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: format!("Failed to load {} credentials for commands KV", platform),
+                    })?;
+                let provider = BindingsProvider::new(config, bindings).context(
+                    ErrorData::ServerInitFailed {
+                        reason: "Failed to create KV bindings provider".to_string(),
+                    },
+                )?;
+                provider
+                    .load_kv("kv")
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load KV binding".to_string(),
+                    })?
+            } else {
+                let kv_path = state_dir.join("commands_kv");
+                Arc::new(
+                    LocalKv::new(kv_path)
                         .await
                         .context(ErrorData::ServerInitFailed {
-                            reason: format!(
-                                "Failed to load {} credentials for commands KV",
-                                platform
-                            ),
-                        })?;
-                    let provider =
-                        BindingsProvider::new(config, bindings).context(
-                            ErrorData::ServerInitFailed {
-                                reason: "Failed to create KV bindings provider".to_string(),
-                            },
-                        )?;
-                    provider.load_kv("kv").await.context(
-                        ErrorData::ServerInitFailed {
-                            reason: "Failed to load KV binding".to_string(),
-                        },
-                    )?
-                } else {
-                    let kv_path = state_dir.join("commands_kv");
-                    Arc::new(LocalKv::new(kv_path).await.context(
-                        ErrorData::ServerInitFailed {
                             reason: "Failed to create local KV store".to_string(),
-                        },
-                    )?)
-                };
+                        })?,
+                )
+            };
 
             // -- Commands storage: from TOML config or local filesystem --
             let command_storage: Arc<dyn alien_bindings::traits::Storage> =
@@ -424,17 +442,17 @@ impl AlienManagerBuilder {
                                 platform
                             ),
                         })?;
-                    let provider =
-                        BindingsProvider::new(config, bindings).context(
-                            ErrorData::ServerInitFailed {
-                                reason: "Failed to create storage bindings provider".to_string(),
-                            },
-                        )?;
-                    provider.load_storage("storage").await.context(
+                    let provider = BindingsProvider::new(config, bindings).context(
                         ErrorData::ServerInitFailed {
-                            reason: "Failed to load storage binding".to_string(),
+                            reason: "Failed to create storage bindings provider".to_string(),
                         },
-                    )?
+                    )?;
+                    provider
+                        .load_storage("storage")
+                        .await
+                        .context(ErrorData::ServerInitFailed {
+                            reason: "Failed to load storage binding".to_string(),
+                        })?
                 } else {
                     let storage_path = state_dir.join("commands_storage");
                     Arc::new(
@@ -472,12 +490,11 @@ impl AlienManagerBuilder {
             let bindings_provider = if self.bindings_provider_override.is_some() {
                 self.bindings_provider_override.take()
             } else {
-                let local_provider =
-                    alien_local::LocalBindingsProvider::new(&state_dir).context(
-                        ErrorData::ServerInitFailed {
-                            reason: "Failed to create local bindings provider".to_string(),
-                        },
-                    )?;
+                let local_provider = alien_local::LocalBindingsProvider::new(&state_dir).context(
+                    ErrorData::ServerInitFailed {
+                        reason: "Failed to create local bindings provider".to_string(),
+                    },
+                )?;
                 let registry_url = local_provider
                     .artifact_registry_manager()
                     .start_registry("artifact-registry")
@@ -619,6 +636,7 @@ impl AlienManagerBuilder {
             self.extra_routes,
             self.platform_routes,
             self.dev_status_tx,
+            self.import_registry,
         )
         .await
     }
@@ -672,6 +690,7 @@ async fn finalize(
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
+    import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -703,6 +722,14 @@ async fn finalize(
         credential_cache: Arc::new(crate::routes::registry_proxy::CredentialCache::new()),
         pull_validation_cache: Arc::new(crate::routes::registry_proxy::PullValidationCache::new()),
         registry_routing_table: server_bindings.registry_routing_table.clone(),
+        // Built-in importer registry covers every OSS `(ResourceType,
+        // Platform)` pair across AWS / GCP / Azure (see
+        // `alien_infra::ImporterRegistry::built_in`). Embedders that need
+        // to layer platform-only resource importers (e.g. `container` /
+        // `container-cluster`) inject an extended registry through
+        // [`AlienManagerBuilder::import_registry`].
+        import_registry: import_registry_override
+            .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
     };
 
     // --- Router ---

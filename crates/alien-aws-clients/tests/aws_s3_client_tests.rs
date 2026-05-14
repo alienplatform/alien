@@ -948,8 +948,9 @@ async fn test_empty_bucket_with_versions(ctx: &mut S3TestContext) {
     if delete_bucket_result.is_ok() {
         ctx.untrack_bucket(&bucket_name);
     }
-    assert!(delete_bucket_result.is_ok(), 
-        "Failed to delete bucket after versioned empty_bucket, likely not empty: {:?}. List output: {:?}", 
+    assert!(
+        delete_bucket_result.is_ok(),
+        "Failed to delete bucket after versioned empty_bucket, likely not empty: {:?}. List output: {:?}",
         delete_bucket_result.err(),
         list_after_empty_result
     );
@@ -2021,8 +2022,8 @@ async fn test_put_and_get_bucket_notification_configuration(ctx: &mut S3TestCont
                 "Serialized XML should contain the Lambda ARN"
             );
 
-            let deserialized: NotificationConfiguration =
-                quick_xml::de::from_str(&xml).expect("Failed to deserialize NotificationConfiguration");
+            let deserialized: NotificationConfiguration = quick_xml::de::from_str(&xml)
+                .expect("Failed to deserialize NotificationConfiguration");
             assert_eq!(deserialized.lambda_function_configurations.len(), 1);
             assert_eq!(
                 deserialized.lambda_function_configurations[0].lambda_function_arn,
@@ -2092,7 +2093,9 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
     let lambda_arn = match env::var("AWS_TEST_LAMBDA_ARN") {
         Ok(arn) if !arn.is_empty() => arn,
         _ => {
-            info!("AWS_TEST_LAMBDA_ARN not set — testing serialization of filter configuration only");
+            info!(
+                "AWS_TEST_LAMBDA_ARN not set — testing serialization of filter configuration only"
+            );
 
             let config = NotificationConfiguration {
                 lambda_function_configurations: vec![LambdaFunctionConfiguration {
@@ -2122,24 +2125,40 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
 
             let xml = quick_xml::se::to_string_with_root("NotificationConfiguration", &config)
                 .expect("Failed to serialize filtered NotificationConfiguration");
-            assert!(xml.contains("uploads/"), "Serialized XML should contain the prefix filter value");
-            assert!(xml.contains(".json"), "Serialized XML should contain the suffix filter value");
-            assert!(xml.contains("s3:ObjectCreated:Put"), "Serialized XML should contain Put event");
+            assert!(
+                xml.contains("uploads/"),
+                "Serialized XML should contain the prefix filter value"
+            );
+            assert!(
+                xml.contains(".json"),
+                "Serialized XML should contain the suffix filter value"
+            );
+            assert!(
+                xml.contains("s3:ObjectCreated:Put"),
+                "Serialized XML should contain Put event"
+            );
             assert!(
                 xml.contains("s3:ObjectRemoved:Delete"),
                 "Serialized XML should contain Delete event"
             );
 
-            let deserialized: NotificationConfiguration =
-                quick_xml::de::from_str(&xml).expect("Failed to deserialize filtered NotificationConfiguration");
+            let deserialized: NotificationConfiguration = quick_xml::de::from_str(&xml)
+                .expect("Failed to deserialize filtered NotificationConfiguration");
             assert_eq!(deserialized.lambda_function_configurations.len(), 1);
 
             let lambda_config = &deserialized.lambda_function_configurations[0];
             assert_eq!(lambda_config.events.len(), 2);
-            assert!(lambda_config.filter.is_some(), "Filter should be present after deserialization");
+            assert!(
+                lambda_config.filter.is_some(),
+                "Filter should be present after deserialization"
+            );
 
             let filter = lambda_config.filter.as_ref().unwrap();
-            assert_eq!(filter.key.filter_rules.len(), 2, "Should have two filter rules");
+            assert_eq!(
+                filter.key.filter_rules.len(),
+                2,
+                "Should have two filter rules"
+            );
 
             return;
         }
@@ -2192,17 +2211,17 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
         lambda_config.lambda_function_arn, lambda_arn,
         "Lambda function ARN should match"
     );
-    assert_eq!(
-        lambda_config.events.len(),
-        2,
-        "Should have two event types"
-    );
+    assert_eq!(lambda_config.events.len(), 2, "Should have two event types");
     assert!(
-        lambda_config.events.contains(&"s3:ObjectCreated:Put".to_string()),
+        lambda_config
+            .events
+            .contains(&"s3:ObjectCreated:Put".to_string()),
         "Should contain ObjectCreated:Put event"
     );
     assert!(
-        lambda_config.events.contains(&"s3:ObjectRemoved:Delete".to_string()),
+        lambda_config
+            .events
+            .contains(&"s3:ObjectRemoved:Delete".to_string()),
         "Should contain ObjectRemoved:Delete event"
     );
 
@@ -2222,7 +2241,10 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
         .iter()
         .find(|r| r.name == "prefix")
         .expect("Should have a prefix filter rule");
-    assert_eq!(prefix_rule.value, "uploads/", "Prefix filter value should match");
+    assert_eq!(
+        prefix_rule.value, "uploads/",
+        "Prefix filter value should match"
+    );
 
     let suffix_rule = filter
         .key
@@ -2230,7 +2252,10 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
         .iter()
         .find(|r| r.name == "suffix")
         .expect("Should have a suffix filter rule");
-    assert_eq!(suffix_rule.value, ".json", "Suffix filter value should match");
+    assert_eq!(
+        suffix_rule.value, ".json",
+        "Suffix filter value should match"
+    );
 
     // Clean up: remove the notification configuration
     ctx.client

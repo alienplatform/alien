@@ -9,8 +9,8 @@ pub mod error;
 pub mod output;
 
 use crate::commands::{
-    agent_command, down_command, list_command, status_command, up_command, AgentArgs, DownArgs,
-    ListArgs, StatusArgs, UpArgs,
+    agent_command, down_command, list_command, register_command, status_command, up_command,
+    AgentArgs, DownArgs, ListArgs, RegisterArgs, StatusArgs, UpArgs,
 };
 use crate::error::Result;
 use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
@@ -35,15 +35,18 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Deploy the application to a target environment
-    Up(UpArgs),
+    Deploy(UpArgs),
     /// Destroy a deployment and its resources
-    Down(DownArgs),
+    Destroy(DownArgs),
     /// Show deployment status
     Status(StatusArgs),
     /// List tracked deployments
     List(ListArgs),
     /// Manage the alien-agent background service
     Agent(AgentArgs),
+    /// Register an externally-provisioned stack (CloudFormation Outputs,
+    /// Terraform, …) with a manager.
+    Register(RegisterArgs),
 }
 
 pub fn setup_tracing(verbose: bool) {
@@ -67,11 +70,12 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     setup_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Up(args) => up_command(args, embedded_config.as_ref()).await,
-        Commands::Down(args) => down_command(args).await,
+        Commands::Deploy(args) => up_command(args, embedded_config.as_ref()).await,
+        Commands::Destroy(args) => down_command(args, embedded_config.as_ref()).await,
         Commands::Status(args) => status_command(args).await,
         Commands::List(args) => list_command(args).await,
         Commands::Agent(args) => agent_command(args).await,
+        Commands::Register(args) => register_command(args).await,
     }
 }
 
@@ -84,7 +88,7 @@ mod tests {
     fn test_parse_up_command() {
         let cli = Cli::try_parse_from([
             "alien-deploy",
-            "up",
+            "deploy",
             "--token",
             "dg_abc123",
             "--platform",
@@ -95,7 +99,7 @@ mod tests {
         .unwrap();
 
         assert!(!cli.verbose);
-        assert!(matches!(cli.command, Commands::Up(_)));
+        assert!(matches!(cli.command, Commands::Deploy(_)));
     }
 
     #[test]
@@ -114,7 +118,7 @@ mod tests {
             "--sync-url",
             "https://manager.example.com",
             "--sync-token",
-            "tok_abc",
+            "ax_dg_abc",
             "--platform",
             "local",
         ])
@@ -131,7 +135,37 @@ mod tests {
 
     #[test]
     fn test_parse_down_command() {
-        let cli = Cli::try_parse_from(["alien-deploy", "down", "--name", "prod"]).unwrap();
-        assert!(matches!(cli.command, Commands::Down(_)));
+        let cli = Cli::try_parse_from(["alien-deploy", "destroy", "--name", "prod"]).unwrap();
+        assert!(matches!(cli.command, Commands::Destroy(_)));
+    }
+
+    #[test]
+    fn test_parse_register_cloudformation_command() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "register",
+            "--import",
+            "cloudformation",
+            "--stack-name",
+            "acme-prod",
+            "--region",
+            "us-east-1",
+            "--manager-url",
+            "https://manager.example.com",
+            "--token",
+            "dg_abc",
+        ])
+        .unwrap();
+        let Commands::Register(args) = cli.command else {
+            panic!("expected register variant");
+        };
+        assert_eq!(
+            args.import,
+            crate::commands::register::ImportKind::Cloudformation
+        );
+        assert_eq!(args.stack_name.as_deref(), Some("acme-prod"));
+        assert_eq!(args.region, "us-east-1");
+        assert_eq!(args.manager_url, "https://manager.example.com");
+        assert_eq!(args.token, "dg_abc");
     }
 }

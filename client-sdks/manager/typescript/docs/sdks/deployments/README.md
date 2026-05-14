@@ -7,7 +7,11 @@ Deployment lifecycle management
 ### Available Operations
 
 * [listDeployments](#listdeployments)
-* [createDeployment](#createdeployment)
+* [createDeployment](#createdeployment) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls. Embedders
+that proxy to an upstream API can use the subject's `bearer_token` for
+passthrough; single-tenant impls ignore it. See the trait doc on
+[`DeploymentStore`] for the full convention.
 * [getDeployment](#getdeployment)
 * [deleteDeployment](#deletedeployment)
 * [getDeploymentInfo](#getdeploymentinfo)
@@ -84,6 +88,9 @@ run();
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## createDeployment
+
+`POST /v1/deployments` — Inbound: workspace / project / dg bearer (or
+authenticated user). Deployment-scoped tokens cannot create deployments.
 
 ### Example Usage
 

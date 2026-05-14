@@ -18,6 +18,9 @@ export const UpdatesMode = {
 export type UpdatesMode = ClosedEnum<typeof UpdatesMode>;
 
 /** @internal */
-export const UpdatesMode$outboundSchema: z.ZodEnum<typeof UpdatesMode> = z.enum(
+export const UpdatesMode$inboundSchema: z.ZodEnum<typeof UpdatesMode> = z.enum(
   UpdatesMode,
 );
+/** @internal */
+export const UpdatesMode$outboundSchema: z.ZodEnum<typeof UpdatesMode> =
+  UpdatesMode$inboundSchema;

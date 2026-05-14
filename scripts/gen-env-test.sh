@@ -12,7 +12,7 @@
 set -euo pipefail
 
 TF=$(cd infra/test && terraform output -json)
-jq_val() { echo "$TF" | jq -r ".$1.value"; }
+jq_val() { printf '%s' "$TF" | jq -er --arg key "$1" '.[$key].value // empty'; }
 # Like jq_val but compacts JSON values onto a single line.
 #
 # GCP SA keys are pretty-printed JSON with \n escape sequences in the

@@ -11,10 +11,13 @@ use crate::error::{ErrorData, Result};
 use alien_aws_clients::dynamodb::{
     attribute_types, billing_modes, key_types, table_status, AttributeDefinition,
     CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DynamoDbApi, DynamoDbClient,
-    KeySchemaElement, TimeToLiveSpecification, UpdateTimeToLiveRequest,
+    KeySchemaElement, Tag, TimeToLiveSpecification, UpdateTimeToLiveRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Kv, KvOutputs, Resource, ResourceDefinition, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    standard_resource_tags, Kv, KvOutputs, Resource, ResourceDefinition, ResourceOutputs,
+    ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 
@@ -80,6 +83,12 @@ impl AwsKvController {
                     .build(),
             ])
             .billing_mode(billing_modes::PAY_PER_REQUEST.to_string())
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &config.id)
+                    .into_iter()
+                    .map(|(key, value)| Tag::builder().key(key).value(value).build())
+                    .collect(),
+            )
             .build();
 
         client

@@ -13,10 +13,7 @@ impl PermissiveAuthValidator {
 
 #[async_trait]
 impl AuthValidator for PermissiveAuthValidator {
-    async fn validate(
-        &self,
-        headers: &http::HeaderMap,
-    ) -> Result<Option<Subject>, AlienError> {
+    async fn validate(&self, headers: &http::HeaderMap) -> Result<Option<Subject>, AlienError> {
         // Capture the bearer if one is present so token passthrough still
         // works in dev mode. The contract is symmetric across all
         // `AuthValidator` impls.

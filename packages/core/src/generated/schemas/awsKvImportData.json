@@ -1,0 +1,1 @@
+{"type":"object","description":"AWS KV ImportData.","required":["tableName","tableArn"],"properties":{"tableArn":{"type":"string","description":"DynamoDB table ARN."},"tableName":{"type":"string","description":"DynamoDB table name."}},"additionalProperties":false,"x-readme-ref-name":"AwsKvImportData"}

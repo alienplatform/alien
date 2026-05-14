@@ -3,11 +3,21 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type AzureCustomCertificateConfig = {
   keyVaultCertificateId: string;
 };
 
+/** @internal */
+export const AzureCustomCertificateConfig$inboundSchema: z.ZodType<
+  AzureCustomCertificateConfig,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+});
 /** @internal */
 export type AzureCustomCertificateConfig$Outbound = {
   keyVaultCertificateId: string;
@@ -28,5 +38,14 @@ export function azureCustomCertificateConfigToJSON(
     AzureCustomCertificateConfig$outboundSchema.parse(
       azureCustomCertificateConfig,
     ),
+  );
+}
+export function azureCustomCertificateConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<AzureCustomCertificateConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => AzureCustomCertificateConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'AzureCustomCertificateConfig' from JSON`,
   );
 }

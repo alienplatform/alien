@@ -1,0 +1,1457 @@
+---
+source: crates/alien-core/src/import/data/mod.rs
+expression: schemas
+---
+{
+  "aws_artifact_registry": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS ArtifactRegistry ImportData.",
+    "properties": {
+      "accountId": {
+        "description": "AWS account ID that owns the ECR registry.",
+        "type": "string"
+      },
+      "pullRoleArn": {
+        "description": "IAM role ARN with pull-only access.",
+        "type": "string"
+      },
+      "pushRoleArn": {
+        "description": "IAM role ARN with push and pull access.",
+        "type": "string"
+      },
+      "region": {
+        "description": "AWS region for the registry endpoint.",
+        "type": "string"
+      },
+      "registryEndpoint": {
+        "description": "Docker registry endpoint.",
+        "type": "string"
+      },
+      "registryId": {
+        "description": "Registry identifier in `account:region` form.",
+        "type": "string"
+      },
+      "repositoryPrefix": {
+        "description": "Prefix used for repositories owned by this stack.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "accountId",
+      "pullRoleArn",
+      "pushRoleArn",
+      "region",
+      "registryEndpoint",
+      "registryId",
+      "repositoryPrefix"
+    ],
+    "title": "AwsArtifactRegistryImportData",
+    "type": "object"
+  },
+  "aws_build": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Build ImportData.",
+    "properties": {
+      "buildEnvVars": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Environment variables stamped into the CodeBuild project.",
+        "type": "object"
+      },
+      "projectArn": {
+        "description": "CodeBuild project ARN.",
+        "type": "string"
+      },
+      "projectName": {
+        "description": "CodeBuild project name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "buildEnvVars",
+      "projectArn",
+      "projectName"
+    ],
+    "title": "AwsBuildImportData",
+    "type": "object"
+  },
+  "aws_container_cluster": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS ContainerCluster ImportData.",
+    "properties": {
+      "clusterId": {
+        "description": "Cluster identifier used by container orchestration.",
+        "type": "string"
+      },
+      "instanceProfileArn": {
+        "description": "IAM instance profile ARN for cluster machines.",
+        "type": "string"
+      },
+      "securityGroupId": {
+        "description": "Security group ID attached to cluster machines.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clusterId",
+      "instanceProfileArn",
+      "securityGroupId"
+    ],
+    "title": "AwsContainerClusterImportData",
+    "type": "object"
+  },
+  "aws_function": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Function ImportData.",
+    "properties": {
+      "apiId": {
+        "description": "API Gateway HTTP API ID, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "eventSourceMappings": {
+        "description": "Queue event-source mapping UUIDs.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "eventbridgePermissionStatementIds": {
+        "description": "Lambda permission statement IDs granted for EventBridge schedule triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "eventbridgeRuleNames": {
+        "description": "EventBridge rule names for schedule triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "functionArn": {
+        "description": "Lambda function ARN.",
+        "type": "string"
+      },
+      "functionName": {
+        "description": "Lambda function name.",
+        "type": "string"
+      },
+      "integrationId": {
+        "description": "API Gateway integration ID, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "routeId": {
+        "description": "API Gateway route ID, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "s3PermissionStatementIds": {
+        "description": "Lambda permission statement IDs granted for S3 storage triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "stageName": {
+        "description": "API Gateway stage name, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "url": {
+        "description": "Public HTTPS URL, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "eventSourceMappings",
+      "eventbridgePermissionStatementIds",
+      "eventbridgeRuleNames",
+      "functionArn",
+      "functionName",
+      "s3PermissionStatementIds"
+    ],
+    "title": "AwsFunctionImportData",
+    "type": "object"
+  },
+  "aws_kv": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS KV ImportData.",
+    "properties": {
+      "tableArn": {
+        "description": "DynamoDB table ARN.",
+        "type": "string"
+      },
+      "tableName": {
+        "description": "DynamoDB table name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "tableArn",
+      "tableName"
+    ],
+    "title": "AwsKvImportData",
+    "type": "object"
+  },
+  "aws_network": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Network ImportData.",
+    "properties": {
+      "availabilityZones": {
+        "description": "Availability zone names used by created or BYO subnets.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "cidrBlock": {
+        "description": "VPC CIDR block when the VPC is created by this stack.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "eipAllocationId": {
+        "description": "Elastic IP allocation ID backing the NAT gateway.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "internetGatewayId": {
+        "description": "Internet gateway ID when created by this stack.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "isByoVpc": {
+        "description": "True when the VPC is owned outside this stack.",
+        "type": "boolean"
+      },
+      "natGatewayId": {
+        "description": "NAT gateway ID when created by this stack.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "privateRouteTableId": {
+        "description": "Private route table ID.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "privateSubnetIds": {
+        "description": "Private subnet IDs.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "publicRouteTableId": {
+        "description": "Public route table ID.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "publicSubnetIds": {
+        "description": "Public subnet IDs.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "securityGroupId": {
+        "description": "Security group ID for private workloads.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "vpcId": {
+        "description": "VPC ID. Absent when default-VPC mode defers lookup to AWS at runtime.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "availabilityZones",
+      "isByoVpc",
+      "privateSubnetIds",
+      "publicSubnetIds"
+    ],
+    "title": "AwsNetworkImportData",
+    "type": "object"
+  },
+  "aws_queue": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Queue ImportData.",
+    "properties": {
+      "queueArn": {
+        "description": "SQS queue ARN.",
+        "type": "string"
+      },
+      "queueName": {
+        "description": "SQS queue name.",
+        "type": "string"
+      },
+      "queueUrl": {
+        "description": "SQS queue URL.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "queueArn",
+      "queueName",
+      "queueUrl"
+    ],
+    "title": "AwsQueueImportData",
+    "type": "object"
+  },
+  "aws_remote_stack_management": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS RemoteStackManagement ImportData.",
+    "properties": {
+      "managementPermissionsApplied": {
+        "description": "Whether the management inline policy was attached by the generated stack.",
+        "type": "boolean"
+      },
+      "roleArn": {
+        "description": "Cross-account management role ARN.",
+        "type": "string"
+      },
+      "roleName": {
+        "description": "Cross-account management role name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "managementPermissionsApplied",
+      "roleArn",
+      "roleName"
+    ],
+    "title": "AwsRemoteStackManagementImportData",
+    "type": "object"
+  },
+  "aws_service_account": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS ServiceAccount ImportData.",
+    "properties": {
+      "roleArn": {
+        "description": "IAM role ARN.",
+        "type": "string"
+      },
+      "roleName": {
+        "description": "IAM role name.",
+        "type": "string"
+      },
+      "stackPermissionsApplied": {
+        "description": "Whether stack-level permissions were attached by the generated stack.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "roleArn",
+      "roleName",
+      "stackPermissionsApplied"
+    ],
+    "title": "AwsServiceAccountImportData",
+    "type": "object"
+  },
+  "aws_storage": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Storage ImportData.",
+    "properties": {
+      "bucketArn": {
+        "description": "S3 bucket ARN.",
+        "type": "string"
+      },
+      "bucketName": {
+        "description": "S3 bucket name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bucketArn",
+      "bucketName"
+    ],
+    "title": "AwsStorageImportData",
+    "type": "object"
+  },
+  "aws_vault": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "AWS Vault ImportData.",
+    "properties": {
+      "accountId": {
+        "description": "AWS account ID that owns the Parameter Store namespace.",
+        "type": "string"
+      },
+      "parameterPrefix": {
+        "description": "Prefix used for SecureString parameters in this vault.",
+        "type": "string"
+      },
+      "region": {
+        "description": "AWS region containing the Parameter Store namespace.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "accountId",
+      "parameterPrefix",
+      "region"
+    ],
+    "title": "AwsVaultImportData",
+    "type": "object"
+  },
+  "azure_artifact_registry": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ArtifactRegistry ImportData — an Azure Container Registry.",
+    "properties": {
+      "loginServer": {
+        "description": "Login server URL (`<name>.azurecr.io`).",
+        "type": "string"
+      },
+      "pullPrincipalId": {
+        "description": "UAMI principal id with `AcrPull` access.",
+        "type": "string"
+      },
+      "pushPrincipalId": {
+        "description": "UAMI principal id with `AcrPush` access.",
+        "type": "string"
+      },
+      "registryName": {
+        "description": "ACR name (must be globally unique, alphanumeric).",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group hosting the registry.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID hosting the registry.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "loginServer",
+      "pullPrincipalId",
+      "pushPrincipalId",
+      "registryName",
+      "resourceGroup",
+      "subscriptionId"
+    ],
+    "title": "AzureArtifactRegistryImportData",
+    "type": "object"
+  },
+  "azure_build": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Build ImportData — an Azure Container Registry build task.",
+    "properties": {
+      "buildEnvVars": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Environment variables stamped into the task's variables block.",
+        "type": "object"
+      },
+      "registryName": {
+        "description": "Azure Container Registry name.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group hosting the registry.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID hosting the build task.",
+        "type": "string"
+      },
+      "taskName": {
+        "description": "Build task name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "buildEnvVars",
+      "registryName",
+      "resourceGroup",
+      "subscriptionId",
+      "taskName"
+    ],
+    "title": "AzureBuildImportData",
+    "type": "object"
+  },
+  "azure_container_apps_environment": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ContainerAppsEnvironment ImportData — parent environment for Container Apps in this stack. Realized once per stack.",
+    "properties": {
+      "defaultDomain": {
+        "description": "Default domain (`<env>.<region>.azurecontainerapps.io`).",
+        "type": "string"
+      },
+      "environmentName": {
+        "description": "Container Apps Environment name.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group hosting the environment.",
+        "type": "string"
+      },
+      "resourceId": {
+        "description": "ARM resource ID of the Container Apps Environment.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID hosting the environment.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "defaultDomain",
+      "environmentName",
+      "resourceGroup",
+      "resourceId",
+      "subscriptionId"
+    ],
+    "title": "AzureContainerAppsEnvironmentImportData",
+    "type": "object"
+  },
+  "azure_container_cluster": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ContainerCluster ImportData — AKS node pool identity / network.",
+    "properties": {
+      "clusterId": {
+        "description": "Cluster identifier used by the controller.",
+        "type": "string"
+      },
+      "clusterIdentityPrincipalId": {
+        "description": "AKS cluster identity principal id (system-assigned identity).",
+        "type": "string"
+      },
+      "kubeletIdentityClientId": {
+        "description": "kubelet UAMI client id used by node pools.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clusterId",
+      "clusterIdentityPrincipalId",
+      "kubeletIdentityClientId"
+    ],
+    "title": "AzureContainerClusterImportData",
+    "type": "object"
+  },
+  "azure_function": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Function ImportData — a Container App backed by the stack's Container Apps Environment.",
+    "properties": {
+      "containerAppName": {
+        "description": "Container App name.",
+        "type": "string"
+      },
+      "fqdn": {
+        "description": "Public FQDN when ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "resourceGroup": {
+        "description": "Resource group hosting the Container App.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID hosting the Container App.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "containerAppName",
+      "resourceGroup",
+      "subscriptionId"
+    ],
+    "title": "AzureFunctionImportData",
+    "type": "object"
+  },
+  "azure_kv": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure KV ImportData — a table in the stack's shared Azure Storage account.",
+    "properties": {
+      "resourceGroup": {
+        "description": "Resource group containing the Storage account.",
+        "type": "string"
+      },
+      "storageAccountName": {
+        "description": "Storage account name.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the Storage account.",
+        "type": "string"
+      },
+      "tableEndpoint": {
+        "description": "Primary Table endpoint URL.",
+        "type": "string"
+      },
+      "tableName": {
+        "description": "Azure Table name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "resourceGroup",
+      "storageAccountName",
+      "subscriptionId",
+      "tableEndpoint",
+      "tableName"
+    ],
+    "title": "AzureKvImportData",
+    "type": "object"
+  },
+  "azure_network": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Network ImportData — VNet + subnets + NAT topology.",
+    "properties": {
+      "isByoVnet": {
+        "description": "True when the VNet is owned outside this stack.",
+        "type": "boolean"
+      },
+      "natGatewayId": {
+        "description": "NAT gateway resource id when one was created.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "networkSecurityGroupId": {
+        "description": "Network Security Group resource id attached to workload subnets.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the VNet.",
+        "type": "string"
+      },
+      "subnetIds": {
+        "description": "Subnet resource ids in this VNet used by workloads.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the VNet.",
+        "type": "string"
+      },
+      "vnetId": {
+        "description": "VNet resource id (full ARM path). Absent when the controller will look up the default VNet at runtime.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "vnetName": {
+        "description": "VNet short name.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "isByoVnet",
+      "resourceGroup",
+      "subnetIds",
+      "subscriptionId"
+    ],
+    "title": "AzureNetworkImportData",
+    "type": "object"
+  },
+  "azure_queue": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Queue ImportData — a Service Bus queue.",
+    "properties": {
+      "namespaceName": {
+        "description": "Service Bus namespace name.",
+        "type": "string"
+      },
+      "queueName": {
+        "description": "Queue name within the namespace.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the namespace.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the namespace.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "namespaceName",
+      "queueName",
+      "resourceGroup",
+      "subscriptionId"
+    ],
+    "title": "AzureQueueImportData",
+    "type": "object"
+  },
+  "azure_remote_stack_management": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure RemoteStackManagement ImportData — UAMI + Federated Identity Credential the manager uses to act on this stack via Azure AD.",
+    "properties": {
+      "clientId": {
+        "description": "Management UAMI client id (used by the manager to call AAD).",
+        "type": "string"
+      },
+      "identityId": {
+        "description": "Management UAMI resource id.",
+        "type": "string"
+      },
+      "managementPermissionsApplied": {
+        "description": "Whether the management role assignments were applied by the generated stack.",
+        "type": "boolean"
+      },
+      "principalId": {
+        "description": "Management UAMI principal id.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the management identity.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the management identity.",
+        "type": "string"
+      },
+      "tenantId": {
+        "description": "Tenant ID containing the management identity.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clientId",
+      "identityId",
+      "managementPermissionsApplied",
+      "principalId",
+      "resourceGroup",
+      "subscriptionId",
+      "tenantId"
+    ],
+    "title": "AzureRemoteStackManagementImportData",
+    "type": "object"
+  },
+  "azure_resource_group": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ResourceGroup ImportData — the parent resource group every Azure resource in this stack lives in. Realized once per stack.",
+    "properties": {
+      "location": {
+        "description": "Resource group location (e.g. `eastus`).",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group name.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the group.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "location",
+      "resourceGroup",
+      "subscriptionId"
+    ],
+    "title": "AzureResourceGroupImportData",
+    "type": "object"
+  },
+  "azure_service_account": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ServiceAccount ImportData — User-Assigned Managed Identity (UAMI) plus optional Federated Identity Credentials trusting Alien's OIDC issuer.",
+    "properties": {
+      "clientId": {
+        "description": "UAMI client id used by `azure.workload.identity/client-id` annotations.",
+        "type": "string"
+      },
+      "identityId": {
+        "description": "UAMI resource id (full ARM path).",
+        "type": "string"
+      },
+      "principalId": {
+        "description": "UAMI principal id (object id of the service principal).",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the UAMI.",
+        "type": "string"
+      },
+      "stackPermissionsApplied": {
+        "description": "Whether stack-level role assignments were attached by the generated stack.",
+        "type": "boolean"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the UAMI.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clientId",
+      "identityId",
+      "principalId",
+      "resourceGroup",
+      "stackPermissionsApplied",
+      "subscriptionId"
+    ],
+    "title": "AzureServiceAccountImportData",
+    "type": "object"
+  },
+  "azure_service_activation": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ServiceActivation ImportData — registers an Azure resource provider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the stack contains resources that depend on a specific Azure RP (Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).",
+    "properties": {
+      "providerNamespace": {
+        "description": "Resource provider namespace (e.g. `Microsoft.App`).",
+        "type": "string"
+      },
+      "registered": {
+        "description": "True once the provider is reported `Registered`.",
+        "type": "boolean"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID the provider was registered on.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "providerNamespace",
+      "registered",
+      "subscriptionId"
+    ],
+    "title": "AzureServiceActivationImportData",
+    "type": "object"
+  },
+  "azure_service_bus_namespace": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure ServiceBusNamespace ImportData — parent namespace for Queue resources. Realized once per stack and shared across `Queue`s.",
+    "properties": {
+      "endpoint": {
+        "description": "Endpoint hostname (`<namespace>.servicebus.windows.net`).",
+        "type": "string"
+      },
+      "namespaceName": {
+        "description": "Service Bus namespace name (globally unique).",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the namespace.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the namespace.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "endpoint",
+      "namespaceName",
+      "resourceGroup",
+      "subscriptionId"
+    ],
+    "title": "AzureServiceBusNamespaceImportData",
+    "type": "object"
+  },
+  "azure_storage": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Storage ImportData — a Blob container inside a Storage Account.",
+    "properties": {
+      "containerName": {
+        "description": "Blob container name owned by this stack.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the storage account.",
+        "type": "string"
+      },
+      "storageAccountName": {
+        "description": "Storage Account name (globally unique).",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the storage account.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "containerName",
+      "resourceGroup",
+      "storageAccountName",
+      "subscriptionId"
+    ],
+    "title": "AzureStorageImportData",
+    "type": "object"
+  },
+  "azure_storage_account": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure StorageAccount ImportData — the parent storage account that holds Blob containers + queues + tables for this stack. Realized once per stack and shared across `Storage` resources.",
+    "properties": {
+      "blobEndpoint": {
+        "description": "Primary blob endpoint URL.",
+        "type": "string"
+      },
+      "queueEndpoint": {
+        "description": "Primary queue endpoint URL.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the storage account.",
+        "type": "string"
+      },
+      "storageAccountName": {
+        "description": "Storage account name (globally unique).",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the storage account.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "blobEndpoint",
+      "queueEndpoint",
+      "resourceGroup",
+      "storageAccountName",
+      "subscriptionId"
+    ],
+    "title": "AzureStorageAccountImportData",
+    "type": "object"
+  },
+  "azure_vault": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Azure Vault ImportData — a Key Vault namespace.",
+    "properties": {
+      "resourceGroup": {
+        "description": "Resource group containing the Key Vault.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Subscription ID containing the Key Vault.",
+        "type": "string"
+      },
+      "vaultName": {
+        "description": "Key Vault name.",
+        "type": "string"
+      },
+      "vaultUri": {
+        "description": "Vault DNS-style URI (`https://<name>.vault.azure.net/`).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "resourceGroup",
+      "subscriptionId",
+      "vaultName",
+      "vaultUri"
+    ],
+    "title": "AzureVaultImportData",
+    "type": "object"
+  },
+  "gcp_artifact_registry": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP ArtifactRegistry ImportData — an Artifact Registry repository.",
+    "properties": {
+      "projectId": {
+        "description": "Project ID hosting the registry.",
+        "type": "string"
+      },
+      "pullServiceAccountEmail": {
+        "description": "Service account email with pull-only access.",
+        "type": "string"
+      },
+      "pushServiceAccountEmail": {
+        "description": "Service account email with push and pull access.",
+        "type": "string"
+      },
+      "region": {
+        "description": "Region where the registry lives.",
+        "type": "string"
+      },
+      "registryEndpoint": {
+        "description": "Docker registry endpoint (`<region>-docker.pkg.dev/<project>/<repo>`).",
+        "type": "string"
+      },
+      "repositoryId": {
+        "description": "Repository ID (the short name).",
+        "type": "string"
+      },
+      "repositoryName": {
+        "description": "Full repository resource name (`projects/<id>/locations/<region>/repositories/<repo>`).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "pullServiceAccountEmail",
+      "pushServiceAccountEmail",
+      "region",
+      "registryEndpoint",
+      "repositoryId",
+      "repositoryName"
+    ],
+    "title": "GcpArtifactRegistryImportData",
+    "type": "object"
+  },
+  "gcp_build": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Build ImportData — Cloud Build trigger + worker pool reference.",
+    "properties": {
+      "buildEnvVars": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Environment variables stamped into the trigger's substitutions.",
+        "type": "object"
+      },
+      "projectId": {
+        "description": "Project ID hosting the trigger.",
+        "type": "string"
+      },
+      "region": {
+        "description": "Region where the trigger runs.",
+        "type": "string"
+      },
+      "triggerId": {
+        "description": "Cloud Build trigger ID.",
+        "type": "string"
+      },
+      "triggerName": {
+        "description": "Cloud Build trigger name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "buildEnvVars",
+      "projectId",
+      "region",
+      "triggerId",
+      "triggerName"
+    ],
+    "title": "GcpBuildImportData",
+    "type": "object"
+  },
+  "gcp_container_cluster": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP ContainerCluster ImportData — GKE node pool identity + network.",
+    "properties": {
+      "clusterId": {
+        "description": "Cluster identifier used by the controller.",
+        "type": "string"
+      },
+      "networkTag": {
+        "description": "Tag applied to firewall rules targeting cluster nodes.",
+        "type": "string"
+      },
+      "nodeServiceAccountEmail": {
+        "description": "Service account email attached to cluster nodes.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clusterId",
+      "networkTag",
+      "nodeServiceAccountEmail"
+    ],
+    "title": "GcpContainerClusterImportData",
+    "type": "object"
+  },
+  "gcp_function": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Function ImportData — a Cloud Run service.",
+    "properties": {
+      "commandsSubscriptionName": {
+        "description": "Pub/Sub push-subscription name created for commands delivery.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "commandsTopicName": {
+        "description": "Pub/Sub topic short name created for commands delivery.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "eventarcTriggerNames": {
+        "description": "Eventarc trigger names created for storage triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "projectId": {
+        "description": "Project ID hosting the service.",
+        "type": "string"
+      },
+      "pubsubSubscriptionNames": {
+        "description": "Pub/Sub push-subscription names created for queue triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "region": {
+        "description": "Region where the service runs.",
+        "type": "string"
+      },
+      "schedulerJobNames": {
+        "description": "Cloud Scheduler job names created for schedule triggers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "serviceName": {
+        "description": "Cloud Run service name.",
+        "type": "string"
+      },
+      "url": {
+        "description": "Public HTTPS URL when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "eventarcTriggerNames",
+      "projectId",
+      "pubsubSubscriptionNames",
+      "region",
+      "schedulerJobNames",
+      "serviceName"
+    ],
+    "title": "GcpFunctionImportData",
+    "type": "object"
+  },
+  "gcp_kv": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP KV ImportData — a Firestore Native database.",
+    "properties": {
+      "databaseId": {
+        "description": "Firestore database ID (`(default)` when this is the default database).",
+        "type": "string"
+      },
+      "location": {
+        "description": "Firestore database location (region or multi-region code).",
+        "type": "string"
+      },
+      "projectId": {
+        "description": "Project ID containing the database.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "databaseId",
+      "location",
+      "projectId"
+    ],
+    "title": "GcpKvImportData",
+    "type": "object"
+  },
+  "gcp_network": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.",
+    "properties": {
+      "isByoVpc": {
+        "description": "True when the VPC is owned outside this stack.",
+        "type": "boolean"
+      },
+      "natName": {
+        "description": "Cloud NAT name (when created).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "projectId": {
+        "description": "Project ID owning the network.",
+        "type": "string"
+      },
+      "routerSelfLink": {
+        "description": "Cloud Router self-link backing Cloud NAT (when created).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "subnetSelfLinks": {
+        "description": "Subnetwork self-links across the configured regions.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "vpcName": {
+        "description": "VPC short name.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "vpcSelfLink": {
+        "description": "VPC self-link. Absent when the controller will look up the default network at runtime.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "isByoVpc",
+      "projectId",
+      "subnetSelfLinks"
+    ],
+    "title": "GcpNetworkImportData",
+    "type": "object"
+  },
+  "gcp_queue": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Queue ImportData — a Pub/Sub topic plus subscription created in the customer's project.",
+    "properties": {
+      "projectId": {
+        "description": "Project ID containing the topic.",
+        "type": "string"
+      },
+      "subscriptionId": {
+        "description": "Default subscription ID created alongside the topic.",
+        "type": "string"
+      },
+      "subscriptionName": {
+        "description": "Subscription full resource name.",
+        "type": "string"
+      },
+      "topicId": {
+        "description": "Pub/Sub topic ID (short name).",
+        "type": "string"
+      },
+      "topicName": {
+        "description": "Pub/Sub topic full resource name (`projects/<id>/topics/<name>`).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "subscriptionId",
+      "subscriptionName",
+      "topicId",
+      "topicName"
+    ],
+    "title": "GcpQueueImportData",
+    "type": "object"
+  },
+  "gcp_remote_stack_management": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",
+    "properties": {
+      "managementPermissionsApplied": {
+        "description": "Whether the management role binding was attached by the generated stack.",
+        "type": "boolean"
+      },
+      "projectId": {
+        "description": "Project ID containing the management service account.",
+        "type": "string"
+      },
+      "projectNumber": {
+        "description": "Numeric project number containing the management service account.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "serviceAccountEmail": {
+        "description": "Service account email the manager impersonates.",
+        "type": "string"
+      },
+      "serviceAccountUniqueId": {
+        "description": "Stable unique id Google assigns to the service account.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "managementPermissionsApplied",
+      "projectId",
+      "serviceAccountEmail",
+      "serviceAccountUniqueId"
+    ],
+    "title": "GcpRemoteStackManagementImportData",
+    "type": "object"
+  },
+  "gcp_service_account": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP ServiceAccount ImportData.",
+    "properties": {
+      "projectId": {
+        "description": "Project ID containing the service account.",
+        "type": "string"
+      },
+      "serviceAccountEmail": {
+        "description": "Service account email (`<name>@<project>.iam.gserviceaccount.com`).",
+        "type": "string"
+      },
+      "serviceAccountUniqueId": {
+        "description": "Stable unique id Google assigns to the service account.",
+        "type": "string"
+      },
+      "stackPermissionsApplied": {
+        "description": "Whether stack-level permissions were attached by the generated stack.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "projectId",
+      "serviceAccountEmail",
+      "serviceAccountUniqueId",
+      "stackPermissionsApplied"
+    ],
+    "title": "GcpServiceAccountImportData",
+    "type": "object"
+  },
+  "gcp_service_activation": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP ServiceActivation ImportData — a `google_project_service` enabling a single GCP API on the customer's project.\n\nAdded by the `GcpServiceActivationMutation` preflight when the stack contains resources that need a specific API enabled (Cloud Run, Pub/Sub, Firestore, …).",
+    "properties": {
+      "activated": {
+        "description": "True once the service is reported enabled.",
+        "type": "boolean"
+      },
+      "projectId": {
+        "description": "Project ID the service was enabled on.",
+        "type": "string"
+      },
+      "serviceName": {
+        "description": "Fully-qualified service name (e.g. `run.googleapis.com`).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "activated",
+      "projectId",
+      "serviceName"
+    ],
+    "title": "GcpServiceActivationImportData",
+    "type": "object"
+  },
+  "gcp_storage": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Storage ImportData — a Cloud Storage bucket created in the customer's project.",
+    "properties": {
+      "bucketName": {
+        "description": "Cloud Storage bucket name.",
+        "type": "string"
+      },
+      "bucketSelfLink": {
+        "description": "Bucket self-link.",
+        "type": "string"
+      },
+      "location": {
+        "description": "Bucket location (region or multi-region code).",
+        "type": "string"
+      },
+      "projectId": {
+        "description": "Project ID containing the bucket.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bucketName",
+      "bucketSelfLink",
+      "location",
+      "projectId"
+    ],
+    "title": "GcpStorageImportData",
+    "type": "object"
+  },
+  "gcp_vault": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "GCP Vault ImportData — Secret Manager namespace.",
+    "properties": {
+      "projectId": {
+        "description": "Project ID containing Secret Manager.",
+        "type": "string"
+      },
+      "secretPrefix": {
+        "description": "Prefix used for secret names owned by this vault.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "secretPrefix"
+    ],
+    "title": "GcpVaultImportData",
+    "type": "object"
+  }
+}

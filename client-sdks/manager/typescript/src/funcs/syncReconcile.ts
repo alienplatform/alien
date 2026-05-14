@@ -24,6 +24,10 @@ import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+ * bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+ */
 export function syncReconcile(
   client: AlienManagerCore,
   request: models.ReconcileRequest,

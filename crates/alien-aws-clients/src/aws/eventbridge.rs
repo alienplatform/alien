@@ -51,10 +51,7 @@ impl EventBridgeClient {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("events") {
             override_url.to_string()
         } else {
-            format!(
-                "https://events.{}.amazonaws.com",
-                self.credentials.region()
-            )
+            format!("https://events.{}.amazonaws.com", self.credentials.region())
         }
     }
 
@@ -157,8 +154,7 @@ impl EventBridgeClient {
         resource: &str,
         request_body: Option<&str>,
     ) -> Option<ErrorData> {
-        let parsed: std::result::Result<EventBridgeErrorResponse, _> =
-            serde_json::from_str(body);
+        let parsed: std::result::Result<EventBridgeErrorResponse, _> = serde_json::from_str(body);
         let (code, message) = match parsed {
             Ok(e) => {
                 let c = e
@@ -240,24 +236,24 @@ impl EventBridgeClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl EventBridgeApi for EventBridgeClient {
     async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse> {
-        let body = serde_json::to_string(&request)
-            .into_alien_error()
-            .context(ErrorData::InvalidInput {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::InvalidInput {
                 message: "Failed to serialize PutRule request".into(),
                 field_name: None,
-            })?;
+            },
+        )?;
 
         self.send_json("AWSEvents.PutRule", body, "PutRule", &request.name)
             .await
     }
 
     async fn put_targets(&self, request: PutTargetsRequest) -> Result<()> {
-        let body = serde_json::to_string(&request)
-            .into_alien_error()
-            .context(ErrorData::InvalidInput {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::InvalidInput {
                 message: "Failed to serialize PutTargets request".into(),
                 field_name: None,
-            })?;
+            },
+        )?;
 
         self.send_json_no_response("AWSEvents.PutTargets", body, "PutTargets", &request.rule)
             .await
@@ -304,6 +300,8 @@ pub struct PutRuleRequest {
     pub schedule_expression: String,
     pub state: Option<String>,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<EventBridgeTag>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,6 +322,13 @@ pub struct PutTargetsRequest {
 pub struct EventBridgeTarget {
     pub id: String,
     pub arn: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EventBridgeTag {
+    pub key: String,
+    pub value: String,
 }
 
 // Internal request types (not exposed publicly)

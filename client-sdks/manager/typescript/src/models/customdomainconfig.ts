@@ -3,11 +3,15 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
 import {
   CustomCertificateConfig,
+  CustomCertificateConfig$inboundSchema,
   CustomCertificateConfig$Outbound,
   CustomCertificateConfig$outboundSchema,
 } from "./customcertificateconfig.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
  * Custom domain configuration for a single resource.
@@ -23,6 +27,14 @@ export type CustomDomainConfig = {
   domain: string;
 };
 
+/** @internal */
+export const CustomDomainConfig$inboundSchema: z.ZodType<
+  CustomDomainConfig,
+  unknown
+> = z.object({
+  certificate: CustomCertificateConfig$inboundSchema,
+  domain: z.string(),
+});
 /** @internal */
 export type CustomDomainConfig$Outbound = {
   certificate: CustomCertificateConfig$Outbound;
@@ -43,5 +55,14 @@ export function customDomainConfigToJSON(
 ): string {
   return JSON.stringify(
     CustomDomainConfig$outboundSchema.parse(customDomainConfig),
+  );
+}
+export function customDomainConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<CustomDomainConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CustomDomainConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CustomDomainConfig' from JSON`,
   );
 }

@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  SetupFingerprintInfo,
+  SetupFingerprintInfo$inboundSchema,
+} from "./setupfingerprintinfo.js";
 
 /**
  * Types of packages that can be built
@@ -39,22 +43,14 @@ export const PackageStatus = {
 export type PackageStatus = ClosedEnum<typeof PackageStatus>;
 
 /**
- * Configuration for the Terraform provider binary
+ * Configuration for Terraform package generation.
  */
 export type ConfigTerraform = {
-  /**
-   * Terraform provider name (e.g., "acme")
-   */
-  providerName: string;
-  /**
-   * Terraform resource type name (e.g., "agent")
-   */
-  resourceType: string;
   type: "terraform";
 };
 
 /**
- * Branding configuration for the agent binary
+ * Branding configuration for the agent binary.
  */
 export type ConfigAgentImage = {
   /**
@@ -91,7 +87,7 @@ export type ConfigCloudformation = {
 };
 
 /**
- * Branding configuration for the deploy CLI binary
+ * Branding configuration for the deploy CLI binary.
  */
 export type ConfigCli = {
   /**
@@ -114,6 +110,36 @@ export type Config =
   | ConfigHelm
   | ConfigAgentImage
   | ConfigTerraform;
+
+/**
+ * Information about a single Terraform module package for one target.
+ */
+export type PackageModules = {
+  /**
+   * Download URL for the module archive
+   */
+  downloadUrl: string;
+  /**
+   * Filename of the module archive
+   */
+  filename: string;
+  /**
+   * SHA256 checksum of the archive
+   */
+  shasum: string;
+  /**
+   * Size of the archive in bytes
+   */
+  size: number;
+  /**
+   * Terraform module source (hostname/namespace/name/provider, without scheme)
+   */
+  source: string;
+  /**
+   * Terraform module target (aws, gcp, azure, eks, gke, aks)
+   */
+  target: string;
+};
 
 /**
  * GPG public key for Terraform provider signature verification
@@ -159,15 +185,10 @@ export type PackagePlatforms = {
   size: number;
 };
 
-export const OutputsTypeTerraform = {
-  Terraform: "terraform",
-} as const;
-export type OutputsTypeTerraform = ClosedEnum<typeof OutputsTypeTerraform>;
-
 /**
- * Outputs from a Terraform provider package build
+ * Terraform provider registry outputs.
  */
-export type OutputsTerraform = {
+export type PackageProvider = {
   /**
    * GPG public key for Terraform provider signature verification
    */
@@ -176,6 +197,29 @@ export type OutputsTerraform = {
    * Provider packages for each target platform
    */
   platforms: { [k: string]: PackagePlatforms };
+  /**
+   * Terraform provider source (hostname/namespace/type, without scheme)
+   */
+  source: string;
+};
+
+export const OutputsTypeTerraform = {
+  Terraform: "terraform",
+} as const;
+export type OutputsTypeTerraform = ClosedEnum<typeof OutputsTypeTerraform>;
+
+/**
+ * Outputs from a Terraform package build.
+ */
+export type OutputsTerraform = {
+  /**
+   * Module registry artifacts by Terraform target.
+   */
+  modules: { [k: string]: PackageModules };
+  /**
+   * Terraform provider registry outputs.
+   */
+  provider: PackageProvider;
   type: OutputsTypeTerraform;
 };
 
@@ -202,6 +246,10 @@ export type OutputsCloudformation = {
    * Template size in bytes
    */
   size: number;
+  /**
+   * S3 URL to the CloudFormation stack policy
+   */
+  stackPolicyUrl: string;
   /**
    * S3 URL to the CloudFormation template
    */
@@ -320,6 +368,18 @@ export type Package = {
    */
   version: string;
   /**
+   * Release used as package build input
+   */
+  sourceReleaseId: string;
+  /**
+   * Per-target setup compatibility fingerprints copied from the source release
+   */
+  setupFingerprints: { [k: string]: SetupFingerprintInfo };
+  /**
+   * Package generator contract/hash version used to decide rebuild compatibility
+   */
+  packageGeneratorContractVersion: string;
+  /**
    * Type-specific configuration
    */
   config:
@@ -372,8 +432,6 @@ export const ConfigTerraform$inboundSchema: z.ZodType<
   ConfigTerraform,
   unknown
 > = z.object({
-  providerName: z.string(),
-  resourceType: z.string(),
   type: z.literal("terraform"),
 });
 
@@ -480,6 +538,27 @@ export function configFromJSON(
 }
 
 /** @internal */
+export const PackageModules$inboundSchema: z.ZodType<PackageModules, unknown> =
+  z.object({
+    downloadUrl: z.string(),
+    filename: z.string(),
+    shasum: z.string(),
+    size: z.int(),
+    source: z.string(),
+    target: z.string(),
+  });
+
+export function packageModulesFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageModules, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageModules$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageModules' from JSON`,
+  );
+}
+
+/** @internal */
 export const PackageGpgPublicKey$inboundSchema: z.ZodType<
   PackageGpgPublicKey,
   unknown
@@ -522,6 +601,26 @@ export function packagePlatformsFromJSON(
 }
 
 /** @internal */
+export const PackageProvider$inboundSchema: z.ZodType<
+  PackageProvider,
+  unknown
+> = z.object({
+  gpgPublicKey: z.lazy(() => PackageGpgPublicKey$inboundSchema),
+  platforms: z.record(z.string(), z.lazy(() => PackagePlatforms$inboundSchema)),
+  source: z.string(),
+});
+
+export function packageProviderFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageProvider, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageProvider$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageProvider' from JSON`,
+  );
+}
+
+/** @internal */
 export const OutputsTypeTerraform$inboundSchema: z.ZodEnum<
   typeof OutputsTypeTerraform
 > = z.enum(OutputsTypeTerraform);
@@ -531,8 +630,8 @@ export const OutputsTerraform$inboundSchema: z.ZodType<
   OutputsTerraform,
   unknown
 > = z.object({
-  gpgPublicKey: z.lazy(() => PackageGpgPublicKey$inboundSchema),
-  platforms: z.record(z.string(), z.lazy(() => PackagePlatforms$inboundSchema)),
+  modules: z.record(z.string(), z.lazy(() => PackageModules$inboundSchema)),
+  provider: z.lazy(() => PackageProvider$inboundSchema),
   type: OutputsTypeTerraform$inboundSchema,
 });
 
@@ -559,6 +658,7 @@ export const OutputsCloudformation$inboundSchema: z.ZodType<
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
+  stackPolicyUrl: z.string(),
   templateUrl: z.string(),
   type: OutputsTypeCloudformation$inboundSchema,
 });
@@ -692,6 +792,9 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   type: PackageTypeEnum$inboundSchema,
   status: PackageStatus$inboundSchema,
   version: z.string(),
+  sourceReleaseId: z.string(),
+  setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
+  packageGeneratorContractVersion: z.string(),
   config: z.union([
     z.lazy(() => ConfigCli$inboundSchema),
     z.lazy(() => ConfigCloudformation$inboundSchema),

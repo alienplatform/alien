@@ -22,10 +22,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 /// Telemetry (monitoring) mode for a deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MonitoringMode {
-    /// Automatically use the best available OTLP config: the parent AM's built-in DeepStore
-    /// endpoint, or the AM's external OTLP integration (e.g. Axiom, Datadog).
+    /// Automatically use the best available OTLP config: the parent manager's
+    /// built-in log store or external OTLP integration (e.g. Axiom, Datadog).
     Auto,
-    /// Disable all monitoring — no OTLP logs for containers or horizond VMs.
+    /// Disable all monitoring — no OTLP logs for containers or worker VMs.
     Off,
 }
 
@@ -84,7 +84,7 @@ pub enum DeploymentsCmd {
         no_heartbeat: bool,
 
         /// Telemetry / monitoring mode.
-        /// "auto" (default) uses the parent AM's built-in DeepStore or external OTLP integration.
+        /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
         /// "off" disables all monitoring.
         #[arg(long, value_enum, default_value_t = MonitoringMode::Auto)]
         monitoring: MonitoringMode,
@@ -235,9 +235,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message:
-                        "`alien dev deployments token` is not supported in local dev mode."
-                            .to_string(),
+                    message: "`alien dev deployments token` is not supported in local dev mode."
+                        .to_string(),
                 }));
             }
             let client = ctx.sdk_client().await?;
@@ -339,10 +338,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client) -> Result<()>
     Ok(())
 }
 
-async fn get_deployment_task(
-    client: &alien_manager_api::Client,
-    reference: &str,
-) -> Result<()> {
+async fn get_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
     println!(
@@ -425,6 +421,7 @@ async fn delete_deployment_task(
     client
         .delete_deployment()
         .id(&deployment.id)
+        .delete_scope(alien_manager_api::types::DeleteScope::Full)
         .send()
         .await
         .into_sdk_error()
@@ -443,10 +440,7 @@ async fn delete_deployment_task(
     Ok(())
 }
 
-async fn retry_deployment_task(
-    client: &alien_manager_api::Client,
-    reference: &str,
-) -> Result<()> {
+async fn retry_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
     println!(

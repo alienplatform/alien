@@ -18,10 +18,10 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Containers extends ClientSDK {
   /**
-   * Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+   * Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
    */
   async getOverview(
-    request?: operations.GetContainerOverviewRequest | undefined,
+    request: operations.GetContainerOverviewRequest,
     options?: RequestOptions,
   ): Promise<operations.GetContainerOverviewResponse> {
     return unwrapAsync(containersGetOverview(
@@ -32,10 +32,10 @@ export class Containers extends ClientSDK {
   }
 
   /**
-   * Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
+   * Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
    */
   async getAttention(
-    request?: operations.GetContainerAttentionRequest | undefined,
+    request: operations.GetContainerAttentionRequest,
     options?: RequestOptions,
   ): Promise<operations.GetContainerAttentionResponse> {
     return unwrapAsync(containersGetAttention(
@@ -46,7 +46,7 @@ export class Containers extends ClientSDK {
   }
 
   /**
-   * Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
+   * Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
    */
   async getDeployments(
     request: operations.GetContainerDefinitionDeploymentsRequest,
@@ -60,10 +60,10 @@ export class Containers extends ClientSDK {
   }
 
   /**
-   * Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+   * Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
    */
   async getMachines(
-    request?: operations.GetContainerMachinesRequest | undefined,
+    request: operations.GetContainerMachinesRequest,
     options?: RequestOptions,
   ): Promise<operations.GetContainerMachinesResponse> {
     return unwrapAsync(containersGetMachines(

@@ -4,7 +4,7 @@
 //! Each controller handles one resource type on one platform (e.g., `AwsFunctionController`, `GcpRoleController`).
 //!
 //! **Key Principles:**
-//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound`.
+//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound` and `RemoteAccessDenied`.
 //! - **Always Retry from Start**: When operations fail, always retry from the beginning of that flow (Start state)
 //! - **Strictly Linear State Flow**: Each flow follows the exact same sequence every time - NO conditional branching or optimization anywhere
 //! - **One Logical Operation Per State**: Each state performs exactly one logical operation (command or query)
@@ -237,12 +237,12 @@
 //! }
 //! ```
 //!
-//! ### Delete Operations – Ignore NotFound
-//! Delete states should treat `RemoteResourceNotFound` as success and continue, making the delete flow idempotent.
+//! ### Delete Operations – Best-Effort Cleanup
+//! Delete states should treat `RemoteResourceNotFound` and `RemoteAccessDenied` as success, making cleanup idempotent even when an imported resource has already been removed or is no longer accessible.
 //! ```ignore
 //! match client.delete_service_account(&name).await {
 //!     Ok(_) => next_state_deleting_role(),
-//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => next_state_deleting_role(),
+//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. } | CloudClientErrorData::RemoteAccessDenied { .. })) => next_state_deleting_role(),
 //!     Err(e) => return Err(e),
 //! }
 //! ```
@@ -463,7 +463,6 @@
 //!         previous_config: None,
 //!         retry_attempt: 3,
 //!         error: Some(AlienError::new(ErrorData::GenericError { message: "boom".into() })),
-//!         is_externally_provisioned: false,
 //!         lifecycle: None,
 //!         dependencies: Vec::new(),
 //!         last_failed_state: Some(failed.box_clone()),

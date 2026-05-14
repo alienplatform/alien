@@ -23,6 +23,13 @@ let value: ReleaseListItemResponse = {
   },
   createdAt: new Date("2026-01-02T08:27:46.228Z"),
   stack: {},
+  setupFingerprints: {
+    "key": {
+      target: "<value>",
+      fingerprint: "<value>",
+      version: 76165,
+    },
+  },
   workspaceId: "<id>",
 };
 ```
@@ -36,6 +43,7 @@ let value: ReleaseListItemResponse = {
 | `gitMetadata`                                                                                 | [models.GitMetadata](../models/gitmetadata.md)                                                | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
 | `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `stack`                                                                                       | [models.StackByPlatform](../models/stackbyplatform.md)                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `setupFingerprints`                                                                           | Record<string, [models.SetupFingerprintInfo](../models/setupfingerprintinfo.md)>              | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `rootDirectory`                                                                               | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
 | `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `project`                                                                                     | [models.ReleaseListItemResponseProject](../models/releaselistitemresponseproject.md)          | :heavy_minus_sign:                                                                            | Project info, included when ?include=project is used                                          |                                                                                               |

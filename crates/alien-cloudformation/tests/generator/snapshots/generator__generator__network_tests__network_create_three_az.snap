@@ -1,0 +1,622 @@
+---
+source: crates/alien-cloudformation/tests/generator/network_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: create network 3 az
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - DeploymentGroupToken
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - VpcCidr
+      - AvailabilityZones
+    - Label:
+        default: Domains
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
+      CertificateArn:
+        default: Certificate ARN
+      DeploymentGroupToken:
+        default: Deployment group token
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager AWS account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+      VpcCidr:
+        default: VPC CIDR
+Parameters:
+  DeploymentGroupToken:
+    Type: String
+    Description: Deployment-group token used when registering the resolved stack import.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Default: ''
+  VpcCidr:
+    Type: String
+    Description: CIDR for created VPCs. Empty uses the generated default.
+    Default: 10.42.0.0/16
+  AvailabilityZones:
+    Type: Number
+    Description: Number of availability zones to use when creating a VPC.
+    Default: 3
+    AllowedValues:
+    - 1
+    - 2
+    - 3
+  DomainName:
+    Type: String
+    Description: Optional domain name for public endpoints. Empty disables custom domains.
+  HostedZoneId:
+    Type: String
+    Description: Optional Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: Optional ACM certificate ARN for the domain.
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: approval-required
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: "off"
+    AllowedValues:
+    - "off"
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "off"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  NetworkCreateUseAz2:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: AvailabilityZones
+      - 1
+  NetworkCreateUseAz3:
+    Fn::Equals:
+    - Ref: AvailabilityZones
+    - 3
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  DefaultNetworkVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::If:
+        - HasVpcCidr
+        - Ref: VpcCidr
+        - 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkVpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      InternetGatewayId:
+        Ref: DefaultNetworkInternetGateway
+  DefaultNetworkPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 0
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 3
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 1
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 4
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 2
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 5
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: DefaultNetworkInternetGateway
+    DependsOn:
+    - DefaultNetworkVpcGatewayAttachment
+  DefaultNetworkPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkNatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  DefaultNetworkNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - DefaultNetworkNatEip
+        - AllocationId
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: DefaultNetworkNatGateway
+    DependsOn:
+    - DefaultNetworkNatGateway
+  DefaultNetworkPublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+  DefaultNetworkPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+  DefaultNetworkPublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private workload security group
+      VpcId:
+        Ref: DefaultNetworkVpc
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentStackPrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Physical stack prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupFingerprintVersion:
+    Value: '1'
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Manager import ManagementConfig JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          type: create
+          cidr:
+            Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - Ref: AWS::NoValue
+          availabilityZones:
+            Ref: AvailabilityZones
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+    Description: Manager import StackSettings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: default-network
+        type: network
+        importData:
+          vpcId:
+            Ref: DefaultNetworkVpc
+          cidrBlock:
+            Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          internetGatewayId:
+            Ref: DefaultNetworkInternetGateway
+          natGatewayId:
+            Ref: DefaultNetworkNatGateway
+          eipAllocationId:
+            Fn::GetAtt:
+            - DefaultNetworkNatEip
+            - AllocationId
+          publicSubnetIds:
+          - Ref: DefaultNetworkPublicSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPublicSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPublicSubnet3
+            - Ref: AWS::NoValue
+          privateSubnetIds:
+          - Ref: DefaultNetworkPrivateSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPrivateSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPrivateSubnet3
+            - Ref: AWS::NoValue
+          publicRouteTableId:
+            Ref: DefaultNetworkPublicRouteTable
+          privateRouteTableId:
+            Ref: DefaultNetworkPrivateRouteTable
+          securityGroupId:
+            Ref: DefaultNetworkSecurityGroup
+          availabilityZones:
+          - Fn::Select:
+            - 0
+            - Fn::GetAZs:
+                Ref: AWS::Region
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Fn::Select:
+              - 1
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Fn::Select:
+              - 2
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          isByoVpc: false
+    Description: Manager import resources JSON.

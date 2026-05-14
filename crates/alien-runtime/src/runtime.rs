@@ -609,7 +609,7 @@ async fn stream_output(
         }
         LogExporter::None => {
             // Containers: Pass through to stdout/stderr (orchestrator captures)
-            // No prefix needed - Docker/horizond adds resource_id when sending to OTLP/LogBuffer
+            // No prefix needed; the runtime adds resource_id when sending to OTLP/LogBuffer.
             tracing::debug!("Starting passthrough log streaming");
 
             while let Ok(Some(line)) = lines.next_line().await {

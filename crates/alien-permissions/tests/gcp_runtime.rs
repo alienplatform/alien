@@ -1,6 +1,7 @@
 mod common;
 
 use alien_permissions::generators::GcpRuntimePermissionsGenerator;
+use alien_permissions::get_permission_set;
 use alien_permissions::BindingTarget;
 use common::*;
 use insta::assert_json_snapshot;
@@ -88,6 +89,27 @@ fn test_gcp_condition_interpolation() {
     assert_eq!(
         condition.expression,
         "resource.name.startsWith('projects/_/buckets/my-stack-')"
+    );
+}
+
+#[test]
+fn test_gcp_vault_data_write_resource_condition_uses_project_number_and_vault_prefix() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("vault/data-write")
+        .expect("vault/data-write permission set should exist");
+    let context = create_test_context().with_resource_name("my-stack-secrets");
+
+    let result = generator
+        .generate_bindings(permission_set, BindingTarget::Resource, &context)
+        .expect("Should generate GCP vault data-write binding successfully");
+
+    assert_eq!(result.bindings.len(), 1);
+    let binding = &result.bindings[0];
+    let condition = binding.condition.as_ref().unwrap();
+    assert_eq!(condition.title, "ResourceVaultSecrets");
+    assert_eq!(
+        condition.expression,
+        "resource.name.startsWith(\"projects/123456789012/secrets/my-stack-secrets-\")"
     );
 }
 

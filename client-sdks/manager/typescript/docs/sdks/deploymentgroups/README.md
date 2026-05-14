@@ -7,7 +7,9 @@ Deployment group management
 ### Available Operations
 
 * [listDeploymentGroups](#listdeploymentgroups)
-* [createDeploymentGroup](#createdeploymentgroup)
+* [createDeploymentGroup](#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls — see the
+trait doc on [`DeploymentStore`] for the convention.
 * [getDeploymentGroup](#getdeploymentgroup)
 * [createDeploymentGroupToken](#createdeploymentgrouptoken)
 
@@ -80,6 +82,8 @@ run();
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## createDeploymentGroup
+
+`POST /v1/deployment-groups` — Inbound: workspace bearer.
 
 ### Example Usage
 

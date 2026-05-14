@@ -40,6 +40,9 @@ pub struct Args {
     #[arg(long, env = "SYNC_TOKEN_FILE")]
     pub sync_token_file: Option<PathBuf>,
 
+    #[arg(long, env = "DEPLOYMENT_ID")]
+    pub deployment_id: Option<String>,
+
     #[arg(long, env = "AGENT_NAME")]
     pub agent_name: Option<String>,
 
@@ -55,11 +58,20 @@ pub struct Args {
     #[arg(long, env = "EXTERNAL_BINDINGS")]
     pub external_bindings: Option<String>,
 
+    #[arg(long, env = "EXTERNAL_BINDINGS_FILE")]
+    pub external_bindings_file: Option<PathBuf>,
+
     #[arg(long, env = "PUBLIC_URLS")]
     pub public_urls: Option<String>,
 
+    #[arg(long, env = "PUBLIC_URLS_FILE")]
+    pub public_urls_file: Option<PathBuf>,
+
     #[arg(long, env = "STACK_SETTINGS")]
     pub stack_settings: Option<String>,
+
+    #[arg(long, env = "STACK_SETTINGS_FILE")]
+    pub stack_settings_file: Option<PathBuf>,
 
     #[arg(long, env = "SYNC_INTERVAL", default_value = "30")]
     pub sync_interval: u64,
@@ -142,8 +154,13 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
     let effective_sync_url = args
         .sync_url
         .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
-    let effective_sync_token = cli_sync_token
-        .or_else(|| embedded_config.as_ref().and_then(|c| c.token.clone()));
+    let effective_sync_token =
+        cli_sync_token.or_else(|| embedded_config.as_ref().and_then(|c| c.token.clone()));
+    let configured_deployment_id = args.deployment_id.or_else(|| {
+        embedded_config
+            .as_ref()
+            .and_then(|c| c.deployment_id.clone())
+    });
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -158,6 +175,9 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
             if let Some(stored_deployment_id) = db.get_deployment_id().await? {
                 info!("   Using stored deployment ID: {}", stored_deployment_id);
+            } else if let Some(deployment_id) = configured_deployment_id {
+                info!("   Using configured deployment ID: {}", deployment_id);
+                db.set_deployment_id(&deployment_id).await?;
             } else {
                 info!("   First startup, initializing with manager...");
 
@@ -203,13 +223,34 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
         }
     };
 
-    let external_bindings = parse_json_opt::<alien_core::ExternalBindings>(
+    let external_bindings_json = load_config_value(
         args.external_bindings,
+        args.external_bindings_file.as_deref(),
+        "external bindings",
+        true,
+    )
+    .await?;
+    let external_bindings = parse_json_opt::<alien_core::ExternalBindings>(
+        external_bindings_json,
         "external bindings",
     )?;
-    let public_urls = parse_json_opt::<HashMap<String, String>>(args.public_urls, "public URLs")?;
+    let public_urls_json = load_config_value(
+        args.public_urls,
+        args.public_urls_file.as_deref(),
+        "public URLs",
+        false,
+    )
+    .await?;
+    let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
+    let stack_settings_json = load_config_value(
+        args.stack_settings,
+        args.stack_settings_file.as_deref(),
+        "stack settings",
+        false,
+    )
+    .await?;
     let mut stack_settings =
-        parse_json_opt::<alien_core::StackSettings>(args.stack_settings, "stack settings")?
+        parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
 
     if let Some(bindings) = external_bindings {
@@ -240,12 +281,11 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
     let service_provider: Option<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>> =
         if args.platform == alien_core::Platform::Local {
             let data_path = std::path::Path::new(&agent_config.data_dir);
-            let local_bindings =
-                alien_local::LocalBindingsProvider::new(data_path).context(
-                    ErrorData::ConfigurationError {
-                        message: "Failed to create LocalBindingsProvider".to_string(),
-                    },
-                )?;
+            let local_bindings = alien_local::LocalBindingsProvider::new(data_path).context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to create LocalBindingsProvider".to_string(),
+                },
+            )?;
             Some(std::sync::Arc::new(
                 alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local_bindings),
             ))
@@ -452,9 +492,7 @@ async fn initialize_with_manager(
             .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
     });
 
-    let mut builder = client
-        .initialize()
-        .body_map(|b| b.platform(Some(sdk_platform)));
+    let mut builder = client.initialize().body_map(|b| b.platform(sdk_platform));
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
@@ -520,17 +558,50 @@ fn parse_json_opt<T: serde::de::DeserializeOwned>(
     }
 }
 
+async fn load_config_value(
+    inline: Option<String>,
+    file: Option<&std::path::Path>,
+    label: &str,
+    sensitive: bool,
+) -> Result<Option<String>> {
+    if let Some(value) = inline {
+        return Ok(Some(value));
+    }
+    if let Some(path) = file {
+        return if sensitive {
+            Ok(Some(read_secret_file(path, label).await?))
+        } else {
+            Ok(Some(read_config_file(path, label).await?))
+        };
+    }
+    Ok(None)
+}
+
+async fn read_config_file(path: &std::path::Path, label: &str) -> Result<String> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to read {} file '{}'", label, path.display()),
+        })?;
+    let trimmed = contents.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("{} file '{}' is empty", label, path.display()),
+        }));
+    }
+    Ok(trimmed)
+}
+
 async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata =
-            tokio::fs::metadata(path)
-                .await
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Failed to stat {} file '{}'", label, path.display()),
-                })?;
+        let metadata = tokio::fs::metadata(path).await.into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: format!("Failed to stat {} file '{}'", label, path.display()),
+            },
+        )?;
         let mode = metadata.permissions().mode() & 0o777;
         if mode != 0o600 {
             return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -544,13 +615,12 @@ async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String>
         }
     }
 
-    let contents =
-        tokio::fs::read_to_string(path)
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to read {} file '{}'", label, path.display()),
-            })?;
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to read {} file '{}'", label, path.display()),
+        })?;
     let trimmed = contents.trim().to_string();
     if trimmed.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {

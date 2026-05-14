@@ -13,6 +13,7 @@ use quick_xml;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::debug;
 
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -20,6 +21,11 @@ use tracing::debug;
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait S3Api: Send + Sync + std::fmt::Debug {
     async fn create_bucket(&self, bucket: &str) -> Result<()>;
+    async fn put_bucket_abac_tags(
+        &self,
+        bucket: &str,
+        tags: &HashMap<String, String>,
+    ) -> Result<()>;
     async fn head_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<GetBucketVersioningOutput>;
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()>;
@@ -114,6 +120,31 @@ impl S3Client {
             .map(|segment| form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>())
             .collect::<Vec<_>>()
             .join("/")
+    }
+
+    fn escape_xml(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
+    fn bucket_tagging_xml(tags: &HashMap<String, String>) -> String {
+        let mut sorted_tags = tags.iter().collect::<Vec<_>>();
+        sorted_tags.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+        let mut xml = String::from("<Tagging><TagSet>");
+        for (key, value) in sorted_tags {
+            xml.push_str("<Tag><Key>");
+            xml.push_str(&Self::escape_xml(key));
+            xml.push_str("</Key><Value>");
+            xml.push_str(&Self::escape_xml(value));
+            xml.push_str("</Value></Tag>");
+        }
+        xml.push_str("</TagSet></Tagging>");
+        xml
     }
 
     fn get_base_url(&self) -> String {
@@ -441,6 +472,31 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "CreateBucket", bucket, body.as_deref())
+    }
+
+    async fn put_bucket_abac_tags(
+        &self,
+        bucket: &str,
+        tags: &HashMap<String, String>,
+    ) -> Result<()> {
+        let host = self.host(bucket);
+        let body = Self::bucket_tagging_xml(tags);
+        let digest = md5::compute(body.as_bytes());
+        let content_md5 = STANDARD.encode(digest.0);
+        let builder = self
+            .client
+            .request(Method::PUT, self.url(bucket, "?tagging"))
+            .host(&host)
+            .content_type_xml()
+            .header("content-md5", &content_md5)
+            .content_sha256(&body)
+            .body(body.clone());
+
+        let result =
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+                .await;
+
+        Self::map_result(result, "PutBucketTagging", bucket, Some(&body))
     }
 
     async fn head_bucket(&self, bucket: &str) -> Result<()> {
@@ -1210,15 +1266,14 @@ impl S3Api for S3Client {
         configuration: &NotificationConfiguration,
     ) -> Result<()> {
         let host = self.host(bucket);
-        let body =
-            quick_xml::se::to_string_with_root("NotificationConfiguration", configuration)
-                .into_alien_error()
-                .context(ErrorData::SerializationError {
-                    message: format!(
-                        "Failed to serialize NotificationConfiguration for bucket '{}'",
-                        bucket
-                    ),
-                })?;
+        let body = quick_xml::se::to_string_with_root("NotificationConfiguration", configuration)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize NotificationConfiguration for bucket '{}'",
+                    bucket
+                ),
+            })?;
 
         let body_clone = body.clone();
         let builder = self

@@ -31,6 +31,7 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "s3:GetObject".to_string(),
@@ -76,6 +77,7 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "s3:GetObject".to_string(),
@@ -185,6 +187,7 @@ pub fn create_permission_set_missing_actions() -> PermissionSet {
         description: "Test permission set with missing actions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: None, // Missing actions for AWS
                     permissions: None,
@@ -256,6 +259,7 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "s3:GetObject".to_string(),
@@ -302,6 +306,7 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: Some(vec![
                 AwsPlatformPermission {
+                    effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
                             "lambda:InvokeFunction".to_string(),
@@ -326,6 +331,7 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                 },
                 // Cross-service permission for ECR
                 AwsPlatformPermission {
+                    effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
                             "ecr:BatchGetImage".to_string(),

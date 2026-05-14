@@ -156,7 +156,7 @@ impl TestManager {
         info!(%port, %url, "TestManager: starting");
 
         // 5. Set ALIEN_API_KEY so the manager's preflight checks
-        //    (DnsTlsRequiredCheck, HorizonRequiredCheck) skip themselves.
+        //    deployment prerequisite checks skip themselves.
         //    These checks block public ingress and containers on cloud
         //    platforms unless the alien.dev platform is available. In E2E
         //    tests, cloud providers supply their own URLs (Lambda function

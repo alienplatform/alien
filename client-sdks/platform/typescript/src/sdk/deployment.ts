@@ -10,7 +10,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Deployment extends ClientSDK {
   /**
-   * Get deployment information for the deployment page. Accepts both agent-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either agent or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+   * Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
    */
   async getInfo(
     request?: operations.GetDeploymentInfoRequest | undefined,

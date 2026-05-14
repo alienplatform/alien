@@ -7,6 +7,9 @@ pub use permissions::*;
 mod platform;
 pub use platform::*;
 
+pub mod runtime_environment;
+pub use runtime_environment::*;
+
 mod build_targets;
 pub use build_targets::*;
 
@@ -15,6 +18,12 @@ pub use error::*;
 
 mod resource;
 pub use resource::*;
+
+mod ownership;
+pub use ownership::*;
+
+mod tags;
+pub use tags::*;
 
 mod load_balancer;
 pub use load_balancer::*;
@@ -64,7 +73,9 @@ pub use commands_types::*;
 pub mod crontab_to_eventbridge;
 pub mod file_utils;
 pub mod image_rewrite;
+pub mod import;
 pub mod instance_catalog;
+pub use import::*;
 
 pub use alien_macros::alien_event;
 

@@ -4,7 +4,6 @@ use alien_core::permissions::{
     PermissionProfile, PermissionSet, PermissionSetReference, PlatformPermissions,
 };
 use alien_core::ServiceAccount;
-use indexmap::IndexMap;
 
 /// Creates a basic ServiceAccount for testing with minimal permissions
 pub fn basic_service_account() -> ServiceAccount {
@@ -64,6 +63,7 @@ pub fn storage_read_permission_set() -> PermissionSet {
         description: "Allows reading data from storage buckets and containers".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "s3:GetObject".to_string(),
@@ -142,6 +142,7 @@ pub fn storage_write_permission_set() -> PermissionSet {
         description: "Allows writing data to storage buckets and containers".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "s3:PutObject".to_string(),
@@ -219,6 +220,7 @@ pub fn function_execute_permission_set() -> PermissionSet {
         description: "Allows executing functions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "lambda:InvokeFunction".to_string(),

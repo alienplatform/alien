@@ -109,7 +109,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     }
 
     // Create token via Platform API — returns deploymentLink
-    let token_workspace_param = alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(workspace.as_str())
+    let token_workspace_param =
+        alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
+            workspace.as_str(),
+        )
         .map_err(|e| {
             AlienError::new(ErrorData::ValidationError {
                 field: "workspace".to_string(),
@@ -117,24 +120,21 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             })
         })?;
 
-    let dg_id_param =
-        alien_platform_api::types::CreateDeploymentGroupTokenId::try_from(
-            deployment_group_id.as_str(),
-        )
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: format!("Invalid deployment group ID: {}", e),
-            })
-        })?;
+    let dg_id_param = alien_platform_api::types::CreateDeploymentGroupTokenId::try_from(
+        deployment_group_id.as_str(),
+    )
+    .map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "id".to_string(),
+            message: format!("Invalid deployment group ID: {}", e),
+        })
+    })?;
 
     let token_response = client
         .create_deployment_group_token()
         .id(&dg_id_param)
         .workspace(&token_workspace_param)
-        .body(alien_platform_api::types::CreateDeploymentGroupTokenRequest {
-            description: None,
-        })
+        .body(alien_platform_api::types::CreateDeploymentGroupTokenRequest { description: None })
         .send()
         .await
         .into_sdk_error()
@@ -252,15 +252,12 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     println!("{} {}", dim_label("Customer"), name);
     println!("{} {}", dim_label("Token"), accent(&token_response.token));
     println!();
-    println!(
-        "{}",
-        dim_label("Share with the customer's admin:")
-    );
+    println!("{}", dim_label("Share with the customer's admin:"));
     println!(
         "  curl -fsSL {}/install | bash",
         mgr.manager_url.trim_end_matches('/')
     );
-    println!("  alien-deploy up \\");
+    println!("  alien-deploy deploy \\");
     println!("    --token {} \\", token_response.token);
     println!("    --name <deployment-name> \\");
     println!("    --platform <aws|gcp|azure> \\");

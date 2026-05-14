@@ -55,7 +55,7 @@ Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cl
 |-------|-------------|
 | [alien-cli](./alien-cli/) | Developer CLI — `alien dev`, `alien build`, `alien release`, `alien deploy`, `alien serve` |
 | [alien-cli-common](./alien-cli-common/) | Shared CLI utilities (networking, TUI) used by both CLIs |
-| [alien-deploy-cli](./alien-deploy-cli/) | Deployment CLI for customer admins — `alien-deploy up/down/status/list/agent` |
+| [alien-deploy-cli](./alien-deploy-cli/) | Deployment CLI for customer admins — `alien-deploy deploy/destroy/status/list/agent` |
 
 ## Local Platform
 

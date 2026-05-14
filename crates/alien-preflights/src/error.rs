@@ -56,6 +56,22 @@ pub enum ErrorData {
         platform: Option<String>,
     },
 
+    /// A deployment prerequisite check failed
+    #[error(
+        code = "DEPLOYMENT_PREREQUISITE_CHECK_FAILED",
+        message = "Deployment prerequisite check '{check_name}' failed: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DeploymentPrerequisiteCheckFailed {
+        /// Name of the check that failed
+        check_name: String,
+        /// Detailed error message
+        message: String,
+        /// Platform being checked
+        platform: Option<String>,
+    },
+
     /// A stack mutation failed
     #[error(
         code = "STACK_MUTATION_FAILED",

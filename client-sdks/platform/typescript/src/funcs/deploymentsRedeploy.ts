@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+ * Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
  */
 export function deploymentsRedeploy(
   client: AlienCore,

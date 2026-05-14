@@ -1,6 +1,6 @@
 # RetryDeploymentResponse
 
-Agent retry enqueued successfully.
+Deployment retry enqueued successfully.
 
 ## Example Usage
 

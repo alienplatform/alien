@@ -15,10 +15,10 @@ expression: result
       ],
       "Resource": [
         {
-          "Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*"
+          "Fn::Sub": "arn:${AWS::Partition}:s3:::${AWS::StackName}-*"
         },
         {
-          "Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*/*"
+          "Fn::Sub": "arn:${AWS::Partition}:s3:::${AWS::StackName}-*/*"
         }
       ]
     }

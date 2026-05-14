@@ -528,8 +528,8 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
     ) -> String {
         format!(
             "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-            &self.token_cache.config().subscription_id, 
-            resource_group_name, 
+            &self.token_cache.config().subscription_id,
+            resource_group_name,
             resource_name
         )
     }

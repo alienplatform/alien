@@ -8,6 +8,10 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import { GitMetadata, GitMetadata$inboundSchema } from "./gitmetadata.js";
 import {
+  SetupFingerprintInfo,
+  SetupFingerprintInfo$inboundSchema,
+} from "./setupfingerprintinfo.js";
+import {
   StackByPlatform,
   StackByPlatform$inboundSchema,
 } from "./stackbyplatform.js";
@@ -21,6 +25,7 @@ export type Release = {
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
   stack: StackByPlatform;
+  setupFingerprints: { [k: string]: SetupFingerprintInfo };
   rootDirectory?: string | null | undefined;
   workspaceId: string;
 };
@@ -32,6 +37,7 @@ export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   stack: StackByPlatform$inboundSchema,
+  setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
   workspaceId: z.string(),
 });

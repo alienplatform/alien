@@ -163,12 +163,7 @@ impl CommandServer {
     ///
     /// Performs HMAC verification first (constant-time), then checks expiration,
     /// to avoid leaking timing information about token validity windows.
-    pub fn verify_response_token(
-        &self,
-        command_id: &str,
-        token: &str,
-        expires: i64,
-    ) -> bool {
+    pub fn verify_response_token(&self, command_id: &str, token: &str, expires: i64) -> bool {
         // Validate token format: SHA-256 HMAC = 32 bytes = 64 hex chars.
         if token.len() != 64 {
             return false;

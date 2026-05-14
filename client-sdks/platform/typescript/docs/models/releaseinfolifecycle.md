@@ -7,11 +7,11 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ```typescript
 import { ReleaseInfoLifecycle } from "@alienplatform/platform-api/models";
 
-let value: ReleaseInfoLifecycle = "live-on-setup";
+let value: ReleaseInfoLifecycle = "live";
 ```
 
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

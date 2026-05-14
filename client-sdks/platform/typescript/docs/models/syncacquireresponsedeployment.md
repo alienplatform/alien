@@ -10,7 +10,7 @@ let value: SyncAcquireResponseDeployment = {
   projectId: "<id>",
   current: {
     platform: "aws",
-    status: "updating",
+    status: "update-failed",
   },
   config: {
     environmentVariables: {
@@ -27,6 +27,6 @@ let value: SyncAcquireResponseDeployment = {
 | Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  | Example                                                                      |
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `deploymentId`                                                               | *string*                                                                     | :heavy_check_mark:                                                           | ID of the acquired deployment                                                | dep_0c29fq4a2yjb7kx3smwdgxlc                                                 |
-| `projectId`                                                                  | *string*                                                                     | :heavy_check_mark:                                                           | Project ID the agent belongs to                                              |                                                                              |
+| `projectId`                                                                  | *string*                                                                     | :heavy_check_mark:                                                           | Project ID the deployment belongs to                                         |                                                                              |
 | `current`                                                                    | [models.SyncAcquireResponseCurrent](../models/syncacquireresponsecurrent.md) | :heavy_check_mark:                                                           | Current deployment state (includes releases)                                 |                                                                              |
 | `config`                                                                     | [models.SyncAcquireResponseConfig](../models/syncacquireresponseconfig.md)   | :heavy_check_mark:                                                           | Deployment configuration                                                     |                                                                              |

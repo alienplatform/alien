@@ -16,7 +16,7 @@ export type GetContainerDefinitionDeploymentsRequest = {
   /**
    * Filter by project ID or name.
    */
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -32,7 +32,6 @@ export type GetContainerDefinitionDeploymentsDeployment = {
   deploymentName: string;
   deploymentGroupId?: string | null | undefined;
   deploymentGroupName?: string | undefined;
-  projectName?: string | null | undefined;
   status: string;
   statusReason: string | null;
   statusMessage: string | null;
@@ -58,7 +57,7 @@ export type GetContainerDefinitionDeploymentsResponse = {
 export type GetContainerDefinitionDeploymentsRequest$Outbound = {
   containerName: string;
   workspace?: string | undefined;
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -69,7 +68,7 @@ export const GetContainerDefinitionDeploymentsRequest$outboundSchema: z.ZodType<
 > = z.object({
   containerName: z.string(),
   workspace: z.string().optional(),
-  project: z.string().optional(),
+  project: z.string(),
   deploymentGroupId: z.string().optional(),
 });
 
@@ -92,7 +91,6 @@ export const GetContainerDefinitionDeploymentsDeployment$inboundSchema:
     deploymentName: z.string(),
     deploymentGroupId: z.nullable(z.string()).optional(),
     deploymentGroupName: z.string().optional(),
-    projectName: z.nullable(z.string()).optional(),
     status: z.string(),
     statusReason: z.nullable(z.string()),
     statusMessage: z.nullable(z.string()),

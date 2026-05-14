@@ -56,5 +56,6 @@ pub trait DeploymentLoopTransport: Send + Sync {
         config: &DeploymentConfig,
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
+        suggested_delay_ms: Option<u64>,
     ) -> Result<StepReconcileResult, AlienError>;
 }

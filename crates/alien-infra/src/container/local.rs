@@ -1,6 +1,6 @@
 //! Local Container controller.
 //!
-//! On the Local platform, containers run via Docker directly (not Horizon).
+//! On the Local platform, containers run via Docker directly.
 //! The LocalContainerManager handles Docker API calls.
 
 use std::time::Duration;
@@ -20,7 +20,7 @@ use alien_macros::controller;
 /// Local Container controller.
 ///
 /// Manages containerized workloads on the Local platform using Docker.
-/// Unlike cloud platforms, there's no Horizon - containers run directly
+/// Unlike cloud platforms, containers run directly
 /// via the Docker daemon.
 #[controller]
 pub struct LocalContainerController {
@@ -144,9 +144,8 @@ impl LocalContainerController {
 
         // Build environment variables using EnvironmentVariableBuilder
         // This populates binding env vars with HOST paths
-        let mut env_vars = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_container_transport_env_vars()
+        let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_container_runtime_env_vars(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();

@@ -11,7 +11,7 @@ let value: SyncAcquireResponseTargetReleaseResources = {
     type: "<value>",
   },
   dependencies: [],
-  lifecycle: "live",
+  lifecycle: "frozen",
 };
 ```
 

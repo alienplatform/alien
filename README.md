@@ -213,7 +213,7 @@ export default new alien.Stack("my-app")
 
 From this definition, Alien derives three layers of permissions:
 
-**Provisioning** — Creates all resources during initial setup. The customer's admin runs `alien-deploy up` once with their own credentials. Alien never holds these permissions.
+**Provisioning** — Creates all resources during initial setup. The customer's admin runs `alien-deploy deploy` once with their own credentials. Alien never holds these permissions.
 
 **Management** — What Alien uses day-to-day to manage the deployment:
 

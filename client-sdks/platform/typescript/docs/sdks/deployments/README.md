@@ -5,19 +5,20 @@
 ### Available Operations
 
 * [list](#list) - Retrieve all deployments.
-* [create](#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+* [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 * [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
-* [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
-* [get](#get) - Retrieve an agent by ID.
-* [delete](#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+* [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
+* [get](#get) - Retrieve a deployment by ID.
+* [delete](#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [import](#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
-* [redeploy](#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+* [import](#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
+* [acceptCloudFormationCallback](#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+* [redeploy](#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
-* [retry](#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
-* [updateEnvironmentVariables](#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
-* [createToken](#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+* [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+* [updateEnvironmentVariables](#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+* [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ## list
 
@@ -97,7 +98,7 @@ run();
 
 ## create
 
-Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 
 ### Example Usage
 
@@ -338,7 +339,7 @@ run();
 
 ## listFilterDeploymentGroups
 
-List deployment groups with agent counts. Used for filter dropdowns.
+List deployment groups with deployment counts. Used for filter dropdowns.
 
 ### Example Usage
 
@@ -414,7 +415,7 @@ run();
 
 ## get
 
-Retrieve an agent by ID.
+Retrieve a deployment by ID.
 
 ### Example Usage
 
@@ -491,7 +492,7 @@ run();
 
 ## delete
 
-Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 
 ### Example Usage
 
@@ -645,7 +646,7 @@ run();
 
 ## import
 
-Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 
 ### Example Usage
 
@@ -661,15 +662,33 @@ async function run() {
   const result = await alien.deployments.import({
     workspace: "my-workspace",
     importDeploymentRequest: {
-      name: "acme-prod",
-      platform: "gcp",
+      mode: "forward",
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      project: "<value>",
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
-        type: "cloudformation",
-        stackName: "<value>",
+        deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        platform: "gcp",
         region: "<value>",
+        setupTarget: "<value>",
+        setupFingerprint: "<value>",
+        setupFingerprintVersion: 994015,
+        stackSettings: {},
+        managementConfig: {
+          platform: "kubernetes",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
       },
     },
   });
@@ -698,15 +717,33 @@ async function run() {
   const res = await deploymentsImport(alien, {
     workspace: "my-workspace",
     importDeploymentRequest: {
-      name: "acme-prod",
-      platform: "gcp",
+      mode: "forward",
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      project: "<value>",
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
-        type: "cloudformation",
-        stackName: "<value>",
+        deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        platform: "gcp",
         region: "<value>",
+        setupTarget: "<value>",
+        setupFingerprint: "<value>",
+        setupFingerprintVersion: 994015,
+        stackSettings: {},
+        managementConfig: {
+          platform: "kubernetes",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
       },
     },
   });
@@ -742,9 +779,150 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## acceptCloudFormationCallback
+
+Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="acceptCloudFormationCallback" method="post" path="/v1/deployments/cloudformation-callbacks" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.acceptCloudFormationCallback({
+    workspace: "my-workspace",
+    cloudFormationCallbackRequest: {
+      stackId: "<id>",
+      requestId: "<id>",
+      logicalResourceId: "<id>",
+      requestType: "Delete",
+      responseUrl: "https://candid-formamide.info",
+      source: {
+        deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        platform: "kubernetes",
+        region: "<value>",
+        setupTarget: "<value>",
+        setupFingerprint: "<value>",
+        setupFingerprintVersion: 688409,
+        stackSettings: {},
+        managementConfig: {
+          managingTenantId: "<id>",
+          platform: "azure",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsAcceptCloudFormationCallback } from "@alienplatform/platform-api/funcs/deploymentsAcceptCloudFormationCallback.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsAcceptCloudFormationCallback(alien, {
+    workspace: "my-workspace",
+    cloudFormationCallbackRequest: {
+      stackId: "<id>",
+      requestId: "<id>",
+      logicalResourceId: "<id>",
+      requestType: "Delete",
+      responseUrl: "https://candid-formamide.info",
+      source: {
+        deploymentName: "<value>",
+        stackPrefix: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        platform: "kubernetes",
+        region: "<value>",
+        setupTarget: "<value>",
+        setupFingerprint: "<value>",
+        setupFingerprintVersion: 688409,
+        stackSettings: {},
+        managementConfig: {
+          managingTenantId: "<id>",
+          platform: "azure",
+        },
+        resources: [
+          {
+            id: "<id>",
+            type: "<value>",
+            importData: {
+              "key": "<value>",
+              "key1": "<value>",
+              "key2": "<value>",
+            },
+          },
+        ],
+      },
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsAcceptCloudFormationCallback failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.AcceptCloudFormationCallbackRequest](../../models/operations/acceptcloudformationcallbackrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.AcceptCloudFormationCallbackResponse](../../models/operations/acceptcloudformationcallbackresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## redeploy
 
-Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 
 ### Example Usage
 
@@ -904,7 +1082,7 @@ run();
 
 ## retry
 
-Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 
 ### Example Usage
 
@@ -981,7 +1159,7 @@ run();
 
 ## updateEnvironmentVariables
 
-Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
+Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 
 ### Example Usage
 
@@ -1058,7 +1236,7 @@ run();
 
 ## createToken
 
-Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ### Example Usage
 

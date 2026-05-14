@@ -1,6 +1,6 @@
 # NewDeploymentRequest
 
-Request schema for creating a new agent
+Request schema for creating a new deployment
 
 ## Example Usage
 

@@ -41,7 +41,8 @@ const value: models.OutputsCloudformation = {
   launchStackUrl: "https://weird-newsprint.info/",
   sha256: "<value>",
   size: 243114,
-  templateUrl: "https://teeming-legging.biz/",
+  stackPolicyUrl: "https://teeming-legging.biz/",
+  templateUrl: "https://similar-petticoat.name",
   type: "cloudformation",
 };
 ```
@@ -50,11 +51,15 @@ const value: models.OutputsCloudformation = {
 
 ```typescript
 const value: models.OutputsTerraform = {
-  gpgPublicKey: {
-    asciiArmor: "<value>",
-    keyId: "<id>",
+  modules: {},
+  provider: {
+    gpgPublicKey: {
+      asciiArmor: "<value>",
+      keyId: "<id>",
+    },
+    platforms: {},
+    source: "<value>",
   },
-  platforms: {},
   type: "terraform",
 };
 ```

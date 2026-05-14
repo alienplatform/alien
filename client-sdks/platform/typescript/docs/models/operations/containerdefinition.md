@@ -7,23 +7,21 @@ import { ContainerDefinition } from "@alienplatform/platform-api/models/operatio
 
 let value: ContainerDefinition = {
   name: "<value>",
-  projectId: "<id>",
-  projectName: "<value>",
-  totalInstances: 382885,
-  runningInstances: 115495,
-  failingInstances: 373415,
-  pendingInstances: 533962,
-  stoppedInstances: 161475,
-  avgCpuPercent: 9918.9,
-  avgMemoryPercent: null,
-  totalReplicas: 577786,
-  healthyReplicas: 853723,
-  attentionCount: 131071,
-  image: "https://loremflickr.com/2726/1266?lock=3189269540663527",
-  stateful: true,
+  totalInstances: 660708,
+  runningInstances: 605148,
+  failingInstances: 382885,
+  pendingInstances: 115495,
+  stoppedInstances: 373415,
+  avgCpuPercent: 1614.75,
+  avgMemoryPercent: 9918.9,
+  totalReplicas: 69849,
+  healthyReplicas: 577786,
+  attentionCount: 853723,
+  image: "https://loremflickr.com/2005/2726?lock=1309587520978016",
+  stateful: false,
   hasAutoscaling: null,
-  avgLatencyP95Ms: 5462.75,
-  avgErrorRate: 3582.68,
+  avgLatencyP95Ms: null,
+  avgErrorRate: 5462.75,
 };
 ```
 
@@ -32,8 +30,6 @@ let value: ContainerDefinition = {
 | Field                                                    | Type                                                     | Required                                                 | Description                                              |
 | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
 | `name`                                                   | *string*                                                 | :heavy_check_mark:                                       | Container definition name (same across all deployments)  |
-| `projectId`                                              | *string*                                                 | :heavy_check_mark:                                       | Project ID this container belongs to                     |
-| `projectName`                                            | *string*                                                 | :heavy_check_mark:                                       | Project name for display (null at workspace level)       |
 | `totalInstances`                                         | *number*                                                 | :heavy_check_mark:                                       | Total deployments running this container                 |
 | `runningInstances`                                       | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
 | `failingInstances`                                       | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |

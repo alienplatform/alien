@@ -16,7 +16,13 @@ import {
 
 export type CreateReleaseRequest = {
   gitMetadata?: GitMetadata | null | undefined;
-  project?: string | null | undefined;
+  /**
+   * Project this release belongs to. Required. The standalone server
+   *
+   * @remarks
+   * uses the canonical value `"default"`.
+   */
+  projectId: string;
   /**
    * The release API accepts stacks keyed by platform.
    *
@@ -29,7 +35,7 @@ export type CreateReleaseRequest = {
 /** @internal */
 export type CreateReleaseRequest$Outbound = {
   gitMetadata?: GitMetadata$Outbound | null | undefined;
-  project?: string | null | undefined;
+  projectId: string;
   stack: StackByPlatform$Outbound;
 };
 
@@ -39,7 +45,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   CreateReleaseRequest
 > = z.object({
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
-  project: z.nullable(z.string()).optional(),
+  projectId: z.string(),
   stack: StackByPlatform$outboundSchema,
 });
 

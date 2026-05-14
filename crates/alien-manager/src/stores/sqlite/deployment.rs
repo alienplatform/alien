@@ -6,7 +6,10 @@ use sea_query::{Expr, Order, Query, SqliteQueryBuilder};
 use std::sync::Arc;
 use tracing::warn;
 
-use alien_core::{EnvironmentVariable, Platform};
+use alien_core::{
+    import::ImportSourceKind, DeleteScope, EnvironmentInfo, EnvironmentVariable, Platform,
+    RuntimeMetadata, StackState,
+};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use super::database::{db_error, RowParser, SqliteDatabase};
@@ -14,6 +17,13 @@ use super::migrations::{DeploymentGroups, Deployments};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
+
+fn import_source_to_string(source: &ImportSourceKind) -> String {
+    serde_json::to_value(source)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| format!("{source:?}").to_ascii_lowercase())
+}
 
 pub struct SqliteDeploymentStore {
     db: Arc<SqliteDatabase>,
@@ -25,7 +35,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 21] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 25] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -37,6 +47,10 @@ impl SqliteDeploymentStore {
         Deployments::RuntimeMetadata,
         Deployments::CurrentReleaseId,
         Deployments::DesiredReleaseId,
+        Deployments::ImportSource,
+        Deployments::SetupTarget,
+        Deployments::SetupFingerprint,
+        Deployments::SetupFingerprintVersion,
         Deployments::EnvironmentVariables,
         Deployments::DeploymentToken,
         Deployments::RetryRequested,
@@ -55,10 +69,19 @@ impl SqliteDeploymentStore {
         let platform: Platform = platform_str.parse().map_err(|e: String| db_error(&e))?;
 
         // Parse user environment variables from JSON TEXT column
-        let user_environment_variables: Option<Vec<EnvironmentVariable>> =
-            p.optional_json(11, "environment_variables")?;
+        let import_source = p
+            .optional_string(11, "import_source")?
+            .map(|source| serde_json::from_value(serde_json::Value::String(source)))
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to parse import_source".to_string(),
+            })?;
 
-        let retry_requested_int: i64 = p.optional_i64(13, "retry_requested")?.unwrap_or(0);
+        let user_environment_variables: Option<Vec<EnvironmentVariable>> =
+            p.optional_json(15, "environment_variables")?;
+
+        let retry_requested_int: i64 = p.optional_i64(17, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
             id: p.string(0, "id")?,
@@ -72,20 +95,26 @@ impl SqliteDeploymentStore {
             runtime_metadata: p.optional_json(8, "runtime_metadata")?,
             current_release_id: p.optional_string(9, "current_release_id")?,
             desired_release_id: p.optional_string(10, "desired_release_id")?,
+            import_source,
+            setup_target: p.optional_string(12, "setup_target")?,
+            setup_fingerprint: p.optional_string(13, "setup_fingerprint")?,
+            setup_fingerprint_version: p
+                .optional_i64(14, "setup_fingerprint_version")?
+                .map(|value| value as u32),
             user_environment_variables,
-            deployment_token: p.optional_string(12, "deployment_token")?,
+            deployment_token: p.optional_string(16, "deployment_token")?,
             management_config: None,
             retry_requested: retry_requested_int != 0,
-            locked_by: p.optional_string(14, "locked_by")?,
-            locked_at: p.optional_datetime(15, "locked_at")?,
-            created_at: p.datetime(16, "created_at")?,
-            updated_at: p.optional_datetime(17, "updated_at")?,
-            error: p.optional_json(18, "error")?,
+            locked_by: p.optional_string(18, "locked_by")?,
+            locked_at: p.optional_datetime(19, "locked_at")?,
+            created_at: p.datetime(20, "created_at")?,
+            updated_at: p.optional_datetime(21, "updated_at")?,
+            error: p.optional_json(22, "error")?,
             workspace_id: p
-                .optional_string(19, "workspace_id")?
+                .optional_string(23, "workspace_id")?
                 .unwrap_or_else(|| "default".to_string()),
             project_id: p
-                .optional_string(20, "project_id")?
+                .optional_string(24, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
     }
@@ -203,6 +232,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             runtime_metadata: None,
             current_release_id: None,
             desired_release_id: None,
+            import_source: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
             user_environment_variables: params.environment_variables,
             deployment_token: params.deployment_token,
             management_config: None,
@@ -213,6 +246,229 @@ impl DeploymentStore for SqliteDeploymentStore {
             updated_at: None,
             error: None,
         })
+    }
+
+    async fn create_with_state(
+        &self,
+        caller: &crate::auth::Subject,
+        params: CreateImportedDeploymentParams,
+    ) -> Result<DeploymentRecord, AlienError> {
+        if self
+            .get_deployment_by_name(caller, &params.deployment_group_id, &params.name)
+            .await?
+            .is_some()
+        {
+            return Err(AlienError::new(ErrorData::DeploymentNameConflict {
+                name: params.name,
+                deployment_group_id: params.deployment_group_id,
+            })
+            .into_generic());
+        }
+
+        let id = ids::deployment_id();
+        let now = Utc::now();
+
+        let stack_settings_json = serde_json::to_string(&params.stack_settings)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize stack_settings".to_string(),
+            })?;
+
+        let stack_state_json = serde_json::to_string(&params.stack_state)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported stack_state".to_string(),
+            })?;
+        let runtime_metadata_json = serde_json::to_string(&params.runtime_metadata)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported runtime_metadata".to_string(),
+            })?;
+        let environment_info_json: Option<String> = params
+            .environment_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported environment_info".to_string(),
+            })?;
+
+        let sql = {
+            let mut columns = vec![
+                Deployments::Id,
+                Deployments::Name,
+                Deployments::DeploymentGroupId,
+                Deployments::Platform,
+                Deployments::Status,
+                Deployments::StackSettings,
+                Deployments::StackState,
+                Deployments::RuntimeMetadata,
+                Deployments::SetupTarget,
+                Deployments::SetupFingerprint,
+                Deployments::SetupFingerprintVersion,
+                Deployments::RetryRequested,
+                Deployments::CreatedAt,
+            ];
+            let mut values: Vec<sea_query::SimpleExpr> = vec![
+                id.clone().into(),
+                params.name.clone().into(),
+                params.deployment_group_id.clone().into(),
+                params.platform.as_str().to_string().into(),
+                params.status.clone().into(),
+                stack_settings_json.into(),
+                stack_state_json.into(),
+                runtime_metadata_json.into(),
+                params.setup_target.clone().into(),
+                params.setup_fingerprint.clone().into(),
+                (params.setup_fingerprint_version as i64).into(),
+                0i64.into(),
+                now.to_rfc3339().into(),
+            ];
+
+            if let Some(ref release_id) = params.current_release_id {
+                columns.push(Deployments::CurrentReleaseId);
+                values.push(release_id.clone().into());
+            }
+
+            if let Some(ref env_info_json) = environment_info_json {
+                columns.push(Deployments::EnvironmentInfo);
+                values.push(env_info_json.clone().into());
+            }
+
+            if let Some(ref import_source) = params.import_source {
+                columns.push(Deployments::ImportSource);
+                values.push(import_source_to_string(import_source).into());
+            }
+
+            if let Some(ref token) = params.deployment_token {
+                columns.push(Deployments::DeploymentToken);
+                values.push(token.clone().into());
+            }
+
+            Query::insert()
+                .into_table(Deployments::Table)
+                .columns(columns)
+                .values(values)
+                .map_err(|e| {
+                    db_error(&format!(
+                        "Failed to build imported deployment insert query: {}",
+                        e
+                    ))
+                })?
+                .to_string(SqliteQueryBuilder)
+        };
+
+        self.db.execute(&sql).await?;
+
+        Ok(DeploymentRecord {
+            id,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: params.name,
+            deployment_group_id: params.deployment_group_id,
+            platform: params.platform,
+            status: params.status,
+            stack_settings: params.stack_settings,
+            stack_state: Some(params.stack_state),
+            environment_info: params.environment_info,
+            runtime_metadata: Some(params.runtime_metadata),
+            current_release_id: params.current_release_id,
+            desired_release_id: None,
+            import_source: params.import_source,
+            setup_target: Some(params.setup_target),
+            setup_fingerprint: Some(params.setup_fingerprint),
+            setup_fingerprint_version: Some(params.setup_fingerprint_version),
+            user_environment_variables: None,
+            deployment_token: params.deployment_token,
+            management_config: params.management_config,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: now,
+            updated_at: None,
+            error: None,
+        })
+    }
+
+    async fn update_imported_stack_state(
+        &self,
+        caller: &crate::auth::Subject,
+        deployment_id: &str,
+        stack_state: StackState,
+        environment_info: Option<EnvironmentInfo>,
+        runtime_metadata: RuntimeMetadata,
+        current_release_id: Option<String>,
+        setup_target: String,
+        setup_fingerprint: String,
+        setup_fingerprint_version: u32,
+    ) -> Result<DeploymentRecord, AlienError> {
+        let mut merged_stack_state = stack_state;
+        if let Some(existing) = self.get_deployment(caller, deployment_id).await? {
+            if let Some(mut existing_stack_state) = existing.stack_state {
+                for (resource_id, resource_state) in merged_stack_state.resources {
+                    existing_stack_state
+                        .resources
+                        .insert(resource_id, resource_state);
+                }
+                merged_stack_state = existing_stack_state;
+            }
+        }
+
+        let stack_state_json = serde_json::to_string(&merged_stack_state)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported stack_state".to_string(),
+            })?;
+        let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported runtime_metadata".to_string(),
+            })?;
+        let environment_info_json: Option<String> = environment_info
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported environment_info".to_string(),
+            })?;
+
+        let now = Utc::now();
+
+        let sql = {
+            let mut update = Query::update();
+            update
+                .table(Deployments::Table)
+                .value(Deployments::StackState, stack_state_json)
+                .value(Deployments::EnvironmentInfo, environment_info_json)
+                .value(Deployments::RuntimeMetadata, runtime_metadata_json)
+                .value(Deployments::SetupTarget, setup_target)
+                .value(Deployments::SetupFingerprint, setup_fingerprint)
+                .value(
+                    Deployments::SetupFingerprintVersion,
+                    setup_fingerprint_version as i64,
+                )
+                .value(Deployments::UpdatedAt, now.to_rfc3339())
+                .and_where(Expr::col(Deployments::Id).eq(deployment_id));
+
+            if let Some(release_id) = current_release_id {
+                update.value(Deployments::CurrentReleaseId, release_id);
+            }
+
+            update.to_string(SqliteQueryBuilder)
+        };
+        self.db.execute(&sql).await?;
+
+        self.get_deployment(caller, deployment_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Imported deployment '{deployment_id}' disappeared mid-update — race?"
+                    ),
+                })
+            })
     }
 
     async fn get_deployment(
@@ -336,6 +592,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+        delete_scope: DeleteScope,
     ) -> Result<(), AlienError> {
         let deployment = self
             .get_deployment(caller, id)
@@ -351,9 +608,18 @@ impl DeploymentStore for SqliteDeploymentStore {
             .into_generic());
         }
 
+        let mut runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
+        runtime_metadata.delete_scope = Some(delete_scope);
+        let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize delete runtime metadata".to_string(),
+            })?;
+
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "delete-pending")
+            .value(Deployments::RuntimeMetadata, runtime_metadata_json)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -858,10 +1124,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
     }
 
-    async fn cleanup_stale_locks(
-        &self,
-        _caller: &crate::auth::Subject,
-    ) -> Result<u64, AlienError> {
+    async fn cleanup_stale_locks(&self, _caller: &crate::auth::Subject) -> Result<u64, AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::LockedBy, Option::<String>::None)

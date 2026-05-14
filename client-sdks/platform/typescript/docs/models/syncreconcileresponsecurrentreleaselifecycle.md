@@ -7,11 +7,11 @@ Describes the lifecycle of a resource within a stack, determining how it's manag
 ```typescript
 import { SyncReconcileResponseCurrentReleaseLifecycle } from "@alienplatform/platform-api/models";
 
-let value: SyncReconcileResponseCurrentReleaseLifecycle = "live-on-setup";
+let value: SyncReconcileResponseCurrentReleaseLifecycle = "live";
 ```
 
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

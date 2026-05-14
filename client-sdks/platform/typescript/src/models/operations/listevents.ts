@@ -18,6 +18,10 @@ export type ListEventsRequest = {
    */
   project?: string | undefined;
   /**
+   * Filter events to a single deployment.
+   */
+  deploymentId?: string | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -45,6 +49,7 @@ export type ListEventsResponse = {
 export type ListEventsRequest$Outbound = {
   workspace?: string | undefined;
   project?: string | undefined;
+  deploymentId?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -56,6 +61,7 @@ export const ListEventsRequest$outboundSchema: z.ZodType<
 > = z.object({
   workspace: z.string().optional(),
   project: z.string().optional(),
+  deploymentId: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });

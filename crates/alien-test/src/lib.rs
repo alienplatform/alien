@@ -24,6 +24,7 @@ pub mod build_push;
 pub mod cleanup;
 pub mod config;
 pub mod deployment;
+pub mod distribution;
 pub mod e2e;
 pub mod manager;
 pub mod ngrok;
@@ -36,6 +37,6 @@ pub use cleanup::{
 };
 pub use config::TestConfig;
 pub use deployment::TestDeployment;
-pub use e2e::{Binding, DeploymentModel, Language, TestContext};
+pub use e2e::{Binding, DeploymentModel, DistributionFlow, Language, TestContext};
 pub use manager::TestManager;
 pub use setup::{setup_target, teardown_target};

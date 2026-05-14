@@ -197,7 +197,7 @@ impl StackBuilder {
     /// // Override auto-derived permissions entirely
     /// Stack::new("my-stack".to_string())
     ///     .management(ManagementPermissions::override_(
-    ///         PermissionProfile::new().global(["storage/management", "function/management"])
+    ///         PermissionProfile::new().global(["storage/heartbeat", "function/provision"])
     ///     ))
     ///     .build();
     /// ```

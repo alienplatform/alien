@@ -77,3 +77,75 @@ pub fn get_container_apps_environment_resource_group(state: &StackState) -> Resu
         .resource_group_name
         .clone())
 }
+
+pub(crate) fn azure_resource_group_resource_id(
+    subscription_id: &str,
+    resource_group: &str,
+) -> String {
+    format!("/subscriptions/{subscription_id}/resourceGroups/{resource_group}")
+}
+
+pub(crate) fn azure_storage_account_resource_id(
+    subscription_id: &str,
+    resource_group: &str,
+    account_name: &str,
+) -> String {
+    format!(
+        "{}/providers/Microsoft.Storage/storageAccounts/{account_name}",
+        azure_resource_group_resource_id(subscription_id, resource_group)
+    )
+}
+
+pub(crate) fn azure_container_apps_environment_resource_id(
+    subscription_id: &str,
+    resource_group: &str,
+    environment_name: &str,
+) -> String {
+    format!(
+        "{}/providers/Microsoft.App/managedEnvironments/{environment_name}",
+        azure_resource_group_resource_id(subscription_id, resource_group)
+    )
+}
+
+pub(crate) fn azure_service_bus_namespace_resource_id(
+    subscription_id: &str,
+    resource_group: &str,
+    namespace_name: &str,
+) -> String {
+    format!(
+        "{}/providers/Microsoft.ServiceBus/namespaces/{namespace_name}",
+        azure_resource_group_resource_id(subscription_id, resource_group)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn azure_resource_ids_match_arm_resource_id_format() {
+        let subscription_id = "sub-123";
+        let resource_group = "alien-e2e-rg";
+
+        assert_eq!(
+            azure_resource_group_resource_id(subscription_id, resource_group),
+            "/subscriptions/sub-123/resourceGroups/alien-e2e-rg"
+        );
+        assert_eq!(
+            azure_storage_account_resource_id(subscription_id, resource_group, "alienstorage"),
+            "/subscriptions/sub-123/resourceGroups/alien-e2e-rg/providers/Microsoft.Storage/storageAccounts/alienstorage"
+        );
+        assert_eq!(
+            azure_container_apps_environment_resource_id(
+                subscription_id,
+                resource_group,
+                "alien-env"
+            ),
+            "/subscriptions/sub-123/resourceGroups/alien-e2e-rg/providers/Microsoft.App/managedEnvironments/alien-env"
+        );
+        assert_eq!(
+            azure_service_bus_namespace_resource_id(subscription_id, resource_group, "alien-bus"),
+            "/subscriptions/sub-123/resourceGroups/alien-e2e-rg/providers/Microsoft.ServiceBus/namespaces/alien-bus"
+        );
+    }
+}

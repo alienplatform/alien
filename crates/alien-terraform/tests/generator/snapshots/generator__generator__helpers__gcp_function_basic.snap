@@ -1,0 +1,155 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+variable "gcp_use_existing_custom_roles" {
+  type        = bool
+  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
+  default     = false
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "gcp"
+  deployment_target   = "gcp"
+  deployment_region   = var.gcp_region
+  deployment_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources      = []
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-fn
+
+Target: `gcp`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-fn' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

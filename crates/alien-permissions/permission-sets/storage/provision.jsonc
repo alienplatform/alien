@@ -15,8 +15,9 @@
             "s3:PutBucketAcl",
             "s3:PutEncryptionConfiguration",
             "s3:PutBucketPublicAccessBlock",
-            "s3:TagResource",
-            "s3:UntagResource",
+            "s3:PutBucketTagging",
+            "s3:GetBucketNotification",
+            "s3:PutBucketNotification",
             "s3:GetBucketLocation",
             "s3:GetBucketVersioning",
             "s3:GetLifecycleConfiguration",
@@ -24,15 +25,19 @@
             "s3:GetBucketAcl",
             "s3:GetEncryptionConfiguration",
             "s3:GetBucketPublicAccessBlock",
-            "s3:ListBucketVersions"
+            "s3:GetBucketTagging",
+            "s3:ListBucket",
+            "s3:ListBucketVersions",
+            "s3:DeleteObject",
+            "s3:DeleteObjectVersion"
           ]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}"]
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
           }
         }
       }

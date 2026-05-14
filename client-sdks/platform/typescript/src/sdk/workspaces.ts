@@ -4,6 +4,7 @@
 
 import { workspacesAddMember } from "../funcs/workspacesAddMember.js";
 import { workspacesDelete } from "../funcs/workspacesDelete.js";
+import { workspacesDismissOnboarding } from "../funcs/workspacesDismissOnboarding.js";
 import { workspacesGet } from "../funcs/workspacesGet.js";
 import { workspacesList } from "../funcs/workspacesList.js";
 import { workspacesListMembers } from "../funcs/workspacesListMembers.js";
@@ -122,6 +123,20 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.WorkspaceMember> {
     return unwrapAsync(workspacesUpdateMember(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
+   */
+  async dismissOnboarding(
+    request: operations.DismissWorkspaceOnboardingRequest,
+    options?: RequestOptions,
+  ): Promise<models.Workspace> {
+    return unwrapAsync(workspacesDismissOnboarding(
       this,
       request,
       options,

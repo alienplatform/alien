@@ -9,7 +9,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Auth extends ClientSDK {
   /**
-   * Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+   * Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
    */
   async whoami(
     options?: RequestOptions,

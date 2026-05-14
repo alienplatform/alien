@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+ * Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
  */
 export function deploymentsImport(
   client: AlienCore,
@@ -162,7 +162,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(201, models.Deployment$inboundSchema),
+    M.json([200, 201], models.Deployment$inboundSchema),
     M.jsonErr(409, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

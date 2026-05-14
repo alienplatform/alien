@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Retrieve an agent by ID.
+ * Retrieve a deployment by ID.
  */
 export function deploymentsGet(
   client: AlienCore,

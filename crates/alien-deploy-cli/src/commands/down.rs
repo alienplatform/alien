@@ -3,6 +3,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
@@ -16,13 +17,13 @@ use super::up::{create_manager_client, push_deletion};
     about = "Destroy a deployment and its resources",
     after_help = "EXAMPLES:
     # Destroy a tracked deployment
-    alien-deploy down --name production
+    alien-deploy destroy --name production
 
-    # Force-delete (skip resource teardown, just remove the record)
-    alien-deploy down --name production --force
+    # Force-delete an imported deployment record
+    alien-deploy destroy --name production --force-delete-record
 
     # Destroy using explicit token
-    alien-deploy down --name production --token ax_dg_abc123... --manager-url https://manager.example.com"
+    alien-deploy destroy --name production --token ax_dg_abc123... --manager-url https://manager.example.com"
 )]
 pub struct DownArgs {
     /// Deployment name
@@ -38,20 +39,21 @@ pub struct DownArgs {
     pub manager_url: Option<String>,
 
     /// Force deletion — skip resource teardown, just remove the deployment record
-    #[arg(long)]
-    pub force: bool,
+    #[arg(long = "force-delete-record", alias = "force")]
+    pub force_delete_record: bool,
 
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
 }
 
-pub async fn down_command(args: DownArgs) -> Result<()> {
+pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
     let (token, manager_url, platform_str) = match tracker.get(&args.name) {
         Some(tracked) => {
-            let token = args.token.unwrap_or_else(|| tracked.token.clone());
+            let token = resolve_token(args.token.clone(), embedded_config)
+                .unwrap_or_else(|| tracked.token.clone());
             let url = args
                 .manager_url
                 .unwrap_or_else(|| tracked.manager_url.clone());
@@ -59,7 +61,7 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
             (token, url, platform)
         }
         None => {
-            let token = args.token.ok_or_else(|| {
+            let token = resolve_token(args.token.clone(), embedded_config).ok_or_else(|| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "token".to_string(),
                     message: format!(
@@ -93,7 +95,38 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
 
     let deployment_id = tracked.deployment_id.clone();
 
-    if args.force {
+    let deployment = client
+        .get_deployment()
+        .id(&deployment_id)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::DeploymentFailed {
+            operation: "fetch deployment".to_string(),
+        })?;
+    let deployment_json = serde_json::to_value(&*deployment)
+        .into_alien_error()
+        .context(ErrorData::DeploymentFailed {
+            operation: "decode deployment".to_string(),
+        })?;
+    let import_source = deployment_json
+        .get("importSource")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+
+    if let Some(source) = &import_source {
+        if !args.force_delete_record {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "force_delete_record".to_string(),
+                message: format!(
+                    "Deployment '{}' was imported from {}. Refusing to tear down customer-owned IaC resources; rerun with --force-delete-record to remove only the manager record.",
+                    args.name, source
+                ),
+            }));
+        }
+    }
+
+    if args.force_delete_record {
         output::step(1, 2, "Force-deleting deployment...");
 
         client
@@ -108,7 +141,13 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
             })?;
 
         output::step(2, 2, "Done!");
-        output::success("Deployment force-deleted. No resource teardown was performed.");
+        if import_source.is_some() {
+            output::success(
+                "Imported deployment record removed. No resource teardown was performed.",
+            );
+        } else {
+            output::success("Deployment force-deleted. No resource teardown was performed.");
+        }
         return Ok(());
     }
 
@@ -118,6 +157,7 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
     client
         .delete_deployment()
         .id(&deployment_id)
+        .delete_scope(alien_manager_api::types::DeleteScope::Full)
         .send()
         .await
         .into_alien_error()
@@ -153,4 +193,17 @@ pub async fn down_command(args: DownArgs) -> Result<()> {
     output::success("Deployment destroyed successfully.");
 
     Ok(())
+}
+
+fn resolve_token(
+    explicit_token: Option<String>,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Option<String> {
+    explicit_token
+        .or_else(|| {
+            embedded_config
+                .and_then(|c| c.token_env_var.as_ref())
+                .and_then(|env_var| std::env::var(env_var).ok())
+        })
+        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
 }

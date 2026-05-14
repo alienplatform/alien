@@ -62,6 +62,20 @@ export type SyncReconcileResponseCurrentReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseOverrideAwGrant = {
@@ -87,6 +101,10 @@ export type SyncReconcileResponseCurrentReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -365,6 +383,20 @@ export type SyncReconcileResponseCurrentReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseExtendAwGrant = {
@@ -390,6 +422,10 @@ export type SyncReconcileResponseCurrentReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -671,6 +707,20 @@ export type SyncReconcileResponseCurrentReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseCurrentReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseCurrentReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseCurrentReleaseProfileAwGrant = {
@@ -696,6 +746,10 @@ export type SyncReconcileResponseCurrentReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseCurrentReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseCurrentReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -976,7 +1030,6 @@ export type SyncReconcileResponseCurrentReleaseDependency = {
 export const SyncReconcileResponseCurrentReleaseLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1012,6 +1065,24 @@ export type SyncReconcileResponseCurrentReleaseResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseCurrentReleaseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseCurrentReleaseSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileResponseCurrentReleaseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileResponseCurrentReleaseStack = {
@@ -1027,6 +1098,13 @@ export type SyncReconcileResponseCurrentReleaseStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileResponseCurrentReleaseResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileResponseCurrentReleaseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 /**
@@ -1205,6 +1283,38 @@ export type SyncReconcileResponseCurrentPlatform = ClosedEnum<
   typeof SyncReconcileResponseCurrentPlatform
 >;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const SyncReconcileResponseDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type SyncReconcileResponseDeleteScopeEnum = ClosedEnum<
+  typeof SyncReconcileResponseDeleteScopeEnum
+>;
+
+export type SyncReconcileResponseDeleteScopeUnion =
+  | SyncReconcileResponseDeleteScopeEnum
+  | any;
+
 export const SyncReconcileResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1255,6 +1365,20 @@ export type SyncReconcileResponsePreparedStackOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackOverrideAwGrant = {
@@ -1280,6 +1404,10 @@ export type SyncReconcileResponsePreparedStackOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1555,6 +1683,20 @@ export type SyncReconcileResponsePreparedStackExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackExtendAwGrant = {
@@ -1580,6 +1722,10 @@ export type SyncReconcileResponsePreparedStackExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -1861,6 +2007,20 @@ export type SyncReconcileResponsePreparedStackProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponsePreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponsePreparedStackProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponsePreparedStackProfileAwGrant = {
@@ -1886,6 +2046,10 @@ export type SyncReconcileResponsePreparedStackProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponsePreparedStackProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponsePreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2164,7 +2328,6 @@ export type SyncReconcileResponsePreparedStackDependency = {
 export const SyncReconcileResponsePreparedStackLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2200,6 +2363,24 @@ export type SyncReconcileResponsePreparedStackResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponsePreparedStackSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponsePreparedStackSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileResponsePreparedStackSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileResponsePreparedStack = {
@@ -2215,6 +2396,13 @@ export type SyncReconcileResponsePreparedStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileResponsePreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileResponsePreparedStackSupportedPlatform>
+    | null
+    | undefined;
 };
 
 export type SyncReconcileResponsePreparedStackUnion =
@@ -2229,6 +2417,7 @@ export type SyncReconcileResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileResponseRuntimeMetadata = {
+  deleteScope?: SyncReconcileResponseDeleteScopeEnum | any | null | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2237,6 +2426,15 @@ export type SyncReconcileResponseRuntimeMetadata = {
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
   preparedStack?: SyncReconcileResponsePreparedStack | any | null | undefined;
+  /**
+   * Whether cross-account registry access has been successfully granted.
+   *
+   * @remarks
+   * Set to true after the manager successfully sets the ECR/GAR repo policy
+   * for this deployment's target account. Prevents redundant API calls on
+   * every reconcile tick.
+   */
+  registryAccessGranted?: boolean | undefined;
 };
 
 export type SyncReconcileResponseRuntimeMetadataUnion =
@@ -2323,6 +2521,10 @@ export type SyncReconcileResponseError = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -2380,7 +2582,6 @@ export type SyncReconcileResponseErrorUnion = SyncReconcileResponseError | any;
 export const SyncReconcileResponseStackStateLifecycleEnum = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2474,13 +2675,6 @@ export type SyncReconcileResponseStackStateResources = {
   dependencies?: Array<SyncReconcileResponseStackStateDependency> | undefined;
   error?: SyncReconcileResponseError | any | null | undefined;
   /**
-   * True if the resource was provisioned by an external system (e.g., CloudFormation).
-   *
-   * @remarks
-   * Defaults to false, indicating dynamic provisioning by the executor.
-   */
-  isExternallyProvisioned?: boolean | undefined;
-  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -2558,6 +2752,7 @@ export const SyncReconcileResponseStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status in the deployment lifecycle
@@ -2616,6 +2811,20 @@ export type SyncReconcileResponseTargetReleaseOverrideAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseOverrideEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseOverrideEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseOverrideAwGrant = {
@@ -2641,6 +2850,10 @@ export type SyncReconcileResponseTargetReleaseOverrideAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseOverrideAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -2916,6 +3129,20 @@ export type SyncReconcileResponseTargetReleaseExtendAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseExtendEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseExtendEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseExtendAwGrant = {
@@ -2941,6 +3168,10 @@ export type SyncReconcileResponseTargetReleaseExtendAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseExtendAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3222,6 +3453,20 @@ export type SyncReconcileResponseTargetReleaseProfileAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileResponseTargetReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileResponseTargetReleaseProfileEffect = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseProfileEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type SyncReconcileResponseTargetReleaseProfileAwGrant = {
@@ -3247,6 +3492,10 @@ export type SyncReconcileResponseTargetReleaseProfileAw = {
    * Generic binding configuration for permissions
    */
   binding: SyncReconcileResponseTargetReleaseProfileAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileResponseTargetReleaseProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -3525,7 +3774,6 @@ export type SyncReconcileResponseTargetReleaseDependency = {
 export const SyncReconcileResponseTargetReleaseLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -3561,6 +3809,24 @@ export type SyncReconcileResponseTargetReleaseResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseTargetReleaseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseTargetReleaseSupportedPlatform = ClosedEnum<
+  typeof SyncReconcileResponseTargetReleaseSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type SyncReconcileResponseTargetReleaseStack = {
@@ -3576,6 +3842,13 @@ export type SyncReconcileResponseTargetReleaseStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: SyncReconcileResponseTargetReleaseResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileResponseTargetReleaseSupportedPlatform>
+    | null
+    | undefined;
 };
 
 /**
@@ -3629,6 +3902,15 @@ export type SyncReconcileResponseCurrent = {
    */
   platform: SyncReconcileResponseCurrentPlatform;
   /**
+   * Protocol version for cross-actor compatibility.
+   *
+   * @remarks
+   * All actors (manager, push client, agent) check this before stepping.
+   * Mismatched versions produce a clear error instead of silent corruption.
+   * See docs/02-manager/10-deployment-protocol.md.
+   */
+  protocolVersion?: number | undefined;
+  /**
    * Whether a retry has been requested for a failed deployment
    *
    * @remarks
@@ -3649,39 +3931,12 @@ export type SyncReconcileResponseCurrent = {
 };
 
 /**
- * Artifact registry configuration for pulling container images.
- *
- * @remarks
- *
- * Used when the deployment needs to pull images from a manager's artifact registry.
- * This is required for Local platform and can optionally be used by cloud platforms
- * instead of native registry mechanisms (ECR/GCR/ACR).
- */
-export type SyncReconcileResponseArtifactRegistry = {
-  /**
-   * Optional authentication token (JWT) for manager API access
-   *
-   * @remarks
-   * When present, must be included in Authorization header as "Bearer {token}"
-   */
-  authToken?: string | null | undefined;
-  /**
-   * Manager base URL for fetching credentials and accessing the registry
-   */
-  managerUrl: string;
-};
-
-export type SyncReconcileResponseArtifactRegistryUnion =
-  | SyncReconcileResponseArtifactRegistry
-  | any;
-
-/**
- * Configuration for a single Horizon cluster.
+ * Configuration for a single container worker cluster.
  *
  * @remarks
  *
  * Contains the cluster ID and management token needed to interact with
- * the Horizon control plane API for container operations.
+ * the managed container control plane API for container operations.
  */
 export type SyncReconcileResponseClusters = {
   /**
@@ -3710,7 +3965,7 @@ export type SyncReconcileResponseComputeBackendType = ClosedEnum<
  * @remarks
  *
  * Determines how compute workloads are orchestrated on cloud platforms.
- * When None, the platform default is used (Horizon for cloud platforms).
+ * When None, the platform default is used for cloud platforms.
  */
 export type SyncReconcileResponseComputeBackendHorizon = {
   /**
@@ -3722,32 +3977,18 @@ export type SyncReconcileResponseComputeBackendHorizon = {
    */
   clusters: { [k: string]: SyncReconcileResponseClusters };
   /**
-   * ETag of the horizond binary fetched from the releases server — used as a
-   *
-   * @remarks
-   * change-detection signal only. nginx auto-generates ETags from mtime+size,
-   * so every `cargo zigbuild` changes this value and triggers a rolling update.
-   *
-   * Optional: when absent (releases server unreachable), change detection
-   * falls back to URL-only (sufficient for versioned production releases).
-   */
-  horizondBinaryHash?: string | null | undefined;
-  /**
-   * Base URL for downloading the horizond binary, without arch suffix.
-   *
-   * @remarks
-   *
-   * Each cloud controller appends `/linux-{arch}/horizond` to construct the
-   * final download URL used in VM startup scripts.
-   *
-   * Production example: "https://releases.alien.dev/horizond/v0.3.0"
-   * Dev example (ngrok): "https://abc123.ngrok.io"
-   */
-  horizondDownloadBaseUrl: string;
-  /**
-   * Horizon API base URL (e.g., "https://horizon.alien.dev")
+   * Worker control-plane API base URL.
    */
   url: string;
+  /**
+   * AMI / image ID for the worker machine image.
+   *
+   * @remarks
+   *
+   * The image contains the worker runtime bootstrap. Controllers only pass
+   * machine-specific settings into that image.
+   */
+  workerImageId?: string | null | undefined;
   type: SyncReconcileResponseComputeBackendType;
 };
 
@@ -3915,6 +4156,194 @@ export type SyncReconcileResponseEnvironmentVariables = {
    * Environment variables in the snapshot
    */
   variables: Array<SyncReconcileResponseVariable>;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseDefaultDomainSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseDefaultDomain = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseDefaultDomainSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseDefaultDomainUnion =
+  | SyncReconcileResponseDefaultDomain
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseEnvironmentNameSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseEnvironmentName = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseEnvironmentNameSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseEnvironmentNameUnion =
+  | SyncReconcileResponseEnvironmentName
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseResourceGroupNameSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseResourceGroupName3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseResourceGroupNameSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseResourceGroupNameUnion3 =
+  | SyncReconcileResponseResourceGroupName3
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseResourceIdSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseResourceId = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseResourceIdSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseResourceIdUnion =
+  | SyncReconcileResponseResourceId
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseStaticIpSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseStaticIp = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseStaticIpSecretRef;
+};
+
+export const SyncReconcileResponseTypeContainerAppsEnvironment = {
+  ContainerAppsEnvironment: "container_apps_environment",
+} as const;
+export type SyncReconcileResponseTypeContainerAppsEnvironment = ClosedEnum<
+  typeof SyncReconcileResponseTypeContainerAppsEnvironment
+>;
+
+/**
+ * Binding configuration for a pre-existing Azure Container Apps Environment.
+ *
+ * @remarks
+ *
+ * Used when deploying to an existing environment instead of having Alien provision one.
+ * This is useful for shared environments (e.g., test infrastructure) or enterprise
+ * setups where environments are managed by a separate team.
+ */
+export type SyncReconcileResponseExternalBindingsContainerAppsEnvironment = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  defaultDomain?:
+    | SyncReconcileResponseDefaultDomain
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  environmentName?:
+    | SyncReconcileResponseEnvironmentName
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  resourceGroupName?:
+    | SyncReconcileResponseResourceGroupName3
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  resourceId?:
+    | SyncReconcileResponseResourceId
+    | any
+    | string
+    | null
+    | undefined;
+  staticIp?: any | null | undefined;
+  type: SyncReconcileResponseTypeContainerAppsEnvironment;
 };
 
 /**
@@ -4268,7 +4697,13 @@ export type SyncReconcileResponseTypeArtifactRegistry4 = ClosedEnum<
 >;
 
 /**
- * Local container registry binding configuration
+ * Local container registry binding configuration.
+ *
+ * @remarks
+ *
+ * The local registry runs on localhost only and does not require authentication.
+ * Security boundary is the OS process isolation on the customer's machine.
+ * External image access is secured by the manager's registry proxy (deployment tokens).
  */
 export type SyncReconcileResponseExternalBindingsLocal = {
   /**
@@ -4324,6 +4759,32 @@ export type SyncReconcileResponsePushServiceAccountEmail = {
   secretRef: SyncReconcileResponsePushServiceAccountEmailSecretRef;
 };
 
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseRepositoryNameSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseRepositoryName = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseRepositoryNameSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseRepositoryNameUnion =
+  | SyncReconcileResponseRepositoryName
+  | any
+  | string;
+
 export const SyncReconcileResponseTypeArtifactRegistry3 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
@@ -4335,20 +4796,20 @@ export type SyncReconcileResponseTypeArtifactRegistry3 = ClosedEnum<
  * Google Artifact Registry binding configuration
  */
 export type SyncReconcileResponseExternalBindingsGar = {
-  /**
-   * Represents a value that can be either a concrete value, a template expression,
-   *
-   * @remarks
-   * or a reference to a Kubernetes Secret
-   */
   pullServiceAccountEmail?: any | null | undefined;
+  pushServiceAccountEmail?: any | null | undefined;
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
    * @remarks
    * or a reference to a Kubernetes Secret
    */
-  pushServiceAccountEmail?: any | null | undefined;
+  repositoryName?:
+    | SyncReconcileResponseRepositoryName
+    | any
+    | string
+    | null
+    | undefined;
   service: "gar";
   type: SyncReconcileResponseTypeArtifactRegistry3;
 };
@@ -4378,6 +4839,21 @@ export type SyncReconcileResponseRegistryNameUnion =
   | SyncReconcileResponseRegistryName
   | any
   | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseRepositoryPrefixSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseRepositoryPrefix2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseRepositoryPrefixSecretRef2;
+};
 
 /**
  * Reference to a Kubernetes Secret
@@ -4428,6 +4904,7 @@ export type SyncReconcileResponseExternalBindingsAcr = {
     | string
     | null
     | undefined;
+  repositoryPrefix?: any | null | undefined;
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
@@ -4477,16 +4954,16 @@ export type SyncReconcileResponsePushRoleArn = {
 /**
  * Reference to a Kubernetes Secret
  */
-export type SyncReconcileResponseRepositoryPrefixSecretRef = {
+export type SyncReconcileResponseRepositoryPrefixSecretRef1 = {
   key: string;
   name: string;
 };
 
-export type SyncReconcileResponseRepositoryPrefix = {
+export type SyncReconcileResponseRepositoryPrefix1 = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: SyncReconcileResponseRepositoryPrefixSecretRef;
+  secretRef: SyncReconcileResponseRepositoryPrefixSecretRef1;
 };
 
 /**
@@ -4496,7 +4973,7 @@ export type SyncReconcileResponseRepositoryPrefix = {
  * or a reference to a Kubernetes Secret
  */
 export type SyncReconcileResponseRepositoryPrefixUnion =
-  | SyncReconcileResponseRepositoryPrefix
+  | SyncReconcileResponseRepositoryPrefix1
   | any
   | string;
 
@@ -4511,19 +4988,7 @@ export type SyncReconcileResponseTypeArtifactRegistry1 = ClosedEnum<
  * AWS ECR (Elastic Container Registry) binding configuration
  */
 export type SyncReconcileResponseExternalBindingsEcr = {
-  /**
-   * Represents a value that can be either a concrete value, a template expression,
-   *
-   * @remarks
-   * or a reference to a Kubernetes Secret
-   */
   pullRoleArn?: any | null | undefined;
-  /**
-   * Represents a value that can be either a concrete value, a template expression,
-   *
-   * @remarks
-   * or a reference to a Kubernetes Secret
-   */
   pushRoleArn?: any | null | undefined;
   /**
    * Represents a value that can be either a concrete value, a template expression,
@@ -4532,7 +4997,7 @@ export type SyncReconcileResponseExternalBindingsEcr = {
    * or a reference to a Kubernetes Secret
    */
   repositoryPrefix?:
-    | SyncReconcileResponseRepositoryPrefix
+    | SyncReconcileResponseRepositoryPrefix1
     | any
     | string
     | null
@@ -5057,6 +5522,54 @@ export type SyncReconcileResponseExternalBindingsUnion3 =
 /**
  * Reference to a Kubernetes Secret
  */
+export type SyncReconcileResponseQueuePathSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncReconcileResponseQueuePath = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncReconcileResponseQueuePathSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncReconcileResponseQueuePathUnion =
+  | SyncReconcileResponseQueuePath
+  | any
+  | string;
+
+export const SyncReconcileResponseTypeQueue4 = {
+  Queue: "queue",
+} as const;
+export type SyncReconcileResponseTypeQueue4 = ClosedEnum<
+  typeof SyncReconcileResponseTypeQueue4
+>;
+
+/**
+ * Local queue parameters
+ */
+export type SyncReconcileResponseExternalBindingsLocalQueue = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  queuePath?: SyncReconcileResponseQueuePath | any | string | null | undefined;
+  service: "local-queue";
+  type: SyncReconcileResponseTypeQueue4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
 export type SyncReconcileResponseNamespaceSecretRef1 = {
   key: string;
   name: string;
@@ -5275,7 +5788,8 @@ export type SyncReconcileResponseExternalBindingsSqs = {
 export type SyncReconcileResponseExternalBindingsUnion2 =
   | SyncReconcileResponseExternalBindingsSqs
   | SyncReconcileResponseExternalBindingsPubsub
-  | SyncReconcileResponseExternalBindingsServicebus;
+  | SyncReconcileResponseExternalBindingsServicebus
+  | SyncReconcileResponseExternalBindingsLocalQueue;
 
 /**
  * Reference to a Kubernetes Secret
@@ -5545,6 +6059,7 @@ export type SyncReconcileResponseExternalBindingsUnion1 =
  * Validated at runtime by the executor.
  */
 export type SyncReconcileResponseExternalBindingsUnion6 =
+  | SyncReconcileResponseExternalBindingsContainerAppsEnvironment
   | SyncReconcileResponseExternalBindingsS3
   | SyncReconcileResponseExternalBindingsBlob
   | SyncReconcileResponseExternalBindingsGcs
@@ -5552,6 +6067,7 @@ export type SyncReconcileResponseExternalBindingsUnion6 =
   | SyncReconcileResponseExternalBindingsSqs
   | SyncReconcileResponseExternalBindingsPubsub
   | SyncReconcileResponseExternalBindingsServicebus
+  | SyncReconcileResponseExternalBindingsLocalQueue
   | SyncReconcileResponseExternalBindingsDynamodb
   | SyncReconcileResponseExternalBindingsFirestore
   | SyncReconcileResponseExternalBindingsTablestorage
@@ -5566,24 +6082,6 @@ export type SyncReconcileResponseExternalBindingsUnion6 =
   | SyncReconcileResponseExternalBindingsKeyVault
   | SyncReconcileResponseExternalBindingsKubernetesSecret
   | SyncReconcileResponseExternalBindingsLocalVault;
-
-/**
- * Image pull credentials for container registries
- */
-export type SyncReconcileResponseImagePullCredentials = {
-  /**
-   * Password for the container registry
-   */
-  password: string;
-  /**
-   * Username for the container registry
-   */
-  username: string;
-};
-
-export type SyncReconcileResponseImagePullCredentialsUnion =
-  | SyncReconcileResponseImagePullCredentials
-  | any;
 
 export const TargetPlatformKubernetes = {
   Kubernetes: "kubernetes",
@@ -5606,13 +6104,21 @@ export type TargetPlatformAzure = ClosedEnum<typeof TargetPlatformAzure>;
  */
 export type SyncReconcileResponseManagementConfigAzure = {
   /**
-   * The principal ID of the service principal in the management account
+   * Management service principal object ID for local development fallback
    */
-  managementPrincipalId: string;
+  managementPrincipalId?: string | null | undefined;
   /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
   platform: TargetPlatformAzure;
 };
 
@@ -5649,9 +6155,9 @@ export type SyncReconcileResponseManagementConfigAws = {
 };
 
 export type SyncReconcileResponseManagementConfigUnion =
-  | SyncReconcileResponseManagementConfigAzure
   | SyncReconcileResponseManagementConfigAws
   | SyncReconcileResponseManagementConfigGcp
+  | SyncReconcileResponseManagementConfigAzure
   | SyncReconcileResponseManagementConfigKubernetes
   | any;
 
@@ -5660,14 +6166,14 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * @remarks
  *
- * When set, all compute workloads (containers and horizond VM workers) export
+ * When set, all compute workloads (containers and worker VMs) export
  * their logs to the given endpoint via OTLP/HTTP.
  *
  * The `logs_auth_header` is stored as plain text in DeploymentConfig because
  * alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
- * before vault secrets load. For horizond, the infra controller writes the
- * same value to the cloud vault (same pattern as the machine token) and the
- * startup script fetches it at boot via IAM.
+ * before vault secrets load. For worker VMs, worker-template stamping passes
+ * the monitoring configuration to the provider controller, which stores the
+ * sensitive header in the cloud vault used by the worker image.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
@@ -5679,10 +6185,9 @@ export type SyncReconcileResponseMonitoring = {
    * into all containers. It must be plain (not a vault secret) because alien-runtime
    * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
    *
-   * horizond VM workers do NOT use this field directly. The ContainerCluster infra
-   * controller writes the same value to the cloud vault (GCP: Secret Manager,
-   * AWS: Secrets Manager, Azure: Key Vault) and the startup script fetches it at
-   * boot via IAM — the same pattern as the machine token.
+   * Worker VMs do NOT use this field directly. The ContainerCluster infra
+   * controller writes the same value to the cloud vault used by the worker
+   * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
    *
    * Example: "authorization=Bearer <write-token>"
    */
@@ -5699,7 +6204,7 @@ export type SyncReconcileResponseMonitoring = {
    *
    * @remarks
    *
-   * When absent, `logs_auth_header` is reused for metrics — suitable when the same
+   * When absent, `logs_auth_header` is reused for metrics -- suitable when the same
    * credential covers both signals. When present (e.g. Axiom with separate datasets),
    * this value is used exclusively for metrics.
    *
@@ -5710,7 +6215,7 @@ export type SyncReconcileResponseMonitoring = {
    * Full OTLP metrics endpoint URL (optional).
    *
    * @remarks
-   * When set, horizond exports its own VM/container orchestration metrics here.
+   * When set, the worker runtime exports its own VM/container orchestration metrics here.
    * Example: "https://api.axiom.co/v1/metrics"
    */
   metricsEndpoint?: string | null | undefined;
@@ -5796,6 +6301,16 @@ export type SyncReconcileResponseDomains = {
 export type SyncReconcileResponseDomainsUnion =
   | SyncReconcileResponseDomains
   | any;
+
+/**
+ * External bindings for pre-existing infrastructure.
+ *
+ * @remarks
+ * Allows using existing resources (MinIO, Redis, shared Container Apps
+ * Environment, etc.) instead of having Alien provision them.
+ * Required for Kubernetes platform, optional for cloud platforms.
+ */
+export type SyncReconcileResponseStackSettingsExternalBindings = {};
 
 /**
  * How heartbeat health checks are handled.
@@ -5973,6 +6488,18 @@ export type SyncReconcileResponseStackSettings = {
   deploymentModel?: SyncReconcileResponseDeploymentModel | undefined;
   domains?: SyncReconcileResponseDomains | any | null | undefined;
   /**
+   * External bindings for pre-existing infrastructure.
+   *
+   * @remarks
+   * Allows using existing resources (MinIO, Redis, shared Container Apps
+   * Environment, etc.) instead of having Alien provision them.
+   * Required for Kubernetes platform, optional for cloud platforms.
+   */
+  externalBindings?:
+    | SyncReconcileResponseStackSettingsExternalBindings
+    | null
+    | undefined;
+  /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: SyncReconcileResponseHeartbeats | undefined;
@@ -6012,16 +6539,20 @@ export type TargetConfig = {
    * This requires running with elevated cloud credentials.
    */
   allowFrozenChanges?: boolean | undefined;
-  artifactRegistry?:
-    | SyncReconcileResponseArtifactRegistry
-    | any
-    | null
-    | undefined;
   computeBackend?:
     | SyncReconcileResponseComputeBackendHorizon
     | any
     | null
     | undefined;
+  /**
+   * Deployment token for pull authentication with the manager's registry.
+   *
+   * @remarks
+   *
+   * Used by controllers to configure registry credentials so cloud platforms
+   * and K8s can pull images from the manager's `/v2/` endpoint.
+   */
+  deploymentToken?: string | null | undefined;
   domainMetadata?: SyncReconcileResponseDomainMetadata | any | null | undefined;
   /**
    * Snapshot of environment variables at a point in time
@@ -6036,6 +6567,7 @@ export type TargetConfig = {
    */
   externalBindings?: {
     [k: string]:
+      | SyncReconcileResponseExternalBindingsContainerAppsEnvironment
       | SyncReconcileResponseExternalBindingsS3
       | SyncReconcileResponseExternalBindingsBlob
       | SyncReconcileResponseExternalBindingsGcs
@@ -6043,6 +6575,7 @@ export type TargetConfig = {
       | SyncReconcileResponseExternalBindingsSqs
       | SyncReconcileResponseExternalBindingsPubsub
       | SyncReconcileResponseExternalBindingsServicebus
+      | SyncReconcileResponseExternalBindingsLocalQueue
       | SyncReconcileResponseExternalBindingsDynamodb
       | SyncReconcileResponseExternalBindingsFirestore
       | SyncReconcileResponseExternalBindingsTablestorage
@@ -6058,20 +6591,40 @@ export type TargetConfig = {
       | SyncReconcileResponseExternalBindingsKubernetesSecret
       | SyncReconcileResponseExternalBindingsLocalVault;
   } | undefined;
-  imagePullCredentials?:
-    | SyncReconcileResponseImagePullCredentials
-    | any
-    | null
-    | undefined;
   managementConfig?:
-    | SyncReconcileResponseManagementConfigAzure
     | SyncReconcileResponseManagementConfigAws
     | SyncReconcileResponseManagementConfigGcp
+    | SyncReconcileResponseManagementConfigAzure
     | SyncReconcileResponseManagementConfigKubernetes
     | any
     | null
     | undefined;
+  /**
+   * Manager base URL (e.g., "https://manager.alien.dev").
+   *
+   * @remarks
+   *
+   * The manager IS the container registry — its `/v2/` endpoint serves as
+   * the OCI Distribution API. Controllers derive the proxy host from this
+   * to configure pull auth (RegistryCredentials, imagePullSecrets).
+   *
+   * When None (e.g., `alien dev`), controllers use image URIs as-is.
+   */
+  managerUrl?: string | null | undefined;
   monitoring?: SyncReconcileResponseMonitoring | any | null | undefined;
+  /**
+   * Native image registry host+prefix for platforms that require it.
+   *
+   * @remarks
+   *
+   * Only Lambda (ECR) and Cloud Run (GAR) require native registry URIs.
+   * All other platforms pull through the manager's proxy.
+   *
+   * Derived by the manager from the artifact registry binding:
+   * - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`
+   * - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
+   */
+  nativeImageHost?: string | null | undefined;
   /**
    * Public URLs for exposed resources (optional override for all platforms).
    *
@@ -6154,6 +6707,20 @@ export type OverrideReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const OverrideReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type OverrideReleaseInfoEffect = ClosedEnum<
+  typeof OverrideReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type OverrideReleaseInfoAwGrant = {
@@ -6179,6 +6746,10 @@ export type OverrideReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: OverrideReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: OverrideReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -6437,6 +7008,20 @@ export type ExtendReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const ExtendReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ExtendReleaseInfoEffect = ClosedEnum<
+  typeof ExtendReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type ExtendReleaseInfoAwGrant = {
@@ -6462,6 +7047,10 @@ export type ExtendReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: ExtendReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ExtendReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -6726,6 +7315,20 @@ export type ProfileReleaseInfoAwBinding = {
 };
 
 /**
+ * IAM effect. Defaults to Allow.
+ */
+export const ProfileReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ProfileReleaseInfoEffect = ClosedEnum<
+  typeof ProfileReleaseInfoEffect
+>;
+
+/**
  * Grant permissions for a specific cloud platform
  */
 export type ProfileReleaseInfoAwGrant = {
@@ -6751,6 +7354,10 @@ export type ProfileReleaseInfoAw = {
    * Generic binding configuration for permissions
    */
   binding: ProfileReleaseInfoAwBinding;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ProfileReleaseInfoEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
@@ -7014,7 +7621,6 @@ export type ReleaseInfoDependency = {
 export const ReleaseInfoLifecycle = {
   Frozen: "frozen",
   Live: "live",
-  LiveOnSetup: "live-on-setup",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -7048,6 +7654,24 @@ export type ReleaseInfoResources = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const ReleaseInfoSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ReleaseInfoSupportedPlatform = ClosedEnum<
+  typeof ReleaseInfoSupportedPlatform
+>;
+
+/**
  * A bag of resources, unaware of any cloud.
  */
 export type ReleaseInfoStack = {
@@ -7063,6 +7687,10 @@ export type ReleaseInfoStack = {
    * Map of resource IDs to their configurations and lifecycle settings
    */
   resources: { [k: string]: ReleaseInfoResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?: Array<ReleaseInfoSupportedPlatform> | null | undefined;
 };
 
 /**
@@ -7223,6 +7851,12 @@ export function syncReconcileResponseCurrentReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseOverrideEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -7253,6 +7887,8 @@ export const SyncReconcileResponseCurrentReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema
     ),
@@ -7847,6 +8483,12 @@ export function syncReconcileResponseCurrentReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseExtendEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseExtendAwGrant, unknown> = z
     .object({
@@ -7877,6 +8519,8 @@ export const SyncReconcileResponseCurrentReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema
     ),
@@ -8500,6 +9144,12 @@ export function syncReconcileResponseCurrentReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseProfileEffect> = z.enum(
+    SyncReconcileResponseCurrentReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseCurrentReleaseProfileAwGrant, unknown> = z
     .object({
@@ -8530,6 +9180,8 @@ export const SyncReconcileResponseCurrentReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseCurrentReleaseProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema
     ),
@@ -9141,6 +9793,11 @@ export function syncReconcileResponseCurrentReleaseResourcesFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseCurrentReleaseSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseCurrentReleaseSupportedPlatform> = z
+    .enum(SyncReconcileResponseCurrentReleaseSupportedPlatform);
+
+/** @internal */
 export const SyncReconcileResponseCurrentReleaseStack$inboundSchema: z.ZodType<
   SyncReconcileResponseCurrentReleaseStack,
   unknown
@@ -9153,6 +9810,9 @@ export const SyncReconcileResponseCurrentReleaseStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileResponseCurrentReleaseResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileResponseCurrentReleaseSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileResponseCurrentReleaseStackFromJSON(
@@ -9410,6 +10070,28 @@ export const SyncReconcileResponseCurrentPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseCurrentPlatform);
 
 /** @internal */
+export const SyncReconcileResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseDeleteScopeEnum
+> = z.enum(SyncReconcileResponseDeleteScopeEnum);
+
+/** @internal */
+export const SyncReconcileResponseDeleteScopeUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseDeleteScopeUnion,
+  unknown
+> = z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]);
+
+export function syncReconcileResponseDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseDeleteScopeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseDeleteScopeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackManagementEnum$inboundSchema:
   z.ZodEnum<typeof SyncReconcileResponsePreparedStackManagementEnum> = z.enum(
     SyncReconcileResponsePreparedStackManagementEnum,
@@ -9496,6 +10178,12 @@ export function syncReconcileResponsePreparedStackOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackOverrideEffect> = z.enum(
+    SyncReconcileResponsePreparedStackOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackOverrideAwGrant, unknown> = z
     .object({
@@ -9526,6 +10214,8 @@ export const SyncReconcileResponsePreparedStackOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema
     ),
@@ -10113,6 +10803,12 @@ export function syncReconcileResponsePreparedStackExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackExtendEffect> = z.enum(
+    SyncReconcileResponsePreparedStackExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackExtendAwGrant, unknown> = z
     .object({
@@ -10143,6 +10839,8 @@ export const SyncReconcileResponsePreparedStackExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema
     ),
@@ -10756,6 +11454,12 @@ export function syncReconcileResponsePreparedStackProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackProfileEffect> = z.enum(
+    SyncReconcileResponsePreparedStackProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponsePreparedStackProfileAwGrant, unknown> = z
     .object({
@@ -10786,6 +11490,8 @@ export const SyncReconcileResponsePreparedStackProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponsePreparedStackProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema
     ),
@@ -11394,6 +12100,11 @@ export function syncReconcileResponsePreparedStackResourcesFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponsePreparedStackSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePreparedStackSupportedPlatform> = z
+    .enum(SyncReconcileResponsePreparedStackSupportedPlatform);
+
+/** @internal */
 export const SyncReconcileResponsePreparedStack$inboundSchema: z.ZodType<
   SyncReconcileResponsePreparedStack,
   unknown
@@ -11406,6 +12117,9 @@ export const SyncReconcileResponsePreparedStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileResponsePreparedStackResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileResponsePreparedStackSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileResponsePreparedStackFromJSON(
@@ -11449,6 +12163,9 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncReconcileResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deleteScope: z.nullable(
+    z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
@@ -11456,6 +12173,7 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccessGranted: z.boolean().optional(),
 });
 
 export function syncReconcileResponseRuntimeMetadataFromJSON(
@@ -11555,6 +12273,7 @@ export const SyncReconcileResponseError$inboundSchema: z.ZodType<
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
   message: z.string(),
@@ -11722,7 +12441,6 @@ export const SyncReconcileResponseStackStateResources$inboundSchema: z.ZodType<
   error: z.nullable(
     z.union([z.lazy(() => SyncReconcileResponseError$inboundSchema), z.any()]),
   ).optional(),
-  isExternallyProvisioned: z.boolean().optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
     z.union([
@@ -11903,6 +12621,12 @@ export function syncReconcileResponseTargetReleaseOverrideAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseOverrideEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseOverrideEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseOverrideAwGrant, unknown> = z
     .object({
@@ -11933,6 +12657,8 @@ export const SyncReconcileResponseTargetReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseOverrideEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema
     ),
@@ -12519,6 +13245,12 @@ export function syncReconcileResponseTargetReleaseExtendAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseExtendEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseExtendEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseExtendAwGrant, unknown> = z
     .object({
@@ -12549,6 +13281,8 @@ export const SyncReconcileResponseTargetReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseExtendEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema
     ),
@@ -13161,6 +13895,12 @@ export function syncReconcileResponseTargetReleaseProfileAwBindingFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseProfileEffect> = z.enum(
+    SyncReconcileResponseTargetReleaseProfileEffect,
+  );
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema:
   z.ZodType<SyncReconcileResponseTargetReleaseProfileAwGrant, unknown> = z
     .object({
@@ -13191,6 +13931,8 @@ export const SyncReconcileResponseTargetReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwBinding$inboundSchema
     ),
+    effect: SyncReconcileResponseTargetReleaseProfileEffect$inboundSchema
+      .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema
     ),
@@ -13798,6 +14540,11 @@ export function syncReconcileResponseTargetReleaseResourcesFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseTargetReleaseSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTargetReleaseSupportedPlatform> = z
+    .enum(SyncReconcileResponseTargetReleaseSupportedPlatform);
+
+/** @internal */
 export const SyncReconcileResponseTargetReleaseStack$inboundSchema: z.ZodType<
   SyncReconcileResponseTargetReleaseStack,
   unknown
@@ -13810,6 +14557,9 @@ export const SyncReconcileResponseTargetReleaseStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncReconcileResponseTargetReleaseResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(SyncReconcileResponseTargetReleaseSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileResponseTargetReleaseStackFromJSON(
@@ -13897,6 +14647,7 @@ export const SyncReconcileResponseCurrent$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   platform: SyncReconcileResponseCurrentPlatform$inboundSchema,
+  protocolVersion: z.int().optional(),
   retryRequested: z.boolean().optional(),
   runtimeMetadata: z.nullable(
     z.union([
@@ -13926,49 +14677,6 @@ export function syncReconcileResponseCurrentFromJSON(
     jsonString,
     (x) => SyncReconcileResponseCurrent$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncReconcileResponseCurrent' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponseArtifactRegistry$inboundSchema: z.ZodType<
-  SyncReconcileResponseArtifactRegistry,
-  unknown
-> = z.object({
-  authToken: z.nullable(z.string()).optional(),
-  managerUrl: z.string(),
-});
-
-export function syncReconcileResponseArtifactRegistryFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncReconcileResponseArtifactRegistry, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseArtifactRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponseArtifactRegistryUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponseArtifactRegistryUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseArtifactRegistry$inboundSchema),
-    z.any(),
-  ]);
-
-export function syncReconcileResponseArtifactRegistryUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncReconcileResponseArtifactRegistryUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseArtifactRegistryUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncReconcileResponseArtifactRegistryUnion' from JSON`,
   );
 }
 
@@ -14003,9 +14711,8 @@ export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
       z.string(),
       z.lazy(() => SyncReconcileResponseClusters$inboundSchema),
     ),
-    horizondBinaryHash: z.nullable(z.string()).optional(),
-    horizondDownloadBaseUrl: z.string(),
     url: z.string(),
+    workerImageId: z.nullable(z.string()).optional(),
     type: SyncReconcileResponseComputeBackendType$inboundSchema,
   });
 
@@ -14185,6 +14892,383 @@ export function syncReconcileResponseEnvironmentVariablesFromJSON(
         JSON.parse(x),
       ),
     `Failed to parse 'SyncReconcileResponseEnvironmentVariables' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseDefaultDomainSecretRef$inboundSchema:
+  z.ZodType<SyncReconcileResponseDefaultDomainSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncReconcileResponseDefaultDomainSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseDefaultDomainSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseDefaultDomainSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseDefaultDomainSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseDefaultDomain$inboundSchema: z.ZodType<
+  SyncReconcileResponseDefaultDomain,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseDefaultDomainSecretRef$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseDefaultDomainFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseDefaultDomain, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseDefaultDomain$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseDefaultDomain' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseDefaultDomainUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseDefaultDomainUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseDefaultDomain$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncReconcileResponseDefaultDomainUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseDefaultDomainUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseDefaultDomainUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseDefaultDomainUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseEnvironmentNameSecretRef$inboundSchema:
+  z.ZodType<SyncReconcileResponseEnvironmentNameSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncReconcileResponseEnvironmentNameSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseEnvironmentNameSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseEnvironmentNameSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseEnvironmentNameSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseEnvironmentName$inboundSchema: z.ZodType<
+  SyncReconcileResponseEnvironmentName,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseEnvironmentNameSecretRef$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseEnvironmentNameFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseEnvironmentName, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseEnvironmentName$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseEnvironmentName' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseEnvironmentNameUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseEnvironmentNameUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseEnvironmentName$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncReconcileResponseEnvironmentNameUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseEnvironmentNameUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseEnvironmentNameUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseEnvironmentNameUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceGroupNameSecretRef3$inboundSchema:
+  z.ZodType<SyncReconcileResponseResourceGroupNameSecretRef3, unknown> = z
+    .object({
+      key: z.string(),
+      name: z.string(),
+    });
+
+export function syncReconcileResponseResourceGroupNameSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseResourceGroupNameSecretRef3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseResourceGroupNameSecretRef3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseResourceGroupNameSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceGroupName3$inboundSchema: z.ZodType<
+  SyncReconcileResponseResourceGroupName3,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseResourceGroupNameSecretRef3$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseResourceGroupName3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseResourceGroupName3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseResourceGroupName3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseResourceGroupName3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceGroupNameUnion3$inboundSchema:
+  z.ZodType<SyncReconcileResponseResourceGroupNameUnion3, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponseResourceGroupName3$inboundSchema),
+    z.any(),
+    z.string(),
+  ]);
+
+export function syncReconcileResponseResourceGroupNameUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseResourceGroupNameUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseResourceGroupNameUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseResourceGroupNameUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceIdSecretRef$inboundSchema: z.ZodType<
+  SyncReconcileResponseResourceIdSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncReconcileResponseResourceIdSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseResourceIdSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseResourceIdSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseResourceIdSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceId$inboundSchema: z.ZodType<
+  SyncReconcileResponseResourceId,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseResourceIdSecretRef$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseResourceIdFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseResourceId, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseResourceId$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseResourceId' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseResourceIdUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseResourceIdUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseResourceId$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncReconcileResponseResourceIdUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseResourceIdUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseResourceIdUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseResourceIdUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseStaticIpSecretRef$inboundSchema: z.ZodType<
+  SyncReconcileResponseStaticIpSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncReconcileResponseStaticIpSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseStaticIpSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseStaticIpSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseStaticIpSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseStaticIp$inboundSchema: z.ZodType<
+  SyncReconcileResponseStaticIp,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncReconcileResponseStaticIpSecretRef$inboundSchema),
+});
+
+export function syncReconcileResponseStaticIpFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseStaticIp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseStaticIp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseStaticIp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTypeContainerAppsEnvironment$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseTypeContainerAppsEnvironment> = z.enum(
+    SyncReconcileResponseTypeContainerAppsEnvironment,
+  );
+
+/** @internal */
+export const SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inboundSchema:
+  z.ZodType<
+    SyncReconcileResponseExternalBindingsContainerAppsEnvironment,
+    unknown
+  > = z.object({
+    defaultDomain: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileResponseDefaultDomain$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    environmentName: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileResponseEnvironmentName$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    resourceGroupName: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileResponseResourceGroupName3$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    resourceId: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileResponseResourceId$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    staticIp: z.nullable(z.any()).optional(),
+    type: SyncReconcileResponseTypeContainerAppsEnvironment$inboundSchema,
+  });
+
+export function syncReconcileResponseExternalBindingsContainerAppsEnvironmentFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseExternalBindingsContainerAppsEnvironment,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseExternalBindingsContainerAppsEnvironment' from JSON`,
   );
 }
 
@@ -15028,6 +16112,76 @@ export function syncReconcileResponsePushServiceAccountEmailFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseRepositoryNameSecretRef$inboundSchema:
+  z.ZodType<SyncReconcileResponseRepositoryNameSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncReconcileResponseRepositoryNameSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseRepositoryNameSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseRepositoryNameSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseRepositoryNameSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseRepositoryName$inboundSchema: z.ZodType<
+  SyncReconcileResponseRepositoryName,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseRepositoryNameSecretRef$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseRepositoryNameFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseRepositoryName, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseRepositoryName$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseRepositoryName' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseRepositoryNameUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseRepositoryNameUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseRepositoryName$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncReconcileResponseRepositoryNameUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseRepositoryNameUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseRepositoryNameUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseRepositoryNameUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseTypeArtifactRegistry3$inboundSchema:
   z.ZodEnum<typeof SyncReconcileResponseTypeArtifactRegistry3> = z.enum(
     SyncReconcileResponseTypeArtifactRegistry3,
@@ -15040,6 +16194,13 @@ export const SyncReconcileResponseExternalBindingsGar$inboundSchema: z.ZodType<
 > = z.object({
   pullServiceAccountEmail: z.nullable(z.any()).optional(),
   pushServiceAccountEmail: z.nullable(z.any()).optional(),
+  repositoryName: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseRepositoryName$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
   service: z.literal("gar"),
   type: SyncReconcileResponseTypeArtifactRegistry3$inboundSchema,
 });
@@ -15121,6 +16282,51 @@ export function syncReconcileResponseRegistryNameUnionFromJSON(
     (x) =>
       SyncReconcileResponseRegistryNameUnion$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncReconcileResponseRegistryNameUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseRepositoryPrefixSecretRef2$inboundSchema:
+  z.ZodType<SyncReconcileResponseRepositoryPrefixSecretRef2, unknown> = z
+    .object({
+      key: z.string(),
+      name: z.string(),
+    });
+
+export function syncReconcileResponseRepositoryPrefixSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseRepositoryPrefixSecretRef2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseRepositoryPrefixSecretRef2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseRepositoryPrefixSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseRepositoryPrefix2$inboundSchema: z.ZodType<
+  SyncReconcileResponseRepositoryPrefix2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseRepositoryPrefixSecretRef2$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseRepositoryPrefix2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseRepositoryPrefix2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseRepositoryPrefix2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseRepositoryPrefix2' from JSON`,
   );
 }
 
@@ -15216,6 +16422,7 @@ export const SyncReconcileResponseExternalBindingsAcr$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  repositoryPrefix: z.nullable(z.any()).optional(),
   resourceGroupName: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponseResourceGroupName2$inboundSchema),
@@ -15334,55 +16541,54 @@ export function syncReconcileResponsePushRoleArnFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseRepositoryPrefixSecretRef$inboundSchema:
-  z.ZodType<SyncReconcileResponseRepositoryPrefixSecretRef, unknown> = z.object(
-    {
+export const SyncReconcileResponseRepositoryPrefixSecretRef1$inboundSchema:
+  z.ZodType<SyncReconcileResponseRepositoryPrefixSecretRef1, unknown> = z
+    .object({
       key: z.string(),
       name: z.string(),
-    },
-  );
+    });
 
-export function syncReconcileResponseRepositoryPrefixSecretRefFromJSON(
+export function syncReconcileResponseRepositoryPrefixSecretRef1FromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncReconcileResponseRepositoryPrefixSecretRef,
+  SyncReconcileResponseRepositoryPrefixSecretRef1,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponseRepositoryPrefixSecretRef$inboundSchema.parse(
+      SyncReconcileResponseRepositoryPrefixSecretRef1$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncReconcileResponseRepositoryPrefixSecretRef' from JSON`,
+    `Failed to parse 'SyncReconcileResponseRepositoryPrefixSecretRef1' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncReconcileResponseRepositoryPrefix$inboundSchema: z.ZodType<
-  SyncReconcileResponseRepositoryPrefix,
+export const SyncReconcileResponseRepositoryPrefix1$inboundSchema: z.ZodType<
+  SyncReconcileResponseRepositoryPrefix1,
   unknown
 > = z.object({
   secretRef: z.lazy(() =>
-    SyncReconcileResponseRepositoryPrefixSecretRef$inboundSchema
+    SyncReconcileResponseRepositoryPrefixSecretRef1$inboundSchema
   ),
 });
 
-export function syncReconcileResponseRepositoryPrefixFromJSON(
+export function syncReconcileResponseRepositoryPrefix1FromJSON(
   jsonString: string,
-): SafeParseResult<SyncReconcileResponseRepositoryPrefix, SDKValidationError> {
+): SafeParseResult<SyncReconcileResponseRepositoryPrefix1, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponseRepositoryPrefix$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseRepositoryPrefix' from JSON`,
+      SyncReconcileResponseRepositoryPrefix1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseRepositoryPrefix1' from JSON`,
   );
 }
 
 /** @internal */
 export const SyncReconcileResponseRepositoryPrefixUnion$inboundSchema:
   z.ZodType<SyncReconcileResponseRepositoryPrefixUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseRepositoryPrefix$inboundSchema),
+    z.lazy(() => SyncReconcileResponseRepositoryPrefix1$inboundSchema),
     z.any(),
     z.string(),
   ]);
@@ -15418,7 +16624,7 @@ export const SyncReconcileResponseExternalBindingsEcr$inboundSchema: z.ZodType<
   pushRoleArn: z.nullable(z.any()).optional(),
   repositoryPrefix: z.nullable(
     z.union([
-      z.lazy(() => SyncReconcileResponseRepositoryPrefix$inboundSchema),
+      z.lazy(() => SyncReconcileResponseRepositoryPrefix1$inboundSchema),
       z.any(),
       z.string(),
     ]),
@@ -16540,6 +17746,108 @@ export function syncReconcileResponseExternalBindingsUnion3FromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseQueuePathSecretRef$inboundSchema: z.ZodType<
+  SyncReconcileResponseQueuePathSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncReconcileResponseQueuePathSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseQueuePathSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseQueuePathSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseQueuePathSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseQueuePath$inboundSchema: z.ZodType<
+  SyncReconcileResponseQueuePath,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncReconcileResponseQueuePathSecretRef$inboundSchema
+  ),
+});
+
+export function syncReconcileResponseQueuePathFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseQueuePath, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseQueuePath$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseQueuePath' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseQueuePathUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseQueuePathUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncReconcileResponseQueuePath$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncReconcileResponseQueuePathUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseQueuePathUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseQueuePathUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseQueuePathUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseTypeQueue4$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseTypeQueue4
+> = z.enum(SyncReconcileResponseTypeQueue4);
+
+/** @internal */
+export const SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema:
+  z.ZodType<SyncReconcileResponseExternalBindingsLocalQueue, unknown> = z
+    .object({
+      queuePath: z.nullable(
+        z.union([
+          z.lazy(() => SyncReconcileResponseQueuePath$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      service: z.literal("local-queue"),
+      type: SyncReconcileResponseTypeQueue4$inboundSchema,
+    });
+
+export function syncReconcileResponseExternalBindingsLocalQueueFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseExternalBindingsLocalQueue,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseExternalBindingsLocalQueue' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseNamespaceSecretRef1$inboundSchema: z.ZodType<
   SyncReconcileResponseNamespaceSecretRef1,
   unknown
@@ -16980,6 +18288,7 @@ export const SyncReconcileResponseExternalBindingsUnion2$inboundSchema:
     z.lazy(() => SyncReconcileResponseExternalBindingsSqs$inboundSchema),
     z.lazy(() => SyncReconcileResponseExternalBindingsPubsub$inboundSchema),
     z.lazy(() => SyncReconcileResponseExternalBindingsServicebus$inboundSchema),
+    z.lazy(() => SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema),
   ]);
 
 export function syncReconcileResponseExternalBindingsUnion2FromJSON(
@@ -17514,6 +18823,9 @@ export function syncReconcileResponseExternalBindingsUnion1FromJSON(
 /** @internal */
 export const SyncReconcileResponseExternalBindingsUnion6$inboundSchema:
   z.ZodType<SyncReconcileResponseExternalBindingsUnion6, unknown> = z.union([
+    z.lazy(() =>
+      SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inboundSchema
+    ),
     z.union([
       z.lazy(() => SyncReconcileResponseExternalBindingsS3$inboundSchema),
       z.lazy(() => SyncReconcileResponseExternalBindingsBlob$inboundSchema),
@@ -17527,6 +18839,9 @@ export const SyncReconcileResponseExternalBindingsUnion6$inboundSchema:
       z.lazy(() => SyncReconcileResponseExternalBindingsPubsub$inboundSchema),
       z.lazy(() =>
         SyncReconcileResponseExternalBindingsServicebus$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema
       ),
     ]),
     z.union([
@@ -17580,54 +18895,6 @@ export function syncReconcileResponseExternalBindingsUnion6FromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseImagePullCredentials$inboundSchema: z.ZodType<
-  SyncReconcileResponseImagePullCredentials,
-  unknown
-> = z.object({
-  password: z.string(),
-  username: z.string(),
-});
-
-export function syncReconcileResponseImagePullCredentialsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncReconcileResponseImagePullCredentials,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseImagePullCredentials$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncReconcileResponseImagePullCredentials' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponseImagePullCredentialsUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponseImagePullCredentialsUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseImagePullCredentials$inboundSchema),
-    z.any(),
-  ]);
-
-export function syncReconcileResponseImagePullCredentialsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncReconcileResponseImagePullCredentialsUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseImagePullCredentialsUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncReconcileResponseImagePullCredentialsUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const TargetPlatformKubernetes$inboundSchema: z.ZodEnum<
   typeof TargetPlatformKubernetes
 > = z.enum(TargetPlatformKubernetes);
@@ -17663,8 +18930,10 @@ export const TargetPlatformAzure$inboundSchema: z.ZodEnum<
 /** @internal */
 export const SyncReconcileResponseManagementConfigAzure$inboundSchema:
   z.ZodType<SyncReconcileResponseManagementConfigAzure, unknown> = z.object({
-    managementPrincipalId: z.string(),
+    managementPrincipalId: z.nullable(z.string()).optional(),
     managingTenantId: z.string(),
+    oidcIssuer: z.nullable(z.string()).optional(),
+    oidcSubject: z.nullable(z.string()).optional(),
     platform: TargetPlatformAzure$inboundSchema,
   });
 
@@ -17747,9 +19016,9 @@ export function syncReconcileResponseManagementConfigAwsFromJSON(
 /** @internal */
 export const SyncReconcileResponseManagementConfigUnion$inboundSchema:
   z.ZodType<SyncReconcileResponseManagementConfigUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),
     z.lazy(() => SyncReconcileResponseManagementConfigAws$inboundSchema),
     z.lazy(() => SyncReconcileResponseManagementConfigGcp$inboundSchema),
+    z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),
     z.lazy(() => SyncReconcileResponseManagementConfigKubernetes$inboundSchema),
     z.any(),
   ]);
@@ -18005,6 +19274,27 @@ export function syncReconcileResponseDomainsUnionFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseStackSettingsExternalBindings$inboundSchema:
+  z.ZodType<SyncReconcileResponseStackSettingsExternalBindings, unknown> = z
+    .object({});
+
+export function syncReconcileResponseStackSettingsExternalBindingsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseStackSettingsExternalBindings,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseStackSettingsExternalBindings$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseStackSettingsExternalBindings' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseHeartbeats$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseHeartbeats
 > = z.enum(SyncReconcileResponseHeartbeats);
@@ -18214,6 +19504,11 @@ export const SyncReconcileResponseStackSettings$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  externalBindings: z.nullable(
+    z.lazy(() =>
+      SyncReconcileResponseStackSettingsExternalBindings$inboundSchema
+    ),
+  ).optional(),
   heartbeats: SyncReconcileResponseHeartbeats$inboundSchema.optional(),
   network: z.nullable(
     z.union([
@@ -18244,18 +19539,13 @@ export function syncReconcileResponseStackSettingsFromJSON(
 export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
   .object({
     allowFrozenChanges: z.boolean().optional(),
-    artifactRegistry: z.nullable(
-      z.union([
-        z.lazy(() => SyncReconcileResponseArtifactRegistry$inboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
     computeBackend: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseComputeBackendHorizon$inboundSchema),
         z.any(),
       ]),
     ).optional(),
+    deploymentToken: z.nullable(z.string()).optional(),
     domainMetadata: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseDomainMetadata$inboundSchema),
@@ -18268,12 +19558,13 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
     externalBindings: z.record(
       z.string(),
       z.union([
+        z.lazy(() =>
+          SyncReconcileResponseExternalBindingsContainerAppsEnvironment$inboundSchema
+        ),
         z.union([
           z.lazy(() => SyncReconcileResponseExternalBindingsS3$inboundSchema),
           z.lazy(() => SyncReconcileResponseExternalBindingsBlob$inboundSchema),
-          z.lazy(() =>
-            SyncReconcileResponseExternalBindingsGcs$inboundSchema
-          ),
+          z.lazy(() => SyncReconcileResponseExternalBindingsGcs$inboundSchema),
           z.lazy(() =>
             SyncReconcileResponseExternalBindingsLocalStorage$inboundSchema
           ),
@@ -18285,6 +19576,9 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
           ),
           z.lazy(() =>
             SyncReconcileResponseExternalBindingsServicebus$inboundSchema
+          ),
+          z.lazy(() =>
+            SyncReconcileResponseExternalBindingsLocalQueue$inboundSchema
           ),
         ]),
         z.union([
@@ -18331,29 +19625,25 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
         ]),
       ]),
     ).optional(),
-    imagePullCredentials: z.nullable(
-      z.union([
-        z.lazy(() => SyncReconcileResponseImagePullCredentials$inboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
     managementConfig: z.nullable(
       z.union([
-        z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),
         z.lazy(() => SyncReconcileResponseManagementConfigAws$inboundSchema),
         z.lazy(() => SyncReconcileResponseManagementConfigGcp$inboundSchema),
+        z.lazy(() => SyncReconcileResponseManagementConfigAzure$inboundSchema),
         z.lazy(() =>
           SyncReconcileResponseManagementConfigKubernetes$inboundSchema
         ),
         z.any(),
       ]),
     ).optional(),
+    managerUrl: z.nullable(z.string()).optional(),
     monitoring: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseMonitoring$inboundSchema),
         z.any(),
       ]),
     ).optional(),
+    nativeImageHost: z.nullable(z.string()).optional(),
     publicUrls: z.nullable(z.record(z.string(), z.string())).optional(),
     stackSettings: z.lazy(() =>
       SyncReconcileResponseStackSettings$inboundSchema
@@ -18436,6 +19726,11 @@ export function overrideReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const OverrideReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof OverrideReleaseInfoEffect
+> = z.enum(OverrideReleaseInfoEffect);
+
+/** @internal */
 export const OverrideReleaseInfoAwGrant$inboundSchema: z.ZodType<
   OverrideReleaseInfoAwGrant,
   unknown
@@ -18461,6 +19756,7 @@ export const OverrideReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => OverrideReleaseInfoAwBinding$inboundSchema),
+  effect: OverrideReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => OverrideReleaseInfoAwGrant$inboundSchema),
 });
 
@@ -18902,6 +20198,11 @@ export function extendReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const ExtendReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ExtendReleaseInfoEffect
+> = z.enum(ExtendReleaseInfoEffect);
+
+/** @internal */
 export const ExtendReleaseInfoAwGrant$inboundSchema: z.ZodType<
   ExtendReleaseInfoAwGrant,
   unknown
@@ -18927,6 +20228,7 @@ export const ExtendReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ExtendReleaseInfoAwBinding$inboundSchema),
+  effect: ExtendReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ExtendReleaseInfoAwGrant$inboundSchema),
 });
 
@@ -19380,6 +20682,11 @@ export function profileReleaseInfoAwBindingFromJSON(
 }
 
 /** @internal */
+export const ProfileReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ProfileReleaseInfoEffect
+> = z.enum(ProfileReleaseInfoEffect);
+
+/** @internal */
 export const ProfileReleaseInfoAwGrant$inboundSchema: z.ZodType<
   ProfileReleaseInfoAwGrant,
   unknown
@@ -19405,6 +20712,7 @@ export const ProfileReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ProfileReleaseInfoAwBinding$inboundSchema),
+  effect: ProfileReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ProfileReleaseInfoAwGrant$inboundSchema),
 });
 
@@ -19857,6 +21165,11 @@ export function releaseInfoResourcesFromJSON(
 }
 
 /** @internal */
+export const ReleaseInfoSupportedPlatform$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoSupportedPlatform
+> = z.enum(ReleaseInfoSupportedPlatform);
+
+/** @internal */
 export const ReleaseInfoStack$inboundSchema: z.ZodType<
   ReleaseInfoStack,
   unknown
@@ -19867,6 +21180,9 @@ export const ReleaseInfoStack$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => ReleaseInfoResources$inboundSchema),
   ),
+  supportedPlatforms: z.nullable(
+    z.array(ReleaseInfoSupportedPlatform$inboundSchema),
+  ).optional(),
 });
 
 export function releaseInfoStackFromJSON(

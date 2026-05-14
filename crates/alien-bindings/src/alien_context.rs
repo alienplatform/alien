@@ -16,6 +16,9 @@ use tracing::{debug, error, info, warn};
 use crate::error::{ErrorData, Result};
 use crate::wait_until::WaitUntilContext;
 use crate::{BindingsMode, BindingsProvider, BindingsProviderApi, WaitUntil};
+use alien_core::{
+    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 #[cfg(feature = "grpc")]
@@ -806,7 +809,7 @@ impl AlienContext {
     /// Gets the current function binding if available.
     pub async fn get_current_function(&self) -> Result<Option<Arc<dyn crate::traits::Function>>> {
         if let Some(current_function_name) =
-            self.env_vars.get("ALIEN_CURRENT_FUNCTION_BINDING_NAME")
+            self.env_vars.get(ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME)
         {
             Ok(Some(
                 self.bindings_provider
@@ -833,7 +836,7 @@ impl AlienContext {
     /// ```
     pub async fn get_current_container(&self) -> Result<Option<Arc<dyn crate::traits::Container>>> {
         if let Some(current_container_name) =
-            self.env_vars.get("ALIEN_CURRENT_CONTAINER_BINDING_NAME")
+            self.env_vars.get(ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME)
         {
             Ok(Some(
                 self.bindings_provider

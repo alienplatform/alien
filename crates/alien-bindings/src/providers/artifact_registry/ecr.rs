@@ -1,16 +1,15 @@
 use crate::{
     error::{map_cloud_client_error, Error, ErrorData, Result},
     traits::{
-        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, RegistryAuthMethod,
+        ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
         AwsCrossAccountAccess, Binding, ComputeServiceType, CrossAccountAccess,
-        CrossAccountPermissions, RepositoryResponse,
+        CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
     },
 };
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DescribeRepositoriesRequest, EcrApi, EcrClient,
-        GetAuthorizationTokenRequest, GetRepositoryPolicyRequest,
-        SetRepositoryPolicyRequest,
+        GetAuthorizationTokenRequest, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
     },
     sts::{AssumeRoleRequest, StsApi, StsClient},
     AwsClientConfigExt as _, AwsCredentialProvider,
@@ -978,5 +977,4 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         );
         Ok(())
     }
-
 }

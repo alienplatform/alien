@@ -1,0 +1,355 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.100"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.46.0.0/16\",\"availability_zones\":2}}"
+  sensitive   = true
+}
+
+variable "azure_location" {
+  type        = string
+  description = "Azure location."
+  default     = "eastus"
+}
+
+variable "azure_subscription_id" {
+  type        = string
+  description = "Azure subscription ID hosting the stack."
+}
+
+variable "azure_resource_group_name" {
+  type        = string
+  description = "Azure resource group name."
+}
+
+variable "azure_managing_tenant_id" {
+  type        = string
+  description = "Azure tenant ID the manager uses for cross-tenant access."
+  default     = ""
+}
+
+variable "azure_management_principal_id" {
+  type        = string
+  description = "Optional service-principal object ID for local development fallback role assignment."
+  default     = ""
+}
+
+variable "azure_oidc_issuer" {
+  type        = string
+  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
+  default     = ""
+}
+
+variable "azure_oidc_subject" {
+  type        = string
+  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "azurerm" {
+  resource_provider_registrations = "none"
+
+  features {}
+}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "azure"
+  deployment_target   = "azure"
+  deployment_region   = var.azure_location
+  deployment_management_config = {
+    platform              = "azure"
+    managingTenantId      = var.azure_managing_tenant_id
+    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
+    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
+    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources = [
+    {
+      id   = "default-resource-group"
+      type = "azure_resource_group"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = azurerm_resource_group.default_resource_group.name
+        location       = azurerm_resource_group.default_resource_group.location
+      }
+    },
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        vnetId         = azurerm_virtual_network.default_network.id
+        vnetName       = azurerm_virtual_network.default_network.name
+        subnetIds = [
+          azurerm_subnet.default_network_public.id,
+          azurerm_subnet.default_network_private.id
+        ]
+        natGatewayId           = azurerm_nat_gateway.default_network_nat.id
+        networkSecurityGroupId = azurerm_network_security_group.default_network_workload.id
+        isByoVnet              = false
+      }
+    }
+  ]
+}
+
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-resource-group"
+    "alien-resource-type" = "resource-group"
+  }
+}
+
+=== default_network.tf ===
+resource "azurerm_virtual_network" "default_network" {
+  name                = "${var.stack_name}-default_network"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  address_space = [
+    "10.46.0.0/16"
+  ]
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "default_network_public" {
+  name                 = "${var.stack_name}-default_network-public"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 0)
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "default_network_private" {
+  name                 = "${var.stack_name}-default_network-private"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_public_ip" "default_network_nat_pip" {
+  name                = "${var.stack_name}-default_network-nat-pip"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_nat_gateway" "default_network_nat" {
+  name                    = "${var.stack_name}-default_network-nat"
+  resource_group_name     = var.azure_resource_group_name
+  location                = var.azure_location
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = 10
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "default_network_nat" {
+  nat_gateway_id       = azurerm_nat_gateway.default_network_nat.id
+  public_ip_address_id = azurerm_public_ip.default_network_nat_pip.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_nat_gateway_association" "default_network_private" {
+  subnet_id      = azurerm_subnet.default_network_private.id
+  nat_gateway_id = azurerm_nat_gateway.default_network_nat.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_group" "default_network_workload" {
+  name                = "${var.stack_name}-default_network-workload"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+
+  security_rule {
+    name                       = "AllowVnetInbound"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+
+  tags = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "default-network"
+    "alien-resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_network_security_group_association" "default_network_private" {
+  subnet_id                 = azurerm_subnet.default_network_private.id
+  network_security_group_id = azurerm_network_security_group.default_network_workload.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_virtual_network.default_network,
+    azurerm_subnet.default_network_public,
+    azurerm_subnet.default_network_private,
+    azurerm_public_ip.default_network_nat_pip,
+    azurerm_nat_gateway.default_network_nat,
+    azurerm_nat_gateway_public_ip_association.default_network_nat,
+    azurerm_subnet_nat_gateway_association.default_network_private,
+    azurerm_network_security_group.default_network_workload,
+    azurerm_subnet_network_security_group_association.default_network_private
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "azure"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-net
+
+Target: `azure`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-net' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

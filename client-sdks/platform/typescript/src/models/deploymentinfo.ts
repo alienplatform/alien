@@ -29,7 +29,7 @@ export type DeploymentInfoTokenType = ClosedEnum<
 /**
  * Represents the target cloud platform.
  */
-export const DeploymentInfoPlatform = {
+export const DeploymentInfoDeploymentPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -40,7 +40,9 @@ export const DeploymentInfoPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type DeploymentInfoPlatform = ClosedEnum<typeof DeploymentInfoPlatform>;
+export type DeploymentInfoDeploymentPlatform = ClosedEnum<
+  typeof DeploymentInfoDeploymentPlatform
+>;
 
 /**
  * Deployment details (present when using a deployment-scoped token)
@@ -50,7 +52,7 @@ export type DeploymentInfoDeployment = {
   /**
    * Represents the target cloud platform.
    */
-  platform: DeploymentInfoPlatform;
+  platform: DeploymentInfoDeploymentPlatform;
 };
 
 /**
@@ -64,10 +66,46 @@ export type DeploymentInfoDeploymentGroup = {
   name: string;
 };
 
+/**
+ * Represents the target cloud platform.
+ */
+export const StackSummaryPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type StackSummaryPlatform = ClosedEnum<typeof StackSummaryPlatform>;
+
+export type ResourceCounts = {
+  functions: number;
+  containers: number;
+  /**
+   * Storage, queue, KV, vault, database, or cache resources that Kubernetes needs Terraform to provision
+   */
+  externalInfra: number;
+  total: number;
+};
+
+export type StackSummary = {
+  /**
+   * Platforms supported by the active release
+   */
+  platforms: Array<StackSummaryPlatform>;
+  resourceCounts: ResourceCounts;
+};
+
 export type DeploymentInfoProject = {
   name: string;
   workspace: string;
   deploymentPageBackground?: DeploymentPageBackground | null | undefined;
+  deploymentPageLogoUrl?: string | null | undefined;
+  stackSummary?: StackSummary | null | undefined;
 };
 
 /**
@@ -171,10 +209,20 @@ export type CloudformationOutputs = {
    */
   size: number;
   /**
+   * S3 URL to the CloudFormation stack policy
+   */
+  stackPolicyUrl: string;
+  /**
    * S3 URL to the CloudFormation template
    */
   templateUrl: string;
 };
+
+export const DeploymentInfoMode = {
+  Auto: "auto",
+  Outputs: "outputs",
+} as const;
+export type DeploymentInfoMode = ClosedEnum<typeof DeploymentInfoMode>;
 
 export type DeploymentInfoCloudformation = {
   /**
@@ -187,10 +235,12 @@ export type DeploymentInfoCloudformation = {
    */
   outputs?: CloudformationOutputs | undefined;
   error?: any | null | undefined;
+  mode: DeploymentInfoMode;
   /**
    * CloudFormation launch URL
    */
   launchUrl: string;
+  outputsSchema?: any | null | undefined;
 };
 
 /**
@@ -207,6 +257,36 @@ export const TerraformStatus = {
  * Status of a package build
  */
 export type TerraformStatus = ClosedEnum<typeof TerraformStatus>;
+
+/**
+ * Information about a single Terraform module package for one target.
+ */
+export type DeploymentInfoModules = {
+  /**
+   * Download URL for the module archive
+   */
+  downloadUrl: string;
+  /**
+   * Filename of the module archive
+   */
+  filename: string;
+  /**
+   * SHA256 checksum of the archive
+   */
+  shasum: string;
+  /**
+   * Size of the archive in bytes
+   */
+  size: number;
+  /**
+   * Terraform module source (hostname/namespace/name/provider, without scheme)
+   */
+  source: string;
+  /**
+   * Terraform module target (aws, gcp, azure, eks, gke, aks)
+   */
+  target: string;
+};
 
 /**
  * GPG public key for Terraform provider signature verification
@@ -253,9 +333,9 @@ export type DeploymentInfoPlatforms = {
 };
 
 /**
- * Outputs from a Terraform provider package build
+ * Terraform provider registry outputs.
  */
-export type TerraformOutputs = {
+export type DeploymentInfoProvider = {
   /**
    * GPG public key for Terraform provider signature verification
    */
@@ -264,6 +344,24 @@ export type TerraformOutputs = {
    * Provider packages for each target platform
    */
   platforms: { [k: string]: DeploymentInfoPlatforms };
+  /**
+   * Terraform provider source (hostname/namespace/type, without scheme)
+   */
+  source: string;
+};
+
+/**
+ * Outputs from a Terraform package build.
+ */
+export type TerraformOutputs = {
+  /**
+   * Module registry artifacts by Terraform target.
+   */
+  modules: { [k: string]: DeploymentInfoModules };
+  /**
+   * Terraform provider registry outputs.
+   */
+  provider: DeploymentInfoProvider;
 };
 
 export type DeploymentInfoTerraform = {
@@ -273,7 +371,7 @@ export type DeploymentInfoTerraform = {
   status: TerraformStatus;
   version?: string | undefined;
   /**
-   * Outputs from a Terraform provider package build
+   * Outputs from a Terraform package build.
    */
   outputs?: TerraformOutputs | undefined;
   error?: any | null | undefined;
@@ -281,6 +379,63 @@ export type DeploymentInfoTerraform = {
    * Terraform provider source (without https://)
    */
   providerSource: string;
+  /**
+   * Terraform module sources by target
+   */
+  moduleSources: { [k: string]: string };
+  moduleVersion?: string | undefined;
+  /**
+   * Manager URLs by Terraform target
+   */
+  managerUrls: { [k: string]: string };
+};
+
+/**
+ * Status of a package build
+ */
+export const HelmStatus = {
+  Pending: "pending",
+  Building: "building",
+  Ready: "ready",
+  Failed: "failed",
+  Canceled: "canceled",
+} as const;
+/**
+ * Status of a package build
+ */
+export type HelmStatus = ClosedEnum<typeof HelmStatus>;
+
+/**
+ * Outputs from a Helm chart package build
+ */
+export type HelmOutputs = {
+  /**
+   * OCI chart reference (e.g., "oci://public.ecr.aws/acme/charts/project-id")
+   */
+  chart: string;
+  /**
+   * Chart version (e.g., "1.2.3")
+   */
+  version: string;
+};
+
+export type DeploymentInfoHelm = {
+  /**
+   * Status of a package build
+   */
+  status: HelmStatus;
+  version?: string | undefined;
+  /**
+   * Outputs from a Helm chart package build
+   */
+  outputs?: HelmOutputs | undefined;
+  error?: any | null | undefined;
+  /**
+   * OCI chart reference
+   */
+  chartRef: string;
+  managerFetchExample: string;
+  localImportExample: string;
 };
 
 export type Packages = {
@@ -291,6 +446,115 @@ export type Packages = {
   cli?: DeploymentInfoCli | undefined;
   cloudformation?: DeploymentInfoCloudformation | undefined;
   terraform?: DeploymentInfoTerraform | undefined;
+  helm?: DeploymentInfoHelm | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const TargetsPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type TargetsPlatformEnum = ClosedEnum<typeof TargetsPlatformEnum>;
+
+export type DeploymentInfoManagementConfigKubernetes = {
+  platform: "kubernetes";
+};
+
+/**
+ * Azure management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigAzure = {
+  /**
+   * Management service principal object ID for local development fallback
+   */
+  managementPrincipalId?: string | null | undefined;
+  /**
+   * The managing Azure Tenant ID for cross-tenant access
+   */
+  managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
+  platform: "azure";
+};
+
+/**
+ * GCP management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigGcp = {
+  /**
+   * Service account email for management roles
+   */
+  serviceAccountEmail: string;
+  platform: "gcp";
+};
+
+/**
+ * AWS management configuration extracted from stack settings
+ */
+export type DeploymentInfoManagementConfigAws = {
+  /**
+   * The managing AWS IAM role ARN that can assume cross-account roles
+   */
+  managingRoleArn: string;
+  platform: "aws";
+};
+
+/**
+ * Management configuration for different cloud platforms.
+ *
+ * @remarks
+ *
+ * Platform-derived configuration for cross-account/cross-tenant access.
+ * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+ */
+export type DeploymentInfoManagementConfigUnion =
+  | DeploymentInfoManagementConfigAws
+  | DeploymentInfoManagementConfigGcp
+  | DeploymentInfoManagementConfigAzure
+  | DeploymentInfoManagementConfigKubernetes;
+
+export type Targets = {
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: TargetsPlatformEnum;
+  managerUrl: string;
+  /**
+   * Management configuration for different cloud platforms.
+   *
+   * @remarks
+   *
+   * Platform-derived configuration for cross-account/cross-tenant access.
+   * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+   */
+  managementConfig:
+    | DeploymentInfoManagementConfigAws
+    | DeploymentInfoManagementConfigGcp
+    | DeploymentInfoManagementConfigAzure
+    | DeploymentInfoManagementConfigKubernetes;
+  awsManagingAccountId?: string | undefined;
+};
+
+export type InstallContext = {
+  /**
+   * Deployment-session install context by Terraform/installer target
+   */
+  targets: { [k: string]: Targets };
 };
 
 export type DeploymentInfo = {
@@ -308,6 +572,7 @@ export type DeploymentInfo = {
   deploymentGroup?: DeploymentInfoDeploymentGroup | undefined;
   project: DeploymentInfoProject;
   packages: Packages;
+  installContext: InstallContext;
 };
 
 /** @internal */
@@ -316,9 +581,9 @@ export const DeploymentInfoTokenType$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentInfoTokenType);
 
 /** @internal */
-export const DeploymentInfoPlatform$inboundSchema: z.ZodEnum<
-  typeof DeploymentInfoPlatform
-> = z.enum(DeploymentInfoPlatform);
+export const DeploymentInfoDeploymentPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoDeploymentPlatform
+> = z.enum(DeploymentInfoDeploymentPlatform);
 
 /** @internal */
 export const DeploymentInfoDeployment$inboundSchema: z.ZodType<
@@ -326,7 +591,7 @@ export const DeploymentInfoDeployment$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   name: z.string(),
-  platform: DeploymentInfoPlatform$inboundSchema,
+  platform: DeploymentInfoDeploymentPlatform$inboundSchema,
 });
 
 export function deploymentInfoDeploymentFromJSON(
@@ -359,6 +624,47 @@ export function deploymentInfoDeploymentGroupFromJSON(
 }
 
 /** @internal */
+export const StackSummaryPlatform$inboundSchema: z.ZodEnum<
+  typeof StackSummaryPlatform
+> = z.enum(StackSummaryPlatform);
+
+/** @internal */
+export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
+  z.object({
+    functions: z.int(),
+    containers: z.int(),
+    externalInfra: z.int(),
+    total: z.int(),
+  });
+
+export function resourceCountsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResourceCounts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResourceCounts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResourceCounts' from JSON`,
+  );
+}
+
+/** @internal */
+export const StackSummary$inboundSchema: z.ZodType<StackSummary, unknown> = z
+  .object({
+    platforms: z.array(StackSummaryPlatform$inboundSchema),
+    resourceCounts: z.lazy(() => ResourceCounts$inboundSchema),
+  });
+
+export function stackSummaryFromJSON(
+  jsonString: string,
+): SafeParseResult<StackSummary, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StackSummary$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StackSummary' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoProject$inboundSchema: z.ZodType<
   DeploymentInfoProject,
   unknown
@@ -367,6 +673,8 @@ export const DeploymentInfoProject$inboundSchema: z.ZodType<
   workspace: z.string(),
   deploymentPageBackground: z.nullable(DeploymentPageBackground$inboundSchema)
     .optional(),
+  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
+  stackSummary: z.nullable(z.lazy(() => StackSummary$inboundSchema)).optional(),
 });
 
 export function deploymentInfoProjectFromJSON(
@@ -476,6 +784,7 @@ export const CloudformationOutputs$inboundSchema: z.ZodType<
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
+  stackPolicyUrl: z.string(),
   templateUrl: z.string(),
 });
 
@@ -490,6 +799,11 @@ export function cloudformationOutputsFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoMode$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoMode
+> = z.enum(DeploymentInfoMode);
+
+/** @internal */
 export const DeploymentInfoCloudformation$inboundSchema: z.ZodType<
   DeploymentInfoCloudformation,
   unknown
@@ -498,7 +812,9 @@ export const DeploymentInfoCloudformation$inboundSchema: z.ZodType<
   version: z.string().optional(),
   outputs: z.lazy(() => CloudformationOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
+  mode: DeploymentInfoMode$inboundSchema,
   launchUrl: z.string(),
+  outputsSchema: z.nullable(z.any()).optional(),
 });
 
 export function deploymentInfoCloudformationFromJSON(
@@ -514,6 +830,29 @@ export function deploymentInfoCloudformationFromJSON(
 /** @internal */
 export const TerraformStatus$inboundSchema: z.ZodEnum<typeof TerraformStatus> =
   z.enum(TerraformStatus);
+
+/** @internal */
+export const DeploymentInfoModules$inboundSchema: z.ZodType<
+  DeploymentInfoModules,
+  unknown
+> = z.object({
+  downloadUrl: z.string(),
+  filename: z.string(),
+  shasum: z.string(),
+  size: z.int(),
+  source: z.string(),
+  target: z.string(),
+});
+
+export function deploymentInfoModulesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoModules, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoModules$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoModules' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentInfoGpgPublicKey$inboundSchema: z.ZodType<
@@ -558,8 +897,8 @@ export function deploymentInfoPlatformsFromJSON(
 }
 
 /** @internal */
-export const TerraformOutputs$inboundSchema: z.ZodType<
-  TerraformOutputs,
+export const DeploymentInfoProvider$inboundSchema: z.ZodType<
+  DeploymentInfoProvider,
   unknown
 > = z.object({
   gpgPublicKey: z.lazy(() => DeploymentInfoGpgPublicKey$inboundSchema),
@@ -567,6 +906,29 @@ export const TerraformOutputs$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => DeploymentInfoPlatforms$inboundSchema),
   ),
+  source: z.string(),
+});
+
+export function deploymentInfoProviderFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoProvider, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoProvider$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoProvider' from JSON`,
+  );
+}
+
+/** @internal */
+export const TerraformOutputs$inboundSchema: z.ZodType<
+  TerraformOutputs,
+  unknown
+> = z.object({
+  modules: z.record(
+    z.string(),
+    z.lazy(() => DeploymentInfoModules$inboundSchema),
+  ),
+  provider: z.lazy(() => DeploymentInfoProvider$inboundSchema),
 });
 
 export function terraformOutputsFromJSON(
@@ -589,6 +951,9 @@ export const DeploymentInfoTerraform$inboundSchema: z.ZodType<
   outputs: z.lazy(() => TerraformOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
   providerSource: z.string(),
+  moduleSources: z.record(z.string(), z.string()),
+  moduleVersion: z.string().optional(),
+  managerUrls: z.record(z.string(), z.string()),
 });
 
 export function deploymentInfoTerraformFromJSON(
@@ -602,12 +967,59 @@ export function deploymentInfoTerraformFromJSON(
 }
 
 /** @internal */
+export const HelmStatus$inboundSchema: z.ZodEnum<typeof HelmStatus> = z.enum(
+  HelmStatus,
+);
+
+/** @internal */
+export const HelmOutputs$inboundSchema: z.ZodType<HelmOutputs, unknown> = z
+  .object({
+    chart: z.string(),
+    version: z.string(),
+  });
+
+export function helmOutputsFromJSON(
+  jsonString: string,
+): SafeParseResult<HelmOutputs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HelmOutputs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HelmOutputs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoHelm$inboundSchema: z.ZodType<
+  DeploymentInfoHelm,
+  unknown
+> = z.object({
+  status: HelmStatus$inboundSchema,
+  version: z.string().optional(),
+  outputs: z.lazy(() => HelmOutputs$inboundSchema).optional(),
+  error: z.nullable(z.any()).optional(),
+  chartRef: z.string(),
+  managerFetchExample: z.string(),
+  localImportExample: z.string(),
+});
+
+export function deploymentInfoHelmFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoHelm, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoHelm$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoHelm' from JSON`,
+  );
+}
+
+/** @internal */
 export const Packages$inboundSchema: z.ZodType<Packages, unknown> = z.object({
   ready: z.boolean(),
   cli: z.lazy(() => DeploymentInfoCli$inboundSchema).optional(),
   cloudformation: z.lazy(() => DeploymentInfoCloudformation$inboundSchema)
     .optional(),
   terraform: z.lazy(() => DeploymentInfoTerraform$inboundSchema).optional(),
+  helm: z.lazy(() => DeploymentInfoHelm$inboundSchema).optional(),
 });
 
 export function packagesFromJSON(
@@ -621,6 +1033,157 @@ export function packagesFromJSON(
 }
 
 /** @internal */
+export const TargetsPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformEnum
+> = z.enum(TargetsPlatformEnum);
+
+/** @internal */
+export const DeploymentInfoManagementConfigKubernetes$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigKubernetes,
+  unknown
+> = z.object({
+  platform: z.literal("kubernetes"),
+});
+
+export function deploymentInfoManagementConfigKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentInfoManagementConfigKubernetes,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigKubernetes$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentInfoManagementConfigKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigAzure$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigAzure,
+  unknown
+> = z.object({
+  managementPrincipalId: z.nullable(z.string()).optional(),
+  managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
+  platform: z.literal("azure"),
+});
+
+export function deploymentInfoManagementConfigAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigGcp$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigGcp,
+  unknown
+> = z.object({
+  serviceAccountEmail: z.string(),
+  platform: z.literal("gcp"),
+});
+
+export function deploymentInfoManagementConfigGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigAws$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigAws,
+  unknown
+> = z.object({
+  managingRoleArn: z.string(),
+  platform: z.literal("aws"),
+});
+
+export function deploymentInfoManagementConfigAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoManagementConfigUnion$inboundSchema: z.ZodType<
+  DeploymentInfoManagementConfigUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
+  z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+]);
+
+export function deploymentInfoManagementConfigUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoManagementConfigUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoManagementConfigUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoManagementConfigUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
+  platform: TargetsPlatformEnum$inboundSchema,
+  managerUrl: z.string(),
+  managementConfig: z.union([
+    z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
+    z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+  ]),
+  awsManagingAccountId: z.string().optional(),
+});
+
+export function targetsFromJSON(
+  jsonString: string,
+): SafeParseResult<Targets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Targets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Targets' from JSON`,
+  );
+}
+
+/** @internal */
+export const InstallContext$inboundSchema: z.ZodType<InstallContext, unknown> =
+  z.object({
+    targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
+  });
+
+export function installContextFromJSON(
+  jsonString: string,
+): SafeParseResult<InstallContext, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InstallContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InstallContext' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
   z.object({
     tokenType: DeploymentInfoTokenType$inboundSchema,
@@ -629,6 +1192,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
       .optional(),
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
+    installContext: z.lazy(() => InstallContext$inboundSchema),
   });
 
 export function deploymentInfoFromJSON(

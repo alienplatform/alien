@@ -11,15 +11,17 @@ let value: CloudformationOutputs = {
   launchStackUrl: "https://well-made-cricket.net",
   sha256: "<value>",
   size: 888258,
-  templateUrl: "https://colorful-godparent.info/",
+  stackPolicyUrl: "https://colorful-godparent.info/",
+  templateUrl: "https://dapper-heroine.biz",
 };
 ```
 
 ## Fields
 
-| Field                                 | Type                                  | Required                              | Description                           |
-| ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
-| `launchStackUrl`                      | *string*                              | :heavy_check_mark:                    | AWS Console quick-launch URL          |
-| `sha256`                              | *string*                              | :heavy_check_mark:                    | SHA256 checksum of the template       |
-| `size`                                | *number*                              | :heavy_check_mark:                    | Template size in bytes                |
-| `templateUrl`                         | *string*                              | :heavy_check_mark:                    | S3 URL to the CloudFormation template |
+| Field                                     | Type                                      | Required                                  | Description                               |
+| ----------------------------------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `launchStackUrl`                          | *string*                                  | :heavy_check_mark:                        | AWS Console quick-launch URL              |
+| `sha256`                                  | *string*                                  | :heavy_check_mark:                        | SHA256 checksum of the template           |
+| `size`                                    | *number*                                  | :heavy_check_mark:                        | Template size in bytes                    |
+| `stackPolicyUrl`                          | *string*                                  | :heavy_check_mark:                        | S3 URL to the CloudFormation stack policy |
+| `templateUrl`                             | *string*                                  | :heavy_check_mark:                        | S3 URL to the CloudFormation template     |

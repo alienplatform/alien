@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+ * Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
  */
 export function deploymentsRetry(
   client: AlienCore,

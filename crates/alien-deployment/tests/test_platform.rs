@@ -5,14 +5,42 @@
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, Function, FunctionCode, Platform,
-    ReleaseInfo, ResourceEntry, ResourceLifecycle, Stack, StackSettings,
+    ReleaseInfo, ResourceEntry, ResourceLifecycle, Stack, StackSettings, Storage,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
+use tokio::sync::MutexGuard;
 
 const MAX_STEPS: usize = 100;
+
+static TEST_VAULT_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+struct TestVaultEnv {
+    _guard: MutexGuard<'static, ()>,
+    _temp_dir: TempDir,
+}
+
+impl Drop for TestVaultEnv {
+    fn drop(&mut self) {
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
+    }
+}
+
+async fn test_vault_env() -> TestVaultEnv {
+    let guard = TEST_VAULT_ENV_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    std::env::set_var("TEST_VAULT_DATA_DIR", temp_dir.path().to_str().unwrap());
+
+    TestVaultEnv {
+        _guard: guard,
+        _temp_dir: temp_dir,
+    }
+}
 
 /// Helper to run deployment steps until a terminal status or max steps
 async fn run_until_status(
@@ -115,7 +143,51 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
-            supported_platforms: None,
+        supported_platforms: None,
+    }
+}
+
+/// Create a stack with one setup-owned Frozen resource and one Alien-owned Live resource.
+fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id: &str) -> Stack {
+    let storage = Storage::new(storage_id.to_string()).build();
+    let function = Function::new(function_id.to_string())
+        .code(FunctionCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+
+    let mut resources = IndexMap::new();
+    resources.insert(
+        storage_id.to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(storage),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+        },
+    );
+    resources.insert(
+        function_id.to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(function),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        },
+    );
+
+    let mut profiles = IndexMap::new();
+    profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
+
+    Stack {
+        id: stack_id.to_string(),
+        resources,
+        permissions: alien_core::PermissionsConfig {
+            profiles,
+            management: alien_core::ManagementPermissions::Auto,
+        },
+        supported_platforms: None,
     }
 }
 
@@ -191,7 +263,7 @@ async fn test_pending_to_running_happy_path_promotes_release() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack);
 
     // Track initial target release
@@ -230,16 +302,51 @@ async fn test_pending_to_running_happy_path_promotes_release() {
     );
 }
 
+#[tokio::test]
+async fn test_initial_setup_creates_only_frozen_resources() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let stack = create_test_stack_with_storage("test-stack", "test-storage", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack);
+
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Provisioning]).await;
+
+    let stack_state = state
+        .stack_state
+        .as_ref()
+        .expect("stack_state should exist after InitialSetup");
+    let storage = stack_state
+        .resources
+        .get("test-storage")
+        .expect("frozen storage should be created during InitialSetup");
+    assert_eq!(storage.status, alien_core::ResourceStatus::Running);
+    assert!(
+        !stack_state.resources.contains_key("test-function"),
+        "live function must not be created during InitialSetup"
+    );
+
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let function = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("test-function")
+        .expect("live function should be created during Provisioning");
+    assert_eq!(function.status, alien_core::ResourceStatus::Running);
+}
+
 /// B) Secrets sync behavior tests
 
 #[tokio::test]
-async fn test_initial_setup_syncs_secrets_before_provisioning() {
-    // Verify that secrets are synced during InitialSetup (when the vault
-    // becomes Running) rather than waiting for the Provisioning phase.
-    // This is critical because functions need ALIEN_COMMANDS_TOKEN (a secret)
-    // to start successfully.
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    std::env::set_var("TEST_VAULT_DATA_DIR", temp_dir.path().to_str().unwrap());
+async fn test_provisioning_syncs_secrets_before_live_compute() {
+    // Verify that secrets are synced before live compute resources are stepped.
+    // With Frozen-only InitialSetup, the vault may become Running on the same
+    // step that transitions to Provisioning, so Provisioning is the first
+    // guaranteed sync point.
+    let _vault_env = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", true);
@@ -253,8 +360,13 @@ async fn test_initial_setup_syncs_secrets_before_provisioning() {
     )
     .await;
 
-    // By the time we reach Provisioning, secrets should already be synced
-    // during InitialSetup (after the vault became Running).
+    // Execute one provisioning step. It must sync secrets before stepping
+    // the live function.
+    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("Step should succeed");
+    state = result.state;
+
     assert_eq!(
         state
             .runtime_metadata
@@ -263,10 +375,8 @@ async fn test_initial_setup_syncs_secrets_before_provisioning() {
             .last_synced_env_vars_hash
             .as_deref(),
         Some("hash_v1"),
-        "Secrets should be synced during InitialSetup, not deferred to Provisioning"
+        "Secrets should be synced before live compute is stepped"
     );
-
-    std::env::remove_var("TEST_VAULT_DATA_DIR");
 }
 
 #[tokio::test]
@@ -274,8 +384,7 @@ async fn test_deploy_with_secrets_reaches_running() {
     // End-to-end: a deployment with secret env vars should reach Running.
     // Before the fix, InitialSetup skipped secrets → functions crashed on
     // missing ALIEN_COMMANDS_TOKEN → deployment stuck in InitialSetupFailed.
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    std::env::set_var("TEST_VAULT_DATA_DIR", temp_dir.path().to_str().unwrap());
+    let _vault_env = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", true);
@@ -299,14 +408,11 @@ async fn test_deploy_with_secrets_reaches_running() {
             .as_deref(),
         Some("hash_v1"),
     );
-
-    std::env::remove_var("TEST_VAULT_DATA_DIR");
 }
 
 #[tokio::test]
 async fn test_provisioning_syncs_secrets_once_per_hash() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    std::env::set_var("TEST_VAULT_DATA_DIR", temp_dir.path().to_str().unwrap());
+    let _vault_env = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", true);
@@ -360,14 +466,11 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
     assert!(
         state.status == DeploymentStatus::Provisioning || state.status == DeploymentStatus::Running
     );
-
-    std::env::remove_var("TEST_VAULT_DATA_DIR");
 }
 
 #[tokio::test]
 async fn test_provisioning_resyncs_when_hash_changes() {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    std::env::set_var("TEST_VAULT_DATA_DIR", temp_dir.path().to_str().unwrap());
+    let _vault_env = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config1 = create_test_config("hash_v1", true);
@@ -400,9 +503,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
     let config2 = create_test_config("hash_v2", true);
 
     // If provisioning already completed (transitioned to Running), set state
-    // back to Provisioning to test the resync behavior. This can happen when
-    // InitialSetup deploys all resources including the function, so Provisioning
-    // completes in a single step.
+    // back to Provisioning to test the resync behavior.
     if state.status != DeploymentStatus::Provisioning {
         state.status = DeploymentStatus::Provisioning;
     }
@@ -424,8 +525,6 @@ async fn test_provisioning_resyncs_when_hash_changes() {
             .unwrap(),
         "hash_v2"
     );
-
-    std::env::remove_var("TEST_VAULT_DATA_DIR");
 }
 
 /// C) Running health checks + heartbeat tests
@@ -435,7 +534,7 @@ async fn test_running_updates_heartbeat_when_healthy() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack);
 
     // Get to Running state
@@ -503,26 +602,24 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
-            supported_platforms: None,
+        supported_platforms: None,
     };
 
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack);
 
-    // This should fail during initial setup due to persistent failure
-    // (initial setup now creates ALL resources)
+    // This should fail during Provisioning because functions are Live resources.
     state = run_until_status(
         state,
         config.clone(),
         &[
             DeploymentStatus::Running,
-            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::ProvisioningFailed,
         ],
     )
     .await;
 
-    // Should have failed during initial setup
-    assert_eq!(state.status, DeploymentStatus::InitialSetupFailed);
+    assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
 }
 
 /// D) Update flow tests
@@ -532,7 +629,7 @@ async fn test_update_flow_happy_path_promotes_release() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack_v1);
 
     // Get to Running with release v1
@@ -578,7 +675,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack_v1);
 
     // Get to Running
@@ -621,7 +718,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
-            supported_platforms: None,
+        supported_platforms: None,
     };
 
     let release_v2 = ReleaseInfo {
@@ -664,7 +761,7 @@ async fn test_delete_flow_happy_path_reaches_deleted() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack);
 
     // Get to Running
@@ -690,7 +787,7 @@ async fn test_delete_failed_retry_gate() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack);
 
     // Get to Running
@@ -763,7 +860,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
-            supported_platforms: None,
+        supported_platforms: None,
     }
 }
 
@@ -825,7 +922,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
         },
-            supported_platforms: None,
+        supported_platforms: None,
     }
 }
 
@@ -843,9 +940,7 @@ async fn test_partial_failure_interrupts_in_progress_resources() {
     // Run until provisioning fails
     let final_state = run_to_completion(state, config).await;
 
-    // Initial setup now creates ALL resources (no separate provisioning phase),
-    // so failures during first deployment result in InitialSetupFailed.
-    assert_eq!(final_state.status, DeploymentStatus::InitialSetupFailed);
+    assert_eq!(final_state.status, DeploymentStatus::ProvisioningFailed);
 
     let stack_state = final_state
         .stack_state
@@ -910,9 +1005,9 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     let config = create_test_config("hash_v1", false);
     let state = create_initial_state(stack.clone());
 
-    // Run until initial setup fails (all resources created during initial setup now)
+    // Run until live provisioning fails.
     let mut final_state = run_to_completion(state, config.clone()).await;
-    assert_eq!(final_state.status, DeploymentStatus::InitialSetupFailed);
+    assert_eq!(final_state.status, DeploymentStatus::ProvisioningFailed);
 
     let stack_state = final_state
         .stack_state
@@ -945,9 +1040,9 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     // must correctly reset to Pending so it can start provisioning.
     request_retry(&mut final_state);
     let after_retry =
-        run_until_status(final_state, config, &[DeploymentStatus::InitialSetupFailed]).await;
+        run_until_status(final_state, config, &[DeploymentStatus::ProvisioningFailed]).await;
 
-    assert_eq!(after_retry.status, DeploymentStatus::InitialSetupFailed);
+    assert_eq!(after_retry.status, DeploymentStatus::ProvisioningFailed);
 
     // sibling-fn should again be ProvisionFailed (either re-interrupted or actually tried),
     // not stuck in a corrupted state
@@ -976,7 +1071,7 @@ async fn test_deleted_is_noop() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", true);
+    let config = create_test_config("hash_v1", false);
     let mut state = create_initial_state(stack.clone());
 
     // Get to Deleted

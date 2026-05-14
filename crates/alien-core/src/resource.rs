@@ -698,13 +698,13 @@ impl ResourceStatus {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceLifecycle {
-    /// Frozen resources are set up once and not modified after creation. They receive
-    /// heartbeat-only permissions for ongoing health checks but no management permissions.
-    /// Example: S3 buckets for logs, VPCs, IAM roles.
+    /// Frozen resources are owned by setup. Setup creates, updates, and
+    /// deletes them. Alien may heartbeat them and may run explicit management
+    /// operations when setup granted management permissions.
     Frozen,
 
-    /// Live resources are updated on every deploy and require management permissions
-    /// for ongoing updates. All resources (Frozen and Live) are created during initial setup.
-    /// Example: Lambda functions, Cloud Run services.
+    /// Live resources are owned by Alien. Alien creates, updates, deletes, and
+    /// replaces them after setup, so Live resources require provision
+    /// permissions.
     Live,
 }

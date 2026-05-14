@@ -3,10 +3,11 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::CreateRoleRequest;
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
-    RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs, ResourceStatus,
+    standard_resource_tags, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
@@ -77,6 +78,12 @@ impl AwsRemoteStackManagementController {
                 "Cross-account management role for Alien stack {}",
                 ctx.resource_prefix
             ))
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &config.id)
+                    .into_iter()
+                    .map(|(key, value)| CreateRoleTag { key, value })
+                    .collect(),
+            )
             .build();
 
         let created_role =
@@ -602,6 +609,7 @@ impl AwsRemoteStackManagementController {
             description: "Auto-generated management permissions for stack".to_string(),
             platforms: alien_core::permissions::PlatformPermissions {
                 aws: Some(vec![alien_core::permissions::AwsPlatformPermission {
+                    effect: Default::default(),
                     grant: alien_core::permissions::PermissionGrant {
                         actions: Some(combined_actions),
                         permissions: None,

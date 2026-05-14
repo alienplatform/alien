@@ -60,8 +60,8 @@ impl AzureBuildController {
         self.managed_identity_id = Some(managed_identity_id);
 
         // Prepare and store environment variables for the build
-        let env_vars = EnvironmentVariableBuilder::new(&cfg.environment)
-            .add_standard_alien_env_vars(ctx)
+        let env_vars = EnvironmentVariableBuilder::try_new(&cfg.environment)?
+            .add_standard_alien_env_vars(ctx)?
             .add_linked_resources(&cfg.links, ctx, &cfg.id)
             .await?
             .build();
@@ -165,8 +165,8 @@ impl AzureBuildController {
         self.managed_identity_id = Some(managed_identity_id);
 
         // Prepare and store environment variables for the build
-        let env_vars = EnvironmentVariableBuilder::new(&current_config.environment)
-            .add_standard_alien_env_vars(ctx)
+        let env_vars = EnvironmentVariableBuilder::try_new(&current_config.environment)?
+            .add_standard_alien_env_vars(ctx)?
             .add_linked_resources(&current_config.links, ctx, &current_config.id)
             .await?
             .build();

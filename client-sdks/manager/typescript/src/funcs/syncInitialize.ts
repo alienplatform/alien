@@ -24,6 +24,13 @@ import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+ * or workspace bearer for self-hosted operator workflows. New deployments
+ * are created via `DeploymentStore::create_deployment(caller, …)` so
+ * embedders that proxy to an upstream API write the row in the dg's
+ * workspace, not the manager's.
+ */
 export function syncInitialize(
   client: AlienManagerCore,
   request: models.InitializeRequest,

@@ -187,52 +187,6 @@ pub enum ErrorData {
         max_times: u32,
     },
 
-    /// Failed to import existing infrastructure state.
-    #[error(
-        code = "INFRASTRUCTURE_IMPORT_FAILED",
-        message = "Failed to import infrastructure state: {message}",
-        retryable = "false",
-        internal = "false"
-    )]
-    InfrastructureImportFailed {
-        /// Human-readable description of the import failure
-        message: String,
-        /// The source/platform being imported from
-        import_source: Option<String>,
-        /// ID of the resource that failed to import, if applicable
-        resource_id: Option<String>,
-    },
-
-    /// CloudFormation stack has resources in non-successful states.
-    #[error(
-        code = "CLOUDFORMATION_STACK_UNHEALTHY",
-        message = "CloudFormation stack '{stack_name}' has resources in non-successful states: {failed_resources:?}",
-        retryable = "true",
-        internal = "false"
-    )]
-    CloudFormationStackUnhealthy {
-        /// Name of the CloudFormation stack
-        stack_name: String,
-        /// List of failed resources with their status
-        failed_resources: Vec<String>,
-    },
-
-    /// Expected CloudFormation resource not found during import.
-    #[error(
-        code = "CLOUDFORMATION_RESOURCE_MISSING",
-        message = "Expected CloudFormation resource '{logical_id}' not found in stack '{stack_name}'",
-        retryable = "false",
-        internal = "false"
-    )]
-    CloudFormationResourceMissing {
-        /// CloudFormation logical ID that was expected
-        logical_id: String,
-        /// Name of the CloudFormation stack
-        stack_name: String,
-        /// Alien resource ID that was being imported
-        resource_id: Option<String>,
-    },
-
     /// Platform configuration is missing or invalid.
     #[error(
         code = "client_config_INVALID",
@@ -430,10 +384,10 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
-    /// Horizon API call failed.
+    /// Managed container API call failed.
     #[error(
         code = "HORIZON_API_ERROR",
-        message = "Horizon API call failed: {message}",
+        message = "Managed container API call failed: {message}",
         retryable = "true",
         internal = "false"
     )]

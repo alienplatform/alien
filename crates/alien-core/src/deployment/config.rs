@@ -31,9 +31,9 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_frozen_changes: bool,
     /// Compute backend for Container and Function resources.
-    /// When None, the platform default is used (Horizon for cloud platforms).
+    /// When None, the platform default is used for cloud platforms.
     /// Contains cluster IDs and management tokens for container orchestration.
-    /// Machine tokens are stored in environment_variables as built-in secret vars.
+    /// Worker runtime credentials are provided through cloud identity and vault-backed secrets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_backend: Option<ComputeBackend>,
     /// External bindings for pre-existing services.
@@ -63,8 +63,8 @@ pub struct DeploymentConfig {
     /// OTLP observability configuration for log export (optional).
     ///
     /// When set, alien-deployment injects OTEL_EXPORTER_OTLP_* env vars into
-    /// container/function configs, and alien-infra embeds --otlp-logs-* flags
-    /// into horizond VM startup scripts.
+    /// container/function configs, and worker-template stamping passes the
+    /// monitoring endpoints to worker images.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring: Option<OtlpConfig>,
     /// Manager base URL (e.g., "https://manager.alien.dev").
@@ -96,14 +96,14 @@ pub struct DeploymentConfig {
 
 /// OTLP log export configuration for a deployment.
 ///
-/// When set, all compute workloads (containers and horizond VM workers) export
+/// When set, all compute workloads (containers and worker VMs) export
 /// their logs to the given endpoint via OTLP/HTTP.
 ///
 /// The `logs_auth_header` is stored as plain text in DeploymentConfig because
 /// alien-runtime reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time,
-/// before vault secrets load. For horizond, the infra controller writes the
-/// same value to the cloud vault (same pattern as the machine token) and the
-/// startup script fetches it at boot via IAM.
+/// before vault secrets load. For worker VMs, worker-template stamping passes
+/// the monitoring configuration to the provider controller, which stores the
+/// sensitive header in the cloud vault used by the worker image.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -117,15 +117,14 @@ pub struct OtlpConfig {
     /// into all containers. It must be plain (not a vault secret) because alien-runtime
     /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
     ///
-    /// horizond VM workers do NOT use this field directly. The ContainerCluster infra
-    /// controller writes the same value to the cloud vault (GCP: Secret Manager,
-    /// AWS: Secrets Manager, Azure: Key Vault) and the startup script fetches it at
-    /// boot via IAM -- the same pattern as the machine token.
+    /// Worker VMs do NOT use this field directly. The ContainerCluster infra
+    /// controller writes the same value to the cloud vault used by the worker
+    /// image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
     ///
     /// Example: "authorization=Bearer <write-token>"
     pub logs_auth_header: String,
     /// Full OTLP metrics endpoint URL (optional).
-    /// When set, horizond exports its own VM/container orchestration metrics here.
+    /// When set, the worker runtime exports its own VM/container orchestration metrics here.
     /// Example: "https://api.axiom.co/v1/metrics"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics_endpoint: Option<String>,

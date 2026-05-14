@@ -4,10 +4,10 @@
 
 ### Available Operations
 
-* [getOverview](#getoverview) - Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
-* [getAttention](#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
-* [getDeployments](#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
-* [getMachines](#getmachines) - Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+* [getOverview](#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+* [getAttention](#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
+* [getDeployments](#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
+* [getMachines](#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
 * [getDeploymentCluster](#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 * [listDeploymentContainers](#listdeploymentcontainers) - List all containers running in a specific deployment.
 * [getDeploymentContainer](#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
@@ -17,7 +17,7 @@
 
 ## getOverview
 
-Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
 
 ### Example Usage
 
@@ -88,12 +88,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getAttention
 
-Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
+Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
 
 ### Example Usage
 
@@ -164,12 +165,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getDeployments
 
-Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
+Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
 
 ### Example Usage
 
@@ -242,12 +244,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getMachines
 
-Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
 
 ### Example Usage
 
@@ -318,6 +321,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 

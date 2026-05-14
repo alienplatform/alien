@@ -393,6 +393,8 @@ impl ApiGatewayV2Api for ApiGatewayV2Client {
 pub struct CreateApiRequest {
     pub name: String,
     pub protocol_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +441,8 @@ pub struct Route {
 pub struct CreateStageRequest {
     pub stage_name: String,
     pub auto_deploy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -453,6 +457,8 @@ pub struct Stage {
 pub struct CreateDomainNameRequest {
     pub domain_name: String,
     pub domain_name_configurations: Vec<DomainNameConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

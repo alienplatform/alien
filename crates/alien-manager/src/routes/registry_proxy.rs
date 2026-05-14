@@ -724,11 +724,7 @@ async fn forward_request(
 /// routing-table prefix lookup gives us the project's name unambiguously.
 /// Pushes that don't match any prefix fall back to `"default"`; the
 /// configured [`crate::auth::Authz`] impl decides whether to allow.
-fn require_push_auth(
-    state: &AppState,
-    subject: &Subject,
-    repo_name: &str,
-) -> Result<(), Response> {
+fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Result<(), Response> {
     let project_id = state
         .registry_routing_table
         .project_id_for_repo(repo_name)
@@ -1115,10 +1111,7 @@ mod tests {
             Some("prj_xxx")
         );
         assert_eq!(
-            project_id_after_prefix(
-                "artifacts/default/prj_xxx/release-v1",
-                "artifacts/default",
-            ),
+            project_id_after_prefix("artifacts/default/prj_xxx/release-v1", "artifacts/default",),
             Some("prj_xxx")
         );
     }

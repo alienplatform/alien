@@ -15,8 +15,9 @@ let value: ListManagerEventsResponse = {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {
+        platform: "<value>",
         stack: "<value>",
-        type: "BuildingStack",
+        type: "RunningPreflights",
       },
       state: "started",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",

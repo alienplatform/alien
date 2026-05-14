@@ -23,6 +23,9 @@ let value: DeploymentInfo = {
   packages: {
     ready: false,
   },
+  installContext: {
+    targets: {},
+  },
 };
 ```
 
@@ -35,3 +38,4 @@ let value: DeploymentInfo = {
 | `deploymentGroup`                                                                  | [models.DeploymentInfoDeploymentGroup](../models/deploymentinfodeploymentgroup.md) | :heavy_minus_sign:                                                                 | Deployment group details (present when using a deployment-group token)             |
 | `project`                                                                          | [models.DeploymentInfoProject](../models/deploymentinfoproject.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `installContext`                                                                   | [models.InstallContext](../models/installcontext.md)                               | :heavy_check_mark:                                                                 | N/A                                                                                |

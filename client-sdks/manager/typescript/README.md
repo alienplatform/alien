@@ -157,14 +157,20 @@ run();
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups)
-* [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup)
+* [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls — see the
+trait doc on [`DeploymentStore`] for the convention.
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup)
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken)
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
 * [listDeployments](docs/sdks/deployments/README.md#listdeployments)
-* [createDeployment](docs/sdks/deployments/README.md#createdeployment)
+* [createDeployment](docs/sdks/deployments/README.md#createdeployment) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls. Embedders
+that proxy to an upstream API can use the subject's `bearer_token` for
+passthrough; single-tenant impls ignore it. See the trait doc on
+[`DeploymentStore`] for the full convention.
 * [getDeployment](docs/sdks/deployments/README.md#getdeployment)
 * [deleteDeployment](docs/sdks/deployments/README.md#deletedeployment)
 * [getDeploymentInfo](docs/sdks/deployments/README.md#getdeploymentinfo)
@@ -186,13 +192,27 @@ run();
 * [getLatestRelease](docs/sdks/releases/README.md#getlatestrelease)
 * [getRelease](docs/sdks/releases/README.md#getrelease)
 
+### [StackImport](docs/sdks/stackimport/README.md)
+
+* [stackImport](docs/sdks/stackimport/README.md#stackimport) - `POST /v1/stack/import` — Inbound: deployment-group bearer.
+
 ### [Sync](docs/sdks/sync/README.md)
 
-* [initialize](docs/sdks/sync/README.md#initialize)
-* [agentSync](docs/sdks/sync/README.md#agentsync)
-* [acquire](docs/sdks/sync/README.md#acquire)
-* [reconcile](docs/sdks/sync/README.md#reconcile)
-* [release](docs/sdks/sync/README.md#release)
+* [initialize](docs/sdks/sync/README.md#initialize) - `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+or workspace bearer for self-hosted operator workflows. New deployments
+are created via `DeploymentStore::create_deployment(caller, …)` so
+embedders that proxy to an upstream API write the row in the dg's
+workspace, not the manager's.
+* [agentSync](docs/sdks/sync/README.md#agentsync) - `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+path; `caller: &Subject` is threaded into the store so embedders see
+the agent's own scope.
+* [acquire](docs/sdks/sync/README.md#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::acquire` so
+embedders can authorize against the inbound caller's scope.
+* [reconcile](docs/sdks/sync/README.md#reconcile) - `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+* [release](docs/sdks/sync/README.md#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::release`.
 
 ### [Whoami](docs/sdks/whoami/README.md)
 
@@ -223,11 +243,17 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsSubmitResponse`](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 - [`commandsUploadComplete`](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
 - [`credentialsResolveCredentials`](docs/sdks/credentials/README.md#resolvecredentials)
-- [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup)
+- [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls — see the
+trait doc on [`DeploymentStore`] for the convention.
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken)
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup)
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups)
-- [`deploymentsCreateDeployment`](docs/sdks/deployments/README.md#createdeployment)
+- [`deploymentsCreateDeployment`](docs/sdks/deployments/README.md#createdeployment) - Every handler in this file runs `auth::require_auth(&state, &headers)`
+and then threads `&subject` into the `DeploymentStore` calls. Embedders
+that proxy to an upstream API can use the subject's `bearer_token` for
+passthrough; single-tenant impls ignore it. See the trait doc on
+[`DeploymentStore`] for the full convention.
 - [`deploymentsDeleteDeployment`](docs/sdks/deployments/README.md#deletedeployment)
 - [`deploymentsGetDeployment`](docs/sdks/deployments/README.md#getdeployment)
 - [`deploymentsGetDeploymentInfo`](docs/sdks/deployments/README.md#getdeploymentinfo)
@@ -240,11 +266,22 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesCreateRelease`](docs/sdks/releases/README.md#createrelease)
 - [`releasesGetLatestRelease`](docs/sdks/releases/README.md#getlatestrelease)
 - [`releasesGetRelease`](docs/sdks/releases/README.md#getrelease)
-- [`syncAcquire`](docs/sdks/sync/README.md#acquire)
-- [`syncAgentSync`](docs/sdks/sync/README.md#agentsync)
-- [`syncInitialize`](docs/sdks/sync/README.md#initialize)
-- [`syncReconcile`](docs/sdks/sync/README.md#reconcile)
-- [`syncRelease`](docs/sdks/sync/README.md#release)
+- [`stackImportStackImport`](docs/sdks/stackimport/README.md#stackimport) - `POST /v1/stack/import` — Inbound: deployment-group bearer.
+- [`syncAcquire`](docs/sdks/sync/README.md#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::acquire` so
+embedders can authorize against the inbound caller's scope.
+- [`syncAgentSync`](docs/sdks/sync/README.md#agentsync) - `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+path; `caller: &Subject` is threaded into the store so embedders see
+the agent's own scope.
+- [`syncInitialize`](docs/sdks/sync/README.md#initialize) - `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+or workspace bearer for self-hosted operator workflows. New deployments
+are created via `DeploymentStore::create_deployment(caller, …)` so
+embedders that proxy to an upstream API write the row in the dg's
+workspace, not the manager's.
+- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+- [`syncRelease`](docs/sdks/sync/README.md#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::release`.
 - [`whoamiWhoami`](docs/sdks/whoami/README.md#whoami)
 
 </details>
@@ -389,7 +426,7 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 30 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 31 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

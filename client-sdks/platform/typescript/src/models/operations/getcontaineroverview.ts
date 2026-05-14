@@ -15,7 +15,7 @@ export type GetContainerOverviewRequest = {
   /**
    * Filter by project ID or name.
    */
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -24,14 +24,6 @@ export type ContainerDefinition = {
    * Container definition name (same across all deployments)
    */
   name: string;
-  /**
-   * Project ID this container belongs to
-   */
-  projectId: string | null;
-  /**
-   * Project name for display (null at workspace level)
-   */
-  projectName: string | null;
   /**
    * Total deployments running this container
    */
@@ -86,7 +78,7 @@ export type GetContainerOverviewTotals = {
 };
 
 /**
- * Container overview across all deployments.
+ * Container overview across the project's deployments.
  */
 export type GetContainerOverviewResponse = {
   containerDefinitions: Array<ContainerDefinition>;
@@ -96,7 +88,7 @@ export type GetContainerOverviewResponse = {
 /** @internal */
 export type GetContainerOverviewRequest$Outbound = {
   workspace?: string | undefined;
-  project?: string | undefined;
+  project: string;
   deploymentGroupId?: string | undefined;
 };
 
@@ -106,7 +98,7 @@ export const GetContainerOverviewRequest$outboundSchema: z.ZodType<
   GetContainerOverviewRequest
 > = z.object({
   workspace: z.string().optional(),
-  project: z.string().optional(),
+  project: z.string(),
   deploymentGroupId: z.string().optional(),
 });
 
@@ -126,8 +118,6 @@ export const ContainerDefinition$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   name: z.string(),
-  projectId: z.nullable(z.string()),
-  projectName: z.nullable(z.string()),
   totalInstances: z.int(),
   runningInstances: z.int(),
   failingInstances: z.int(),

@@ -120,27 +120,32 @@ pub async fn restore_cache(
             // Validate tar entries before extraction to prevent path traversal attacks.
             // A poisoned cache archive could contain entries with absolute paths or "../"
             // that overwrite files outside the intended directories.
-            for entry in archive.entries().into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "read entries".to_string(),
-                    file_path: "(cache archive)".to_string(),
-                    reason: "Failed to read cache archive entries".to_string(),
-                },
-            )? {
-                let entry = entry.into_alien_error().context(
-                    ErrorData::FileOperationFailed {
+            for entry in
+                archive
+                    .entries()
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "read entries".to_string(),
+                        file_path: "(cache archive)".to_string(),
+                        reason: "Failed to read cache archive entries".to_string(),
+                    })?
+            {
+                let entry = entry
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
                         operation: "read entry".to_string(),
                         file_path: "(cache archive)".to_string(),
                         reason: "Failed to read cache archive entry".to_string(),
-                    },
-                )?;
-                let path = entry.path().into_alien_error().context(
-                    ErrorData::FileOperationFailed {
-                        operation: "read entry path".to_string(),
-                        file_path: "(cache archive)".to_string(),
-                        reason: "Failed to read entry path".to_string(),
-                    },
-                )?;
+                    })?;
+                let path =
+                    entry
+                        .path()
+                        .into_alien_error()
+                        .context(ErrorData::FileOperationFailed {
+                            operation: "read entry path".to_string(),
+                            file_path: "(cache archive)".to_string(),
+                            reason: "Failed to read entry path".to_string(),
+                        })?;
                 if path.is_absolute()
                     || path
                         .components()

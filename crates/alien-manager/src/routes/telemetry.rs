@@ -84,9 +84,11 @@ async fn ingest(
         }
     };
 
-    if !state.authz.can_ingest_telemetry_for(&subject, &deployment_id) {
-        return ErrorData::forbidden("Cannot ingest telemetry for this deployment")
-            .into_response();
+    if !state
+        .authz
+        .can_ingest_telemetry_for(&subject, &deployment_id)
+    {
+        return ErrorData::forbidden("Cannot ingest telemetry for this deployment").into_response();
     }
 
     let caller = TelemetryCaller {
@@ -95,11 +97,7 @@ async fn ingest(
         workspace_id: Some(subject.workspace_id.clone()),
     };
 
-    match state
-        .telemetry_backend
-        .ingest(signal, &caller, body)
-        .await
-    {
+    match state.telemetry_backend.ingest(signal, &caller, body).await {
         Ok(()) => Json(TelemetryResponse { accepted: true }).into_response(),
         Err(e) => e.into_response(),
     }

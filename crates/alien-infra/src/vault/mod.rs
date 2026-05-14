@@ -1,11 +1,20 @@
 mod aws;
 pub use aws::*;
 
+mod aws_import;
+pub use aws_import::AwsVaultImporter;
+
 mod gcp;
 pub use gcp::*;
 
+mod gcp_import;
+pub use gcp_import::GcpVaultImporter;
+
 mod azure;
 pub use azure::*;
+
+mod azure_import;
+pub use azure_import::AzureVaultImporter;
 
 #[cfg(feature = "local")]
 mod local;
@@ -21,8 +30,3 @@ pub use kubernetes::*;
 mod test;
 #[cfg(feature = "test")]
 pub use test::*;
-
-#[cfg(feature = "aws")]
-mod templates;
-#[cfg(feature = "aws")]
-pub use templates::*;

@@ -8,8 +8,7 @@
 ```typescript
 const value: models.SyncReconcileResponseComputeBackendHorizon = {
   clusters: {},
-  horizondDownloadBaseUrl: "https://alarmed-effector.info/",
-  url: "https://fortunate-sailor.com",
+  url: "https://alarmed-effector.info/",
   type: "horizon",
 };
 ```

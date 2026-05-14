@@ -73,6 +73,8 @@ pub struct ReconcileRequest {
     pub update_heartbeat: bool,
     #[serde(default)]
     pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub suggested_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +127,7 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    pub stack_settings: Option<alien_core::StackSettings>,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,8 +235,7 @@ async fn acquire(
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("Failed to serialize deployment: {e}");
-            return ErrorData::internal("Failed to serialize deployment")
-                .into_response()
+            return ErrorData::internal("Failed to serialize deployment").into_response();
         }
     };
 
@@ -266,7 +268,11 @@ async fn reconcile(
 
     // Allow admin tokens (push mode) or deployment tokens (pull mode) per
     // the unified Authz policy.
-    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &req.deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -282,8 +288,7 @@ async fn reconcile(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("Failed to deserialize deployment state: {e}");
-            return ErrorData::bad_request("Invalid deployment state")
-                .into_response()
+            return ErrorData::bad_request("Invalid deployment state").into_response();
         }
     };
 
@@ -310,6 +315,7 @@ async fn reconcile(
                 state: final_state.clone(),
                 update_heartbeat: req.update_heartbeat,
                 error: req.error,
+                suggested_delay_ms: req.suggested_delay_ms,
             },
         )
         .await
@@ -331,8 +337,7 @@ async fn reconcile(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("Failed to serialize reconciled state: {e}");
-            return ErrorData::internal("Failed to serialize reconciled state")
-                .into_response()
+            return ErrorData::internal("Failed to serialize reconciled state").into_response();
         }
     };
 
@@ -366,7 +371,12 @@ async fn release(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
+    };
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &req.deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -412,7 +422,11 @@ async fn agent_sync(
 
     // Must be a deployment token matching this deployment (workspace-scoped
     // tokens are accepted by `Authz::can_sync_deployment` for system flows).
-    let deployment = match state.deployment_store.get_deployment(&subject, &req.deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &req.deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -447,6 +461,7 @@ async fn agent_sync(
                             state: agent_state.clone(),
                             update_heartbeat: true,
                             error: None,
+                            suggested_delay_ms: None,
                         },
                     )
                     .await
@@ -583,17 +598,12 @@ async fn agent_sync(
     };
 
     Json(AgentSyncResponse {
-        target: match target
-            .map(|t| serde_json::to_value(&t))
-            .transpose()
-        {
+        target: match target.map(|t| serde_json::to_value(&t)).transpose() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("Failed to serialize target deployment: {e}");
-                return ErrorData::internal(
-                    "Failed to serialize target deployment",
-                )
-                .into_response()
+                return ErrorData::internal("Failed to serialize target deployment")
+                    .into_response();
             }
         },
         commands_url: Some(state.config.commands_base_url()),
@@ -642,7 +652,6 @@ async fn initialize(
             deployment_group_id: dg_id,
             ..
         } => {
-
             let name = req
                 .name
                 .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
@@ -677,13 +686,16 @@ async fn initialize(
                 };
             }
 
-            let mut settings = alien_core::StackSettings::default();
-            settings.deployment_model = match platform {
-                Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
-                    alien_core::DeploymentModel::Push
-                }
-                Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
-            };
+            let settings = req.stack_settings.unwrap_or_else(|| {
+                let mut settings = alien_core::StackSettings::default();
+                settings.deployment_model = match platform {
+                    Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
+                        alien_core::DeploymentModel::Push
+                    }
+                    Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
+                };
+                settings
+            });
 
             // Create deployment with a token (reuse the agent's Bearer token)
             let dep_token = headers
@@ -759,7 +771,11 @@ async fn initialize(
                 platforms: None,
                 limit: Some(1),
             };
-            match state.deployment_store.list_deployments(&subject, &filter).await {
+            match state
+                .deployment_store
+                .list_deployments(&subject, &filter)
+                .await
+            {
                 Ok(deployments) if !deployments.is_empty() => {
                     let deployment_id = deployments[0].id.clone();
                     tracing::info!(

@@ -5,7 +5,7 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeBackend, ContainerCluster,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceStatus, Stack, StackState, TemplateInputs, TestEnvironmentInfo,
+    ResourceStatus, Stack, StackState, TestEnvironmentInfo, WorkerTemplate, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -174,9 +174,6 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
 ///   each resource within the stack appears as a distinct `service.name` in
 ///   logs (drives the dashboard's "Resource" column). Skipped if the user
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
-///
-/// deepstore-* resources are skipped: they manage their own telemetry pipeline
-/// and receive OTLP config via a different mechanism.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
@@ -184,16 +181,6 @@ pub fn inject_monitoring_environment_variables(
     info!("Injecting OTLP monitoring env vars into compute resources");
 
     for (resource_name, resource_entry) in &mut stack.resources {
-        // Skip deepstore resources — they run DeepStore itself and must not
-        // receive the OTLP endpoint that points back into their own storage.
-        if resource_name.starts_with("deepstore-") {
-            debug!(
-                "Skipping OTLP injection for deepstore resource '{}'",
-                resource_name
-            );
-            continue;
-        }
-
         let resource_type = resource_entry.config.resource_type();
 
         let environment = if resource_type == alien_core::Function::RESOURCE_TYPE {
@@ -273,11 +260,11 @@ pub fn inject_monitoring_environment_variables(
     Ok(())
 }
 
-/// Stamp deployment-config values onto ContainerCluster template inputs.
+/// Stamp deployment-config values onto ContainerCluster worker-template inputs.
 ///
-/// ContainerCluster controllers read `template_inputs` (horizond URL, binary hash,
+/// ContainerCluster controllers read `worker_template` (worker URL, binary hash,
 /// monitoring config) from the resource config. These values originate from
-/// `DeploymentConfig` and may change between syncs (e.g., new horizond binary ETag).
+/// `DeploymentConfig` and may change between syncs (e.g., new worker image ID).
 ///
 /// Like `inject_environment_variables`, this runs every step — not just once during
 /// preflights — so the executor's `resource_eq()` always compares against the latest
@@ -285,7 +272,7 @@ pub fn inject_monitoring_environment_variables(
 ///
 /// The OTLP auth header is sensitive, so only a SHA-256 hash is stored for change
 /// detection. The actual value is read from `DeploymentConfig` at provisioning time.
-pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
+pub fn stamp_worker_template(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
     let horizon_config = match &config.compute_backend {
         Some(ComputeBackend::Horizon(h)) => h,
         _ => return Ok(()),
@@ -317,22 +304,20 @@ pub fn stamp_template_inputs(stack: &mut Stack, config: &DeploymentConfig) -> Re
     for cluster_id in &cluster_ids {
         if let Some(entry) = stack.resources.get_mut(cluster_id) {
             if let Some(cluster) = entry.config.downcast_mut::<ContainerCluster>() {
-                cluster.template_inputs = Some(TemplateInputs {
-                    horizond_download_base_url: horizon_config.horizond_download_base_url.clone(),
+                cluster.worker_template = Some(WorkerTemplate {
                     horizon_api_url: horizon_config.url.clone(),
-                    horizond_binary_hash: horizon_config.horizond_binary_hash.clone(),
                     monitoring_logs_endpoint: monitoring_logs_endpoint.clone(),
                     monitoring_metrics_endpoint: monitoring_metrics_endpoint.clone(),
                     monitoring_auth_hash: monitoring_auth_hash.clone(),
                     monitoring_metrics_auth_hash: monitoring_metrics_auth_hash.clone(),
-                    flatcar_image_id: horizon_config.flatcar_image_id.clone(),
+                    worker_image_id: horizon_config.worker_image_id.clone(),
                 });
                 debug!(
                     cluster_id = %cluster_id,
-                    horizond_url = %horizon_config.horizond_download_base_url,
+                    has_worker_image = horizon_config.worker_image_id.is_some(),
                     has_monitoring = monitoring_logs_endpoint.is_some(),
                     has_metrics = monitoring_metrics_endpoint.is_some(),
-                    "Stamped template inputs onto ContainerCluster"
+                    "Stamped worker template onto ContainerCluster"
                 );
             }
         }
@@ -404,18 +389,6 @@ fn inject_into_compute_resource(
     let secret_keys: Vec<String> = applicable_vars
         .iter()
         .filter(|v| v.var_type == EnvironmentVariableType::Secret)
-        .filter(|v| {
-            // Skip OTEL_EXPORTER secrets for deepstore-* resources
-            if resource_name.starts_with("deepstore-") && v.name.starts_with("OTEL_EXPORTER") {
-                debug!(
-                    "Skipping OTEL secret '{}' for deepstore resource '{}'",
-                    v.name, resource_name
-                );
-                false
-            } else {
-                true
-            }
-        })
         .map(|v| v.name.clone())
         .collect();
 
@@ -432,7 +405,7 @@ fn inject_into_compute_resource(
                 message: "Failed to serialize ALIEN_SECRETS config".to_string(),
             })?;
 
-        environment.insert("ALIEN_SECRETS".to_string(), alien_secrets_json);
+        environment.insert(ENV_ALIEN_SECRETS.to_string(), alien_secrets_json);
 
         let resource_type = if is_function { "function" } else { "container" };
         debug!(
@@ -803,7 +776,7 @@ mod tests {
         assert_eq!(func.environment.get("PLAIN_VAR").unwrap(), "pv");
 
         // ALIEN_SECRETS present with both secret keys
-        let alien_secrets_raw = func.environment.get("ALIEN_SECRETS").unwrap();
+        let alien_secrets_raw = func.environment.get(ENV_ALIEN_SECRETS).unwrap();
         let parsed: AlienSecretsConfig = serde_json::from_str(alien_secrets_raw).unwrap();
         assert!(parsed.keys.contains(&"SECRET_TOKEN".to_string()));
         assert!(parsed.keys.contains(&"SECRET_KEY".to_string()));
@@ -831,7 +804,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(func.environment.get("APP_ENV").unwrap(), "prod");
-        assert!(func.environment.get("ALIEN_SECRETS").is_none());
+        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
     }
 
     #[test]
@@ -857,6 +830,6 @@ mod tests {
             .unwrap();
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
-        assert!(func.environment.get("ALIEN_SECRETS").is_none());
+        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
     }
 }

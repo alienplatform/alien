@@ -24,7 +24,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+ * Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
  */
 export function authWhoami(
   client: AlienCore,

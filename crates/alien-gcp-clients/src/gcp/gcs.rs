@@ -88,11 +88,8 @@ pub trait GcsApi: Send + Sync + Debug {
     ) -> Result<GcsNotification>;
 
     /// Delete a notification configuration from a bucket.
-    async fn delete_notification(
-        &self,
-        bucket_name: String,
-        notification_id: String,
-    ) -> Result<()>;
+    async fn delete_notification(&self, bucket_name: String, notification_id: String)
+        -> Result<()>;
 }
 
 /// Google Cloud Storage client relying on the new cloud-agnostic helpers.

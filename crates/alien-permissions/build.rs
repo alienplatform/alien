@@ -147,7 +147,13 @@ fn scan_permission_sets(dir: &Path, permission_sets: &mut HashMap<String, String
             // Validate that the JSONC parses correctly at build time
             match validate_permission_set(&content, &path) {
                 Ok(id) => {
-                    permission_sets.insert(id, content);
+                    if permission_sets.insert(id.clone(), content).is_some() {
+                        panic!(
+                            "Duplicate permission set id '{}' while scanning {}",
+                            id,
+                            path.display()
+                        );
+                    }
                 }
                 Err(err) => {
                     panic!(

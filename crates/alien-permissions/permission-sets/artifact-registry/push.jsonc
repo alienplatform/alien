@@ -25,6 +25,8 @@
             "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages",
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
             "ecr:CompleteLayerUpload",
             "ecr:UploadLayerPart",
             "ecr:InitiateLayerUpload",

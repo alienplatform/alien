@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
@@ -127,6 +127,27 @@ pub struct StackExecutor {
 }
 
 const MAX_RETRIES: u32 = 10;
+
+fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code)
+        || err
+            .source
+            .as_deref()
+            .is_some_and(is_best_effort_delete_source)
+}
+
+fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code)
+        || err
+            .source
+            .as_deref()
+            .is_some_and(is_best_effort_delete_source)
+}
+
+fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool {
+    matches!(http_status_code, Some(401 | 403 | 404))
+        || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
+}
 
 /// Configuration for creating a [`StackExecutor`] via the builder pattern.
 ///
@@ -278,6 +299,17 @@ impl StackExecutor {
                     lifecycle: resource_entry.lifecycle,
                 },
             );
+
+            if let Some(binding) = deployment_config.external_bindings.get(&id) {
+                alien_core::validate_binding_type(&resource_entry.config, binding).context(
+                    ErrorData::ResourceConfigInvalid {
+                        message: format!("External binding type mismatch for resource '{}'", id),
+                        resource_id: Some(id.clone()),
+                    },
+                )?;
+                continue;
+            }
+
             // Ensure that a controller exists for the resource on the specified platform.
             let resource_type = resource_entry.config.resource_type();
             resource_registry
@@ -385,6 +417,10 @@ impl StackExecutor {
             .build()
     }
 
+    fn is_external_binding_resource(&self, resource_id: &str) -> bool {
+        self.deployment_config.external_bindings.has(resource_id)
+    }
+
     /// Computes the **diff** between the *desired* stack configuration and the
     /// *current* [`StackState`].
     ///
@@ -485,17 +521,8 @@ impl StackExecutor {
         // 2. Identify Deletes & Updates
         for (resource_id, current_resource_state) in &state.resources {
             match self.resources.get(resource_id) {
-                // Resource NOT in desired state -> Delete (unless externally provisioned or filtered by lifecycle)
+                // Resource NOT in desired state -> Delete (unless filtered by lifecycle)
                 None => {
-                    // Skip deletion if the resource is externally provisioned
-                    if current_resource_state.is_externally_provisioned {
-                        debug!(
-                            "Skipping DELETE for externally provisioned resource '{}' (status: {:?})",
-                            resource_id, current_resource_state.status
-                        );
-                        continue;
-                    }
-
                     // Skip if the resource status is already Deleting, Deleted, or DeleteFailed
                     if current_resource_state.status == ResourceStatus::Deleting
                         || current_resource_state.status == ResourceStatus::Deleted
@@ -618,22 +645,34 @@ impl StackExecutor {
                                         desired_config.resource.clone(),
                                     );
                                 } else {
-                                    debug!("Deferring UPDATE for '{}' - new dependencies not ready yet", resource_id);
+                                    debug!(
+                                        "Deferring UPDATE for '{}' - new dependencies not ready yet",
+                                        resource_id
+                                    );
                                 }
                             }
                             ResourceStatus::ProvisionFailed => {
-                                info!("Restarting CREATE for '{}' due to config change during ProvisionFailed", resource_id);
+                                info!(
+                                    "Restarting CREATE for '{}' due to config change during ProvisionFailed",
+                                    resource_id
+                                );
                                 plan_result.creates.push(resource_id.clone());
                                 plan_result.updates.remove(resource_id); // Ensure no conflicting update plan
                                 plan_result.deletes.retain(|id| id != resource_id);
                                 // Ensure no conflicting delete plan
                             }
                             ResourceStatus::DeleteFailed => {
-                                warn!("Config changed for '{}' while in DeleteFailed status, ignoring change", resource_id);
+                                warn!(
+                                    "Config changed for '{}' while in DeleteFailed status, ignoring change",
+                                    resource_id
+                                );
                             }
                             ResourceStatus::Deleted => {
                                 // Resource is deleted but desired again (with different config) - plan for recreation
-                                info!("Planning CREATE for '{}' due to config change while Deleted (recreation)", resource_id);
+                                info!(
+                                    "Planning CREATE for '{}' due to config change while Deleted (recreation)",
+                                    resource_id
+                                );
                                 plan_result.creates.push(resource_id.clone());
                                 plan_result.updates.remove(resource_id); // Ensure no conflicting update plan
                                 plan_result.deletes.retain(|id| id != resource_id);
@@ -642,20 +681,29 @@ impl StackExecutor {
                             ResourceStatus::Pending => {
                                 // Config changed while Pending. Usually means the desired config was updated before initialization.
                                 // No action needed here; the desired_config will be used when it initializes.
-                                info!("Config changed for '{}' while Pending, will use new config on initialization", resource_id);
+                                info!(
+                                    "Config changed for '{}' while Pending, will use new config on initialization",
+                                    resource_id
+                                );
                             }
                             ResourceStatus::Provisioning => {
                                 // Delete-then-recreate: the resource is stuck mid-provisioning
                                 // with stale config. Since transition_to_delete_start() is now
                                 // unconditional, we can safely interrupt it.
-                                info!("Config changed for '{}' during Provisioning, planning delete-then-recreate", resource_id);
+                                info!(
+                                    "Config changed for '{}' during Provisioning, planning delete-then-recreate",
+                                    resource_id
+                                );
                                 plan_result.deletes.push(resource_id.clone());
                                 plan_result.creates.retain(|id| id != resource_id);
                                 plan_result.updates.remove(resource_id);
                             }
                             _ => {
                                 // Updating, Deleting -- wait for stable before acting
-                                warn!("Config changed for '{}' while in status {:?}, ignoring change until stable", resource_id, current_resource_state.status);
+                                warn!(
+                                    "Config changed for '{}' while in status {:?}, ignoring change until stable",
+                                    resource_id, current_resource_state.status
+                                );
                             }
                         }
                     } else {
@@ -727,7 +775,10 @@ impl StackExecutor {
                                     );
                                     dependency_propagation_needed = true; // Continue iterating as this might trigger more updates
                                 } else {
-                                    debug!("Deferring UPDATE for '{}' due to dependency changes - dependencies not ready yet", resource_id);
+                                    debug!(
+                                        "Deferring UPDATE for '{}' due to dependency changes - dependencies not ready yet",
+                                        resource_id
+                                    );
                                 }
                             }
                             _ => {
@@ -786,7 +837,6 @@ impl StackExecutor {
         // Apply planned transitions directly or prepare initial state
         let mut initial_transitions: HashMap<String, StackResourceState> = HashMap::new();
         let mut removed_pending_ids: Vec<String> = Vec::new();
-        let mut removed_external_ids: Vec<String> = Vec::new();
 
         // Handle Creates - prepare initial pending states or handle external bindings
         for resource_id in &plan_result.creates {
@@ -817,10 +867,7 @@ impl StackExecutor {
                     },
                 )?;
 
-                info!(
-                    "Using external binding for '{}' -> Running (externally provisioned)",
-                    resource_id
-                );
+                info!("Using external binding for '{}' -> Running", resource_id);
 
                 // Get resource entry to check remote_access flag
                 let resource_entry = self.desired_stack.resources.get(resource_id);
@@ -834,7 +881,6 @@ impl StackExecutor {
                     desired_config.dependencies.clone(),
                 );
                 resource_state.status = ResourceStatus::Running;
-                resource_state.is_externally_provisioned = true;
 
                 // Only sync binding params if remote_access is enabled
                 if remote_access {
@@ -889,7 +935,7 @@ impl StackExecutor {
                     | ResourceStatus::ProvisionFailed
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
-                        // Check if this resource is ready for deletion (all dependents are deleted/deleting)
+                        // Check if this resource is ready for deletion (all dependents are deleted)
                         if !self.deletion_ready(resource_id, &state) {
                             debug!(
                                 "Resource '{}' not ready for deletion - skipping until dependents are deleted",
@@ -927,7 +973,7 @@ impl StackExecutor {
                                             state.status = ResourceStatus::DeleteFailed;
                                             state.error = Some(e.into_generic());
                                             state.retry_attempt = 0;
-                                            
+
                                             // Preserve current controller state as last_failed_state for retry
                                             if let Ok(Some(current_controller)) = state.get_internal_controller() {
                                                 if let Err(set_error) = state.set_last_failed_controller(Some(current_controller)) {
@@ -940,7 +986,34 @@ impl StackExecutor {
                                 }
                             }
                             Ok(None) => {
-                                warn!("Cannot start delete transition for status {:?} because it has no controller, executor will proceed", resource_state.status);
+                                if self.is_external_binding_resource(resource_id) {
+                                    info!(
+                                        resource_id = %resource_id,
+                                        "Marking external binding resource as deleted"
+                                    );
+                                    resource_state.status = ResourceStatus::Deleted;
+                                    resource_state.outputs = None;
+                                    resource_state.remote_binding_params = None;
+                                    resource_state.retry_attempt = 0;
+                                    resource_state.error = None;
+                                } else {
+                                    warn!(
+                                        "Cannot start delete transition for status {:?} because it has no controller",
+                                        resource_state.status
+                                    );
+                                    let failed_state = resource_state.with_failure(
+                                        ResourceStatus::DeleteFailed,
+                                        AlienError::new(
+                                            ErrorData::ResourceStateSerializationFailed {
+                                                resource_id: resource_id.clone(),
+                                                message: "Missing controller state for non-external resource deletion"
+                                                    .to_string(),
+                                            },
+                                        )
+                                        .into_generic(),
+                                    );
+                                    *resource_state = failed_state;
+                                }
                             }
                             Err(e) => {
                                 error!(
@@ -979,27 +1052,6 @@ impl StackExecutor {
             }
         }
 
-        // Remove externally provisioned resources that are no longer in the desired stack.
-        // These were not created by us, so they don't need deletion — just remove from state
-        // so they don't block stack status (e.g., staying Running during a full-stack delete).
-        //
-        // IMPORTANT: When a lifecycle filter is active, some resources are excluded from
-        // self.resources even though they ARE in the desired stack (just filtered out).
-        // Don't remove those — they're still needed by resources within the filtered scope
-        // (e.g., a Live function depends on a Frozen container-apps-environment).
-        for (resource_id, resource_state) in &next_state.resources {
-            if resource_state.is_externally_provisioned
-                && !self.resources.contains_key(resource_id)
-                && !self.filtered_out_ids.contains(resource_id)
-            {
-                debug!(
-                    "Removing externally provisioned resource '{}' from state (not in desired stack)",
-                    resource_id
-                );
-                removed_external_ids.push(resource_id.clone());
-            }
-        }
-
         // Handle Updates - create initial update transition states
         for (resource_id, new_config) in &plan_result.updates {
             if let Some(current_state) = state.resources.get(resource_id) {
@@ -1018,7 +1070,10 @@ impl StackExecutor {
                                 let desired_config = match self.resources.get(resource_id) {
                                     Some(config) => config,
                                     None => {
-                                        error!("Resource '{}' not found in desired config during update", resource_id);
+                                        error!(
+                                            "Resource '{}' not found in desired config during update",
+                                            resource_id
+                                        );
                                         let failed_update_state = current_state
                                             .with_failure(ResourceStatus::UpdateFailed, AlienError::new(ErrorData::InfrastructureError {
                                                 message: format!("Resource '{}' not found in desired config during update", resource_id),
@@ -1106,11 +1161,6 @@ impl StackExecutor {
             next_state.resources.remove(&id);
         }
 
-        // Remove externally provisioned resources that are no longer in the desired stack
-        for id in removed_external_ids {
-            next_state.resources.remove(&id);
-        }
-
         // Apply the calculated initial transitions for Creates/Updates
         next_state.resources.extend(initial_transitions);
         // --- Planning Phase End ---
@@ -1142,29 +1192,32 @@ impl StackExecutor {
                 }
             }
 
-            // When a lifecycle filter is active, skip heartbeat checks for resources
-            // outside the executor's scope. For example, during Provisioning (Live-only),
-            // frozen resources are already Running from InitialSetup and should not be
-            // stepped — they may use different credentials than what the current executor has.
-            // However, resources actively being deleted (Deleting status) must still be
-            // stepped to complete their deletion, even though they're not in the desired stack.
-            if self.lifecycle_filter.is_some()
-                && !self.resources.contains_key(resource_id)
-                && current_resource_view.status != ResourceStatus::Deleting
-            {
-                continue;
+            // When a lifecycle filter is active, only step resources in that scope.
+            // Live-only deletes must not continue a frozen resource delete that was
+            // started by a previous full cleanup attempt; the current credentials may
+            // not have access to that resource.
+            if let Some(filter_set) = &self.lifecycle_filter {
+                let resource_in_scope = self.resources.contains_key(resource_id)
+                    || current_resource_view
+                        .lifecycle
+                        .is_some_and(|lifecycle| filter_set.contains(&lifecycle));
+
+                if !resource_in_scope {
+                    continue;
+                }
             }
 
-            let is_actively_modifying = matches!(
-                current_resource_view.status,
-                ResourceStatus::Updating | ResourceStatus::Deleting
-            );
-
             // A resource is ready if:
-            // 1. It's actively being updated or deleted.
+            // 1. It's actively being updated.
             // 2. It's already Running - needs to run Ready handler for health checks.
             // 3. Or, it's not actively modifying (e.g., Pending) AND its dependencies were met before this step.
-            let is_ready = if is_actively_modifying {
+            //
+            // Delete flows use reverse dependency ordering at every step, not
+            // just when entering Deleting. A dependent may still need its
+            // dependency's outputs while its delete flow is polling.
+            let is_ready = if current_resource_view.status == ResourceStatus::Deleting {
+                self.deletion_ready(resource_id, &next_state)
+            } else if current_resource_view.status == ResourceStatus::Updating {
                 true
             } else if current_resource_view.status == ResourceStatus::Running {
                 // Running resources should always be stepped to run their Ready handler.
@@ -1255,10 +1308,17 @@ impl StackExecutor {
             // We don't need to get a separate controller since the controller is stored
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
-                warn!(
-                    "Resource '{}' has no controller state. Skipping step.",
-                    resource_id
-                );
+                if self.is_external_binding_resource(&resource_id) {
+                    debug!(
+                        resource_id = %resource_id,
+                        "External binding resource has no controller state; skipping step"
+                    );
+                } else {
+                    warn!(
+                        "Resource '{}' has no controller state. Skipping step.",
+                        resource_id
+                    );
+                }
                 continue;
             }
 
@@ -1296,49 +1356,62 @@ impl StackExecutor {
             };
 
             // Handle the step result
-            let (next_retry_attempt, next_error, step_suggested_delay, force_failure) =
-                match step_outcome_result {
-                    Ok(step_result) => {
-                        // Step succeeded, clear retry count and error
-                        (0, None, step_result.suggested_delay, false)
-                    }
-                    Err(err) => {
-                        warn!("Step failed for '{}': {}", resource_id, err);
+            let (
+                next_retry_attempt,
+                next_error,
+                step_suggested_delay,
+                force_failure,
+                force_deleted,
+            ) = match step_outcome_result {
+                Ok(step_result) => {
+                    // Step succeeded, clear retry count and error
+                    (0, None, step_result.suggested_delay, false, false)
+                }
+                Err(err) => {
+                    warn!("Step failed for '{}': {}", resource_id, err);
 
+                    if current_resource_state.status == ResourceStatus::Deleting
+                        && is_best_effort_delete_error(&err)
+                    {
+                        info!(
+                            resource_id = %resource_id,
+                            error = %err,
+                            "Best-effort delete accepted missing or inaccessible resource"
+                        );
+                        (0, None, None, false, true)
+                    } else if !err.retryable {
                         let error = Some(err.clone().into_generic());
-
-                        // Check if the error is retryable
-                        if !err.retryable {
-                            error!(
+                        error!(
                             "Non-retryable error for '{}', transitioning to failure immediately",
                             resource_id
                         );
-                            // For non-retryable errors, immediately transition to failure (no retries)
-                            (0, error, None, true) // force_failure = true bypasses retry logic
+                        // For non-retryable errors, immediately transition to failure (no retries)
+                        (0, error, None, true, false) // force_failure = true bypasses retry logic
+                    } else {
+                        let error = Some(err.clone().into_generic());
+                        let new_retry_attempt = original_retry_attempt + 1;
+                        if new_retry_attempt >= MAX_RETRIES {
+                            error!(
+                                "Max retries reached for '{}', transitioning to failure",
+                                resource_id
+                            );
+                            // Transition to failure state on the updated controller
+                            (new_retry_attempt, error, None, true, false) // force_failure = true
                         } else {
-                            let new_retry_attempt = original_retry_attempt + 1;
-                            if new_retry_attempt >= MAX_RETRIES {
-                                error!(
-                                    "Max retries reached for '{}', transitioning to failure",
-                                    resource_id
-                                );
-                                // Transition to failure state on the updated controller
-                                (new_retry_attempt, error, None, true) // force_failure = true
-                            } else {
-                                // Calculate exponential backoff delay: 2^(retry_attempt) seconds
-                                let delay_secs = 2u64.pow(original_retry_attempt);
-                                let delay = Duration::from_secs(delay_secs);
-                                info!(
-                                    "Scheduling retry for '{}' (attempt {}/{}) after {:?}",
-                                    resource_id, new_retry_attempt, MAX_RETRIES, delay
-                                );
-                                // Update min_delay if this retry suggests a delay
-                                min_delay = Some(min_delay.map_or(delay, |d| d.min(delay)));
-                                (new_retry_attempt, error, None, false) // No step delay on error, use retry delay instead
-                            }
+                            // Calculate exponential backoff delay: 2^(retry_attempt) seconds
+                            let delay_secs = 2u64.pow(original_retry_attempt);
+                            let delay = Duration::from_secs(delay_secs);
+                            info!(
+                                "Scheduling retry for '{}' (attempt {}/{}) after {:?}",
+                                resource_id, new_retry_attempt, MAX_RETRIES, delay
+                            );
+                            // Update min_delay if this retry suggests a delay
+                            min_delay = Some(min_delay.map_or(delay, |d| d.min(delay)));
+                            (new_retry_attempt, error, None, false, false) // No step delay on error, use retry delay instead
                         }
                     }
-                };
+                }
+            };
 
             // Update min_delay with step-suggested delay.
             // None means "proceed immediately" — the handler just did work and its next
@@ -1361,20 +1434,35 @@ impl StackExecutor {
                 min_delay = Some(min_delay.map_or(effective_delay, |d| d.min(effective_delay)));
             }
 
-            // Use the appropriate controller based on whether we failed
-            let final_controller =
-                if force_failure || (next_error.is_some() && next_retry_attempt >= MAX_RETRIES) {
+            let (final_controller, next_status, next_outputs, next_binding_params) =
+                if force_deleted {
+                    (None, ResourceStatus::Deleted, None, None)
+                } else if force_failure
+                    || (next_error.is_some() && next_retry_attempt >= MAX_RETRIES)
+                {
                     let mut failure_controller = updated_controller.clone();
                     failure_controller.transition_to_failure();
-                    failure_controller
+                    let next_status = failure_controller.get_status();
+                    let next_outputs = failure_controller.get_outputs();
+                    let next_binding_params = failure_controller.get_binding_params()?;
+                    (
+                        Some(failure_controller),
+                        next_status,
+                        next_outputs,
+                        next_binding_params,
+                    )
                 } else {
-                    updated_controller.clone()
+                    let final_controller = updated_controller.clone();
+                    let next_status = final_controller.get_status();
+                    let next_outputs = final_controller.get_outputs();
+                    let next_binding_params = final_controller.get_binding_params()?;
+                    (
+                        Some(final_controller),
+                        next_status,
+                        next_outputs,
+                        next_binding_params,
+                    )
                 };
-
-            // Get the updated status, outputs, and binding params from the final controller
-            let next_status = final_controller.get_status();
-            let next_outputs = final_controller.get_outputs();
-            let next_binding_params = final_controller.get_binding_params()?;
 
             // Automatically update config to match desired state (except during deletion)
             let next_config = if current_resource_state.status == ResourceStatus::Deleting {
@@ -1391,7 +1479,7 @@ impl StackExecutor {
             // Set the internal controller outside the closure to handle errors properly
             let mut next_state = current_resource_state.clone();
             next_state
-                .set_internal_controller(Some(final_controller))
+                .set_internal_controller(final_controller)
                 .context(ErrorData::ResourceStateSerializationFailed {
                     resource_id: resource_id.clone(),
                     message: "Failed to serialize final controller state".to_string(),
@@ -1569,15 +1657,14 @@ impl StackExecutor {
 
     /// Checks if a resource is ready for deletion by verifying all its dependents are deleted.
     /// For deletion, the dependency logic is reversed: a resource can only be deleted when
-    /// all resources that depend on it are already deleted or being deleted.
+    /// all resources that depend on it are already deleted.
     fn deletion_ready(&self, resource_id: &str, state: &StackState) -> bool {
         // Find all resources in the state that depend on this resource
         for (dependent_id, dependent_state) in &state.resources {
-            // Skip if the dependent is already deleted or being deleted
-            if matches!(
-                dependent_state.status,
-                ResourceStatus::Deleted | ResourceStatus::Deleting
-            ) {
+            // Skip self and dependents that are fully deleted. A dependent in
+            // Deleting is still active because delete handlers often need
+            // dependency outputs such as resource group names or bucket names.
+            if dependent_id == resource_id || dependent_state.status == ResourceStatus::Deleted {
                 continue;
             }
 
@@ -1625,6 +1712,14 @@ impl StackExecutor {
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {
         match state.resources.get(resource_id) {
             Some(view) => {
+                if self.is_external_binding_resource(resource_id) {
+                    if self.resources.contains_key(resource_id) {
+                        return view.status == ResourceStatus::Running;
+                    }
+                    return view.status == ResourceStatus::Deleted
+                        || view.status == ResourceStatus::DeleteFailed;
+                }
+
                 // If controller exists, check its status. Otherwise (Pending), it's not terminal.
                 match view.get_internal_controller() {
                     Ok(Some(controller)) => controller.get_status().is_terminal(),
@@ -1665,13 +1760,16 @@ impl StackExecutor {
                         // DeleteFailed is NOT a valid terminal state for a *desired* resource.
                         let is_running = current_view.status == ResourceStatus::Running;
 
-                        let config_matches =
+                        let config_matches = if self.is_external_binding_resource(id) {
+                            current_view.config == desired_resource_config.resource
+                        } else {
                             current_view
                                 .internal_state
                                 .as_ref()
                                 .is_some_and(|_controller| {
                                     current_view.config == desired_resource_config.resource
-                                });
+                                })
+                        };
 
                         is_running && config_matches
                     }
@@ -1697,7 +1795,7 @@ impl StackExecutor {
 
         let deleting_resources_are_synced = state.resources.iter().all(|(res_id, view)| {
             // Skip resources that are part of the desired stack – they were already handled above.
-            if self.resources.contains_key(res_id) || view.is_externally_provisioned {
+            if self.resources.contains_key(res_id) {
                 return true;
             }
 

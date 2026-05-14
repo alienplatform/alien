@@ -21,6 +21,9 @@ platform = ["dep:oauth2", "dep:open", "dep:keyring"]
 
 [dependencies]
 alien-core = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-helm = { workspace = true }
+alien-terraform = { workspace = true }
 alien-runtime = { workspace = true, optional = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-build = { workspace = true }

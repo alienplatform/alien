@@ -31,6 +31,7 @@ The shared runner (`runner.rs`) wraps this contract into a step loop with a budg
 ## Mutation Strategy
 
 - **Pending/UpdatePending** — Apply preflight mutations, store `prepared_stack` in runtime metadata
-- **InitialSetup** — Deploy all resources (frozen first, then live with env var injection)
+- **InitialSetup** — Deploy setup-owned Frozen resources.
+- **Provisioning/Updating** — Deploy Alien-owned Live resources with env var injection.
 - **Running** — Health checks (read-only)
 - **Delete phases** — Teardown using prepared stack

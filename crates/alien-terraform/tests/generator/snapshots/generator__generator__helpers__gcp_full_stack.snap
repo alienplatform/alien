@@ -1,0 +1,725 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.44.0.0/16\",\"availability_zones\":1},\"updates\":\"approval-required\"}"
+  sensitive   = true
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+variable "gcp_use_existing_custom_roles" {
+  type        = bool
+  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
+  default     = false
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "gcp"
+  deployment_target   = "gcp"
+  deployment_region   = var.gcp_region
+  deployment_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        projectId   = var.gcp_project
+        vpcSelfLink = google_compute_network.default_network.self_link
+        vpcName     = google_compute_network.default_network.name
+        subnetSelfLinks = [
+          google_compute_subnetwork.default_network_workload.self_link
+        ]
+        routerSelfLink = google_compute_router.default_network_router.self_link
+        natName        = google_compute_router_nat.default_network_nat.name
+        isByoVpc       = false
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        projectId               = var.gcp_project
+        serviceAccountEmail     = google_service_account.execution_sa.email
+        serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
+        stackPermissionsApplied = true
+      }
+    },
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        projectId                    = var.gcp_project
+        projectNumber                = data.google_project.current.number
+        serviceAccountEmail          = google_service_account.management.email
+        serviceAccountUniqueId       = google_service_account.management.unique_id
+        managementPermissionsApplied = true
+      }
+    },
+    {
+      id   = "assets"
+      type = "storage"
+      importData = {
+        bucketName     = google_storage_bucket.assets.name
+        bucketSelfLink = google_storage_bucket.assets.self_link
+        projectId      = var.gcp_project
+        location       = google_storage_bucket.assets.location
+      }
+    },
+    {
+      id   = "jobs"
+      type = "queue"
+      importData = {
+        projectId        = var.gcp_project
+        topicId          = google_pubsub_topic.jobs.name
+        topicName        = google_pubsub_topic.jobs.id
+        subscriptionId   = google_pubsub_subscription.jobs.name
+        subscriptionName = google_pubsub_subscription.jobs.id
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        projectId  = var.gcp_project
+        databaseId = google_firestore_database.metadata.name
+        location   = google_firestore_database.metadata.location_id
+      }
+    },
+    {
+      id   = "secrets"
+      type = "vault"
+      importData = {
+        projectId    = var.gcp_project
+        secretPrefix = "${var.stack_name}-secrets"
+      }
+    },
+    {
+      id   = "registry"
+      type = "artifact-registry"
+      importData = {
+        projectId               = var.gcp_project
+        region                  = var.gcp_region
+        repositoryId            = google_artifact_registry_repository.registry.name
+        repositoryName          = google_artifact_registry_repository.registry.id
+        registryEndpoint        = "${var.gcp_region}-docker.pkg.dev/${var.gcp_project}/${google_artifact_registry_repository.registry.name}"
+        pullServiceAccountEmail = google_service_account.registry_pull.email
+        pushServiceAccountEmail = google_service_account.registry_push.email
+      }
+    }
+  ]
+}
+
+=== default_network.tf ===
+resource "google_compute_network" "default_network" {
+  name                    = "${var.stack_name}-default_network"
+  project                 = var.gcp_project
+  auto_create_subnetworks = false
+  routing_mode            = "REGIONAL"
+}
+
+resource "google_compute_subnetwork" "default_network_workload" {
+  name                     = "${var.stack_name}-default_network-workload"
+  project                  = var.gcp_project
+  region                   = var.gcp_region
+  ip_cidr_range            = "10.44.0.0/16"
+  network                  = google_compute_network.default_network.id
+  private_ip_google_access = true
+}
+
+resource "google_compute_router" "default_network_router" {
+  name    = "${var.stack_name}-default_network-router"
+  project = var.gcp_project
+  region  = var.gcp_region
+  network = google_compute_network.default_network.id
+}
+
+resource "google_compute_router_nat" "default_network_nat" {
+  name                               = "${var.stack_name}-default_network-nat"
+  project                            = var.gcp_project
+  region                             = var.gcp_region
+  router                             = google_compute_router.default_network_router.name
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
+}
+
+resource "google_compute_firewall" "default_network_internal" {
+  name      = "${var.stack_name}-default_network-internal"
+  project   = var.gcp_project
+  network   = google_compute_network.default_network.id
+  direction = "INGRESS"
+  source_ranges = [
+    "10.44.0.0/16"
+  ]
+
+  allow {
+    protocol = "all"
+  }
+}
+
+=== execution_sa.tf ===
+resource "google_service_account" "execution_sa" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", var.stack_name)), "_", "-")), 0, 8))
+  display_name = "Alien execution-sa service account"
+  description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
+}
+
+resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_execution_sa_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-storageDataRead", var.stack_name)), 0, 8))
+  title       = "Storage Data Read"
+  description = "Allows reading data from storage buckets and containers"
+  stage       = "GA"
+  permissions = [
+    "storage.buckets.get",
+    "storage.buckets.list",
+    "storage.objects.get",
+    "storage.objects.list",
+    "storage.objects.getIamPolicy",
+    "storage.multipartUploads.list",
+    "storage.multipartUploads.listParts",
+    "iam.serviceAccounts.signBlob"
+  ]
+}
+
+resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageDataRead", var.gcp_project) : google_project_iam_custom_role.execution_sa_storagedataread[0].name
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_project_iam_custom_role" "execution_sa_queuedatawrite" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_execution_sa_queueDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-queueDataWrite", var.stack_name)), 0, 8))
+  title       = "Queue Data Write"
+  description = "Allows sending messages to queues and acknowledging received messages"
+  stage       = "GA"
+  permissions = [
+    "pubsub.topics.publish",
+    "pubsub.subscriptions.consume",
+    "pubsub.subscriptions.get"
+  ]
+}
+
+resource "google_project_iam_member" "execution_sa_queuedatawrite_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/queueDataWrite", var.gcp_project) : google_project_iam_custom_role.execution_sa_queuedatawrite[0].name
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+=== management.tf ===
+data "google_project" "current" {
+  project_id = var.gcp_project
+}
+
+resource "google_service_account" "management" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", var.stack_name)), "_", "-")), 0, 8))
+  display_name = "Alien stack management identity"
+  description  = "${var.stack_name} cross-account management service account"
+}
+
+resource "google_project_iam_custom_role" "management_functionmanagement" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-functionManagement", var.stack_name)), 0, 8))
+  title       = "Function Management"
+  description = "Allows managing function configuration, versions, aliases, and monitoring"
+  stage       = "GA"
+  permissions = [
+    "run.services.get",
+    "run.services.list",
+    "run.services.getIamPolicy",
+    "run.revisions.get",
+    "run.revisions.list",
+    "run.operations.get",
+    "run.operations.list",
+    "run.locations.list",
+    "run.configurations.get",
+    "run.configurations.list",
+    "run.routes.get",
+    "run.routes.list",
+    "run.executions.get",
+    "run.executions.list",
+    "run.tasks.get",
+    "run.tasks.list",
+    "run.services.listEffectiveTags",
+    "run.services.listTagBindings",
+    "resourcemanager.projects.get",
+    "run.services.update",
+    "run.services.setIamPolicy",
+    "run.jobs.update",
+    "run.jobs.getIamPolicy",
+    "run.jobs.setIamPolicy",
+    "run.operations.delete",
+    "run.revisions.delete",
+    "run.executions.delete",
+    "run.services.createTagBinding",
+    "run.services.deleteTagBinding",
+    "run.jobs.createTagBinding",
+    "run.jobs.deleteTagBinding",
+    "pubsub.topics.create",
+    "pubsub.topics.delete",
+    "pubsub.topics.get",
+    "pubsub.topics.update",
+    "pubsub.topics.attachSubscription",
+    "pubsub.subscriptions.create",
+    "pubsub.subscriptions.delete",
+    "iam.serviceAccounts.actAs",
+    "pubsub.subscriptions.get",
+    "pubsub.subscriptions.update",
+    "iam.serviceAccounts.getIamPolicy",
+    "iam.serviceAccounts.setIamPolicy",
+    "compute.sslCertificates.create",
+    "compute.sslCertificates.delete",
+    "compute.sslCertificates.get",
+    "compute.networkEndpointGroups.create",
+    "compute.networkEndpointGroups.delete",
+    "compute.networkEndpointGroups.get",
+    "compute.backendServices.create",
+    "compute.backendServices.delete",
+    "compute.backendServices.get",
+    "compute.backendServices.update",
+    "compute.urlMaps.create",
+    "compute.urlMaps.delete",
+    "compute.urlMaps.get",
+    "compute.targetHttpsProxies.create",
+    "compute.targetHttpsProxies.delete",
+    "compute.targetHttpsProxies.get",
+    "compute.globalAddresses.create",
+    "compute.globalAddresses.delete",
+    "compute.globalAddresses.get",
+    "compute.globalForwardingRules.create",
+    "compute.globalForwardingRules.delete",
+    "compute.globalForwardingRules.get"
+  ]
+}
+
+resource "google_project_iam_member" "management_functionmanagement_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/functionManagement", var.gcp_project) : google_project_iam_custom_role.management_functionmanagement[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "management_storageheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_storageHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-storageHeartbeat", var.stack_name)), 0, 8))
+  title       = "Storage Heartbeat"
+  description = "Allows readonly monitoring and health checks for storage resources"
+  stage       = "GA"
+  permissions = [
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
+    "storage.managedFolders.get",
+    "storage.managedFolders.list",
+    "storage.managedFolders.getIamPolicy",
+    "storage.bucketOperations.get",
+    "storage.bucketOperations.list",
+    "storage.hmacKeys.get",
+    "storage.hmacKeys.list"
+  ]
+}
+
+resource "google_project_iam_member" "management_storageheartbeat_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_storageheartbeat[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "management_queueheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_queueHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-queueHeartbeat", var.stack_name)), 0, 8))
+  title       = "Queue Heartbeat"
+  description = "Allows readonly monitoring and health checks for queue resources"
+  stage       = "GA"
+  permissions = [
+    "pubsub.topics.get",
+    "pubsub.topics.list",
+    "pubsub.subscriptions.get",
+    "pubsub.subscriptions.list"
+  ]
+}
+
+resource "google_project_iam_member" "management_queueheartbeat_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/queueHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_queueheartbeat[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "management_kvheartbeat" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_kvHeartbeat_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-kvHeartbeat", var.stack_name)), 0, 8))
+  title       = "Kv Heartbeat"
+  description = "Allows readonly monitoring and health checks for kv resources"
+  stage       = "GA"
+  permissions = [
+    "datastore.databases.get",
+    "datastore.databases.list",
+    "datastore.entities.get",
+    "datastore.entities.list",
+    "datastore.indexes.get",
+    "datastore.indexes.list"
+  ]
+}
+
+resource "google_project_iam_member" "management_kvheartbeat_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/kvHeartbeat", var.gcp_project) : google_project_iam_custom_role.management_kvheartbeat[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_service_account_iam_member" "management_manager_token_creator" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management.id
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${each.value}"
+}
+
+resource "google_service_account_iam_member" "management_manager_user" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management.id
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${each.value}"
+}
+
+=== assets.tf ===
+resource "google_storage_bucket" "assets" {
+  name                        = "${var.stack_name}-assets"
+  project                     = var.gcp_project
+  location                    = upper(var.gcp_region)
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  force_destroy               = true
+  public_access_prevention    = "enforced"
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "assets"
+    "alien-resource-type" = "storage"
+  }
+
+  versioning {
+    enabled = true
+  }
+}
+
+=== jobs.tf ===
+resource "google_pubsub_topic" "jobs" {
+  name    = "${var.stack_name}-jobs"
+  project = var.gcp_project
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "jobs"
+    "alien-resource-type" = "queue"
+  }
+}
+
+resource "google_pubsub_subscription" "jobs" {
+  name                       = "${var.stack_name}-jobs-default"
+  project                    = var.gcp_project
+  topic                      = google_pubsub_topic.jobs.id
+  ack_deadline_seconds       = 360
+  message_retention_duration = "604800s"
+  enable_message_ordering    = false
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "jobs"
+    "alien-resource-type" = "queue"
+  }
+}
+
+=== metadata.tf ===
+resource "google_firestore_database" "metadata" {
+  name                        = "${var.stack_name}-metadata"
+  project                     = var.gcp_project
+  location_id                 = var.gcp_region
+  type                        = "FIRESTORE_NATIVE"
+  concurrency_mode            = "OPTIMISTIC"
+  app_engine_integration_mode = "DISABLED"
+  delete_protection_state     = "DELETE_PROTECTION_DISABLED"
+  deletion_policy             = "DELETE"
+}
+
+=== secrets.tf ===
+resource "google_project_iam_custom_role" "management_vaultdatawrite" {
+  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+  project     = var.gcp_project
+  role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
+  title       = "Vault Data Write"
+  description = "Allows creating, updating, and deleting individual secrets within vault"
+  stage       = "GA"
+  permissions = [
+    "secretmanager.versions.access",
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.create",
+    "secretmanager.versions.add",
+    "secretmanager.secrets.delete"
+  ]
+}
+
+resource "google_project_iam_member" "management_vaultdatawrite_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_vaultdatawrite[0].name
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecrets"
+    description = "Limit to ResourceVaultSecrets"
+    expression  = "resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${var.stack_name}-secrets-\")"
+  }
+}
+
+=== registry.tf ===
+resource "google_artifact_registry_repository" "registry" {
+  project       = var.gcp_project
+  location      = var.gcp_region
+  repository_id = "${var.stack_name}-registry"
+  format        = "DOCKER"
+  description   = "Alien registry container artifact registry"
+  labels = {
+    "managed-by"          = "alien-dev"
+    "alien-stack-id"      = var.stack_name
+    "alien-resource-id"   = "registry"
+    "alien-resource-type" = "artifact-registry"
+  }
+}
+
+resource "google_service_account" "registry_pull" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-pull", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-pull", var.stack_name)), "_", "-")), 0, 8))
+  display_name = "Alien registry artifact registry pull identity"
+}
+
+resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
+  project    = var.gcp_project
+  location   = google_artifact_registry_repository.registry.location
+  repository = google_artifact_registry_repository.registry.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.registry_pull.email}"
+}
+
+resource "google_service_account" "registry_push" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-push", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-push", var.stack_name)), "_", "-")), 0, 8))
+  display_name = "Alien registry artifact registry push identity"
+}
+
+resource "google_artifact_registry_repository_iam_member" "registry_push_iam" {
+  project    = var.gcp_project
+  location   = google_artifact_registry_repository.registry.location
+  repository = google_artifact_registry_repository.registry.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.registry_push.email}"
+}
+
+=== iam_propagation.tf ===
+resource "time_sleep" "gcp_iam_propagation" {
+  create_duration = "120s"
+  depends_on = [
+    google_project_iam_custom_role.execution_sa_storagedataread,
+    google_project_iam_member.execution_sa_storagedataread_binding_0,
+    google_project_iam_custom_role.execution_sa_queuedatawrite,
+    google_project_iam_member.execution_sa_queuedatawrite_binding_0,
+    google_project_iam_custom_role.management_functionmanagement,
+    google_project_iam_member.management_functionmanagement_binding_0,
+    google_project_iam_custom_role.management_storageheartbeat,
+    google_project_iam_member.management_storageheartbeat_binding_0,
+    google_project_iam_custom_role.management_queueheartbeat,
+    google_project_iam_member.management_queueheartbeat_binding_0,
+    google_project_iam_custom_role.management_kvheartbeat,
+    google_project_iam_member.management_kvheartbeat_binding_0,
+    google_service_account_iam_member.management_manager_token_creator,
+    google_service_account_iam_member.management_manager_user,
+    google_project_iam_custom_role.management_vaultdatawrite,
+    google_project_iam_member.management_vaultdatawrite_binding_0
+  ]
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+  depends_on = [
+    google_compute_network.default_network,
+    google_compute_subnetwork.default_network_workload,
+    google_compute_router.default_network_router,
+    google_compute_router_nat.default_network_nat,
+    google_compute_firewall.default_network_internal,
+    google_service_account.execution_sa,
+    google_project_iam_custom_role.execution_sa_storagedataread,
+    google_project_iam_member.execution_sa_storagedataread_binding_0,
+    google_project_iam_custom_role.execution_sa_queuedatawrite,
+    google_project_iam_member.execution_sa_queuedatawrite_binding_0,
+    google_service_account.management,
+    google_project_iam_custom_role.management_functionmanagement,
+    google_project_iam_member.management_functionmanagement_binding_0,
+    google_project_iam_custom_role.management_storageheartbeat,
+    google_project_iam_member.management_storageheartbeat_binding_0,
+    google_project_iam_custom_role.management_queueheartbeat,
+    google_project_iam_member.management_queueheartbeat_binding_0,
+    google_project_iam_custom_role.management_kvheartbeat,
+    google_project_iam_member.management_kvheartbeat_binding_0,
+    google_service_account_iam_member.management_manager_token_creator,
+    google_service_account_iam_member.management_manager_user,
+    google_storage_bucket.assets,
+    google_pubsub_topic.jobs,
+    google_pubsub_subscription.jobs,
+    google_firestore_database.metadata,
+    google_project_iam_custom_role.management_vaultdatawrite,
+    google_project_iam_member.management_vaultdatawrite_binding_0,
+    google_artifact_registry_repository.registry,
+    google_service_account.registry_pull,
+    google_artifact_registry_repository_iam_member.registry_pull_iam,
+    google_service_account.registry_push,
+    google_artifact_registry_repository_iam_member.registry_push_iam,
+    time_sleep.gcp_iam_propagation
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - full-gcp
+
+Target: `gcp`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=full-gcp' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

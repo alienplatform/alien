@@ -20,7 +20,7 @@ const value: models.DeploymentPreparedStack = {
           type: "<value>",
         },
       ],
-      lifecycle: "live-on-setup",
+      lifecycle: "live",
     },
   },
 };

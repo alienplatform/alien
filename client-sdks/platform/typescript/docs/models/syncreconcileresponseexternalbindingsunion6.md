@@ -21,7 +21,7 @@ const value: models.SyncReconcileResponseExternalBindingsUnion1 = {
 
 ```typescript
 const value: models.SyncReconcileResponseExternalBindingsUnion2 = {
-  service: "sqs",
+  service: "pubsub",
   type: "queue",
 };
 ```
@@ -52,5 +52,14 @@ const value: models.SyncReconcileResponseExternalBindingsUnion5 = {
   service: "local-vault",
   type: "vault",
 };
+```
+
+### `models.SyncReconcileResponseExternalBindingsContainerAppsEnvironment`
+
+```typescript
+const value:
+  models.SyncReconcileResponseExternalBindingsContainerAppsEnvironment = {
+    type: "container_apps_environment",
+  };
 ```
 

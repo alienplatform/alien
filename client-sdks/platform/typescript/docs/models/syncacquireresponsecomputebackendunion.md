@@ -13,8 +13,7 @@ const value: models.SyncAcquireResponseComputeBackendHorizon = {
       managementToken: "<value>",
     },
   },
-  horizondDownloadBaseUrl: "https://lanky-jazz.com",
-  url: "https://warped-swordfish.biz/",
+  url: "https://lanky-jazz.com",
   type: "horizon",
 };
 ```

@@ -11,7 +11,8 @@ let value: OutputsCloudformation = {
   launchStackUrl: "https://weird-newsprint.info/",
   sha256: "<value>",
   size: 243114,
-  templateUrl: "https://teeming-legging.biz/",
+  stackPolicyUrl: "https://teeming-legging.biz/",
+  templateUrl: "https://similar-petticoat.name",
   type: "cloudformation",
 };
 ```
@@ -23,5 +24,6 @@ let value: OutputsCloudformation = {
 | `launchStackUrl`                                                           | *string*                                                                   | :heavy_check_mark:                                                         | AWS Console quick-launch URL                                               |
 | `sha256`                                                                   | *string*                                                                   | :heavy_check_mark:                                                         | SHA256 checksum of the template                                            |
 | `size`                                                                     | *number*                                                                   | :heavy_check_mark:                                                         | Template size in bytes                                                     |
+| `stackPolicyUrl`                                                           | *string*                                                                   | :heavy_check_mark:                                                         | S3 URL to the CloudFormation stack policy                                  |
 | `templateUrl`                                                              | *string*                                                                   | :heavy_check_mark:                                                         | S3 URL to the CloudFormation template                                      |
 | `type`                                                                     | [models.OutputsTypeCloudformation](../models/outputstypecloudformation.md) | :heavy_check_mark:                                                         | N/A                                                                        |

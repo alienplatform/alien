@@ -28,6 +28,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.apiKeys.list({
     workspace: "my-workspace",
+    project: "my-project",
   });
 
   console.log(result);
@@ -53,6 +54,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await apiKeysList(alien, {
     workspace: "my-workspace",
+    project: "my-project",
   });
   if (res.ok) {
     const { value: result } = res;

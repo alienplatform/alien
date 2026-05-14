@@ -193,5 +193,4 @@ mod tests {
         let result = check.check(&stack, Platform::Local).await.unwrap();
         assert!(result.success);
     }
-
 }

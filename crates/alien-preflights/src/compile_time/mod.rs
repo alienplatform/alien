@@ -7,7 +7,7 @@ pub mod container_lifecycle;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
 pub mod function_memory;
-pub mod infrastructure_requirements;
+pub mod live_provision_permissions;
 pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod public_function_lifecycle;
@@ -17,6 +17,7 @@ pub mod resource_references_exist;
 pub mod service_account_impersonate_validation;
 pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
+pub mod trigger_edge_ownership;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
 
@@ -26,7 +27,7 @@ pub use container_lifecycle::ContainerLifecycleCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
 pub use function_memory::FunctionMemoryCheck;
-pub use infrastructure_requirements::{DnsTlsRequiredCheck, HorizonRequiredCheck};
+pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
 };
@@ -38,5 +39,6 @@ pub use resource_references_exist::ResourceReferencesExistCheck;
 pub use service_account_impersonate_validation::ServiceAccountImpersonateValidationCheck;
 pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
+pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
 pub use unique_resources::UniqueResourcesCheck;
 pub use valid_resource_dependencies::ValidResourceDependenciesCheck;

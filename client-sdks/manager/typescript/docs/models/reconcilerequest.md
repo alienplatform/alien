@@ -20,4 +20,5 @@ let value: ReconcileRequest = {
 | `error`            | *any*              | :heavy_minus_sign: | N/A                |
 | `session`          | *string*           | :heavy_check_mark: | N/A                |
 | `state`            | *any*              | :heavy_check_mark: | N/A                |
+| `suggestedDelayMs` | *number*           | :heavy_minus_sign: | N/A                |
 | `updateHeartbeat`  | *boolean*          | :heavy_minus_sign: | N/A                |

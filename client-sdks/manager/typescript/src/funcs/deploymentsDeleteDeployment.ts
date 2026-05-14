@@ -90,6 +90,7 @@ async function $do(
   const path = pathToFunc("/v1/deployments/{id}")(pathParams);
 
   const query = encodeFormQuery({
+    "deleteScope": payload.deleteScope,
     "force": payload.force,
   });
 

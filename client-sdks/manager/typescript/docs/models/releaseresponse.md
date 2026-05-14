@@ -8,7 +8,9 @@ import { ReleaseResponse } from "@alienplatform/manager-api/models";
 let value: ReleaseResponse = {
   createdAt: "1706636647935",
   id: "<id>",
+  projectId: "<id>",
   stack: {},
+  workspaceId: "<id>",
 };
 ```
 
@@ -19,4 +21,6 @@ let value: ReleaseResponse = {
 | `createdAt`                                                                                    | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `gitMetadata`                                                                                  | [models.GitMetadataResponse](../models/gitmetadataresponse.md)                                 | :heavy_minus_sign:                                                                             | N/A                                                                                            |
 | `id`                                                                                           | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `projectId`                                                                                    | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `stack`                                                                                        | [models.StackByPlatform](../models/stackbyplatform.md)                                         | :heavy_check_mark:                                                                             | The release API accepts stacks keyed by platform.<br/>Only one platform stack needs to be present. |
+| `workspaceId`                                                                                  | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |

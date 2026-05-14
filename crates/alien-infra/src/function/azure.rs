@@ -11,12 +11,12 @@ use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, ResourceOutputs,
-    ResourceRef, ResourceStatus,
+    ResourceRef, ResourceStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
@@ -33,6 +33,120 @@ use alien_macros::controller;
 /// Generates a deterministic Azure Container Apps name for a function.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+#[cfg(not(test))]
+const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 60;
+#[cfg(test)]
+const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 0;
+
+#[cfg(not(test))]
+const AZURE_READY_RBAC_WAIT_SECS: u64 = 120;
+#[cfg(test)]
+const AZURE_READY_RBAC_WAIT_SECS: u64 = 0;
+
+#[cfg(not(test))]
+const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 300;
+#[cfg(test)]
+const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 0;
+
+const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
+const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+
+fn current_unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn ensure_rbac_wait_deadline(wait_until_epoch_secs: &mut Option<u64>, wait_secs: u64) -> u64 {
+    let now = current_unix_timestamp_secs();
+    *wait_until_epoch_secs.get_or_insert_with(|| now.saturating_add(wait_secs))
+}
+
+fn rbac_wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
+    let now = current_unix_timestamp_secs();
+    let remaining = deadline_epoch_secs.saturating_sub(now);
+
+    if remaining == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(
+            remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
+        ))
+    }
+}
+
+fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -> bool {
+    const AUTHORIZATION_MESSAGE_MARKERS: &[&str] = &[
+        "AuthorizationFailed",
+        "Unauthorized",
+        "does not have authorization",
+        "refresh your credentials",
+        "HTTP 401",
+        "HTTP 403",
+    ];
+
+    fn context_http_status(context: Option<&serde_json::Value>) -> Option<u16> {
+        context
+            .and_then(|value| value.get("http_status"))
+            .and_then(|value| value.as_u64())
+            .and_then(|status| u16::try_from(status).ok())
+    }
+
+    fn context_contains_auth_marker(context: Option<&serde_json::Value>) -> bool {
+        context.is_some_and(|value| {
+            let context_text = value.to_string();
+            AUTHORIZATION_MESSAGE_MARKERS
+                .iter()
+                .any(|marker| context_text.contains(marker))
+        })
+    }
+
+    fn matches_layer(
+        code: &str,
+        message: &str,
+        http_status_code: Option<u16>,
+        context: Option<&serde_json::Value>,
+    ) -> bool {
+        let http_status_code = http_status_code.or_else(|| context_http_status(context));
+        let authorization_status = matches!(http_status_code, Some(401 | 403));
+        let authorization_code = matches!(
+            code,
+            "REMOTE_ACCESS_DENIED" | "AUTHENTICATION_ERROR" | "HTTP_RESPONSE_ERROR"
+        );
+        let authorization_message = AUTHORIZATION_MESSAGE_MARKERS
+            .iter()
+            .any(|marker| message.contains(marker))
+            || context_contains_auth_marker(context);
+
+        (authorization_status || authorization_code) && authorization_message
+    }
+
+    if matches_layer(
+        &error.code,
+        &error.message,
+        error.http_status_code,
+        error.context.as_ref(),
+    ) {
+        return true;
+    }
+
+    let mut source = error.source.as_deref();
+    while let Some(layer) = source {
+        if matches_layer(
+            &layer.code,
+            &layer.message,
+            layer.http_status_code,
+            layer.context.as_ref(),
+        ) {
+            return true;
+        }
+        source = layer.source.as_deref();
+    }
+
+    false
 }
 
 /// Get the Key Vault name for importing certificates.
@@ -190,6 +304,19 @@ pub struct AzureFunctionController {
     pub(crate) commands_sender_role_assignment_id: Option<String>,
     /// Role assignment ID for Service Bus Data Receiver on the execution UAMI (for cleanup)
     pub(crate) commands_receiver_role_assignment_id: Option<String>,
+
+    /// Deadline for retrying commands infrastructure creation while Azure IAM grants propagate.
+    #[serde(default)]
+    pub(crate) commands_infrastructure_auth_wait_until_epoch_secs: Option<u64>,
+    /// Deadline before creating the Container App after pre-created RBAC assignments.
+    #[serde(default)]
+    pub(crate) pre_container_app_rbac_wait_until_epoch_secs: Option<u64>,
+    /// Deadline before reporting Ready after all consumer-visible permissions were applied.
+    #[serde(default)]
+    pub(crate) ready_rbac_wait_until_epoch_secs: Option<u64>,
+    /// Whether the current update flow changed the workload and should wait for RBAC propagation.
+    #[serde(default)]
+    pub(crate) update_rbac_wait_required: bool,
 }
 
 // ≡ Lifecycle implementation ===================================================
@@ -208,6 +335,11 @@ impl AzureFunctionController {
         let func_cfg = ctx.desired_resource_config::<Function>()?;
         info!(name=%func_cfg.id, "Initiating Azure Container App function creation");
 
+        self.pre_container_app_rbac_wait_until_epoch_secs = None;
+        self.ready_rbac_wait_until_epoch_secs = None;
+        self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+        self.update_rbac_wait_required = false;
+
         // Product limitation: Only allow at most one queue trigger per function
         let queue_trigger_count = func_cfg
             .triggers
@@ -219,8 +351,7 @@ impl AzureFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    func_cfg.id,
-                    queue_trigger_count
+                    func_cfg.id, queue_trigger_count
                 ),
                 resource_id: Some(func_cfg.id.clone()),
             }));
@@ -228,8 +359,6 @@ impl AzureFunctionController {
 
         // Derive deterministic resource names.
         let container_app_name = get_azure_container_app_name(ctx.resource_prefix, &func_cfg.id);
-        let resource_group_name = get_resource_group_name(ctx.state)?;
-        let environment_name = get_container_apps_environment_name(ctx.state)?;
 
         // Pre-create commands infrastructure BEFORE the Container App so the Dapr
         // sidecar starts with the component already defined AND the RBAC roles already
@@ -237,25 +366,79 @@ impl AzureFunctionController {
         // This eliminates the race condition where the sidecar starts before permissions exist.
         self.container_app_name = Some(container_app_name.clone());
         if func_cfg.commands_enabled {
-            self.setup_commands_infrastructure(
-                ctx,
-                azure_cfg,
-                func_cfg,
-                &resource_group_name,
-                &container_app_name,
-            )
-            .await?;
+            match self
+                .setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
+                .await
+            {
+                Ok(()) => {
+                    self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+                }
+                Err(e) if is_azure_authorization_propagation_error(&e) => {
+                    let deadline = ensure_rbac_wait_deadline(
+                        &mut self.commands_infrastructure_auth_wait_until_epoch_secs,
+                        AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS,
+                    );
+
+                    if let Some(delay) = rbac_wait_delay(deadline) {
+                        warn!(
+                            name=%func_cfg.id,
+                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                            error=%e,
+                            "Azure authorization is not ready for commands infrastructure; retrying"
+                        );
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(delay),
+                        });
+                    }
+
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
-        // Transition to CreatingContainerAppResource with a delay for Azure RBAC propagation.
-        // Azure role assignments (storage, KV, queue, vault, commands) were created during
-        // infrastructure setup and above, but Azure takes up to 5-10 minutes to propagate
-        // them globally. This delay gives RBAC time to propagate before the Container App
-        // starts and its Dapr sidecar tries to access protected resources.
+        // Wait in a real controller state for Azure RBAC propagation. A
+        // suggested delay alone is only a scheduling hint and can be shortened
+        // by other resources in the executor.
         info!(name=%func_cfg.id, "Commands infrastructure ready, waiting for RBAC propagation before creating Container App");
         Ok(HandlerAction::Continue {
+            state: WaitingBeforeContainerAppCreation,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = WaitingBeforeContainerAppCreation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_before_container_app_creation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+        let deadline = ensure_rbac_wait_deadline(
+            &mut self.pre_container_app_rbac_wait_until_epoch_secs,
+            AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS,
+        );
+
+        if let Some(delay) = rbac_wait_delay(deadline) {
+            info!(
+                name=%func_cfg.id,
+                remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure RBAC propagation before creating Container App"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.pre_container_app_rbac_wait_until_epoch_secs = None;
+        Ok(HandlerAction::Continue {
             state: CreatingContainerAppResource,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: None,
         })
     }
 
@@ -349,7 +532,7 @@ impl AzureFunctionController {
                         .to_string(),
                     operation: Some("waiting_for_create_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -443,7 +626,10 @@ impl AzureFunctionController {
                                         });
                                     }
                                     Err(e) => {
-                                        warn!("Failed to resolve domain info, skipping custom domain setup: {}", e);
+                                        warn!(
+                                            "Failed to resolve domain info, skipping custom domain setup: {}",
+                                            e
+                                        );
                                         // Continue without custom domain
                                     }
                                 }
@@ -517,6 +703,18 @@ impl AzureFunctionController {
             .and_then(|meta| meta.resources.get(&function_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
+        if !self.ensure_domain_info(ctx, &function_config.id)? {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringDaprComponents,
+                suggested_delay: None,
+            });
+        }
+        if self.uses_custom_domain && self.keyvault_cert_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringCustomDomain,
+                suggested_delay: None,
+            });
+        }
 
         match status {
             Some(CertificateStatus::Issued) => Ok(HandlerAction::Continue {
@@ -546,6 +744,7 @@ impl AzureFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let function_config = ctx.desired_resource_config::<Function>()?;
+        self.ensure_domain_info(ctx, &function_config.id)?;
         let azure_cfg = ctx.get_azure_config()?;
         let resource = ctx
             .deployment_config
@@ -777,20 +976,37 @@ impl AzureFunctionController {
             match trigger {
                 alien_core::FunctionTrigger::Queue { queue } => {
                     info!(function=%func_cfg.id, queue=%queue.id, "Creating Dapr Service Bus component");
-                    self.create_dapr_service_bus_component(ctx, &container_app_name, &func_cfg, queue)
-                        .await?;
+                    self.create_dapr_service_bus_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        queue,
+                    )
+                    .await?;
                     created_any = true;
                 }
                 alien_core::FunctionTrigger::Storage { storage, events } => {
                     info!(function=%func_cfg.id, storage=%storage.id, "Creating Dapr blob storage component");
-                    self.create_dapr_blob_storage_component(ctx, &container_app_name, &func_cfg, storage, events)
-                        .await?;
+                    self.create_dapr_blob_storage_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        storage,
+                        events,
+                    )
+                    .await?;
                     created_any = true;
                 }
                 alien_core::FunctionTrigger::Schedule { cron } => {
                     info!(function=%func_cfg.id, cron=%cron, "Creating Dapr cron component");
-                    self.create_dapr_cron_component(ctx, &container_app_name, &func_cfg, cron, cron_index)
-                        .await?;
+                    self.create_dapr_cron_component(
+                        ctx,
+                        &container_app_name,
+                        &func_cfg,
+                        cron,
+                        cron_index,
+                    )
+                    .await?;
                     cron_index += 1;
                     created_any = true;
                 }
@@ -822,7 +1038,7 @@ impl AzureFunctionController {
         if !func_cfg.commands_enabled {
             debug!(function=%func_cfg.id, "Commands not enabled, skipping commands infrastructure");
             return Ok(HandlerAction::Continue {
-                state: RunningReadinessProbe,
+                state: ApplyingPermissions,
                 suggested_delay: None,
             });
         }
@@ -833,15 +1049,12 @@ impl AzureFunctionController {
         if self.commands_namespace_name.is_some() {
             info!(function=%func_cfg.id, "Commands infrastructure already created in CreateStart, skipping");
             return Ok(HandlerAction::Continue {
-                state: RunningReadinessProbe,
+                state: ApplyingPermissions,
                 suggested_delay: None,
             });
         }
 
         let azure_config = ctx.get_azure_config()?;
-        // The Service Bus namespace lives in the deployment's resource group.
-        let deployment_resource_group =
-            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         // Dapr components live on the Container Apps Environment, which may be in a
         // different resource group than the deployment (shared/external environments).
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -864,6 +1077,7 @@ impl AzureFunctionController {
                 })
             })?
             .clone();
+        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
 
         let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -886,7 +1100,7 @@ impl AzureFunctionController {
         );
 
         mgmt.create_or_update_queue(
-            deployment_resource_group.clone(),
+            service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
             alien_azure_clients::models::queue::SbQueueProperties {
@@ -1024,31 +1238,19 @@ impl AzureFunctionController {
         // Azure separates management plane (Contributor) from data plane — the identity
         // that creates the queue cannot send messages without an explicit data-plane role.
         // This is Azure-specific; AWS/GCP don't have this separation.
-        match self
-            .assign_commands_sender_role(
-                ctx,
-                azure_config,
-                &deployment_resource_group,
-                &namespace_name,
-                func_cfg,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => {
-                warn!(
-                    function=%func_cfg.id,
-                    error=%e,
-                    "Failed to assign Service Bus Data Sender to deploying identity \
-                     (commands dispatch may fail with 401)"
-                );
-            }
-        }
+        self.assign_commands_sender_role(
+            ctx,
+            azure_config,
+            &service_bus_resource_group,
+            &namespace_name,
+            func_cfg,
+        )
+        .await?;
 
         info!(function=%func_cfg.id, "Commands Service Bus infrastructure created");
 
         Ok(HandlerAction::Continue {
-            state: RunningReadinessProbe,
+            state: ApplyingPermissions,
             suggested_delay: None,
         })
     }
@@ -1064,10 +1266,10 @@ impl AzureFunctionController {
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Function>()?;
 
-        // If no readiness probe configured → Skip to applying permissions.
+        // If no readiness probe is configured, the function is ready.
         if func_cfg.readiness_probe.is_none() {
             return Ok(HandlerAction::Continue {
-                state: ApplyingPermissions,
+                state: Ready,
                 suggested_delay: None,
             });
         }
@@ -1075,7 +1277,7 @@ impl AzureFunctionController {
         // Only run probe for public ingress where we have a URL.
         if func_cfg.ingress != Ingress::Public {
             return Ok(HandlerAction::Continue {
-                state: ApplyingPermissions,
+                state: Ready,
                 suggested_delay: None,
             });
         }
@@ -1086,7 +1288,7 @@ impl AzureFunctionController {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: func_cfg.id.clone(),
                     message: "Readiness probe configured but URL is missing".to_string(),
-                }))
+                }));
             }
         };
 
@@ -1095,7 +1297,7 @@ impl AzureFunctionController {
                 info!(name=%func_cfg.id, "Readiness probe succeeded");
 
                 Ok(HandlerAction::Continue {
-                    state: ApplyingPermissions,
+                    state: Ready,
                     suggested_delay: None,
                 })
             }
@@ -1156,14 +1358,13 @@ impl AzureFunctionController {
         // applied during this deployment (storage, KV, queue, vault, plus the
         // function/execute role just applied above). Azure RBAC propagation can
         // take 2-5 minutes for resource-scope assignments — caller code that
-        // invokes the function within seconds of `Running` otherwise hits 403
+        // invokes the function within seconds otherwise hits 403
         // `AuthorizationPermissionMismatch`. Wait here, in the consumer, before
-        // signalling Ready. `WaitingForRbacPropagation` keeps the resource in
-        // Provisioning status so the deployment doesn't transition to Running
-        // yet.
+        // running readiness probes or signalling Ready.
+        self.ready_rbac_wait_until_epoch_secs = None;
         Ok(HandlerAction::Continue {
             state: WaitingForRbacPropagation,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: None,
         })
     }
 
@@ -1174,10 +1375,29 @@ impl AzureFunctionController {
     )]
     async fn waiting_for_rbac_propagation(
         &mut self,
-        _ctx: &ResourceControllerContext<'_>,
+        ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+        let deadline = ensure_rbac_wait_deadline(
+            &mut self.ready_rbac_wait_until_epoch_secs,
+            AZURE_READY_RBAC_WAIT_SECS,
+        );
+
+        if let Some(delay) = rbac_wait_delay(deadline) {
+            info!(
+                name=%func_cfg.id,
+                remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure RBAC propagation before marking function Ready"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.ready_rbac_wait_until_epoch_secs = None;
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: RunningReadinessProbe,
             suggested_delay: None,
         })
     }
@@ -1226,8 +1446,8 @@ impl AzureFunctionController {
             }
         }
 
-        // Check for certificate renewal (if using custom domain)
-        if self.uses_custom_domain && self.certificate_id.is_some() {
+        // Check for certificate renewal on auto-managed public domains.
+        if func_cfg.ingress == Ingress::Public && !self.uses_custom_domain {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -1245,7 +1465,7 @@ impl AzureFunctionController {
                             "Certificate renewed, triggering update to re-import certificate"
                         );
                         return Ok(HandlerAction::Continue {
-                            state: UpdateStart,
+                            state: UpdateImportingCertificate,
                             suggested_delay: None,
                         });
                     }
@@ -1264,12 +1484,151 @@ impl AzureFunctionController {
 
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
+        state = UpdateImportingCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_importing_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+
+        if func_cfg.ingress != Ingress::Public || self.uses_custom_domain {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&func_cfg.id))
+        else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
+        let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
+        let keyvault_name = get_keyvault_name_for_function(ctx)?;
+        let keyvault_url = format!("https://{}.vault.azure.net", keyvault_name);
+        let cert_name = format!("{}-{}", ctx.resource_prefix, func_cfg.id)
+            .replace('_', "-")
+            .to_lowercase();
+        let import_request = CertificateImportParameters {
+            value: pkcs12_base64,
+            pwd: Some(String::new()),
+            policy: None,
+            attributes: None,
+            tags: HashMap::new(),
+            preserve_cert_order: None,
+        };
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let keyvault_client = ctx
+            .service_provider
+            .get_azure_key_vault_certificates_client(azure_cfg)?;
+        let response = keyvault_client
+            .import_certificate(keyvault_url, cert_name, import_request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import certificate to Key Vault".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        self.keyvault_cert_id = response.id;
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        if self.fqdn.is_some() && self.keyvault_cert_id.is_some() {
+            let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: func_cfg.id.clone(),
+                    message: "Container app name not set in state".to_string(),
+                })
+            })?;
+            let fqdn = self.fqdn.clone().unwrap();
+            let keyvault_cert_id = self.keyvault_cert_id.clone().unwrap();
+            let resource_group_name = get_resource_group_name(ctx.state)?;
+            let client = ctx
+                .service_provider
+                .get_azure_container_apps_client(azure_cfg)?;
+            let mut app = client
+                .get_container_app(&resource_group_name, container_app_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get container app for certificate renewal".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+
+            if let Some(props) = &mut app.properties {
+                if let Some(config) = &mut props.configuration {
+                    if let Some(ingress) = &mut config.ingress {
+                        ingress.custom_domains = vec![CustomDomain {
+                            name: fqdn,
+                            binding_type: Some(CustomDomainBindingType::SniEnabled),
+                            certificate_id: Some(keyvault_cert_id),
+                        }];
+                    }
+                }
+            }
+
+            client
+                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to bind renewed certificate to custom domain".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+        }
+
+        Ok(HandlerAction::Continue {
+            state: UpdateStart,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
         state = UpdateStart,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Function>()?;
+        let previous_cfg = ctx.previous_resource_config::<Function>()?;
+        self.ready_rbac_wait_until_epoch_secs = None;
+        if func_cfg == previous_cfg {
+            self.update_rbac_wait_required = false;
+            return Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -1283,6 +1642,7 @@ impl AzureFunctionController {
         let client = ctx
             .service_provider
             .get_azure_container_apps_client(azure_cfg)?;
+        self.update_rbac_wait_required = true;
 
         // Build desired spec
         let desired_app = self
@@ -1294,6 +1654,20 @@ impl AzureFunctionController {
                 ctx,
             )
             .await?;
+        let mut desired_app = desired_app;
+        if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
+            if let Some(props) = &mut desired_app.properties {
+                if let Some(config) = &mut props.configuration {
+                    if let Some(ingress) = &mut config.ingress {
+                        ingress.custom_domains = vec![CustomDomain {
+                            name: fqdn.clone(),
+                            binding_type: Some(CustomDomainBindingType::SniEnabled),
+                            certificate_id: Some(keyvault_cert_id.clone()),
+                        }];
+                    }
+                }
+            }
+        }
 
         // Issue UPDATE
         let op_result = client
@@ -1342,7 +1716,7 @@ impl AzureFunctionController {
                         .to_string(),
                     operation: Some("waiting_for_update_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -1521,11 +1895,17 @@ impl AzureFunctionController {
             info!(function=%current_config.id, "No trigger changes detected");
         }
 
-        // Always go to readiness probe next (linear flow)
-        Ok(HandlerAction::Continue {
-            state: UpdateRunningReadinessProbe,
-            suggested_delay: None,
-        })
+        if self.update_rbac_wait_required {
+            Ok(HandlerAction::Continue {
+                state: UpdateWaitingForRbacPropagation,
+                suggested_delay: None,
+            })
+        } else {
+            Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            })
+        }
     }
 
     #[handler(
@@ -1570,6 +1950,41 @@ impl AzureFunctionController {
                 })
             }
         }
+    }
+
+    #[handler(
+        state = UpdateWaitingForRbacPropagation,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_rbac_propagation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Function>()?;
+        let deadline = ensure_rbac_wait_deadline(
+            &mut self.ready_rbac_wait_until_epoch_secs,
+            AZURE_READY_RBAC_WAIT_SECS,
+        );
+
+        if let Some(delay) = rbac_wait_delay(deadline) {
+            info!(
+                name=%func_cfg.id,
+                remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure RBAC propagation before completing function update"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.ready_rbac_wait_until_epoch_secs = None;
+        self.update_rbac_wait_required = false;
+        Ok(HandlerAction::Continue {
+            state: UpdateRunningReadinessProbe,
+            suggested_delay: None,
+        })
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -1697,7 +2112,16 @@ impl AzureFunctionController {
             self.commands_namespace_name.take(),
             self.commands_queue_name.take(),
         ) {
-            let resource_group_name = get_resource_group_name(ctx.state)?;
+            let namespace_ref = ResourceRef::new(
+                alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+                "default-service-bus-namespace",
+            );
+            let resource_group_name = match ctx
+                .require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)
+            {
+                Ok(controller) => controller.resource_group_name(ctx)?,
+                Err(_) => get_resource_group_name(ctx.state)?,
+            };
             info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
             let mgmt = ctx
                 .service_provider
@@ -1808,7 +2232,7 @@ impl AzureFunctionController {
                     message: "No pending_operation_url in WaitingForDeleteOperation".to_string(),
                     operation: Some("waiting_for_delete_operation".to_string()),
                     resource_id: Some(ctx.desired_resource_config::<Function>()?.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -1971,7 +2395,10 @@ impl AzureFunctionController {
                 .nth(4)
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::InfrastructureError {
-                        message: format!("Malformed ARM resource ID (missing resource group): {}", resource_id),
+                        message: format!(
+                            "Malformed ARM resource ID (missing resource group): {}",
+                            resource_id
+                        ),
                         operation: Some("parse_arm_resource_id".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })
@@ -1985,7 +2412,10 @@ impl AzureFunctionController {
                 .nth(2)
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::InfrastructureError {
-                        message: format!("Malformed ARM resource ID (missing subscription): {}", resource_id),
+                        message: format!(
+                            "Malformed ARM resource ID (missing subscription): {}",
+                            resource_id
+                        ),
                         operation: Some("parse_arm_resource_id".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })
@@ -2031,7 +2461,6 @@ impl AzureFunctionController {
         ctx: &ResourceControllerContext<'_>,
         azure_config: &alien_azure_clients::AzureClientConfig,
         func_cfg: &alien_core::Function,
-        deployment_resource_group: &str,
         container_app_name: &str,
     ) -> Result<()> {
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
@@ -2054,6 +2483,7 @@ impl AzureFunctionController {
                 })
             })?
             .clone();
+        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
 
         // Create commands queue
         let queue_name = format!("{}-rq", container_app_name);
@@ -2069,7 +2499,7 @@ impl AzureFunctionController {
         );
 
         mgmt.create_or_update_queue(
-            deployment_resource_group.to_string(),
+            service_bus_resource_group.clone(),
             namespace_name.clone(),
             queue_name.clone(),
             alien_azure_clients::models::queue::SbQueueProperties::default(),
@@ -2176,26 +2606,15 @@ impl AzureFunctionController {
         self.commands_queue_name = Some(queue_name);
         self.commands_dapr_component = Some(component_name);
 
-        // Assign roles BEFORE Container App starts, giving RBAC time to propagate
-        match self
-            .assign_commands_sender_role(
-                ctx,
-                azure_config,
-                deployment_resource_group,
-                &namespace_name,
-                func_cfg,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => {
-                warn!(
-                    function=%func_cfg.id,
-                    error=%e,
-                    "Failed to assign Service Bus roles for commands (commands dispatch may fail)"
-                );
-            }
-        }
+        // Assign roles BEFORE Container App starts, giving RBAC time to propagate.
+        self.assign_commands_sender_role(
+            ctx,
+            azure_config,
+            &service_bus_resource_group,
+            &namespace_name,
+            func_cfg,
+        )
+        .await?;
 
         info!(function=%func_cfg.id, "Commands infrastructure pre-created successfully");
         Ok(())
@@ -2442,6 +2861,39 @@ impl AzureFunctionController {
         })
     }
 
+    fn ensure_domain_info(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.fqdn.is_some()
+            && (self.certificate_id.is_some()
+                || self.keyvault_cert_id.is_some()
+                || self.uses_custom_domain)
+        {
+            return Ok(true);
+        }
+
+        match Self::resolve_domain_info(ctx, resource_id) {
+            Ok(domain_info) => {
+                self.fqdn = Some(domain_info.fqdn.clone());
+                self.certificate_id = domain_info.certificate_id;
+                self.keyvault_cert_id = domain_info.keyvault_cert_id;
+                self.uses_custom_domain = domain_info.uses_custom_domain;
+                if self.url.is_none() {
+                    self.url = ctx
+                        .deployment_config
+                        .public_urls
+                        .as_ref()
+                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                }
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     fn clear_all(&mut self) {
         self.container_app_name = None;
         self.resource_id = None;
@@ -2506,10 +2958,8 @@ impl AzureFunctionController {
 
         // Build complete environment using shared logic
         // IMPORTANT: Start with func.environment which includes injected vars from DeploymentConfig
-        let complete_env = EnvironmentVariableBuilder::new(&func.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
-            .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
+        let complete_env = EnvironmentVariableBuilder::try_new(&func.environment)?
+            .add_function_runtime_env_vars(ctx, &func.id)?
             .add_linked_resources(&func.links, ctx, &func.id)
             .await?
             .add_self_function_binding(&func.id, self_binding_params.as_ref())?
@@ -2541,7 +2991,7 @@ impl AzureFunctionController {
         {
             if let Some(client_id) = &service_account_state.identity_client_id {
                 env_vars.push(EnvironmentVar {
-                    name: Some("AZURE_CLIENT_ID".to_string()),
+                    name: Some(ENV_AZURE_CLIENT_ID.to_string()),
                     value: Some(client_id.clone()),
                     secret_ref: None,
                 });
@@ -2576,7 +3026,7 @@ impl AzureFunctionController {
         };
 
         // Prepare environment variables using shared logic
-        let mut env_vars = self.prepare_environment_variables_azure(func, ctx).await?;
+        let env_vars = self.prepare_environment_variables_azure(func, ctx).await?;
 
         // Note: Dapr input bindings (bindings.azure.servicebusqueues) auto-deliver
         // messages without requiring GET /dapr/subscribe. No subscription env var needed.
@@ -2976,12 +3426,15 @@ impl AzureFunctionController {
         // Get storage controller to access storage account and container names
         let storage_controller =
             ctx.require_dependency::<crate::storage::azure::AzureStorageController>(storage_ref)?;
-        let storage_account_name = storage_controller.storage_account_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: function_config.id.clone(),
-                dependency_id: storage_ref.id.clone(),
-            })
-        })?;
+        let storage_account_name = storage_controller
+            .storage_account_name
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: function_config.id.clone(),
+                    dependency_id: storage_ref.id.clone(),
+                })
+            })?;
         let container_name = storage_controller.container_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::DependencyNotReady {
                 resource_id: function_config.id.clone(),
@@ -3016,7 +3469,11 @@ impl AzureFunctionController {
             service_account_id.to_string(),
         );
 
-        if let Ok(service_account_state) = ctx.require_dependency::<crate::service_account::AzureServiceAccountController>(&service_account_ref) {
+        if let Ok(service_account_state) = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )
+        {
             if let Some(client_id) = &service_account_state.identity_client_id {
                 metadata.push(DaprMetadata {
                     name: Some("azureClientId".into()),
@@ -3242,6 +3699,10 @@ impl AzureFunctionController {
             commands_dapr_component: None,
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
+            commands_infrastructure_auth_wait_until_epoch_secs: None,
+            pre_container_app_rbac_wait_until_epoch_secs: None,
+            ready_rbac_wait_until_epoch_secs: None,
+            update_rbac_wait_required: false,
             _internal_stay_count: None,
         }
     }
@@ -3268,16 +3729,52 @@ mod tests {
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{Function, FunctionOutputs, Ingress, Platform, ResourceStatus};
-    use alien_error::AlienError;
+    use alien_error::{AlienError, ContextError};
     use httpmock::MockServer;
     use rstest::rstest;
 
+    use super::{
+        current_unix_timestamp_secs, is_azure_authorization_propagation_error,
+        AZURE_RBAC_WAIT_POLL_SECS,
+    };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::error::ErrorData;
     use crate::function::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
         AzureFunctionController,
     };
     use crate::AzureFunctionState;
+
+    #[test]
+    fn detects_azure_authorization_propagation_error_from_http_context() {
+        let http_error = AlienError::new(CloudClientErrorData::HttpResponseError {
+            message: "Azure CreateOrUpdateDaprComponent failed: HTTP 403 Forbidden".to_string(),
+            url: "https://management.azure.com/test".to_string(),
+            http_status: 403,
+            http_request_text: None,
+            http_response_text: Some(
+                "{\"error\":{\"code\":\"AuthorizationFailed\",\"message\":\"The client does not have authorization to perform action. If access was recently granted, please refresh your credentials.\"}}"
+                    .to_string(),
+            ),
+        });
+
+        let error = http_error.context(ErrorData::CloudPlatformError {
+            message: "Failed to create commands Dapr component".to_string(),
+            resource_id: Some("alien-rs-fn".to_string()),
+        });
+
+        assert!(is_azure_authorization_propagation_error(&error));
+    }
+
+    #[test]
+    fn ignores_non_authorization_cloud_platform_errors() {
+        let error = AlienError::new(ErrorData::CloudPlatformError {
+            message: "Failed to create commands Dapr component".to_string(),
+            resource_id: Some("alien-rs-fn".to_string()),
+        });
+
+        assert!(!is_azure_authorization_propagation_error(&error));
+    }
 
     fn create_successful_container_app_response(app_name: &str, has_url: bool) -> ContainerApp {
         let fqdn = if has_url {
@@ -3598,7 +4095,12 @@ mod tests {
                     .returning(|_, _, role_def| Ok(role_def.clone()));
                 mock_auth
                     .expect_build_role_assignment_id()
-                    .returning(|_, name| format!("/test/providers/Microsoft.Authorization/roleAssignments/{}", name));
+                    .returning(|_, name| {
+                        format!(
+                            "/test/providers/Microsoft.Authorization/roleAssignments/{}",
+                            name
+                        )
+                    });
                 mock_auth
                     .expect_create_or_update_role_assignment_by_id()
                     .returning(|_, role_assignment| Ok(role_assignment.clone()));
@@ -3784,6 +4286,155 @@ mod tests {
             system_data: None,
             type_: None,
         }
+    }
+
+    async fn executor_for_wait_state(
+        controller: AzureFunctionController,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_pre_container_app_rbac_wait_holds_state_when_woken_early() {
+        let deadline = current_unix_timestamp_secs().saturating_add(60);
+        let mut controller = AzureFunctionController::mock_ready("test-basic-function");
+        controller.state = AzureFunctionState::WaitingBeforeContainerAppCreation;
+        controller.pre_container_app_rbac_wait_until_epoch_secs = Some(deadline);
+
+        let mut executor = executor_for_wait_state(controller).await;
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Provisioning);
+        assert_eq!(
+            controller.state,
+            AzureFunctionState::WaitingBeforeContainerAppCreation
+        );
+        assert_eq!(
+            step_result.suggested_delay,
+            Some(Duration::from_secs(AZURE_RBAC_WAIT_POLL_SECS))
+        );
+        assert_eq!(
+            controller.pre_container_app_rbac_wait_until_epoch_secs,
+            Some(deadline)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ready_rbac_wait_holds_state_when_woken_early() {
+        let deadline = current_unix_timestamp_secs().saturating_add(60);
+        let mut controller = AzureFunctionController::mock_ready("test-basic-function");
+        controller.state = AzureFunctionState::WaitingForRbacPropagation;
+        controller.ready_rbac_wait_until_epoch_secs = Some(deadline);
+
+        let mut executor = executor_for_wait_state(controller).await;
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Provisioning);
+        assert_eq!(
+            controller.state,
+            AzureFunctionState::WaitingForRbacPropagation
+        );
+        assert_eq!(
+            step_result.suggested_delay,
+            Some(Duration::from_secs(AZURE_RBAC_WAIT_POLL_SECS))
+        );
+        assert_eq!(controller.ready_rbac_wait_until_epoch_secs, Some(deadline));
+    }
+
+    #[tokio::test]
+    async fn test_ready_rbac_wait_advances_after_deadline() {
+        let mut controller = AzureFunctionController::mock_ready("test-basic-function");
+        controller.state = AzureFunctionState::WaitingForRbacPropagation;
+        controller.ready_rbac_wait_until_epoch_secs =
+            Some(current_unix_timestamp_secs().saturating_sub(1));
+
+        let mut executor = executor_for_wait_state(controller).await;
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Provisioning);
+        assert_eq!(controller.state, AzureFunctionState::RunningReadinessProbe);
+        assert_eq!(step_result.suggested_delay, None);
+        assert_eq!(controller.ready_rbac_wait_until_epoch_secs, None);
+
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(controller.state, AzureFunctionState::Ready);
+        assert_eq!(step_result.suggested_delay, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_rbac_wait_holds_and_clears() {
+        let deadline = current_unix_timestamp_secs().saturating_add(60);
+        let mut controller = AzureFunctionController::mock_ready("test-basic-function");
+        controller.state = AzureFunctionState::UpdateWaitingForRbacPropagation;
+        controller.ready_rbac_wait_until_epoch_secs = Some(deadline);
+        controller.update_rbac_wait_required = true;
+
+        let mut executor = executor_for_wait_state(controller).await;
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Updating);
+        assert_eq!(
+            controller.state,
+            AzureFunctionState::UpdateWaitingForRbacPropagation
+        );
+        assert_eq!(
+            step_result.suggested_delay,
+            Some(Duration::from_secs(AZURE_RBAC_WAIT_POLL_SECS))
+        );
+        assert_eq!(controller.ready_rbac_wait_until_epoch_secs, Some(deadline));
+        assert!(controller.update_rbac_wait_required);
+
+        let mut controller = controller.clone();
+        controller.ready_rbac_wait_until_epoch_secs =
+            Some(current_unix_timestamp_secs().saturating_sub(1));
+        let mut executor = executor_for_wait_state(controller).await;
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Updating);
+        assert_eq!(
+            controller.state,
+            AzureFunctionState::UpdateRunningReadinessProbe
+        );
+        assert_eq!(step_result.suggested_delay, None);
+        assert_eq!(controller.ready_rbac_wait_until_epoch_secs, None);
+        assert!(!controller.update_rbac_wait_required);
+
+        let step_result = executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AzureFunctionController>()
+            .unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(controller.state, AzureFunctionState::Ready);
+        assert_eq!(step_result.suggested_delay, None);
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
@@ -4263,6 +4914,10 @@ mod tests {
             commands_dapr_component: None,
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
+            commands_infrastructure_auth_wait_until_epoch_secs: None,
+            pre_container_app_rbac_wait_until_epoch_secs: None,
+            ready_rbac_wait_until_epoch_secs: None,
+            update_rbac_wait_required: false,
             _internal_stay_count: None,
         };
 

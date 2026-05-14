@@ -1,6 +1,6 @@
 # OutputsTerraform
 
-Outputs from a Terraform provider package build
+Outputs from a Terraform package build.
 
 ## Example Usage
 
@@ -8,19 +8,23 @@ Outputs from a Terraform provider package build
 import { OutputsTerraform } from "@alienplatform/platform-api/models";
 
 let value: OutputsTerraform = {
-  gpgPublicKey: {
-    asciiArmor: "<value>",
-    keyId: "<id>",
+  modules: {},
+  provider: {
+    gpgPublicKey: {
+      asciiArmor: "<value>",
+      keyId: "<id>",
+    },
+    platforms: {},
+    source: "<value>",
   },
-  platforms: {},
   type: "terraform",
 };
 ```
 
 ## Fields
 
-| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `gpgPublicKey`                                                           | [models.PackageGpgPublicKey](../models/packagegpgpublickey.md)           | :heavy_check_mark:                                                       | GPG public key for Terraform provider signature verification             |
-| `platforms`                                                              | Record<string, [models.PackagePlatforms](../models/packageplatforms.md)> | :heavy_check_mark:                                                       | Provider packages for each target platform                               |
-| `type`                                                                   | [models.OutputsTypeTerraform](../models/outputstypeterraform.md)         | :heavy_check_mark:                                                       | N/A                                                                      |
+| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `modules`                                                            | Record<string, [models.PackageModules](../models/packagemodules.md)> | :heavy_check_mark:                                                   | Module registry artifacts by Terraform target.                       |
+| `provider`                                                           | [models.PackageProvider](../models/packageprovider.md)               | :heavy_check_mark:                                                   | Terraform provider registry outputs.                                 |
+| `type`                                                               | [models.OutputsTypeTerraform](../models/outputstypeterraform.md)     | :heavy_check_mark:                                                   | N/A                                                                  |

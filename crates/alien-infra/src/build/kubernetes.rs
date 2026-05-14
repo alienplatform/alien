@@ -697,9 +697,9 @@ impl KubernetesBuildController {
     ) -> Result<Job> {
         let labels = self.build_labels(job_name);
 
-        let env_builder = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_container_transport_env_vars()
+        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_standard_alien_env_vars(ctx)?
+            .add_passthrough_transport_env_vars()
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 

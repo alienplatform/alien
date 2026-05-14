@@ -46,7 +46,7 @@ pub async fn check_all_bindings(
             Binding::Sse => bindings::check_sse(deployment).await?,
             Binding::Environment => bindings::check_environment(deployment).await?,
             Binding::Inspect => bindings::check_inspect(deployment).await?,
-            Binding::ExternalSecret => bindings::check_external_secret(deployment).await?,
+            Binding::ManagedSecret => bindings::check_managed_secret(deployment).await?,
             Binding::Events => bindings::check_events(deployment).await?,
             Binding::Storage => bindings::check_storage(deployment).await?,
             Binding::Kv => bindings::check_kv(deployment).await?,

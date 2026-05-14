@@ -10,6 +10,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 export type ScopeInfo = {
   deploymentGroupId?: string | null | undefined;
   deploymentId?: string | null | undefined;
+  projectId?: string | null | undefined;
   type: string;
 };
 
@@ -17,6 +18,7 @@ export type ScopeInfo = {
 export const ScopeInfo$inboundSchema: z.ZodType<ScopeInfo, unknown> = z.object({
   deploymentGroupId: z.nullable(z.string()).optional(),
   deploymentId: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
   type: z.string(),
 });
 

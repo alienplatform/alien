@@ -12,14 +12,17 @@ let value: Package = {
   type: "cloudformation",
   status: "building",
   version: "<value>",
+  sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  setupFingerprints: {},
+  packageGeneratorContractVersion: "<value>",
   config: {
-    displayName: "Augustine.Bashirian",
+    displayName: "Cooper58",
     name: "<value>",
     type: "cli",
   },
-  retries: 879999,
-  createdAt: new Date("2026-08-16T22:11:42.848Z"),
-  updatedAt: new Date("2025-04-23T18:44:16.436Z"),
+  retries: 874932,
+  createdAt: new Date("2025-04-23T18:44:16.436Z"),
+  updatedAt: new Date("2024-02-03T09:51:05.659Z"),
 };
 ```
 
@@ -33,6 +36,9 @@ let value: Package = {
 | `type`                                                                                        | [models.PackageTypeEnum](../models/packagetypeenum.md)                                        | :heavy_check_mark:                                                                            | Types of packages that can be built                                                           |                                                                                               |
 | `status`                                                                                      | [models.PackageStatus](../models/packagestatus.md)                                            | :heavy_check_mark:                                                                            | Status of a package build                                                                     |                                                                                               |
 | `version`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | Package version (e.g., '1.0.0', 'rel_abc123')                                                 |                                                                                               |
+| `sourceReleaseId`                                                                             | *string*                                                                                      | :heavy_check_mark:                                                                            | Release used as package build input                                                           | rel_WbhQgksrawSKIpEN0NAssHX9                                                                  |
+| `setupFingerprints`                                                                           | Record<string, [models.SetupFingerprintInfo](../models/setupfingerprintinfo.md)>              | :heavy_check_mark:                                                                            | Per-target setup compatibility fingerprints copied from the source release                    |                                                                                               |
+| `packageGeneratorContractVersion`                                                             | *string*                                                                                      | :heavy_check_mark:                                                                            | Package generator contract/hash version used to decide rebuild compatibility                  |                                                                                               |
 | `config`                                                                                      | *models.Config*                                                                               | :heavy_check_mark:                                                                            | Type-specific configuration                                                                   |                                                                                               |
 | `outputs`                                                                                     | *models.PackageOutputsUnion*                                                                  | :heavy_minus_sign:                                                                            | Package outputs (only when status is 'ready')                                                 |                                                                                               |
 | `error`                                                                                       | *any*                                                                                         | :heavy_minus_sign:                                                                            | Error information if status is 'failed'                                                       |                                                                                               |

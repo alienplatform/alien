@@ -861,10 +861,9 @@ mod oauth_flow {
                 let content = serde_json::to_string_pretty(store).map_err(|e| {
                     DebugKeyringError(format!("Failed to serialize keyring: {}", e))
                 })?;
-                alien_core::file_utils::write_secret_file(&path, content.as_bytes())
-                    .map_err(|e| {
-                        DebugKeyringError(format!("Failed to write keyring file: {}", e))
-                    })?;
+                alien_core::file_utils::write_secret_file(&path, content.as_bytes()).map_err(
+                    |e| DebugKeyringError(format!("Failed to write keyring file: {}", e)),
+                )?;
                 Ok(())
             }
         }

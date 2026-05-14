@@ -55,8 +55,8 @@ fn test_aws_cloudformation_intrinsic_functions() {
 
     // Check that resources contain Fn::Sub for CloudFormation variables
     let expected_resources = vec![
-        json!({"Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*"}),
-        json!({"Fn::Sub": "arn:aws:s3:::${AWS::StackName}-*/*"}),
+        json!({"Fn::Sub": "arn:${AWS::Partition}:s3:::${AWS::StackName}-*"}),
+        json!({"Fn::Sub": "arn:${AWS::Partition}:s3:::${AWS::StackName}-*/*"}),
     ];
     assert_eq!(first_statement.resource, expected_resources);
 }
@@ -74,8 +74,8 @@ fn test_aws_cloudformation_resource_references() {
     // Verify that resource-level binding substitutes resourceName in ARN context
     let first_statement = &result.statement[0];
     let expected_resources = vec![
-        json!("arn:aws:s3:::PaymentsDataBucket"),
-        json!("arn:aws:s3:::PaymentsDataBucket/*"),
+        json!({"Fn::Sub": "arn:${AWS::Partition}:s3:::PaymentsDataBucket"}),
+        json!({"Fn::Sub": "arn:${AWS::Partition}:s3:::PaymentsDataBucket/*"}),
     ];
     assert_eq!(first_statement.resource, expected_resources);
 }
@@ -216,6 +216,7 @@ fn test_aws_cloudformation_managing_account_id_substitution() {
 
     // The ECR statement should have the managing account ID as a CloudFormation parameter reference
     let ecr_statement = &result.statement[1];
-    let expected_resource = json!({"Fn::Sub": "arn:aws:ecr:*:${ManagingAccountId}:repository/*"});
+    let expected_resource =
+        json!({"Fn::Sub": "arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*"});
     assert_eq!(ecr_statement.resource[0], expected_resource);
 }

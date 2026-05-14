@@ -26,9 +26,9 @@ use crate::commands::{
     commands_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, onboard_task, prepare_dev_session_deployment,
-    release_command, vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs,
-    CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, OnboardArgs,
-    ReleaseArgs, WhoamiArgs,
+    release_command, render_task, vault_remote_task, vault_task, whoami_task, write_dev_status,
+    BuildArgs, CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs,
+    OnboardArgs, ReleaseArgs, RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -83,6 +83,7 @@ impl Cli {
         match &self.command {
             Some(Commands::Build(args)) => args.json,
             Some(Commands::Release(args)) => args.json,
+            Some(Commands::Render(args)) => args.json,
             Some(Commands::Onboard(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
             Some(Commands::Dev(dev)) => match &dev.subcommand {
@@ -113,6 +114,8 @@ pub enum Commands {
     Build(BuildArgs),
     /// Push images and create a release
     Release(ReleaseArgs),
+    /// Render setup artifacts for review
+    Render(RenderArgs),
     /// Create a deployment group and generate a deployment link
     Onboard(OnboardArgs),
     /// Deployment commands
@@ -507,11 +510,13 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Bootstrap admin token — DB is the source of truth.
     // The plaintext token is only shown on first generation (like AWS/Stripe API keys).
     let legacy_token_path = state_dir.join("admin-token");
-    let existing_tokens = token_store.list_tokens().await.context(
-        ErrorData::ServerStartFailed {
-            reason: "Failed to list tokens".to_string(),
-        },
-    )?;
+    let existing_tokens =
+        token_store
+            .list_tokens()
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to list tokens".to_string(),
+            })?;
     let existing_admin = existing_tokens
         .iter()
         .find(|t| t.token_type == TokenType::Admin);
@@ -632,11 +637,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     println!("  {} {}", dim_label("Manager URL"), accent(&manager_url));
     if generated_token.is_none() {
         if let Some(ref prefix) = admin_prefix {
-            println!(
-                "  {} {}…",
-                dim_label("Admin token"),
-                accent(prefix),
-            );
+            println!("  {} {}…", dim_label("Admin token"), accent(prefix),);
         }
     }
 
@@ -646,10 +647,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
             "  {}",
             dim_label(&format!("export ALIEN_MANAGER_URL={manager_url}"))
         );
-        println!(
-            "  {}",
-            dim_label(&format!("export ALIEN_API_KEY={token}"))
-        );
+        println!("  {}", dim_label(&format!("export ALIEN_API_KEY={token}")));
     } else {
         println!(
             "  {}",
@@ -663,16 +661,11 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
         dim_label("Next"),
         command("alien release --platform aws")
     );
-    println!(
-        "        {}",
-        command("alien onboard <customer-name>")
-    );
+    println!("        {}", command("alien onboard <customer-name>"));
     println!();
 
     // Spawn server in background so we can run the deployment watch loop
-    let server_handle = tokio::spawn(async move {
-        server.start(addr).await
-    });
+    let server_handle = tokio::spawn(async move { server.start(addr).await });
 
     // Watch deployments until Ctrl+C or server exit
     watch_serve_deployments(deployment_store, server_handle).await
@@ -692,10 +685,10 @@ async fn watch_serve_deployments(
         std::result::Result<(), alien_error::AlienError<alien_manager::error::ErrorData>>,
     >,
 ) -> Result<()> {
-    use alien_manager::traits::DeploymentFilter;
     use crate::ui::{
         render_deployment_cards, render_serve_actions_footer, supports_ansi, LiveRegion,
     };
+    use alien_manager::traits::DeploymentFilter;
 
     let is_tty = supports_ansi();
     let live = if is_tty {
@@ -815,10 +808,7 @@ fn deployment_record_to_card(
                 .iter()
                 .map(|(name, res)| DevResourceEntry {
                     name: name.clone(),
-                    url: Some(
-                        crate::ui::format_resource_status(res.status)
-                            .to_ascii_lowercase(),
-                    ),
+                    url: Some(crate::ui::format_resource_status(res.status).to_ascii_lowercase()),
                 })
                 .collect();
             entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -826,10 +816,7 @@ fn deployment_record_to_card(
         })
         .unwrap_or_default();
 
-    let error = record
-        .error
-        .as_ref()
-        .and_then(deployment_error_message);
+    let error = record.error.as_ref().and_then(deployment_error_message);
 
     // Show group_name/deployment_name so the user knows which project a deployment belongs to
     let card_name = match group_names.get(&record.deployment_group_id) {
@@ -1378,6 +1365,12 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return serve_task(args).await;
     }
 
+    // Handle render command early — it only reads local stack files and writes
+    // artifacts; it does not need auth or a manager connection.
+    if let Some(Commands::Render(args)) = cli.command {
+        return render_task(args).await;
+    }
+
     // Handle dev command early — it creates its own execution context.
     if let Some(Commands::Dev(dev_cmd)) = cli.command {
         return handle_dev_command(dev_cmd).await;
@@ -1437,6 +1430,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             }
             Some(Commands::Init(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Serve(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Build(args)) => build_command(args).await?,
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,

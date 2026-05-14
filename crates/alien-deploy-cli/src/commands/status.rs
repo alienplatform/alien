@@ -34,7 +34,7 @@ pub async fn status_command(args: StatusArgs) -> Result<()> {
         AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
             message: format!(
-                "Deployment '{}' is not tracked. Use 'alien-deploy up' first.",
+                "Deployment '{}' is not tracked. Use 'alien-deploy deploy' first.",
                 args.name
             ),
         })

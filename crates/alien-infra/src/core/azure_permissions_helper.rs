@@ -26,6 +26,21 @@ use uuid::Uuid;
 pub struct AzurePermissionsHelper;
 
 impl AzurePermissionsHelper {
+    fn role_definition_scope_for_assignment_scope(scope: &Scope) -> Scope {
+        match scope {
+            Scope::Resource {
+                resource_group_name,
+                ..
+            }
+            | Scope::ResourceGroup {
+                resource_group_name,
+            } => Scope::ResourceGroup {
+                resource_group_name: resource_group_name.clone(),
+            },
+            Scope::Subscription => Scope::Subscription,
+        }
+    }
+
     /// Apply resource-scoped permissions to an Azure resource
     ///
     /// This method:
@@ -95,28 +110,11 @@ impl AzurePermissionsHelper {
             }
         }
 
-        // Process management SA permissions at resource-group scope (not resource scope).
-        // Management operations often involve linked resources (e.g., Container Apps
-        // need `managedEnvironments/join/action` on the environment, not the app itself).
-        // Using RG scope ensures the management SA can act on all related resources.
-        let rg_scope = match &resource_scope {
-            Scope::Resource {
-                resource_group_name,
-                ..
-            }
-            | Scope::ResourceGroup {
-                resource_group_name,
-            } => Scope::ResourceGroup {
-                resource_group_name: resource_group_name.clone(),
-            },
-            // For subscription scope, keep as-is
-            other => other.clone(),
-        };
         Self::apply_management_permissions(
             ctx,
             resource_id,
             resource_type,
-            &rg_scope,
+            &resource_scope,
             permission_context,
         )
         .await?;
@@ -145,12 +143,15 @@ impl AzurePermissionsHelper {
         // Sets are independent (different UUIDs), so they can run concurrently.
         // All operations are idempotent (deterministic UUIDs + create_or_update).
         let azure_config = ctx.get_azure_config()?;
+        let role_definition_scope =
+            Self::role_definition_scope_for_assignment_scope(resource_scope);
 
         let futures = permission_set_refs.iter().map(|permission_set_ref| {
             let authorization_client = authorization_client.clone();
             let managed_identity_id = managed_identity_id.clone();
             let managed_identity_principal_id = managed_identity_principal_id.clone();
             let azure_config = azure_config.clone();
+            let role_definition_scope = role_definition_scope.clone();
 
             async move {
                 let permission_set = permission_set_ref
@@ -179,13 +180,10 @@ impl AzurePermissionsHelper {
                         resource_id: Some(profile_name.to_string()),
                     })?;
 
-                // Use subscription-level assignableScopes as recommended by Azure.
-                // A subscription scope allows assignment at any child scope
-                // (resource groups, individual resources) within that subscription,
-                // and avoids propagation delays when adding new resource scopes.
-                let subscription_scope =
-                    format!("/{}", Scope::Subscription.to_scope_string(&azure_config));
-                azure_role_definition.assignable_scopes = vec![subscription_scope];
+                let role_definition_scope_string =
+                    format!("/{}", role_definition_scope.to_scope_string(&azure_config));
+                azure_role_definition.assignable_scopes =
+                    vec![role_definition_scope_string.clone()];
 
                 info!(
                     profile = %profile_name,
@@ -210,6 +208,7 @@ impl AzurePermissionsHelper {
 
                 Self::create_or_update_role_definition(
                     &authorization_client,
+                    &role_definition_scope,
                     &role_definition_id,
                     &azure_role_definition,
                 )
@@ -241,7 +240,7 @@ impl AzurePermissionsHelper {
 
                 let full_role_definition_id = format!(
                     "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                    Scope::Subscription.to_scope_string(&azure_config),
+                    role_definition_scope.to_scope_string(&azure_config),
                     role_definition_id
                 );
 
@@ -286,11 +285,10 @@ impl AzurePermissionsHelper {
     /// idempotent — no GET-then-merge needed.
     async fn create_or_update_role_definition(
         authorization_client: &Arc<dyn AuthorizationApi>,
+        scope: &Scope,
         role_definition_id: &str,
         azure_role_definition: &alien_permissions::generators::AzureRoleDefinition,
     ) -> Result<()> {
-        let scope = Scope::Subscription;
-
         let role_definition = RoleDefinition {
             id: None,
             name: None,
@@ -315,7 +313,7 @@ impl AzurePermissionsHelper {
 
         authorization_client
             .create_or_update_role_definition(
-                &scope,
+                scope,
                 role_definition_id.to_string(),
                 &role_definition,
             )
@@ -433,6 +431,8 @@ impl AzurePermissionsHelper {
         let authorization_client = ctx
             .service_provider
             .get_azure_authorization_client(azure_config)?;
+        let role_definition_scope =
+            Self::role_definition_scope_for_assignment_scope(resource_scope);
 
         // Parallelize management permission sets — each set creates a role
         // definition then a role assignment. Sets are independent (different
@@ -441,6 +441,7 @@ impl AzurePermissionsHelper {
             let authorization_client = authorization_client.clone();
             let management_principal_id = management_principal_id.clone();
             let azure_config = azure_config.clone();
+            let role_definition_scope = role_definition_scope.clone();
 
             async move {
                 let generator = AzureRuntimePermissionsGenerator::new();
@@ -459,7 +460,7 @@ impl AzurePermissionsHelper {
                 let mut azure_role_definition = generator
                     .generate_role_definition(
                         &permission_set,
-                        BindingTarget::Stack,
+                        BindingTarget::Resource,
                         permission_context,
                     )
                     .context(ErrorData::CloudPlatformError {
@@ -475,9 +476,10 @@ impl AzurePermissionsHelper {
                 // profiles reference the same permission set.
                 azure_role_definition.name = format!("{} [mgmt]", azure_role_definition.name);
 
-                let subscription_scope =
-                    format!("/{}", Scope::Subscription.to_scope_string(&azure_config));
-                azure_role_definition.assignable_scopes = vec![subscription_scope];
+                let role_definition_scope_string =
+                    format!("/{}", role_definition_scope.to_scope_string(&azure_config));
+                azure_role_definition.assignable_scopes =
+                    vec![role_definition_scope_string.clone()];
 
                 // Deterministic UUID keyed on (prefix, permission_set) — NOT on
                 // resource_id — so every resource shares the same management role
@@ -501,6 +503,7 @@ impl AzurePermissionsHelper {
 
                 Self::create_or_update_role_definition(
                     &authorization_client,
+                    &role_definition_scope,
                     &role_definition_id,
                     &azure_role_definition,
                 )
@@ -521,18 +524,15 @@ impl AzurePermissionsHelper {
 
                 let full_role_definition_id = format!(
                     "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                    Scope::Subscription.to_scope_string(&azure_config),
+                    role_definition_scope.to_scope_string(&azure_config),
                     role_definition_id
                 );
 
-                // UUID excludes resource_id because management assignments are at RG scope:
-                // multiple resources sharing the same (role_definition, principal, scope)
-                // must use the SAME assignment UUID to avoid Azure 409 RoleAssignmentExists.
                 let role_assignment_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "alien:azure:mgmt-rg-role-assign:{}:{}",
-                        ctx.resource_prefix, permission_set.id
+                        "alien:azure:mgmt-res-role-assign:{}:{}:{}",
+                        ctx.resource_prefix, resource_id, permission_set.id
                     )
                     .as_bytes(),
                 )

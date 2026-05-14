@@ -36,8 +36,8 @@ export {
  * Represents a long-running container workload.
  *
  * Containers run on compute instances (EC2, GCE, Azure VMs) and are orchestrated
- * by Horizon. They're designed for always-on workloads like web services, APIs,
- * databases, and background workers.
+ * by the managed container backend. They're designed for always-on workloads
+ * like web services, APIs, databases, and background workers.
  */
 export class Container {
   private _config: Partial<ContainerConfig> = {

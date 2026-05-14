@@ -46,6 +46,7 @@ impl DeploymentLoopTransport for AgentTransport {
         _config: &alien_core::DeploymentConfig,
         _step_error: Option<&AlienError>,
         _update_heartbeat: bool,
+        _suggested_delay_ms: Option<u64>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
         // Persist state to local DB after each step
         self.db
@@ -343,7 +344,7 @@ async fn resolve_client_config(
     platform: Platform,
     data_dir: &str,
     namespace: Option<String>,
-    sync_config: Option<&crate::config::SyncConfig>,
+    _sync_config: Option<&crate::config::SyncConfig>,
 ) -> Result<ClientConfig> {
     match platform {
         Platform::Kubernetes => {

@@ -165,8 +165,9 @@ fn parse_stacks_from_request(
     let mut stacks = HashMap::new();
     for (platform, value) in &platforms {
         if let Some(v) = value {
-            let parsed: Stack = serde_json::from_value(v.clone())
-                .map_err(|e| ErrorData::bad_request(format!("Invalid stack format for {}: {}", platform, e)))?;
+            let parsed: Stack = serde_json::from_value(v.clone()).map_err(|e| {
+                ErrorData::bad_request(format!("Invalid stack format for {}: {}", platform, e))
+            })?;
             stacks.insert(*platform, parsed);
         }
     }

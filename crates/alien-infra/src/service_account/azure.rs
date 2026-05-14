@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
@@ -32,6 +32,44 @@ fn get_azure_custom_role_name(prefix: &str, name: &str) -> String {
     format!("{}-{}-role", prefix, name)
 }
 
+#[cfg(not(test))]
+const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 10;
+#[cfg(test)]
+const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 0;
+
+#[cfg(not(test))]
+const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 60;
+#[cfg(test)]
+const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
+
+const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
+const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+
+fn current_unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn ensure_wait_deadline(wait_until_epoch_secs: &mut Option<u64>, wait_secs: u64) -> u64 {
+    let now = current_unix_timestamp_secs();
+    *wait_until_epoch_secs.get_or_insert_with(|| now.saturating_add(wait_secs))
+}
+
+fn wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
+    let now = current_unix_timestamp_secs();
+    let remaining = deadline_epoch_secs.saturating_sub(now);
+
+    if remaining == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(
+            remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
+        ))
+    }
+}
+
 #[controller]
 pub struct AzureServiceAccountController {
     /// The resource ID of the created user-assigned managed identity.
@@ -46,6 +84,12 @@ pub struct AzureServiceAccountController {
     pub(crate) role_assignment_ids: Vec<String>,
     /// Whether stack-level permissions have been applied
     pub(crate) stack_permissions_applied: bool,
+    /// Deadline before using the newly created managed identity in role assignments.
+    #[serde(default)]
+    pub(crate) managed_identity_wait_until_epoch_secs: Option<u64>,
+    /// Deadline before marking role assignments consumer-visible.
+    #[serde(default)]
+    pub(crate) role_assignment_wait_until_epoch_secs: Option<u64>,
 }
 
 #[controller]
@@ -66,6 +110,9 @@ impl AzureServiceAccountController {
         let resource_group_name =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let identity_name = get_azure_managed_identity_name(ctx.resource_prefix, &config.id);
+
+        self.managed_identity_wait_until_epoch_secs = None;
+        self.role_assignment_wait_until_epoch_secs = None;
 
         let azure_cfg = ctx.get_azure_config()?;
         let location = azure_cfg.region.as_deref().unwrap_or("eastus");
@@ -139,11 +186,45 @@ impl AzureServiceAccountController {
         self.identity_client_id = Some(client_id.to_string());
         self.identity_principal_id = Some(principal_id.to_string());
 
-        info!("Waiting 30 seconds for managed identity to propagate across Azure tenants");
+        info!("Waiting for managed identity to propagate across Azure tenants");
 
         Ok(HandlerAction::Continue {
+            state: WaitingForManagedIdentityPropagation,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = WaitingForManagedIdentityPropagation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_managed_identity_propagation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let deadline = ensure_wait_deadline(
+            &mut self.managed_identity_wait_until_epoch_secs,
+            AZURE_MANAGED_IDENTITY_WAIT_SECS,
+        );
+
+        if let Some(delay) = wait_delay(deadline) {
+            info!(
+                config_id = %config.id,
+                remaining_secs = deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure managed identity propagation"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.managed_identity_wait_until_epoch_secs = None;
+        Ok(HandlerAction::Continue {
             state: CreatingRoleDefinitions,
-            suggested_delay: Some(std::time::Duration::from_secs(30)),
+            suggested_delay: None,
         })
     }
 
@@ -476,6 +557,48 @@ impl AzureServiceAccountController {
 
         self.stack_permissions_applied = true;
 
+        if self.role_assignment_ids.is_empty() {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
+        self.role_assignment_wait_until_epoch_secs = None;
+        Ok(HandlerAction::Continue {
+            state: WaitingForRbacPropagation,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = WaitingForRbacPropagation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_rbac_propagation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let deadline = ensure_wait_deadline(
+            &mut self.role_assignment_wait_until_epoch_secs,
+            AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS,
+        );
+
+        if let Some(delay) = wait_delay(deadline) {
+            info!(
+                config_id = %config.id,
+                remaining_secs = deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure role assignment propagation"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.role_assignment_wait_until_epoch_secs = None;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -613,6 +736,48 @@ impl AzureServiceAccountController {
             );
         }
 
+        if self.role_assignment_ids.is_empty() {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            })
+        } else {
+            self.role_assignment_wait_until_epoch_secs = None;
+            Ok(HandlerAction::Continue {
+                state: UpdateWaitingForRbacPropagation,
+                suggested_delay: None,
+            })
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForRbacPropagation,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_rbac_propagation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let deadline = ensure_wait_deadline(
+            &mut self.role_assignment_wait_until_epoch_secs,
+            AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS,
+        );
+
+        if let Some(delay) = wait_delay(deadline) {
+            info!(
+                config_id = %config.id,
+                remaining_secs = deadline.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting for Azure role assignment propagation after update"
+            );
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+
+        self.role_assignment_wait_until_epoch_secs = None;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -798,6 +963,8 @@ impl AzureServiceAccountController {
         self.identity_client_id = None;
         self.identity_principal_id = None;
         self.stack_permissions_applied = false;
+        self.managed_identity_wait_until_epoch_secs = None;
+        self.role_assignment_wait_until_epoch_secs = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -972,6 +1139,8 @@ impl AzureServiceAccountController {
             custom_role_definition_ids: vec!["/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Authorization/roleDefinitions/test-role".to_string()],
             role_assignment_ids: vec!["/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.Authorization/roleAssignments/test-assignment".to_string()],
             stack_permissions_applied: true,
+            managed_identity_wait_until_epoch_secs: None,
+            role_assignment_wait_until_epoch_secs: None,
             _internal_stay_count: None,
         }
     }

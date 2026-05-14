@@ -1,0 +1,158 @@
+---
+source: crates/alien-cloudformation/tests/generator/registration_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: registration custom resource
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - DeploymentGroupToken
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Domains
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      CertificateArn:
+        default: Certificate ARN
+      DeploymentGroupToken:
+        default: Deployment group token
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager AWS account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+Parameters:
+  DeploymentGroupToken:
+    Type: String
+    Description: Deployment-group token used when registering the resolved stack import.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Default: ''
+  DomainName:
+    Type: String
+    Description: Optional domain name for public endpoints. Empty disables custom domains.
+  HostedZoneId:
+    Type: String
+    Description: Optional Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: Optional ACM certificate ARN for the domain.
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - "off"
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-logs-bucket
+  DeploymentStackImport:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
+      DeploymentGroupToken:
+        Ref: DeploymentGroupToken
+      DeploymentName:
+        Ref: AWS::StackName
+      StackPrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupFingerprint: test
+      SetupFingerprintVersion: '1'
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+      Resources:
+      - id: logs-bucket
+        type: sample-resource
+        importData:
+          bucketName:
+            Ref: LogsBucket
+          bucketArn:
+            Fn::GetAtt:
+            - LogsBucket
+            - Arn
+    DependsOn:
+    - LogsBucket

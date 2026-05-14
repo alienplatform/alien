@@ -6,8 +6,9 @@ terraform {
       configuration_aliases = [azurerm.management, azurerm.target]
     }
     azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.0"
+      source                = "hashicorp/azuread"
+      version               = "~> 3.0"
+      configuration_aliases = [azuread.management]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
@@ -82,9 +83,9 @@ resource "azurerm_container_app_environment" "shared_target" {
   location            = azurerm_resource_group.shared_target.location
 }
 
-# Custom role that allows joining the shared environment. Created once here;
-# the test harness assigns it to each deployment's management UAMI after
-# InitialSetup (when the UAMI exists but before Provisioning needs it).
+# Custom role that allows using the shared environment. Created once here; the
+# test harness assigns it to each deployment's management UAMI after InitialSetup
+# (when the UAMI exists but before Provisioning needs it).
 resource "azurerm_role_definition" "shared_env_join" {
   provider = azurerm.target
   name     = "alien-e2e-env-join-${random_id.suffix.hex}"
@@ -94,6 +95,9 @@ resource "azurerm_role_definition" "shared_env_join" {
     actions = [
       "Microsoft.App/managedEnvironments/read",
       "Microsoft.App/managedEnvironments/join/action",
+      "Microsoft.App/managedEnvironments/daprComponents/delete",
+      "Microsoft.App/managedEnvironments/daprComponents/read",
+      "Microsoft.App/managedEnvironments/daprComponents/write",
     ]
   }
 
@@ -129,19 +133,56 @@ data "azurerm_client_config" "management" {
 # In production/CI, OIDC token exchange replaces this SP entirely.
 
 resource "azuread_application" "manager" {
+  provider         = azuread.management
   display_name     = "alien-test-manager"
   sign_in_audience = "AzureADMultipleOrgs"
   owners           = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_service_principal" "manager" {
+  provider  = azuread.management
   client_id = azuread_application.manager.client_id
   owners    = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_application_password" "manager" {
+  provider       = azuread.management
   application_id = azuread_application.manager.id
   display_name   = "alien-test"
+}
+
+# Drop historical managed cloud-pull identities from state without requiring
+# directory delete privileges. The current e2e flows do not use these resources.
+removed {
+  from = azuread_application.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_application_password.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_service_principal.agent
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azuread_service_principal.target_agent
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # GitHub Actions OIDC federation — lets the Terraform execution SP
@@ -155,10 +196,12 @@ resource "azuread_application_password" "manager" {
 # (push to main, pull_request, workflow_dispatch on a feature branch all
 # match). This avoids per-branch FIC churn or hardcoding branch names.
 data "azuread_application" "terraform_bootstrap" {
+  provider  = azuread.management
   client_id = var.management_client_id
 }
 
 resource "azuread_application_federated_identity_credential" "github_environment" {
+  provider       = azuread.management
   application_id = data.azuread_application.terraform_bootstrap.id
   display_name   = "github-actions-e2e-tests"
   issuer         = "https://token.actions.githubusercontent.com"
@@ -185,16 +228,19 @@ resource "azurerm_role_assignment" "mgmt_sp_user_access_admin" {
 # Separate service principals for ACR operations, scoped to the ACR resource.
 
 resource "azuread_application" "acr_pull" {
+  provider     = azuread.management
   display_name = "alien-test-acr-pull"
   owners       = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_service_principal" "acr_pull" {
+  provider  = azuread.management
   client_id = azuread_application.acr_pull.client_id
   owners    = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_application_password" "acr_pull" {
+  provider       = azuread.management
   application_id = azuread_application.acr_pull.id
   display_name   = "alien-test"
 }
@@ -207,16 +253,19 @@ resource "azurerm_role_assignment" "acr_pull" {
 }
 
 resource "azuread_application" "acr_push" {
+  provider     = azuread.management
   display_name = "alien-test-acr-push"
   owners       = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_service_principal" "acr_push" {
+  provider  = azuread.management
   client_id = azuread_application.acr_push.client_id
   owners    = [data.azurerm_client_config.management.object_id]
 }
 
 resource "azuread_application_password" "acr_push" {
+  provider       = azuread.management
   application_id = azuread_application.acr_push.id
   display_name   = "alien-test"
 }

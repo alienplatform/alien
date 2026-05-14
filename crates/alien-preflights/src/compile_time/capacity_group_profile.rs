@@ -5,7 +5,7 @@
 //! ContainerClusterMutation always populates these fields. This check catches the
 //! case where a user manually defines a ContainerCluster without profiles, which
 //! would cause a provisioning failure when the infra controller tries to create
-//! the Horizon cluster or launch instances.
+//! the managed container cluster or launch instances.
 //!
 //! NOTE: This check runs on the mutated stack (after mutations), so it validates
 //! both user-defined and auto-generated clusters. It is registered as a runtime
@@ -57,7 +57,7 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
                 if group.profile.is_none() {
                     errors.push(format!(
                         "ContainerCluster '{}' capacity group '{}': profile is not set. \
-                        This is required for cloud platforms (Horizon needs the machine profile \
+                        This is required for cloud platforms (the managed container backend needs the machine profile \
                         for capacity planning). If using an auto-generated cluster, this should \
                         be resolved by ContainerClusterMutation.",
                         resource_id, group.group_id

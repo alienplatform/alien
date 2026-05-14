@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import * as models from "../index.js";
 
 export type DeleteDeploymentRequest = {
   /**
@@ -13,12 +14,17 @@ export type DeleteDeploymentRequest = {
    * Force delete without running cleanup (immediately removes record)
    */
   force?: boolean | undefined;
+  /**
+   * Delete scope: full or liveOnly
+   */
+  deleteScope?: models.DeleteScope | undefined;
 };
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
   force?: boolean | undefined;
+  deleteScope?: string | undefined;
 };
 
 /** @internal */
@@ -28,6 +34,7 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   force: z.boolean().optional(),
+  deleteScope: models.DeleteScope$outboundSchema.optional(),
 });
 
 export function deleteDeploymentRequestToJSON(

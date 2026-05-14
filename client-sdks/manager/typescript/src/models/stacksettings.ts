@@ -3,29 +3,41 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentModel,
+  DeploymentModel$inboundSchema,
   DeploymentModel$outboundSchema,
 } from "./deploymentmodel.js";
 import {
   DomainSettings,
+  DomainSettings$inboundSchema,
   DomainSettings$Outbound,
   DomainSettings$outboundSchema,
 } from "./domainsettings.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   HeartbeatsMode,
+  HeartbeatsMode$inboundSchema,
   HeartbeatsMode$outboundSchema,
 } from "./heartbeatsmode.js";
 import {
   NetworkSettings,
+  NetworkSettings$inboundSchema,
   NetworkSettings$Outbound,
   NetworkSettings$outboundSchema,
 } from "./networksettings.js";
 import {
   TelemetryMode,
+  TelemetryMode$inboundSchema,
   TelemetryMode$outboundSchema,
 } from "./telemetrymode.js";
-import { UpdatesMode, UpdatesMode$outboundSchema } from "./updatesmode.js";
+import {
+  UpdatesMode,
+  UpdatesMode$inboundSchema,
+  UpdatesMode$outboundSchema,
+} from "./updatesmode.js";
 
 /**
  * External bindings for pre-existing infrastructure.
@@ -80,6 +92,11 @@ export type StackSettings = {
 };
 
 /** @internal */
+export const ExternalBindings$inboundSchema: z.ZodType<
+  ExternalBindings,
+  unknown
+> = z.object({});
+/** @internal */
 export type ExternalBindings$Outbound = {};
 
 /** @internal */
@@ -95,7 +112,28 @@ export function externalBindingsToJSON(
     ExternalBindings$outboundSchema.parse(externalBindings),
   );
 }
+export function externalBindingsFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindings' from JSON`,
+  );
+}
 
+/** @internal */
+export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
+  .object({
+    deploymentModel: DeploymentModel$inboundSchema.optional(),
+    domains: z.nullable(DomainSettings$inboundSchema).optional(),
+    externalBindings: z.nullable(z.lazy(() => ExternalBindings$inboundSchema))
+      .optional(),
+    heartbeats: HeartbeatsMode$inboundSchema.optional(),
+    network: z.nullable(NetworkSettings$inboundSchema).optional(),
+    telemetry: TelemetryMode$inboundSchema.optional(),
+    updates: UpdatesMode$inboundSchema.optional(),
+  });
 /** @internal */
 export type StackSettings$Outbound = {
   deploymentModel?: string | undefined;
@@ -124,4 +162,13 @@ export const StackSettings$outboundSchema: z.ZodType<
 
 export function stackSettingsToJSON(stackSettings: StackSettings): string {
   return JSON.stringify(StackSettings$outboundSchema.parse(stackSettings));
+}
+export function stackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<StackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StackSettings' from JSON`,
+  );
 }

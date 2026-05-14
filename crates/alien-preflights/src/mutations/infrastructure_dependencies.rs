@@ -56,13 +56,15 @@ impl StackMutation for InfrastructureDependenciesMutation {
             if let Some(entry) = stack.resources.get_mut(&resource_id) {
                 let resource_type = entry.config.resource_type();
 
-                // Skip infrastructure resources themselves
-                if self.is_infrastructure_resource(&resource_id, Some(&resource_type)) {
-                    continue;
-                }
-
-                // Add global dependencies
+                // Add global dependencies before the infrastructure-resource
+                // check. Azure infrastructure resources such as managed
+                // identities, role definitions, storage accounts, and service
+                // bus namespaces still live inside the deployment resource
+                // group and must wait for it.
                 for global_dep in &global_deps {
+                    if global_dep.id() == resource_id {
+                        continue;
+                    }
                     if !entry.dependencies.contains(global_dep) {
                         entry.dependencies.push(global_dep.clone());
                         debug!(
@@ -70,6 +72,13 @@ impl StackMutation for InfrastructureDependenciesMutation {
                             global_dep, resource_id
                         );
                     }
+                }
+
+                // Skip resource-specific dependencies for infrastructure
+                // resources themselves; the global dependencies above are
+                // still required.
+                if self.is_infrastructure_resource(&resource_id, Some(&resource_type)) {
+                    continue;
                 }
 
                 // Add resource-specific dependencies
@@ -288,5 +297,104 @@ impl InfrastructureDependenciesMutation {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
+    use alien_core::{
+        AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
+        Resource, ResourceEntry, ResourceLifecycle, StackSettings, Storage,
+    };
+    use indexmap::IndexMap;
+
+    fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
+        EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: String::new(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_infrastructure_resources_depend_on_resource_group() {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "default-resource-group".to_string(),
+            ResourceEntry {
+                config: Resource::new(
+                    AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "default-storage-account".to_string(),
+            ResourceEntry {
+                config: Resource::new(
+                    AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "app-storage".to_string(),
+            ResourceEntry {
+                config: Resource::new(Storage::new("app-storage".to_string()).build()),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+        };
+        let stack_state = StackState::new(Platform::Azure);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let resource_group =
+            ResourceRef::new(AzureResourceGroup::RESOURCE_TYPE, "default-resource-group");
+        let storage_account = ResourceRef::new(
+            AzureStorageAccount::RESOURCE_TYPE,
+            "default-storage-account",
+        );
+
+        assert!(!result
+            .resources
+            .get("default-resource-group")
+            .unwrap()
+            .dependencies
+            .contains(&resource_group));
+        assert!(result
+            .resources
+            .get("default-storage-account")
+            .unwrap()
+            .dependencies
+            .contains(&resource_group));
+        let app_storage_deps = &result.resources.get("app-storage").unwrap().dependencies;
+        assert!(app_storage_deps.contains(&resource_group));
+        assert!(app_storage_deps.contains(&storage_account));
     }
 }

@@ -264,17 +264,17 @@ pub async fn check_inspect(deployment: &TestDeployment) -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// External Secret
+// Managed Secret
 // ---------------------------------------------------------------------------
 
-/// Check external secret: GET /external-secret (cloud only)
+/// Check managed secret: GET /managed-secret (cloud only)
 ///
-/// This verifies that the vault binding can retrieve secrets. In standalone
-/// test environments the specific `EXTERNAL_TEST_SECRET` may not exist;
-/// a 502 (runtime proxy timeout) or a "not found" response are acceptable.
-pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Result<()> {
+/// This verifies that the runtime can read a secret that the test harness
+/// seeded into Alien's internal `secrets` vault. This is intentionally separate
+/// from customer-owned external vault secrets.
+pub async fn check_managed_secret(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
-    info!("Checking external secret");
+    info!("Checking managed secret");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -282,10 +282,10 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
         .unwrap();
 
     let resp = client
-        .get(format!("{}/external-secret", url))
+        .get(format!("{}/managed-secret", url))
         .send()
         .await
-        .context("External secret request failed")?;
+        .context("Managed secret request failed")?;
 
     let status = resp.status();
 
@@ -295,7 +295,7 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
     if status == reqwest::StatusCode::BAD_GATEWAY {
         let body = resp.text().await.unwrap_or_default();
         info!(
-            "External secret returned 502 (runtime proxy timeout, non-fatal): {}",
+            "Managed secret returned 502 (runtime proxy timeout, non-fatal): {}",
             body
         );
         return Ok(());
@@ -303,13 +303,13 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
 
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        bail!("External secret returned {}: {}", status, body);
+        bail!("Managed secret returned {}: {}", status, body);
     }
 
     let data: serde_json::Value = resp
         .json()
         .await
-        .context("Failed to parse external secret response")?;
+        .context("Failed to parse managed secret response")?;
     // The endpoint returns { exists: bool, value?: string }
     let exists = data
         .get("exists")
@@ -317,14 +317,14 @@ pub async fn check_external_secret(deployment: &TestDeployment) -> anyhow::Resul
         .unwrap_or(false);
     if !exists {
         bail!(
-            "External secret EXTERNAL_TEST_SECRET not found. \
+            "Managed secret MANAGED_TEST_SECRET not found. \
              It should have been provisioned via the manager vault API after deployment. \
              Response: {:?}",
             data
         );
     }
 
-    info!("External secret check passed");
+    info!("Managed secret check passed");
     Ok(())
 }
 

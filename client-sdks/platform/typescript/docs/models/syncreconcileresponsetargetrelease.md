@@ -27,7 +27,7 @@ let value: SyncReconcileResponseTargetRelease = {
             type: "<value>",
           },
         ],
-        lifecycle: "live",
+        lifecycle: "frozen",
       },
     },
   },

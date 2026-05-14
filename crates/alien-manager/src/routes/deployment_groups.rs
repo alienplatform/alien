@@ -155,7 +155,11 @@ async fn list_deployment_groups(State(state): State<AppState>, headers: HeaderMa
         Err(e) => return e.into_response(),
     };
 
-    let groups = match state.deployment_store.list_deployment_groups(&subject).await {
+    let groups = match state
+        .deployment_store
+        .list_deployment_groups(&subject)
+        .await
+    {
         Ok(g) => g,
         Err(e) => return e.into_response(),
     };
@@ -201,7 +205,11 @@ async fn get_deployment_group(
         Err(e) => return e.into_response(),
     };
 
-    let dg = match state.deployment_store.get_deployment_group(&subject, &id).await {
+    let dg = match state
+        .deployment_store
+        .get_deployment_group(&subject, &id)
+        .await
+    {
         Ok(Some(dg)) => dg,
         Ok(None) => return ErrorData::not_found_group(&id).into_response(),
         Err(e) => return e.into_response(),
@@ -240,11 +248,16 @@ async fn create_deployment_group_token(
     };
 
     // Verify group exists, then authorize on the loaded entity.
-    let dg = match state.deployment_store.get_deployment_group(&subject, &id).await {
+    let dg = match state
+        .deployment_store
+        .get_deployment_group(&subject, &id)
+        .await
+    {
         Ok(Some(dg)) => dg,
         Ok(None) => return ErrorData::not_found_group(&id).into_response(),
         Err(e) => return e.into_response(),
-    };    if !state.authz.can_update_deployment_group(&subject, &dg) {
+    };
+    if !state.authz.can_update_deployment_group(&subject, &dg) {
         return ErrorData::forbidden("Cannot mint tokens for this deployment group")
             .into_response();
     }

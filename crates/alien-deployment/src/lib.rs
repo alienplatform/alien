@@ -114,8 +114,8 @@ pub async fn step(
     // Mutation and injection strategy:
     // - Pending: Applies mutations, stores prepared_stack in runtime_metadata, validates env var injection
     // - UpdatePending: Applies mutations, stores prepared_stack in runtime_metadata
-    // - InitialSetup: Use prepared_stack, deploy all resources with env vars injected
-    // - Provisioning/Updating: Use prepared_stack with env vars injected for functions/services
+    // - InitialSetup: Use prepared_stack, deploy setup-owned Frozen resources
+    // - Provisioning/Updating: Use prepared_stack with env vars injected for Alien-owned Live resources
     // - Running: Use prepared_stack with env vars for health checks (read-only, no config changes)
     // - Delete phases: Use prepared_stack for deletion (no env var injection needed)
     //

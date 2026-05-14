@@ -9,11 +9,11 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type CreateDeploymentTokenResponse = {
   /**
-   * The generated agent token (only shown once)
+   * The generated deployment token (only shown once)
    */
   token: string;
   /**
-   * The agent ID that this token is scoped to
+   * The deployment ID that this token is scoped to
    */
   deploymentId: string;
 };

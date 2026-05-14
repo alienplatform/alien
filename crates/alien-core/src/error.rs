@@ -1,7 +1,7 @@
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-use crate::ResourceType;
+use crate::{Platform, ResourceType};
 
 /// Core error data exposed by the `alien-core` crate.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
@@ -194,6 +194,60 @@ pub enum ErrorData {
         internal = "false"
     )]
     JsonSerializationFailed { reason: String },
+
+    /// JSON deserialization failed.
+    #[error(
+        code = "JSON_DESERIALIZATION_FAILED",
+        message = "Failed to deserialize JSON: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    JsonDeserializationFailed { reason: String },
+
+    /// Distribution template serialization failed.
+    #[error(
+        code = "TEMPLATE_SERIALIZATION_FAILED",
+        message = "Failed to serialize {format} template: {reason}",
+        retryable = "false",
+        internal = "true"
+    )]
+    TemplateSerializationFailed { format: String, reason: String },
+
+    /// ImportData did not match the registered typed payload.
+    #[error(
+        code = "IMPORT_DATA_INVALID",
+        message = "Invalid ImportData for resource '{resource_id}' ({resource_type}) on {platform}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ImportDataInvalid {
+        resource_id: String,
+        resource_type: ResourceType,
+        platform: Platform,
+    },
+
+    /// No registry implementation exists for a resource/platform pair.
+    #[error(
+        code = "IMPORT_REGISTRATION_MISSING",
+        message = "Missing {registration_kind} registration for resource type '{resource_type}' on {platform}",
+        retryable = "false",
+        internal = "true"
+    )]
+    ImportRegistrationMissing {
+        resource_type: ResourceType,
+        platform: Platform,
+        registration_kind: String,
+    },
+
+    /// ImportData schema serialization failed.
+    #[error(
+        code = "IMPORT_SCHEMA_SERIALIZATION_FAILED",
+        message = "Failed to serialize ImportData schema",
+        retryable = "false",
+        internal = "true"
+    )]
+    ImportSchemaSerializationFailed,
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;

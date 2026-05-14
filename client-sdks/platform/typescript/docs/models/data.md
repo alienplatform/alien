@@ -1,7 +1,5 @@
 # Data
 
-Represents all possible events in the Alien system
-
 
 ## Supported Types
 
@@ -306,6 +304,132 @@ const value: models.DataEmptyingBuckets = {
     "<value 1>",
   ],
   type: "EmptyingBuckets",
+};
+```
+
+### `models.DataDeploymentCreated`
+
+```typescript
+const value: models.DataDeploymentCreated = {
+  deploymentGroupId: "<id>",
+  deploymentId: "<id>",
+  type: "DeploymentCreated",
+};
+```
+
+### `models.DataDeploymentReleased`
+
+```typescript
+const value: models.DataDeploymentReleased = {
+  deploymentId: "<id>",
+  releaseId: "<id>",
+  type: "DeploymentReleased",
+};
+```
+
+### `models.DataDeploymentFailed`
+
+```typescript
+const value: models.DataDeploymentFailed = {
+  deploymentId: "<id>",
+  error: {
+    code: "<value>",
+    internal: true,
+    message: "<value>",
+  },
+  phase: "provisioning",
+  type: "DeploymentFailed",
+};
+```
+
+### `models.DataDeploymentDegraded`
+
+```typescript
+const value: models.DataDeploymentDegraded = {
+  deploymentId: "<id>",
+  error: {
+    code: "<value>",
+    internal: false,
+    message: "<value>",
+  },
+  type: "DeploymentDegraded",
+};
+```
+
+### `models.DataDeploymentRecovered`
+
+```typescript
+const value: models.DataDeploymentRecovered = {
+  deploymentId: "<id>",
+  releaseId: "<id>",
+  type: "DeploymentRecovered",
+};
+```
+
+### `models.DataDeploymentDeleted`
+
+```typescript
+const value: models.DataDeploymentDeleted = {
+  deploymentId: "<id>",
+  type: "DeploymentDeleted",
+};
+```
+
+### `models.DataDeploymentRetryRequested`
+
+```typescript
+const value: models.DataDeploymentRetryRequested = {
+  deploymentId: "<id>",
+  type: "DeploymentRetryRequested",
+};
+```
+
+### `models.DataDeploymentRedeployRequested`
+
+```typescript
+const value: models.DataDeploymentRedeployRequested = {
+  deploymentId: "<id>",
+  releaseId: "<id>",
+  type: "DeploymentRedeployRequested",
+};
+```
+
+### `models.DataDeploymentReleasePinned`
+
+```typescript
+const value: models.DataDeploymentReleasePinned = {
+  deploymentId: "<id>",
+  pinnedReleaseId: "<id>",
+  type: "DeploymentReleasePinned",
+};
+```
+
+### `models.DataDeploymentReleaseUnpinned`
+
+```typescript
+const value: models.DataDeploymentReleaseUnpinned = {
+  deploymentId: "<id>",
+  previousPinnedReleaseId: "<id>",
+  type: "DeploymentReleaseUnpinned",
+};
+```
+
+### `models.DataDeploymentEnvironmentUpdated`
+
+```typescript
+const value: models.DataDeploymentEnvironmentUpdated = {
+  changedKeys: [],
+  deploymentId: "<id>",
+  type: "DeploymentEnvironmentUpdated",
+};
+```
+
+### `models.DataDeploymentDeletionRequested`
+
+```typescript
+const value: models.DataDeploymentDeletionRequested = {
+  deploymentId: "<id>",
+  type: "DeploymentDeletionRequested",
 };
 ```
 

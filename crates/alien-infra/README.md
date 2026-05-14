@@ -36,4 +36,4 @@ Use `SingleControllerExecutor` for controller tests. Every controller needs: cre
 
 ## Change Detection for External State
 
-The executor triggers updates by comparing resource configs via `resource_eq()`. Values that affect provisioning but live outside the config should be stamped onto the resource config in a preflight mutation. See `ContainerCluster.template_inputs` for the pattern.
+The executor triggers updates by comparing resource configs via `resource_eq()`. Values that affect provisioning but live outside the config should be stamped onto the resource config in a preflight mutation. See `ContainerCluster.worker_template` for the pattern.

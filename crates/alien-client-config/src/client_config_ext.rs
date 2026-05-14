@@ -93,7 +93,9 @@ impl ClientConfigExt for ClientConfig {
                 let config = alien_aws_clients::AwsClientConfig::from_env(environment_variables)
                     .await
                     .context(ErrorData::InvalidClientConfig {
-                        message: "Failed to create AWS client configuration from environment variables".to_string(),
+                        message:
+                            "Failed to create AWS client configuration from environment variables"
+                                .to_string(),
                         errors: None,
                     })?;
                 Ok(ClientConfig::Aws(Box::new(config)))
@@ -109,7 +111,9 @@ impl ClientConfigExt for ClientConfig {
                 let config = alien_gcp_clients::GcpClientConfig::from_env(environment_variables)
                     .await
                     .context(ErrorData::InvalidClientConfig {
-                        message: "Failed to create GCP client configuration from environment variables".to_string(),
+                        message:
+                            "Failed to create GCP client configuration from environment variables"
+                                .to_string(),
                         errors: None,
                     })?;
                 Ok(ClientConfig::Gcp(Box::new(config)))
@@ -122,12 +126,16 @@ impl ClientConfigExt for ClientConfig {
             #[cfg(feature = "azure")]
             Platform::Azure => {
                 use alien_azure_clients::AzureClientConfigExt;
-                let config = alien_azure_clients::AzureClientConfig::from_env(environment_variables)
-                    .await
-                    .context(ErrorData::InvalidClientConfig {
-                        message: "Failed to create Azure client configuration from environment variables".to_string(),
-                        errors: None,
-                    })?;
+                let config = alien_azure_clients::AzureClientConfig::from_env(
+                    environment_variables,
+                )
+                .await
+                .context(ErrorData::InvalidClientConfig {
+                    message:
+                        "Failed to create Azure client configuration from environment variables"
+                            .to_string(),
+                    errors: None,
+                })?;
                 Ok(ClientConfig::Azure(Box::new(config)))
             }
             #[cfg(not(feature = "azure"))]

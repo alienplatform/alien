@@ -45,10 +45,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
         if !added_frozen.is_empty() {
             errors.push(format!(
                 "Cannot add frozen resources during update: {}. \
-                 Frozen resources can only be added during initial deployment. \
-                 \n\n💡 To proceed with frozen infrastructure changes:\n   \
-                 1. Run with --allow-frozen-changes (requires elevated permissions)\n   \
-                 2. Or perform a full redeployment",
+                 Frozen resources are setup-owned and can only be added by rerunning setup with the updated stack.",
                 added_frozen
                     .iter()
                     .map(|s| format!("'{}'", s))
@@ -75,7 +72,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 if old_entry.config != new_entry.config {
                     errors.push(format!(
                         "Frozen resource '{}' was modified. \
-                         Frozen resources cannot be changed after initial deployment.",
+                         Frozen resources are setup-owned. Rerun setup with the updated stack.",
                         id
                     ));
                 }

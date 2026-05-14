@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::EnvironmentVariableBuilder;
-use crate::core::ResourceControllerContext;
+use crate::core::{EnvironmentVariableBuilder, ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -934,11 +933,11 @@ impl KubernetesContainerController {
 
         // Build environment variables
         // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
-        let env_builder = EnvironmentVariableBuilder::new(&config.environment)
-            .add_standard_alien_env_vars(ctx)
-            .add_container_transport_env_vars()
+        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_container_runtime_env_vars(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
-            .await?;
+            .await?
+            .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 

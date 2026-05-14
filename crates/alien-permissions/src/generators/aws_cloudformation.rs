@@ -116,7 +116,7 @@ impl AwsCloudFormationPermissionsGenerator {
 
             let statement = AwsCloudFormationIamStatement {
                 sid: statement_id,
-                effect: "Allow".to_string(),
+                effect: platform_permission.effect.as_str().to_string(),
                 action: action_values,
                 resource: resources,
                 condition: if conditions.is_empty() {
@@ -166,20 +166,27 @@ impl AwsCloudFormationPermissionsGenerator {
         template: &str,
         context: &PermissionContext,
     ) -> Result<JsonValue> {
+        let template = template.replace("arn:aws:", "arn:${AWS::Partition}:");
+
         // Check if the template contains CloudFormation variables or regular variables
         let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
-        let contains_regular_vars = template.contains("${") && !contains_cf_vars;
+        let contains_regular_vars = [
+            "${stackPrefix}",
+            "${resourceName}",
+            "${awsRegion}",
+            "${awsAccountId}",
+            "${externalId}",
+            "${managingAccountId}",
+            "${stackTag}",
+            "${resourceTag}",
+            "${managedByTag}",
+        ]
+        .iter()
+        .any(|placeholder| template.contains(placeholder));
 
-        if contains_cf_vars {
-            // Template already contains CloudFormation variables, wrap in Fn::Sub
-            Ok(json!({
-                "Fn::Sub": template
-            }))
-        } else if contains_regular_vars {
-            // Template contains our custom variables that need to be replaced
-            let mut result = template.to_string();
-
-            // First, replace our known variables with CloudFormation equivalents or literal values
+        if contains_regular_vars {
+            // Template contains our custom variables that need to be replaced.
+            let mut result = template;
             if let Some(stack_prefix) = context.stack_prefix.as_ref() {
                 if stack_prefix.is_empty() {
                     // Empty stack prefix means just use the stack name
@@ -198,7 +205,7 @@ impl AwsCloudFormationPermissionsGenerator {
             if let Some(resource_name) = context.resource_name.as_ref() {
                 // For resource names in CloudFormation context, we usually want the raw logical ID
                 // unless it's in an ARN context where we need to build the full ARN
-                if result.contains("arn:aws:") && result.contains("${resourceName}") {
+                if result.contains("arn:${AWS::Partition}:") && result.contains("${resourceName}") {
                     // This is an ARN template, replace with the resource name directly
                     result = result.replace("${resourceName}", resource_name);
                 } else {
@@ -210,6 +217,9 @@ impl AwsCloudFormationPermissionsGenerator {
             // Handle AWS-specific variables that should map to CloudFormation pseudo parameters
             result = result.replace("${awsRegion}", "${AWS::Region}");
             result = result.replace("${awsAccountId}", "${AWS::AccountId}");
+            result = result.replace("${stackTag}", alien_core::ALIEN_STACK_TAG_KEY);
+            result = result.replace("${resourceTag}", alien_core::ALIEN_RESOURCE_TAG_KEY);
+            result = result.replace("${managedByTag}", alien_core::ALIEN_MANAGED_BY_TAG_KEY);
 
             // Handle external ID
             if let Some(external_id) = context.external_id.as_ref() {
@@ -247,6 +257,11 @@ impl AwsCloudFormationPermissionsGenerator {
                 // Just a plain string after substitution
                 Ok(json!(result))
             }
+        } else if contains_cf_vars {
+            // Template already contains CloudFormation variables, wrap in Fn::Sub
+            Ok(json!({
+                "Fn::Sub": template
+            }))
         } else {
             // No variables, just return as plain string
             Ok(json!(template))
@@ -267,6 +282,8 @@ impl AwsCloudFormationPermissionsGenerator {
             sorted_condition_keys.sort();
 
             for condition_key in sorted_condition_keys {
+                let interpolated_condition_key =
+                    crate::VariableInterpolator::interpolate_variables(condition_key, context)?;
                 let condition_values = &condition_template[condition_key];
                 let mut interpolated_values = IndexMap::new();
 
@@ -275,13 +292,15 @@ impl AwsCloudFormationPermissionsGenerator {
                 sorted_value_keys.sort();
 
                 for value_key in sorted_value_keys {
+                    let interpolated_value_key =
+                        crate::VariableInterpolator::interpolate_variables(value_key, context)?;
                     let value_template = &condition_values[value_key];
                     let interpolated_value =
                         self.interpolate_cloudformation_string(value_template, context)?;
-                    interpolated_values.insert(value_key.clone(), interpolated_value);
+                    interpolated_values.insert(interpolated_value_key, interpolated_value);
                 }
 
-                interpolated_conditions.insert(condition_key.clone(), interpolated_values);
+                interpolated_conditions.insert(interpolated_condition_key, interpolated_values);
             }
 
             Ok(interpolated_conditions)

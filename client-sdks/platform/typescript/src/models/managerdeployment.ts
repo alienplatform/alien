@@ -26,6 +26,7 @@ export const ManagerDeploymentStatus = {
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
   Deleted: "deleted",
+  Error: "error",
 } as const;
 /**
  * Deployment status of the internal deployment

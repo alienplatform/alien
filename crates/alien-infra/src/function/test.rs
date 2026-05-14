@@ -1,4 +1,4 @@
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -468,6 +468,40 @@ impl TestFunctionController {
                 message: "Identifier missing in DeleteFunctionPolling state".to_string(),
             })
         })?;
+
+        if target_func
+            .environment
+            .get("SIMULATE_DELETE_NOT_FOUND")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Function".to_string(),
+                    resource_name: target_func.id.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: "Simulated delete not found".to_string(),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
+
+        if target_func
+            .environment
+            .get("SIMULATE_DELETE_ACCESS_DENIED")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "Function".to_string(),
+                    resource_name: target_func.id.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: "Simulated delete access denied".to_string(),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
 
         self.delete_poll_count += 1;
 

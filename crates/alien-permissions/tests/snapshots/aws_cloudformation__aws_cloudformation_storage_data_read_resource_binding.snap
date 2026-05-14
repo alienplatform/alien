@@ -14,8 +14,12 @@ expression: result
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::PaymentsDataBucket",
-        "arn:aws:s3:::PaymentsDataBucket/*"
+        {
+          "Fn::Sub": "arn:${AWS::Partition}:s3:::PaymentsDataBucket"
+        },
+        {
+          "Fn::Sub": "arn:${AWS::Partition}:s3:::PaymentsDataBucket/*"
+        }
       ]
     }
   ]

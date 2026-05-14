@@ -30,7 +30,6 @@ const value: operations.Gcp = {
 
 ```typescript
 const value: operations.Azure = {
-  managementPrincipalId: "<id>",
   managingTenantId: "<id>",
   platform: "azure",
 };

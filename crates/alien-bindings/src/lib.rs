@@ -2,14 +2,14 @@ use alien_error::AlienError;
 
 // Re-export core traits and types
 pub use alien_context::AlienContext;
-pub use alien_core::{BindingsMode, Platform};
+pub use alien_core::{BindingsMode, Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
-    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, RegistryAuthMethod,
+    ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
-    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RepositoryResponse,
-    ServiceAccount, ServiceAccountInfo, Storage, Vault,
+    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod,
+    RepositoryResponse, ServiceAccount, ServiceAccountInfo, Storage, Vault,
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 
@@ -44,15 +44,15 @@ pub fn get_current_platform() -> Result<Platform> {
 
 /// Gets the platform from a HashMap of environment variables.
 pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) -> Result<Platform> {
-    let deployment_type = env.get("ALIEN_DEPLOYMENT_TYPE").ok_or_else(|| {
+    let deployment_type = env.get(ENV_ALIEN_DEPLOYMENT_TYPE).ok_or_else(|| {
         AlienError::new(ErrorData::EnvironmentVariableMissing {
-            variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            variable_name: ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
         })
     })?;
 
     deployment_type.parse().map_err(|_| {
         AlienError::new(ErrorData::InvalidEnvironmentVariable {
-            variable_name: "ALIEN_DEPLOYMENT_TYPE".to_string(),
+            variable_name: ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
             value: deployment_type.clone(),
             reason: "Cannot parse the ALIEN_DEPLOYMENT_TYPE environment variable".to_string(),
         })
@@ -65,13 +65,13 @@ pub fn get_bindings_mode_from_env(
     env: &std::collections::HashMap<String, String>,
 ) -> Result<BindingsMode> {
     let mode_str = env
-        .get("ALIEN_BINDINGS_MODE")
+        .get(ENV_ALIEN_BINDINGS_MODE)
         .map(|s| s.as_str())
         .unwrap_or("direct");
 
     mode_str.parse().map_err(|reason: String| {
         AlienError::new(ErrorData::InvalidEnvironmentVariable {
-            variable_name: "ALIEN_BINDINGS_MODE".to_string(),
+            variable_name: ENV_ALIEN_BINDINGS_MODE.to_string(),
             value: mode_str.to_string(),
             reason,
         })

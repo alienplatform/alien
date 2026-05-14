@@ -24,6 +24,14 @@ import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * Every handler in this file runs `auth::require_auth(&state, &headers)`
+ * and then threads `&subject` into the `DeploymentStore` calls — see the
+ * trait doc on [`DeploymentStore`] for the convention.
+ *
+ * @remarks
+ * `POST /v1/deployment-groups` — Inbound: workspace bearer.
+ */
 export function deploymentGroupsCreateDeploymentGroup(
   client: AlienManagerCore,
   request: models.CreateDeploymentGroupRequest,

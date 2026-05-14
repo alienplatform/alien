@@ -137,17 +137,14 @@ fn install(args: InstallArgs) -> Result<()> {
                 sync_token_path.display()
             ),
         })?;
-    alien_core::file_utils::write_secret_file(
-        &encryption_key_path,
-        encryption_key.as_bytes(),
-    )
-    .into_alien_error()
-    .context(ErrorData::AgentServiceError {
-        message: format!(
-            "Failed to write encryption key to {}",
-            encryption_key_path.display()
-        ),
-    })?;
+    alien_core::file_utils::write_secret_file(&encryption_key_path, encryption_key.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::AgentServiceError {
+            message: format!(
+                "Failed to write encryption key to {}",
+                encryption_key_path.display()
+            ),
+        })?;
 
     let service_args = vec![
         OsString::from("--service"),

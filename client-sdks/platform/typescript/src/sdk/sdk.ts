@@ -5,6 +5,7 @@
 import { ClientSDK } from "../lib/sdks.js";
 import { ApiKeys } from "./apikeys.js";
 import { Auth } from "./auth.js";
+import { Billing } from "./billing.js";
 import { Commands } from "./commands.js";
 import { Containers } from "./containers.js";
 import { Deployment } from "./deployment.js";
@@ -105,5 +106,10 @@ export class Alien extends ClientSDK {
   private _resolve?: Resolve;
   get resolve(): Resolve {
     return (this._resolve ??= new Resolve(this._options));
+  }
+
+  private _billing?: Billing;
+  get billing(): Billing {
+    return (this._billing ??= new Billing(this._options));
   }
 }

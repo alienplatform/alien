@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, DeploymentConfig, Function, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState, Vault,
+    Container, DeploymentConfig, Function, RemoteStackManagement, ResourceEntry, ResourceLifecycle,
+    ResourceRef, Stack, StackState, Vault,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -19,7 +19,7 @@ use tracing::{debug, info};
 /// 1. Add "secrets" vault resource (if not present)
 /// 2. Link vault to all Functions and Containers
 /// 3. Add vault/data-read to compute resource profiles
-/// 4. Add vault/data-write to management profile
+/// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
 pub struct SecretsVaultMutation;
 
 #[async_trait]
@@ -74,9 +74,10 @@ impl StackMutation for SecretsVaultMutation {
         // This allows Functions and Containers to read secrets from the vault
         add_vault_read_permissions_to_compute_profiles(&mut stack, secrets_vault_id)?;
 
-        // Step 4: Add vault/data-write permission to management profile
-        // This allows the control plane to sync secrets during deployment
-        add_vault_write_permission_to_management(&mut stack, secrets_vault_id)?;
+        // Step 4: Add vault data permissions to management profile for the secrets vault.
+        // This allows the control plane to sync secret environment variables without
+        // granting access to user-declared vaults.
+        add_vault_permissions_to_management(&mut stack, secrets_vault_id)?;
 
         Ok(stack)
     }
@@ -203,18 +204,32 @@ fn add_vault_read_permissions_to_compute_profiles(
     Ok(())
 }
 
-/// Add vault/data-write permission to management profile
-/// This allows the management service to sync secrets to the vault during deployment
-fn add_vault_write_permission_to_management(stack: &mut Stack, _vault_name: &str) -> Result<()> {
+/// Add vault data permissions to the management profile for the secrets vault.
+/// This allows the management service to sync Alien-managed secrets without
+/// granting access to user-declared vaults.
+fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
+
+    if !stack
+        .resources
+        .values()
+        .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+    {
+        debug!(
+            vault_name = %vault_name,
+            "Skipping secrets vault management permissions because remote stack management is not present"
+        );
+        return Ok(());
+    }
 
     // Get current management permissions
     let current_management = stack.permissions.management.clone();
 
     match current_management {
         ManagementPermissions::Auto | ManagementPermissions::Extend(_) => {
-            // For Auto or Extend, we need to add vault/data-write to the management profile
+            // For Auto or Extend, add data access only to the Alien-managed secrets vault.
             // This will be merged with auto-generated permissions by ManagementPermissionProfileMutation
+            let vault_read_permission = PermissionSetReference::from_name("vault/data-read");
             let vault_write_permission = PermissionSetReference::from_name("vault/data-write");
 
             let mut management_profile = match current_management {
@@ -222,28 +237,35 @@ fn add_vault_write_permission_to_management(stack: &mut Stack, _vault_name: &str
                 _ => PermissionProfile::new(),
             };
 
-            // Add vault/data-write to global scope
-            if let Some(global_permissions) = management_profile.0.get_mut("*") {
-                if !global_permissions
-                    .iter()
-                    .any(|p| p.id() == "vault/data-write")
-                {
-                    global_permissions.push(vault_write_permission);
-                    debug!("Added vault/data-write to management profile");
-                }
-            } else {
-                // Create global scope if it doesn't exist
-                management_profile
-                    .0
-                    .insert("*".to_string(), vec![vault_write_permission]);
-                debug!("Added vault/data-write to new global scope in management profile");
+            let vault_permissions = management_profile
+                .0
+                .entry(vault_name.to_string())
+                .or_default();
+            if !vault_permissions
+                .iter()
+                .any(|p| p.id() == "vault/data-read")
+            {
+                vault_permissions.push(vault_read_permission);
+                debug!(
+                    vault_name = %vault_name,
+                    "Added vault/data-read to management profile for secrets vault resource"
+                );
             }
-
+            if !vault_permissions
+                .iter()
+                .any(|p| p.id() == "vault/data-write")
+            {
+                vault_permissions.push(vault_write_permission);
+                debug!(
+                    vault_name = %vault_name,
+                    "Added vault/data-write to management profile for secrets vault resource"
+                );
+            }
             stack.permissions.management = ManagementPermissions::Extend(management_profile);
         }
         ManagementPermissions::Override(_) => {
-            // Don't modify override - user has full control
-            debug!("Skipping vault/data-write addition - management permissions are overridden");
+            // Don't modify override - user has full control.
+            debug!("Skipping secrets vault management permissions - management permissions are overridden");
         }
     }
 
@@ -269,6 +291,17 @@ mod tests {
         }
     }
 
+    fn remote_stack_management_entry() -> ResourceEntry {
+        ResourceEntry {
+            config: alien_core::Resource::new(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
     #[tokio::test]
     async fn test_adds_secrets_vault_and_links_to_function() {
         let function = Function::new("test-function".to_string())
@@ -287,6 +320,10 @@ mod tests {
                 dependencies: Vec::new(),
                 remote_access: false,
             },
+        );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
         );
 
         let mut profiles = IndexMap::new();
@@ -557,7 +594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_adds_vault_data_write_to_management() {
+    async fn test_adds_vault_data_permissions_to_management() {
         let function = Function::new("test-function".to_string())
             .code(FunctionCode::Image {
                 image: "test:latest".to_string(),
@@ -574,6 +611,10 @@ mod tests {
                 dependencies: Vec::new(),
                 remote_access: false,
             },
+        );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
         );
 
         let mut profiles = IndexMap::new();
@@ -599,15 +640,113 @@ mod tests {
         let mutation = SecretsVaultMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Check that management profile has vault/data-write
+        // Check that management profile has vault data permissions scoped to the secrets vault.
+        match result_stack.permissions.management {
+            ManagementPermissions::Extend(profile) => {
+                assert!(
+                    profile.0.get("*").map_or(true, |permissions| !permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write")),
+                    "Management profile should not have global vault/data-write"
+                );
+                let vault_permissions = profile.0.get("secrets").unwrap();
+                assert!(
+                    vault_permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-read"),
+                    "Management profile should have vault/data-read for secrets vault"
+                );
+                assert!(
+                    vault_permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write"),
+                    "Management profile should have vault/data-write for secrets vault"
+                );
+                assert!(
+                    profile.0.get("alien-vault").is_none(),
+                    "Management profile should not get vault/data-write for user vaults by default"
+                );
+            }
+            _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preserves_explicit_global_vault_data_write_and_adds_secrets_scope() {
+        let user_vault = Vault::new("alien-vault".to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "alien-vault".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(user_vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "remote-stack-management".to_string(),
+            remote_stack_management_entry(),
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Extend(
+                    PermissionProfile::new().global(["vault/data-write", "storage/heartbeat"]),
+                ),
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutation = SecretsVaultMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
         match result_stack.permissions.management {
             ManagementPermissions::Extend(profile) => {
                 let global_permissions = profile.0.get("*").unwrap();
                 assert!(
                     global_permissions
                         .iter()
+                        .any(|p| p.id() == "storage/heartbeat"),
+                    "Unrelated global permissions should be preserved"
+                );
+                assert!(
+                    global_permissions
+                        .iter()
                         .any(|p| p.id() == "vault/data-write"),
-                    "Management profile should have vault/data-write"
+                    "Explicit global vault/data-write should be preserved"
+                );
+                assert!(
+                    profile
+                        .0
+                        .get("secrets")
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.id() == "vault/data-read"),
+                    "vault/data-read should be added to the secrets vault resource"
+                );
+                assert!(
+                    profile
+                        .0
+                        .get("secrets")
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write"),
+                    "vault/data-write should be added to the secrets vault resource"
+                );
+                assert!(
+                    profile.0.get("alien-vault").is_none(),
+                    "user vaults should not receive resource-specific management vault/data-write by default"
                 );
             }
             _ => panic!("Expected Extend management permissions"),
@@ -680,5 +819,58 @@ mod tests {
             }
             _ => panic!("Expected Override management permissions"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_skips_management_permissions_without_remote_stack_management() {
+        let function = Function::new("test-function".to_string())
+            .code(FunctionCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test-profile".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "test-function".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(function),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let mut profiles = IndexMap::new();
+        profiles.insert("test-profile".to_string(), PermissionProfile::new());
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Local);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutation = SecretsVaultMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
+        assert!(result_stack.resources.contains_key("secrets"));
+        assert!(
+            matches!(
+                result_stack.permissions.management,
+                ManagementPermissions::Auto
+            ),
+            "Local stacks without remote stack management should not get resource-scoped management permissions"
+        );
     }
 }

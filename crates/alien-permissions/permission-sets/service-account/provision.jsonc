@@ -32,6 +32,8 @@
           "permissions": [
             "iam.serviceAccounts.create",
             "iam.serviceAccounts.get",
+            "iam.serviceAccounts.getIamPolicy",
+            "iam.serviceAccounts.setIamPolicy",
             "iam.serviceAccounts.update",
             "iam.roles.create",
             "iam.roles.get",

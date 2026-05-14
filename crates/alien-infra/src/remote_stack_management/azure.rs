@@ -886,6 +886,7 @@ impl AzureRemoteStackManagementController {
         let mut combined_actions = Vec::new();
         let mut combined_data_actions = Vec::new();
         let azure_config = ctx.get_azure_config()?;
+        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
 
         for permission_set_ref in global_refs {
             let permission_set =
@@ -898,7 +899,10 @@ impl AzureRemoteStackManagementController {
 
                 let permission_context = PermissionContext::new()
                     .with_subscription_id(azure_config.subscription_id.clone())
-                    .with_stack_prefix(ctx.resource_prefix.to_string());
+                    .with_resource_group(resource_group_name.clone())
+                    .with_stack_prefix(ctx.resource_prefix.to_string())
+                    .with_managing_subscription_id(azure_config.subscription_id.clone())
+                    .with_managing_resource_group(resource_group_name.clone());
 
                 let generator = AzureRuntimePermissionsGenerator::new();
                 let azure_role_def = generator
@@ -931,7 +935,6 @@ impl AzureRemoteStackManagementController {
         combined_data_actions.sort();
         combined_data_actions.dedup();
 
-        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let assignable_scopes = vec![format!(
             "/subscriptions/{}/resourceGroups/{}",
             azure_config.subscription_id, resource_group_name

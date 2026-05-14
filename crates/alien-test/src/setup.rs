@@ -1,13 +1,15 @@
 //! Target account setup for cross-account E2E tests.
 //!
-//! Creates a scoped IAM role with auto-generated permissions (from
-//! `alien-permissions`) and impersonates it during `push_initial_setup`.
-//! This validates that the auto-generated permissions are sufficient for
-//! initial setup — the real flow a customer admin would follow.
+//! AWS CLI push uses scoped credentials with auto-generated permissions from
+//! `alien-permissions`. GCP and Azure CLI push use target credentials for
+//! initial setup; scoped cloud deployment identities are covered by the
+//! Terraform/Helm pull flows, not the legacy Docker cloud-pull path.
 
 use std::sync::Arc;
 
-use alien_core::{ClientConfig, ManagementConfig, Platform};
+use alien_aws_clients::{ErrorData as AwsErrorData, IamApi};
+use alien_core::{ClientConfig, ManagementConfig, Platform, Stack};
+use alien_permissions::generators::{AwsIamPolicy, AwsIamStatement};
 use alien_permissions::PermissionContext;
 use anyhow::Context;
 use tracing::info;
@@ -18,10 +20,10 @@ use crate::manager::TestManager;
 
 /// Run the target-side setup for cross-account deployment.
 ///
-/// 1. Auto-generates minimal permissions from the stack definition
-/// 2. Creates a temporary scoped IAM role with those permissions
-/// 3. Impersonates the role during `push_initial_setup`
-/// 4. If initial setup succeeds → permissions are correct
+/// 1. Builds the target-side credentials for the selected push flow.
+/// 2. Runs `push_initial_setup` with those credentials.
+/// 3. If initial setup succeeds, the deployment loop resumes using the
+///    manager's own management identity.
 ///
 /// After this function returns, the manager's deployment loop will resume
 /// from `Provisioning` using its own management SA impersonation chain.
@@ -29,6 +31,7 @@ pub async fn setup_target(
     config: &TestConfig,
     platform: Platform,
     deployment: &TestDeployment,
+    _stack: &Stack,
     manager: &Arc<TestManager>,
     management_config: Option<ManagementConfig>,
 ) -> anyhow::Result<()> {
@@ -42,12 +45,12 @@ pub async fn setup_target(
     info!(
         platform = %platform.as_str(),
         deployment_id = %deployment.id,
-        "setup_target: generating scoped permissions and running initial setup"
+        "setup_target: preparing target credentials and running initial setup"
     );
 
-    let target_config = build_scoped_target_config(config, platform, &deployment.name)
+    let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
         .await
-        .context("Failed to build scoped target config")?;
+        .context("Failed to build initial setup target config")?;
 
     alien_deploy_cli::commands::push_initial_setup(
         manager.client(),
@@ -64,9 +67,9 @@ pub async fn setup_target(
     .map_err(|e| anyhow::anyhow!("push_initial_setup failed: {}", e))?;
 
     // For Azure with shared (external) Container Apps Environment: the management
-    // UAMI now exists but lacks `managedEnvironments/join/action` on the shared
-    // environment (which is in a different resource group). Grant it here using
-    // target credentials, before the manager's Provisioning phase starts.
+    // UAMI now exists but lacks permissions on the shared environment (which is
+    // in a different resource group). Grant them here using target credentials,
+    // before the manager's Provisioning phase starts.
     if platform == Platform::Azure {
         if let Some(ref shared_env) = config.azure_resources.shared_container_env {
             grant_shared_env_join_permission(
@@ -89,19 +92,26 @@ pub async fn setup_target(
     Ok(())
 }
 
-/// Build a `ClientConfig` that impersonates a scoped role with auto-generated
-/// permissions. For AWS, creates a temporary IAM role and returns credentials
-/// that assume it. For GCP/Azure, uses target credentials directly for now
-/// (scoped role creation for GCP/Azure is a follow-up).
-async fn build_scoped_target_config(
+/// Build a `ClientConfig` for initial setup.
+async fn build_initial_setup_target_config(
     config: &TestConfig,
     platform: Platform,
     deployment_name: &str,
 ) -> anyhow::Result<ClientConfig> {
     match platform {
         Platform::Aws => build_aws_scoped_config(config, deployment_name).await,
-        Platform::Gcp => build_gcp_target_config(config),
-        Platform::Azure => build_azure_target_config(config),
+        Platform::Gcp => {
+            // GCP CLI push uses target credentials for initial setup. The
+            // scoped identity path belonged to the removed legacy Docker
+            // cloud-pull flow; pull is now covered by Terraform+Helm.
+            build_gcp_target_config(config)
+        }
+        Platform::Azure => {
+            // Azure CLI push uses the target credentials for initial setup for now.
+            // The removed scoped identity path only modeled the legacy cloud-pull
+            // Docker flow; pull is now covered by Terraform+Helm on Kubernetes.
+            build_azure_target_config(config)
+        }
         other => anyhow::bail!("setup_target not supported for platform: {}", other),
     }
 }
@@ -112,6 +122,28 @@ async fn build_aws_scoped_config(
     config: &TestConfig,
     deployment_name: &str,
 ) -> anyhow::Result<ClientConfig> {
+    let context = aws_permission_context(config)?;
+
+    let policy = alien_permissions::initial_setup::generate_aws_initial_setup_policy(&context)
+        .map_err(|e| anyhow::anyhow!("Failed to generate initial setup policy: {}", e))?;
+
+    build_aws_scoped_config_with_policies(
+        config,
+        deployment_name,
+        vec![("alien-initial-setup".to_string(), policy)],
+        "initial-setup",
+        "Alien E2E scoped initial setup role (auto-generated permissions)",
+    )
+    .await
+}
+
+async fn build_aws_scoped_config_with_policies(
+    config: &TestConfig,
+    deployment_name: &str,
+    policies: Vec<(String, AwsIamPolicy)>,
+    session_purpose: &str,
+    role_description: &str,
+) -> anyhow::Result<ClientConfig> {
     use alien_aws_clients::{AwsClientConfigExt as _, AwsCredentialProvider, IamApi};
     use alien_core::{AwsClientConfig, AwsCredentials};
 
@@ -119,40 +151,8 @@ async fn build_aws_scoped_config(
         .aws_target
         .as_ref()
         .context("Missing AWS target credentials")?;
-    let mgmt = config
-        .aws_mgmt
-        .as_ref()
-        .context("Missing AWS management credentials")?;
 
     let account_id = target.account_id.clone().unwrap_or_default();
-    let mgmt_account_id = mgmt
-        .account_id
-        .as_ref()
-        .context("Missing management account ID")?;
-
-    // Use wildcard prefix — the actual resource_prefix is a random 8-char
-    // string generated at deployment time (StackState::new()). We can't
-    // predict it, so the scoped role allows any prefix in the target account.
-    // In production, customers would scope to their specific stack prefix.
-    let stack_prefix = "*";
-
-    // Generate the scoped IAM policy from the stack definition
-    let context = PermissionContext::new()
-        .with_aws_account_id(&account_id)
-        .with_aws_region(&target.region)
-        .with_stack_prefix(stack_prefix)
-        .with_managing_account_id(mgmt_account_id);
-
-    let policy = alien_permissions::initial_setup::generate_aws_initial_setup_policy(&context)
-        .map_err(|e| anyhow::anyhow!("Failed to generate initial setup policy: {}", e))?;
-
-    let policy_json = serde_json::to_string(&policy).context("Failed to serialize IAM policy")?;
-
-    info!(
-        statements = policy.statement.len(),
-        policy_size = policy_json.len(),
-        "Generated scoped IAM policy for initial setup"
-    );
 
     // Create the target credentials (admin user)
     let admin_config = AwsClientConfig {
@@ -176,7 +176,7 @@ async fn build_aws_scoped_config(
     // Create the scoped role
     // Use first 8 chars of deployment name for role naming (not for permissions)
     let role_suffix = &deployment_name[..deployment_name.len().min(8)];
-    let role_name = format!("alien-e2e-setup-{}", role_suffix);
+    let role_name = format!("alien-e2e-{}-{}", session_purpose, role_suffix);
 
     // Trust policy: allow the target user to assume this role
     let trust_policy = serde_json::json!({
@@ -195,9 +195,7 @@ async fn build_aws_scoped_config(
         .create_role(alien_aws_clients::iam::CreateRoleRequest {
             role_name: role_name.clone(),
             assume_role_policy_document: trust_policy.to_string(),
-            description: Some(
-                "Alien E2E scoped initial setup role (auto-generated permissions)".to_string(),
-            ),
+            description: Some(role_description.to_string()),
             path: None,
             max_session_duration: None,
             tags: None,
@@ -225,11 +223,11 @@ async fn build_aws_scoped_config(
         }
     }
 
-    // Attach the auto-generated policy as an inline policy
-    iam_client
-        .put_role_policy(&role_name, "alien-initial-setup", &policy_json)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to attach policy to scoped role: {}", e))?;
+    cleanup_scoped_role_policies(&iam_client, &role_name).await?;
+
+    for (policy_name, policy) in policies {
+        attach_policy_chunks(&iam_client, &role_name, &policy_name, policy).await?;
+    }
 
     info!(role_name = %role_name, "Attached auto-generated policy to scoped role");
 
@@ -241,7 +239,7 @@ async fn build_aws_scoped_config(
     let scoped_config = admin_config
         .impersonate(alien_aws_clients::AwsImpersonationConfig {
             role_arn: role_arn.clone(),
-            session_name: Some("alien-e2e-initial-setup".to_string()),
+            session_name: Some(format!("alien-e2e-{}", session_purpose)),
             duration_seconds: Some(3600),
             external_id: None,
             target_region: None,
@@ -254,8 +252,220 @@ async fn build_aws_scoped_config(
     Ok(ClientConfig::Aws(Box::new(scoped_config)))
 }
 
-/// GCP: Use target SA credentials directly.
-/// TODO: Create scoped custom role from auto-generated permissions.
+fn aws_permission_context(config: &TestConfig) -> anyhow::Result<PermissionContext> {
+    let target = config
+        .aws_target
+        .as_ref()
+        .context("Missing AWS target credentials")?;
+    let mgmt = config
+        .aws_mgmt
+        .as_ref()
+        .context("Missing AWS management credentials")?;
+
+    let account_id = target.account_id.clone().unwrap_or_default();
+    let mgmt_account_id = mgmt
+        .account_id
+        .as_ref()
+        .context("Missing management account ID")?;
+
+    Ok(PermissionContext::new()
+        .with_aws_account_id(account_id)
+        .with_aws_region(&target.region)
+        .with_stack_prefix("*")
+        .with_managing_account_id(mgmt_account_id))
+}
+
+async fn attach_policy_chunks(
+    iam_client: &alien_aws_clients::iam::IamClient,
+    role_name: &str,
+    policy_name: &str,
+    policy: AwsIamPolicy,
+) -> anyhow::Result<()> {
+    let chunks = split_policy(policy, 5_500)?;
+    let policy_run_id = uuid::Uuid::new_v4().simple().to_string();
+    let policy_run_id = &policy_run_id[..8];
+
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let chunk_name = scoped_managed_policy_name(role_name, policy_name, policy_run_id, index);
+        let policy_json =
+            serde_json::to_string(&chunk).context("Failed to serialize IAM policy")?;
+
+        info!(
+            role_name = %role_name,
+            policy_name = %chunk_name,
+            statements = chunk.statement.len(),
+            policy_size = policy_json.len(),
+            "Creating scoped IAM managed policy"
+        );
+
+        let create_response = iam_client
+            .create_policy(&chunk_name, &policy_json, Some("/alien-e2e/".to_string()))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create scoped managed policy: {}", e))?;
+        let policy_arn = create_response.create_policy_result.policy.arn;
+
+        if let Err(error) = iam_client.attach_role_policy(role_name, &policy_arn).await {
+            let _ = iam_client.delete_policy(&policy_arn).await;
+            return Err(anyhow::anyhow!(
+                "Failed to attach managed policy to scoped role: {}",
+                error
+            ));
+        }
+
+        info!(
+            role_name = %role_name,
+            policy_arn = %policy_arn,
+            "Attached scoped IAM managed policy"
+        );
+    }
+
+    Ok(())
+}
+
+async fn cleanup_scoped_role_policies(
+    iam_client: &alien_aws_clients::iam::IamClient,
+    role_name: &str,
+) -> anyhow::Result<()> {
+    match iam_client.list_role_policies(role_name).await {
+        Ok(response) => {
+            if let Some(policy_names) = response.list_role_policies_result.policy_names {
+                for policy_name in policy_names.member {
+                    iam_client
+                        .delete_role_policy(role_name, &policy_name)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to delete stale scoped inline policy {policy_name}: {e}"
+                            )
+                        })?;
+                }
+            }
+        }
+        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Failed to list stale scoped inline policies: {}",
+                error
+            ));
+        }
+    }
+
+    match iam_client.list_attached_role_policies(role_name).await {
+        Ok(response) => {
+            if let Some(attached_policies) = response
+                .list_attached_role_policies_result
+                .attached_policies
+            {
+                for policy in attached_policies.member {
+                    iam_client
+                        .detach_role_policy(role_name, &policy.policy_arn)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to detach stale scoped managed policy {}: {e}",
+                                policy.policy_arn
+                            )
+                        })?;
+
+                    if policy.policy_name.starts_with("alien-e2e-scoped-") {
+                        match iam_client.delete_policy(&policy.policy_arn).await {
+                            Ok(()) => {}
+                            Err(error) if is_aws_not_found(&error) => {}
+                            Err(error) => {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to delete stale scoped managed policy {}: {}",
+                                    policy.policy_arn,
+                                    error
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(error) if is_aws_not_found(&error) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Failed to list stale scoped managed policies: {}",
+                error
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn scoped_managed_policy_name(
+    role_name: &str,
+    policy_name: &str,
+    run_id: &str,
+    index: usize,
+) -> String {
+    let suffix = if index == 0 {
+        run_id.to_string()
+    } else {
+        format!("{run_id}-{}", index + 1)
+    };
+    let prefix = format!("alien-e2e-scoped-{role_name}-{policy_name}");
+    let max_prefix_len = 128usize.saturating_sub(suffix.len() + 1);
+    let trimmed = prefix
+        .chars()
+        .take(max_prefix_len)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string();
+    format!("{trimmed}-{suffix}")
+}
+
+fn is_aws_not_found(error: &alien_error::AlienError<AwsErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(AwsErrorData::RemoteResourceNotFound { .. })
+    )
+}
+
+fn split_policy(policy: AwsIamPolicy, max_json_len: usize) -> anyhow::Result<Vec<AwsIamPolicy>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::<AwsIamStatement>::new();
+
+    for statement in policy.statement {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        let candidate_policy = AwsIamPolicy {
+            version: policy.version.clone(),
+            statement: candidate,
+        };
+        let candidate_len = serde_json::to_string(&candidate_policy)
+            .context("Failed to serialize IAM policy chunk")?
+            .len();
+
+        if candidate_len > max_json_len && !current.is_empty() {
+            chunks.push(AwsIamPolicy {
+                version: policy.version.clone(),
+                statement: current,
+            });
+            current = vec![statement];
+        } else if candidate_len > max_json_len {
+            anyhow::bail!(
+                "A single IAM statement is too large for inline policy {}",
+                statement.sid
+            );
+        } else {
+            current = candidate_policy.statement;
+        }
+    }
+
+    if !current.is_empty() {
+        chunks.push(AwsIamPolicy {
+            version: policy.version,
+            statement: current,
+        });
+    }
+
+    Ok(chunks)
+}
+
+/// GCP: Use target SA credentials directly for CLI push initial setup.
 fn build_gcp_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig> {
     let target = config
         .gcp_target
@@ -275,8 +485,7 @@ fn build_gcp_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig> 
     })))
 }
 
-/// Azure: Use target SP credentials directly.
-/// TODO: Create scoped role definition from auto-generated permissions.
+/// Azure: Use target SP credentials directly for CLI push initial setup.
 fn build_azure_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig> {
     let target = config
         .azure_target
@@ -294,92 +503,6 @@ fn build_azure_target_config(config: &TestConfig) -> anyhow::Result<ClientConfig
             service_overrides: None,
         },
     )))
-}
-
-/// Create scoped credentials and set them as environment variables.
-///
-/// This mirrors what a real customer would do: they have scoped credentials
-/// in their environment, and `alien-deploy up` reads them via
-/// `ClientConfig::from_std_env()`.
-///
-/// For AWS: creates a scoped IAM role with auto-generated permissions,
-/// assumes it, and sets AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN env vars.
-/// For GCP/Azure: sets target credentials directly (scoped role creation TBD).
-pub async fn set_scoped_credentials_env(
-    config: &TestConfig,
-    platform: Platform,
-    _manager: &Arc<TestManager>,
-    _management_config: Option<ManagementConfig>,
-) -> anyhow::Result<()> {
-    if !config.has_platform(platform) {
-        anyhow::bail!(
-            "Cannot set up scoped credentials for {}: missing credentials",
-            platform.as_str()
-        );
-    }
-
-    info!(
-        platform = %platform.as_str(),
-        "Setting scoped credentials as environment variables for alien-deploy up"
-    );
-
-    // Build the scoped config (creates IAM role for AWS, uses direct creds for GCP/Azure)
-    let scoped_config = build_scoped_target_config(config, platform, "e2e-deploy")
-        .await
-        .context("Failed to build scoped target config")?;
-
-    // Extract credentials and set as env vars so alien-deploy up inherits them
-    match scoped_config {
-        ClientConfig::Aws(aws_config) => {
-            match &aws_config.credentials {
-                alien_core::AwsCredentials::AccessKeys {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                } => {
-                    std::env::set_var("AWS_ACCESS_KEY_ID", access_key_id);
-                    std::env::set_var("AWS_SECRET_ACCESS_KEY", secret_access_key);
-                    if let Some(token) = session_token {
-                        std::env::set_var("AWS_SESSION_TOKEN", token);
-                    }
-                    std::env::set_var("AWS_REGION", &aws_config.region);
-                    if !aws_config.account_id.is_empty() {
-                        std::env::set_var("AWS_ACCOUNT_ID", &aws_config.account_id);
-                    }
-                }
-                _ => anyhow::bail!("Expected AccessKeys credentials from scoped AWS config"),
-            }
-            info!("AWS scoped credentials set as environment variables");
-        }
-        ClientConfig::Gcp(gcp_config) => {
-            std::env::set_var("GCP_PROJECT_ID", &gcp_config.project_id);
-            std::env::set_var("GCP_REGION", &gcp_config.region);
-            if let alien_core::GcpCredentials::ServiceAccountKey { json } = &gcp_config.credentials
-            {
-                std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", json);
-            }
-            info!("GCP credentials set as environment variables");
-        }
-        ClientConfig::Azure(azure_config) => {
-            std::env::set_var("AZURE_SUBSCRIPTION_ID", &azure_config.subscription_id);
-            std::env::set_var("AZURE_TENANT_ID", &azure_config.tenant_id);
-            if let alien_core::AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            } = &azure_config.credentials
-            {
-                std::env::set_var("AZURE_CLIENT_ID", client_id);
-                std::env::set_var("AZURE_CLIENT_SECRET", client_secret);
-            }
-            if let Some(ref region) = azure_config.region {
-                std::env::set_var("AZURE_REGION", region);
-            }
-            info!("Azure credentials set as environment variables");
-        }
-        _ => anyhow::bail!("Unsupported platform for scoped credentials: {}", platform),
-    }
-
-    Ok(())
 }
 
 /// Tears down a deployment by running the deletion state machine locally
@@ -444,8 +567,8 @@ fn build_direct_target_config(
     }
 }
 
-/// Grant the deployment's management UAMI `managedEnvironments/join/action`
-/// on the shared Container Apps Environment.
+/// Grant the deployment's management UAMI permissions on the shared Container
+/// Apps Environment.
 ///
 /// The shared environment is in a different resource group than the deployment,
 /// so the management UAMI's RG-scoped role doesn't cover it. The role
@@ -462,7 +585,6 @@ async fn grant_shared_env_join_permission(
         RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
     };
     use alien_azure_clients::AzureAuthorizationClient;
-    use alien_client_config::ClientConfigExt;
 
     let join_role_id = shared_env
         .join_role_definition_id
@@ -503,7 +625,7 @@ async fn grant_shared_env_join_permission(
     info!(
         principal_id = %mgmt_principal_id,
         shared_env = %shared_env.environment_name,
-        "Granting managedEnvironments/join on shared environment for management UAMI"
+        "Granting shared environment permissions for management UAMI"
     );
 
     // Create role assignment using the Terraform-provisioned role definition
@@ -546,7 +668,7 @@ async fn grant_shared_env_join_permission(
                     condition: None,
                     condition_version: None,
                     delegated_managed_identity_resource_id: None,
-                    description: Some("E2E test: management UAMI join shared env".into()),
+                    description: Some("E2E test: management UAMI shared env access".into()),
                     created_by: None,
                     created_on: None,
                     updated_by: None,
@@ -559,7 +681,7 @@ async fn grant_shared_env_join_permission(
 
     info!(
         principal_id = %mgmt_principal_id,
-        "Shared environment join permission granted"
+        "Shared environment permissions granted"
     );
 
     Ok(())

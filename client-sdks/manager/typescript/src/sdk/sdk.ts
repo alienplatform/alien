@@ -10,6 +10,7 @@ import { Deployments } from "./deployments.js";
 import { Health } from "./health.js";
 import { Leases } from "./leases.js";
 import { Releases } from "./releases.js";
+import { StackImport } from "./stackimport.js";
 import { Sync } from "./sync.js";
 import { Whoami } from "./whoami.js";
 
@@ -52,6 +53,11 @@ export class AlienManager extends ClientSDK {
   private _credentials?: Credentials;
   get credentials(): Credentials {
     return (this._credentials ??= new Credentials(this._options));
+  }
+
+  private _stackImport?: StackImport;
+  get stackImport(): StackImport {
+    return (this._stackImport ??= new StackImport(this._options));
   }
 
   private _whoami?: Whoami;

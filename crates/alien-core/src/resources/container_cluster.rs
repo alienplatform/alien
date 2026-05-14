@@ -1,13 +1,11 @@
 //! ContainerCluster resource for long-running container workloads.
 //!
-//! A ContainerCluster represents the compute infrastructure needed to run containers.
-//! It provisions:
+//! A ContainerCluster represents the setup-owned compute boundary for containers.
+//! Setup provisions:
 //! - Auto Scaling Groups (AWS), Managed Instance Groups (GCP), or VM Scale Sets (Azure)
 //! - IAM roles/service accounts for machine authentication
 //! - Security groups/firewall rules
 //! - Launch templates/instance configurations
-//!
-//! The cluster integrates with Horizon for container scheduling and orchestration.
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
@@ -34,7 +32,7 @@ pub struct GpuSpec {
 ///
 /// Represents the hardware specifications for machines in a capacity group.
 /// These are hardware totals (what the instance type advertises), not allocatable
-/// capacity. Horizon's scheduler internally subtracts system reserves for planning.
+/// capacity. The managed container scheduler internally subtracts system reserves for planning.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -75,12 +73,11 @@ pub struct CapacityGroup {
     pub max_size: u32,
 }
 
-/// Deployment-time values that affect VM instance templates.
+/// Deployment-time values that affect worker instance templates.
 ///
-/// These are stamped onto `ContainerCluster` by `stamp_template_inputs()` before
+/// These are stamped onto `ContainerCluster` by `stamp_worker_template()` before
 /// each deployment. Storing them in the resource config means `resource_eq()`
-/// detects changes (e.g., new horizond binary URL, rotated monitoring credentials)
-/// and triggers the normal update flow without any executor changes.
+/// detects changes and triggers worker replacement without any executor changes.
 ///
 /// The OTLP auth header is sensitive — only a SHA-256 hash is stored here for
 /// change detection. The actual header value is read from `DeploymentConfig` at
@@ -88,21 +85,14 @@ pub struct CapacityGroup {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct TemplateInputs {
-    /// Base URL for downloading the horizond binary (without arch suffix).
-    pub horizond_download_base_url: String,
-    /// Horizon API base URL (e.g., "https://horizon.alien.dev").
+pub struct WorkerTemplate {
+    /// Worker control-plane API base URL.
     pub horizon_api_url: String,
-    /// ETag of the horizond binary from the releases server — change-detection signal.
-    /// Changes on every `cargo zigbuild` (nginx ETag = mtime+size), triggering a rolling update.
-    /// Absent when the releases server is unreachable; change detection falls back to URL-only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub horizond_binary_hash: Option<String>,
     /// OTLP logs endpoint URL (non-sensitive, stored directly).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring_logs_endpoint: Option<String>,
     /// OTLP metrics endpoint URL (non-sensitive, stored directly).
-    /// When set, horizond will export its own VM/container orchestration metrics here.
+    /// When set, the worker runtime exports its own VM/container orchestration metrics here.
     /// The same auth header as logs is reused at boot time (stored in the cloud vault).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring_metrics_endpoint: Option<String>,
@@ -114,23 +104,25 @@ pub struct TemplateInputs {
     /// Only set when metrics uses a separate auth header from logs (e.g. Axiom with distinct datasets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring_metrics_auth_hash: Option<String>,
-    /// AMI / image ID for the Flatcar OS image used by EC2 instances.
-    /// Set by the platform when stamping template inputs.
+    /// AMI / image ID for the worker machine image.
+    ///
+    /// The selected image contains the worker runtime bootstrap. Controllers
+    /// only pass machine-specific settings into that image.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub flatcar_image_id: Option<String>,
+    pub worker_image_id: Option<String>,
 }
 
 /// ContainerCluster resource for running long-running container workloads.
 ///
-/// A ContainerCluster provides compute infrastructure that integrates with Horizon
-/// for container orchestration. It manages auto scaling groups of machines that
-/// run the horizond agent for container scheduling.
+/// A ContainerCluster provides the setup-owned machine boundary for containers.
+/// Alien may manage the worker fleet inside that boundary when setup grants
+/// `container-cluster/management`.
 ///
 /// ## Architecture
 ///
-/// - **Alien** provisions infrastructure: ASGs/MIGs/VMSSs, IAM roles, security groups
-/// - **Horizon** manages containers: scheduling replicas to machines, autoscaling
-/// - **horizond** runs on each machine: starts/stops containers based on Horizon's assignments
+/// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
+/// - **Alien** manages allowed fleet operations: machine count and worker image rollout
+/// - **Worker runtime** runs on each machine from the selected worker image
 ///
 /// ## Example
 ///
@@ -168,11 +160,11 @@ pub struct ContainerCluster {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_cidr: Option<String>,
 
-    /// Deployment-time values that affect instance templates (horizond URL, monitoring, etc.).
-    /// Populated by stamp_template_inputs() from DeploymentConfig — not user-provided.
+    /// Deployment-time values that affect worker instance templates.
+    /// Populated by stamp_worker_template() from DeploymentConfig; not user-provided.
     #[builder(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub template_inputs: Option<TemplateInputs>,
+    pub worker_template: Option<WorkerTemplate>,
 }
 
 impl ContainerCluster {
@@ -207,7 +199,7 @@ pub struct CapacityGroupStatus {
     pub group_id: String,
     /// Current number of machines
     pub current_machines: u32,
-    /// Desired number of machines (from Horizon's capacity plan)
+    /// Desired number of machines (from the managed container capacity plan)
     pub desired_machines: u32,
     /// Instance type being used
     pub instance_type: String,
@@ -218,9 +210,9 @@ pub struct CapacityGroupStatus {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerClusterOutputs {
-    /// Horizon cluster ID (workspace/project/agent/resourceid format)
+    /// Managed container cluster ID (workspace/project/deployment/resourceid format)
     pub cluster_id: String,
-    /// Whether the Horizon cluster is ready
+    /// Whether the managed container cluster is ready
     pub horizon_ready: bool,
     /// Status of each capacity group
     pub capacity_group_statuses: Vec<CapacityGroupStatus>,

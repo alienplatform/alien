@@ -1,0 +1,255 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_compute_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: aws_build
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - DeploymentGroupToken
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Domains
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      CertificateArn:
+        default: Certificate ARN
+      DeploymentGroupToken:
+        default: Deployment group token
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager AWS account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+Parameters:
+  DeploymentGroupToken:
+    Type: String
+    Description: Deployment-group token used when registering the resolved stack import.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Default: ''
+  DomainName:
+    Type: String
+    Description: Optional domain name for public endpoints. Empty disables custom domains.
+  HostedZoneId:
+    Type: String
+    Description: Optional Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: Optional ACM certificate ARN for the domain.
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - "off"
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  BuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: alien-managed-policy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Sid: WriteLogs
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: builder
+      - Key: AlienResourceType
+        Value: build
+  BuilderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/codebuild/${AWS::StackName}-builder
+      RetentionInDays: 30
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  Builder:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-builder
+      ServiceRole:
+        Fn::GetAtt:
+        - BuilderRole
+        - Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Build project is ready for runtime-provided commands"
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        PrivilegedMode: true
+        EnvironmentVariables:
+        - Name: PROFILE
+          Value: release
+          Type: PLAINTEXT
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName:
+            Ref: BuilderLogGroup
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: builder
+      - Key: AlienResourceType
+        Value: build
+    DependsOn:
+    - BuilderLogGroup
+    - BuilderRole
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentStackPrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Physical stack prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupFingerprintVersion:
+    Value: '1'
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Manager import ManagementConfig JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+    Description: Manager import StackSettings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: builder
+        type: build
+        importData:
+          projectName:
+            Ref: Builder
+          projectArn:
+            Fn::GetAtt:
+            - Builder
+            - Arn
+          buildEnvVars:
+            PROFILE: release
+    Description: Manager import resources JSON.

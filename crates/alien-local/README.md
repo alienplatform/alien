@@ -12,4 +12,4 @@ Local platform implementation. "Local" is a full Alien platform — applications
 
 Application code is identical across platforms — the same `storage.put(key, data)` call works on Local, AWS, GCP, and Azure.
 
-Used by `alien dev` for local development, and deployable to any machine via `alien-deploy up --platform local`.
+Used by `alien dev` for local development, and deployable to any machine via `alien-deploy deploy --platform local`.

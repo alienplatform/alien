@@ -4,6 +4,8 @@ pub mod initial_setup;
 pub mod registry;
 pub mod variables;
 
+use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+
 pub use error::*;
 pub use registry::{get_permission_set, has_permission_set, list_permission_set_ids};
 pub use variables::VariableInterpolator;
@@ -209,6 +211,9 @@ impl PermissionContext {
             "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
+            "stackTag" => Some(ALIEN_STACK_TAG_KEY),
+            "resourceTag" => Some(ALIEN_RESOURCE_TAG_KEY),
+            "managedByTag" => Some(ALIEN_MANAGED_BY_TAG_KEY),
             _ => None,
         }
     }

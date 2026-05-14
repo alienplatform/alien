@@ -231,13 +231,7 @@ async fn load_release_config(
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
         for platform_str in &target_platforms {
-            auto_build_for_platform(
-                platform_str,
-                &stack,
-                &output_dir,
-                show_human_output,
-            )
-            .await?;
+            auto_build_for_platform(platform_str, &stack, &output_dir, show_human_output).await?;
         }
     }
 
@@ -454,12 +448,25 @@ async fn release_task_core(
                 commit_message: inner.commit_message.map(|s| s.to_string()),
             })
         });
-        create_manager_release(manager, &project_link.project_id, stack_by_platform, sdk_git_metadata).await?
+        create_manager_release(
+            manager,
+            &project_link.project_id,
+            stack_by_platform,
+            sdk_git_metadata,
+        )
+        .await?
     } else {
         // Platform mode: create release directly on the platform API
         #[cfg(feature = "platform")]
         {
-            create_platform_release(ctx, &project_link.project_id, &project_link.workspace, stack_by_platform, git_metadata).await?
+            create_platform_release(
+                ctx,
+                &project_link.project_id,
+                &project_link.workspace,
+                stack_by_platform,
+                git_metadata,
+            )
+            .await?
         }
         #[cfg(not(feature = "platform"))]
         {
@@ -529,22 +536,23 @@ async fn create_platform_release(
     let platform_client = http.sdk_client();
 
     // Convert manager SDK StackByPlatform to platform SDK StackByPlatform (serde roundtrip)
-    let stack_json = serde_json::to_value(&stack).into_alien_error().context(
-        ErrorData::ApiRequestFailed {
-            message: "Failed to serialize stack".to_string(),
-            url: None,
-        },
-    )?;
+    let stack_json =
+        serde_json::to_value(&stack)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to serialize stack".to_string(),
+                url: None,
+            })?;
     let platform_stack: alien_platform_api::types::StackByPlatform =
-        serde_json::from_value(stack_json).into_alien_error().context(
-            ErrorData::ApiRequestFailed {
+        serde_json::from_value(stack_json)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
                 message: "Failed to convert stack to platform format".to_string(),
                 url: None,
-            },
-        )?;
+            })?;
 
-    let workspace_param =
-        alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace).map_err(|e| {
+    let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace)
+        .map_err(|e| {
             AlienError::new(ErrorData::ValidationError {
                 field: "workspace".to_string(),
                 message: format!("Invalid workspace: {}", e),
@@ -583,7 +591,10 @@ async fn create_platform_release(
 }
 
 /// Discover which platforms have been built
-fn discover_built_platforms(output_dir: &PathBuf, include_experimental: bool) -> Result<Vec<String>> {
+fn discover_built_platforms(
+    output_dir: &PathBuf,
+    include_experimental: bool,
+) -> Result<Vec<String>> {
     let build_dir = output_dir.join("build");
     if !build_dir.exists() {
         return Ok(Vec::new());
@@ -606,7 +617,6 @@ fn discover_built_platforms(output_dir: &PathBuf, include_experimental: bool) ->
     Ok(platforms)
 }
 
-
 /// Build for a single platform.
 async fn auto_build_for_platform(
     platform_str: &str,
@@ -614,7 +624,6 @@ async fn auto_build_for_platform(
     output_dir: &PathBuf,
     _show_human_output: bool,
 ) -> Result<()> {
-
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -791,13 +800,13 @@ async fn build_proxy_push_settings(
             }));
         }
 
-        let bc: serde_json::Value = resp
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to parse build-config response".to_string(),
-            })?;
+        let bc: serde_json::Value =
+            resp.json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to parse build-config response".to_string(),
+                })?;
 
         bc.get("repositoryName")
             .and_then(|v| v.as_str())
@@ -844,7 +853,6 @@ async fn build_proxy_push_settings(
         },
     })
 }
-
 
 /// Translate registry URL for CLI access.
 ///

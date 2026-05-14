@@ -16,7 +16,7 @@ let value: SyncAcquireResponseCurrentReleaseResources = {
       type: "<value>",
     },
   ],
-  lifecycle: "live-on-setup",
+  lifecycle: "live",
 };
 ```
 

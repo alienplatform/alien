@@ -62,18 +62,12 @@ async fn require_command_access(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/commands", post(create_command))
-        .route(
-            "/v1/commands/{command_id}",
-            get(get_command_status),
-        )
+        .route("/v1/commands/{command_id}", get(get_command_status))
         .route(
             "/v1/commands/{command_id}/upload-complete",
             post(upload_complete),
         )
-        .route(
-            "/v1/commands/{command_id}/response",
-            put(submit_response),
-        )
+        .route("/v1/commands/{command_id}/response", put(submit_response))
         .route(
             "/v1/commands/{command_id}/payload",
             get(get_command_payload).put(store_command_payload),
@@ -99,15 +93,18 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state.deployment_store.get_deployment(&subject, &request.deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &request.deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
         Err(e) => return e.into_response(),
     };
 
     if !state.authz.can_dispatch_command(&subject, &deployment) {
-        return ErrorData::forbidden("Cannot dispatch command for this deployment")
-            .into_response();
+        return ErrorData::forbidden("Cannot dispatch command for this deployment").into_response();
     }
 
     match state.command_server.create_command(request).await {
@@ -161,7 +158,11 @@ async fn upload_complete(
         Err(e) => return e,
     };
 
-    let deployment = match state.deployment_store.get_deployment(&subject, &deployment_id).await {
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &deployment_id)
+        .await
+    {
         Ok(Some(d)) => d,
         Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
         Err(e) => return e.into_response(),
@@ -213,11 +214,16 @@ async fn submit_response(
             Ok(id) => id,
             Err(e) => return e,
         };
-        let deployment = match state.deployment_store.get_deployment(&subject, &deployment_id).await {
+        let deployment = match state
+            .deployment_store
+            .get_deployment(&subject, &deployment_id)
+            .await
+        {
             Ok(Some(d)) => d,
             Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
             Err(e) => return e.into_response(),
-        };        if !state.authz.can_act_on_deployment(&subject, &deployment) {
+        };
+        if !state.authz.can_act_on_deployment(&subject, &deployment) {
             return ErrorData::forbidden(
                 "Access denied: only the target deployment can submit responses",
             )
@@ -327,7 +333,7 @@ async fn store_command_payload(
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
-    };    // Storing payload with no entity context is workspace-write only.
+    }; // Storing payload with no entity context is workspace-write only.
     if !matches!(subject.scope, crate::auth::Scope::Workspace)
         || !matches!(
             subject.role,
@@ -407,11 +413,7 @@ async fn release_lease(
         return e.into_response();
     }
 
-    match state
-        .command_server
-        .release_lease_by_id(&lease_id)
-        .await
-    {
+    match state.command_server.release_lease_by_id(&lease_id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
     }

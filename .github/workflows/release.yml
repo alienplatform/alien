@@ -749,21 +749,6 @@ jobs:
           provenance: true
           sbom: true
 
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-
-      - name: Package Helm chart
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          sed -i "s/^version:.*/version: $VERSION/" charts/alien-agent/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/alien-agent/Chart.yaml
-          helm package charts/alien-agent
-
-      - name: Push Helm chart to GHCR
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          helm push alien-agent-$VERSION.tgz oci://ghcr.io/alienplatform/charts
-
   # ─── Homebrew tap ──────────────────────────────────────────────────
 
   publish-homebrew-tap:

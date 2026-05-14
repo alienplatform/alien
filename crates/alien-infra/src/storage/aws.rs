@@ -13,7 +13,9 @@ use alien_aws_clients::s3::{
     LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api, S3Client, VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Resource, ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_core::{
+    standard_resource_tags, Resource, ResourceOutputs, ResourceStatus, Storage, StorageOutputs,
+};
 use alien_error::{Context, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use std::sync::Arc;
@@ -21,6 +23,17 @@ use std::sync::Arc;
 /// Generates the full, prefixed AWS bucket name.
 fn get_aws_bucket_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+            if message.contains("BucketAlreadyOwnedByYou")
+                || message.contains("you already own")
+                || message.contains("already owned by you")
+                || message.contains("previous request to create the named bucket succeeded")
+    )
 }
 
 #[controller]
@@ -49,21 +62,39 @@ impl AwsStorageController {
             .bucket_name
             .clone()
             .unwrap_or_else(|| get_aws_bucket_name(ctx.resource_prefix, &config.id));
+        self.bucket_name = Some(bucket_name.clone());
 
         info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
 
         // Create the bucket using our custom S3 client
+        match client.create_bucket(&bucket_name).await {
+            Ok(()) => {}
+            Err(error) if is_bucket_already_owned(&error) => {
+                info!(
+                    bucket = %bucket_name,
+                    "S3 bucket already exists and is owned by this account; continuing create flow"
+                );
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create S3 bucket '{}'", bucket_name),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+
         client
-            .create_bucket(&bucket_name)
+            .put_bucket_abac_tags(
+                &bucket_name,
+                &standard_resource_tags(ctx.resource_prefix, &config.id),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create S3 bucket '{}'", bucket_name),
+                message: format!("Failed to tag S3 bucket '{}'", bucket_name),
                 resource_id: Some(config.id.clone()),
             })?;
 
         info!(bucket=%bucket_name, "S3 bucket created successfully");
-
-        self.bucket_name = Some(bucket_name);
 
         Ok(HandlerAction::Continue {
             state: ConfiguringVersioning,
@@ -930,6 +961,9 @@ mod tests {
 
         // Mock successful bucket creation
         mock_s3.expect_create_bucket().returning(|_| Ok(()));
+        mock_s3
+            .expect_put_bucket_abac_tags()
+            .returning(|_, _| Ok(()));
 
         // Mock configuration methods
         mock_s3
@@ -952,6 +986,11 @@ mod tests {
 
     fn setup_mock_client_for_creation_and_update(bucket_name: &str) -> Arc<MockS3Api> {
         let mut mock_s3 = MockS3Api::new();
+
+        mock_s3.expect_create_bucket().returning(|_| Ok(()));
+        mock_s3
+            .expect_put_bucket_abac_tags()
+            .returning(|_, _| Ok(()));
 
         // Mock configuration methods for create and update
         mock_s3
@@ -1194,6 +1233,9 @@ mod tests {
             .expect_create_bucket()
             .withf(|bucket_name| bucket_name == "test-my-awesome-storage")
             .returning(|_| Ok(()));
+        mock_s3
+            .expect_put_bucket_abac_tags()
+            .returning(|_, _| Ok(()));
 
         // Mock other required methods
         mock_s3
@@ -1242,6 +1284,9 @@ mod tests {
         let mut mock_s3 = MockS3Api::new();
 
         mock_s3.expect_create_bucket().returning(|_| Ok(()));
+        mock_s3
+            .expect_put_bucket_abac_tags()
+            .returning(|_, _| Ok(()));
         mock_s3
             .expect_put_bucket_versioning()
             .returning(|_, _| Ok(()));
@@ -1329,6 +1374,9 @@ mod tests {
         let mut mock_s3 = MockS3Api::new();
 
         mock_s3.expect_create_bucket().returning(|_| Ok(()));
+        mock_s3
+            .expect_put_bucket_abac_tags()
+            .returning(|_, _| Ok(()));
         mock_s3
             .expect_put_bucket_versioning()
             .returning(|_, _| Ok(()));

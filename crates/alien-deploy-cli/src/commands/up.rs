@@ -8,10 +8,11 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
-    StackSettings,
+    ClientConfig, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    NetworkSettings, Platform, ReleaseInfo, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome},
@@ -23,28 +24,28 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
-use alien_cli_common::network::{self, NetworkArgs};
 use clap::Parser;
-use std::str::FromStr;
+use serde::Deserialize;
+use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Deploy the application to a target environment",
     after_help = "EXAMPLES:
     # Deploy to AWS using a deployment group token
-    alien-deploy up --token ax_dg_abc123... --platform aws
+    alien-deploy deploy --token ax_dg_abc123... --platform aws
 
     # Deploy with an isolated VPC
-    alien-deploy up --token ax_dg_abc123... --platform aws --network create
+    alien-deploy deploy --token ax_dg_abc123... --platform aws --network create
 
     # Deploy into an existing VPC
-    alien-deploy up --token ax_dg_abc123... --platform aws --network byo --vpc-id vpc-0abc123 --public-subnet-ids subnet-pub1 --private-subnet-ids subnet-priv1
+    alien-deploy deploy --token ax_dg_abc123... --platform aws --network byo --vpc-id vpc-0abc123 --public-subnet-ids subnet-pub1 --private-subnet-ids subnet-priv1
 
     # Redeploy an existing tracked deployment
-    alien-deploy up --name production
+    alien-deploy deploy --name production
 
     # Deploy to a standalone (OSS) manager
-    ALIEN_MANAGER_URL=https://manager.example.com alien-deploy up --token tok_... --platform aws"
+    ALIEN_MANAGER_URL=https://manager.example.com alien-deploy deploy --token ax_dg_abc123... --platform aws"
 )]
 pub struct UpArgs {
     /// Authentication token (deployment or deployment group token)
@@ -56,10 +57,10 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
 
-    /// Platform API base URL (default: https://api.alien.dev).
+    /// Platform API base URL.
     /// Used for manager discovery when ALIEN_MANAGER_URL is not set.
-    #[arg(long, env = "ALIEN_BASE_URL", default_value = "https://api.alien.dev")]
-    pub base_url: String,
+    #[arg(long, env = "ALIEN_BASE_URL")]
+    pub base_url: Option<String>,
 
     /// Target platform (aws, gcp, azure)
     #[arg(long)]
@@ -91,13 +92,109 @@ pub struct UpArgs {
     #[arg(long)]
     pub data_dir: Option<String>,
 
+    /// TOML file containing deployment settings.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
     #[command(flatten)]
     pub network: NetworkArgs,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeployConfigFile {
+    /// Deployment name.
+    name: Option<String>,
+    /// Target platform: aws, gcp, azure, kubernetes, or local.
+    platform: Option<String>,
+    /// Network settings for cloud deployments.
+    network: Option<DeployConfigNetwork>,
+    /// Update delivery mode.
+    updates: Option<UpdatesMode>,
+    /// Telemetry delivery mode.
+    telemetry: Option<TelemetryMode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+enum DeployConfigNetwork {
+    UseDefault,
+    Create {
+        cidr: Option<String>,
+        #[serde(default = "default_config_availability_zones")]
+        availability_zones: u8,
+    },
+    ByoVpcAws {
+        vpc_id: String,
+        public_subnet_ids: Vec<String>,
+        private_subnet_ids: Vec<String>,
+        #[serde(default)]
+        security_group_ids: Vec<String>,
+    },
+    ByoVpcGcp {
+        network_name: String,
+        subnet_name: String,
+        region: String,
+    },
+    ByoVnetAzure {
+        vnet_resource_id: String,
+        public_subnet_name: String,
+        private_subnet_name: String,
+    },
+}
+
+fn default_config_availability_zones() -> u8 {
+    2
+}
+
+impl From<DeployConfigNetwork> for NetworkSettings {
+    fn from(value: DeployConfigNetwork) -> Self {
+        match value {
+            DeployConfigNetwork::UseDefault => NetworkSettings::UseDefault,
+            DeployConfigNetwork::Create {
+                cidr,
+                availability_zones,
+            } => NetworkSettings::Create {
+                cidr,
+                availability_zones,
+            },
+            DeployConfigNetwork::ByoVpcAws {
+                vpc_id,
+                public_subnet_ids,
+                private_subnet_ids,
+                security_group_ids,
+            } => NetworkSettings::ByoVpcAws {
+                vpc_id,
+                public_subnet_ids,
+                private_subnet_ids,
+                security_group_ids,
+            },
+            DeployConfigNetwork::ByoVpcGcp {
+                network_name,
+                subnet_name,
+                region,
+            } => NetworkSettings::ByoVpcGcp {
+                network_name,
+                subnet_name,
+                region,
+            },
+            DeployConfigNetwork::ByoVnetAzure {
+                vnet_resource_id,
+                public_subnet_name,
+                private_subnet_name,
+            } => NetworkSettings::ByoVnetAzure {
+                vnet_resource_id,
+                public_subnet_name,
+                private_subnet_name,
+            },
+        }
+    }
+}
+
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    let deploy_config = load_deploy_config(&args)?;
     // Resolve token and platform from args, embedded config, or tracked deployment
-    let resolved = resolve_deployment_info(&args, embedded_config)?;
+    let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
     let token = resolved.token;
     let platform_str = resolved.platform;
     let name = resolved.name;
@@ -136,7 +233,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         Some(url) => url,
         None => {
             output::info("Discovering manager via platform API...");
-            discover_manager_url(&args.base_url, &token, &platform_str).await?
+            discover_manager_url(&resolved.base_url, &token, &platform_str).await?
         }
     };
 
@@ -149,11 +246,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     output::label_value("Name", &name);
     eprintln!();
 
+    let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
+
     // Create authenticated manager client
     let client = create_manager_client(&token, &manager_url)?;
 
     // Initialize with manager
-    let init = initialize_deployment(&client, &token, platform, &name).await?;
+    let init = initialize_deployment(&client, &token, platform, &name, &stack_settings).await?;
     let deployment_id = init.deployment_id;
     output::success("Connected to manager");
 
@@ -202,9 +301,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             // Build progress callback
-            let progress = std::sync::Arc::new(std::sync::Mutex::new(
-                output::DeployProgress::new(),
-            ));
+            let progress =
+                std::sync::Arc::new(std::sync::Mutex::new(output::DeployProgress::new()));
             let progress_clone = progress.clone();
             let on_progress: alien_deployment::runner::ProgressCallback =
                 Box::new(move |step_progress| {
@@ -243,19 +341,46 @@ struct ResolvedInfo {
     token: String,
     /// Manager URL (from override, tracker, or to be discovered via platform API).
     manager_url: Option<String>,
+    /// Platform API base URL used when manager URL must be discovered.
+    base_url: String,
     platform: String,
     name: String,
+}
+
+fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
+    let Some(path) = &args.config else {
+        return Ok(None);
+    };
+
+    let text = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: format!("Failed to read deployment config {}", path.display()),
+        },
+    )?;
+    let config =
+        toml::from_str(&text)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to parse deployment config {}", path.display()),
+            })?;
+    Ok(Some(config))
 }
 
 fn resolve_deployment_info(
     args: &UpArgs,
     embedded_config: Option<&DeployCliConfig>,
+    deploy_config: Option<&DeployConfigFile>,
 ) -> Result<ResolvedInfo> {
     // If name is provided, try to load from tracker
-    if let Some(ref name) = args.name {
+    let requested_name = args
+        .name
+        .as_ref()
+        .or_else(|| deploy_config.and_then(|c| c.name.as_ref()));
+    if let Some(name) = requested_name {
         let tracker = DeploymentTracker::new()?;
         if let Some(tracked) = tracker.get(name) {
-            let token = args.token.clone().unwrap_or_else(|| tracked.token.clone());
+            let token =
+                resolve_token(args, embedded_config).unwrap_or_else(|_| tracked.token.clone());
             let manager_url = args
                 .manager_url
                 .clone()
@@ -263,10 +388,12 @@ fn resolve_deployment_info(
             let platform = args
                 .platform
                 .clone()
+                .or_else(|| deploy_config.and_then(|c| c.platform.clone()))
                 .unwrap_or_else(|| tracked.platform.clone());
             return Ok(ResolvedInfo {
                 token,
                 manager_url,
+                base_url: resolve_base_url(args, embedded_config),
                 platform,
                 name: name.clone(),
             });
@@ -274,16 +401,7 @@ fn resolve_deployment_info(
     }
 
     // CLI args override embedded config, which overrides nothing (required)
-    let token = args
-        .token
-        .clone()
-        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "token".to_string(),
-                message: "--token is required for new deployments. Use the deployment token from `alien onboard` (starts with `ax_dg_...`) or from the deploy page.".to_string(),
-            })
-        })?;
+    let token = resolve_token(args, embedded_config)?;
 
     // Manager URL: explicit override only. If not set, will be discovered via platform API.
     let manager_url = args.manager_url.clone();
@@ -291,34 +409,111 @@ fn resolve_deployment_info(
     let platform = args
         .platform
         .clone()
+        .or_else(|| deploy_config.and_then(|c| c.platform.clone()))
         .or_else(|| embedded_config.and_then(|c| c.default_platform.clone()))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "platform".to_string(),
-                message: "--platform is required for new deployments. Choose from: aws, gcp, azure.".to_string(),
+                message:
+                    "--platform is required for new deployments. Choose from: aws, gcp, azure."
+                        .to_string(),
             })
         })?;
 
     let name = match args.name.clone() {
         Some(n) => n,
-        None if platform == "local" => hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "default".to_string()),
-        None => {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "name".to_string(),
-                message: "--name is required for non-local deployments.".to_string(),
-            }));
-        }
+        None => match deploy_config.and_then(|c| c.name.clone()) {
+            Some(n) => n,
+            None if platform == "local" => hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "default".to_string()),
+            None => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "name".to_string(),
+                    message: "--name or config field `name` is required for non-local deployments."
+                        .to_string(),
+                }));
+            }
+        },
     };
 
     Ok(ResolvedInfo {
         token,
         manager_url,
+        base_url: resolve_base_url(args, embedded_config),
         platform,
         name,
     })
+}
+
+fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
+    args.token
+        .clone()
+        .or_else(|| {
+            embedded_config
+                .and_then(|c| c.token_env_var.as_ref())
+                .and_then(|env_var| std::env::var(env_var).ok())
+        })
+        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
+        .ok_or_else(|| {
+            let branded_hint = embedded_config
+                .and_then(|c| c.token_env_var.as_deref())
+                .map(|env_var| format!(" or set ${env_var}"))
+                .unwrap_or_default();
+            AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: format!(
+                    "--token is required for new deployments{branded_hint}. Use the deployment token from the deploy page."
+                ),
+            })
+        })
+}
+
+fn resolve_base_url(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> String {
+    args.base_url
+        .clone()
+        .or_else(|| embedded_config.and_then(|c| c.api_base_url.clone()))
+        .unwrap_or_else(|| "https://api.alien.dev".to_string())
+}
+
+fn load_stack_settings(
+    args: &UpArgs,
+    platform: Platform,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<StackSettings> {
+    let mut settings = StackSettings::default();
+    settings.deployment_model = match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => DeploymentModel::Push,
+        Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
+    };
+
+    if let Some(config) = deploy_config {
+        if let Some(network) = config.network.clone() {
+            settings.network = Some(network.into());
+        }
+        if let Some(updates) = config.updates {
+            settings.updates = updates;
+        }
+        if let Some(telemetry) = config.telemetry {
+            settings.telemetry = telemetry;
+        }
+    }
+
+    if args.network.network_mode != NetworkMode::Auto {
+        let network_override = network::parse_network_settings(&args.network, platform.as_str())
+            .map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message: e,
+                })
+            })?;
+        if let Some(network) = network_override {
+            settings.network = Some(network);
+        }
+    }
+
+    Ok(settings)
 }
 
 /// Discover the manager URL via the platform API.
@@ -382,13 +577,13 @@ async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Re
         manager_url: String,
     }
 
-    let resolved: ResolveResponse = resp
-        .json()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to parse /v1/resolve response".to_string(),
-        })?;
+    let resolved: ResolveResponse =
+        resp.json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse /v1/resolve response".to_string(),
+            })?;
 
     Ok(resolved.manager_url)
 }
@@ -474,6 +669,7 @@ async fn initialize_deployment(
     _token: &str,
     platform: Platform,
     name: &str,
+    stack_settings: &StackSettings,
 ) -> Result<InitResult> {
     let sdk_platform = match platform {
         Platform::Aws => alien_manager_api::types::Platform::Aws,
@@ -487,6 +683,7 @@ async fn initialize_deployment(
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform),
+        stack_settings: Some(sdk_stack_settings(stack_settings)?),
     };
 
     let response = client
@@ -504,6 +701,21 @@ async fn initialize_deployment(
         deployment_id: init.deployment_id,
         deployment_token: init.token,
     })
+}
+
+fn sdk_stack_settings(
+    stack_settings: &StackSettings,
+) -> Result<alien_manager_api::types::StackSettings> {
+    let value = serde_json::to_value(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize stack settings".to_string(),
+        })?;
+    serde_json::from_value(value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to convert stack settings for manager API".to_string(),
+        })
 }
 
 async fn run_pull_model(
@@ -674,16 +886,17 @@ async fn run_kubernetes_pull_model(
 ) -> Result<()> {
     output::info("Kubernetes platform detected — use Helm to install the agent.");
     output::info("");
-    output::info("Add the chart and install:");
+    output::info("Generate the stack-specific chart and install it:");
     println!();
-    println!("  helm install alien-agent ./charts/alien-agent \\");
-    println!("    --set syncUrl={} \\", manager_url);
-    println!("    --set syncToken={} \\", token);
-    println!("    --set encryptionKey=$(openssl rand -hex 32) \\",);
-    println!("    --set namespace=<your-app-namespace>");
+    println!("  alien render --format helm --stack ./alien.ts --output ./dist/helm");
+    println!("  # Edit ./dist/helm/values.yaml:");
+    println!("  #   management.url: {}", manager_url);
+    println!("  #   management.token: {}", token);
+    println!("  #   management.deploymentId: {}", deployment_id);
+    println!("  helm install alien-agent ./dist/helm --namespace <your-app-namespace> --create-namespace");
     println!();
     output::info(&format!("Deployment ID: {}", deployment_id));
-    output::info("The agent will register with the manager on first sync.");
+    output::info("The generated chart is stack-specific; do not use the old generic agent chart.");
 
     Ok(())
 }
@@ -838,7 +1051,7 @@ async fn run_push_model(
 /// steps the deployment through InitialSetup until it reaches Provisioning (or a
 /// terminal state), reconciles state back to the manager, and releases the lock.
 ///
-/// This is used by both `alien-deploy up` (push model) and `alien-test` (e2e setup).
+/// This is used by both `alien-deploy deploy` (push model) and `alien-test` (e2e setup).
 pub async fn push_initial_setup(
     client: &ServerClient,
     deployment_id: &str,
@@ -889,7 +1102,7 @@ pub async fn push_initial_setup(
                 let rel = resp.into_inner();
                 // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
                 // Extract the inner stack value for the target platform.
-                let mut platform_stack_value = match platform {
+                let platform_stack_value = match platform {
                     Platform::Aws => rel.stack.aws,
                     Platform::Gcp => rel.stack.gcp,
                     Platform::Azure => rel.stack.azure,
@@ -970,8 +1183,8 @@ pub async fn push_initial_setup(
 
     // Override network settings if the customer provided CLI flags
     if let Some(net_args) = network_args {
-        let network_override =
-            network::parse_network_settings(net_args, platform.as_str()).map_err(|e| {
+        let network_override = network::parse_network_settings(net_args, platform.as_str())
+            .map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "network".to_string(),
                     message: e,
@@ -1104,7 +1317,9 @@ pub async fn push_initial_setup(
             ),
         })),
         LoopOutcome::Neutral => {
-            output::success("Setup complete. Your deployment is being provisioned and will be ready shortly.");
+            output::success(
+                "Setup complete. Your deployment is being provisioned and will be ready shortly.",
+            );
             Ok(())
         }
     }

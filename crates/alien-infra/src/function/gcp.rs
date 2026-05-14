@@ -12,16 +12,16 @@ use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
     TrafficTargetAllocationType, VpcAccess, VpcEgress,
 };
+use alien_gcp_clients::cloudscheduler::{HttpTarget, SchedulerJob, SchedulerOidcToken};
 use alien_gcp_clients::compute::{
     Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
     ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
     NetworkEndpointGroupCloudRun, NetworkEndpointType, SslCertificate, SslCertificateSelfManaged,
     TargetHttpsProxy, UrlMap,
 };
-use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::cloudscheduler::{HttpTarget, SchedulerJob, SchedulerOidcToken};
 use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::iam::Binding;
+use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - functions now use ServiceAccount and permission profiles
 use alien_core::{
@@ -134,8 +134,7 @@ impl GcpFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    cfg.id,
-                    queue_trigger_count
+                    cfg.id, queue_trigger_count
                 ),
                 resource_id: Some(cfg.id.clone()),
             }));
@@ -393,6 +392,18 @@ impl GcpFunctionController {
             .and_then(|meta| meta.resources.get(&function_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
+        if !self.ensure_domain_info(ctx, &function_config.id)? {
+            return Ok(HandlerAction::Continue {
+                state: CreatingPushSubscriptions,
+                suggested_delay: None,
+            });
+        }
+        if self.uses_custom_domain && self.ssl_certificate_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingServerlessNeg,
+                suggested_delay: None,
+            });
+        }
 
         match status {
             Some(CertificateStatus::Issued) => Ok(HandlerAction::Continue {
@@ -422,6 +433,7 @@ impl GcpFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let function_config = ctx.desired_resource_config::<Function>()?;
+        self.ensure_domain_info(ctx, &function_config.id)?;
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -503,6 +515,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.serverless_neg_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingBackendService,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -564,6 +583,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.backend_service_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingUrlMap,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -629,6 +655,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.url_map_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingTargetHttpsProxy,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -685,6 +718,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.target_https_proxy_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingGlobalAddress,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -754,6 +794,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.global_address_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingForwardingRule,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -798,6 +845,13 @@ impl GcpFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.forwarding_rule_name.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: WaitingForDns,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         let function_config = ctx.desired_resource_config::<Function>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
@@ -1021,10 +1075,7 @@ impl GcpFunctionController {
         let service_account_email = self.get_service_account_email(ctx, &cfg)?;
 
         for (index, cron) in &schedule_triggers {
-            let job_id = format!(
-                "{}-{}-cron-{}",
-                ctx.resource_prefix, cfg.id, index
-            );
+            let job_id = format!("{}-{}-cron-{}", ctx.resource_prefix, cfg.id, index);
             let job_full_name = format!(
                 "projects/{}/locations/{}/jobs/{}",
                 gcp_config.project_id, gcp_config.region, job_id
@@ -1392,8 +1443,8 @@ impl GcpFunctionController {
             }
         }
 
-        // Check for certificate renewal (if using custom domain)
-        if self.uses_custom_domain && self.certificate_id.is_some() {
+        // Check for certificate renewal on auto-managed public domains.
+        if function_config.ingress == Ingress::Public && !self.uses_custom_domain {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -1411,7 +1462,7 @@ impl GcpFunctionController {
                             "Certificate renewed, triggering update to re-import certificate"
                         );
                         return Ok(HandlerAction::Continue {
-                            state: UpdateStart,
+                            state: UpdateImportingSslCertificate,
                             suggested_delay: None,
                         });
                     }
@@ -1429,12 +1480,127 @@ impl GcpFunctionController {
     // ─────────────── UPDATE FLOW ──────────────────────────────
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
+        state = UpdateImportingSslCertificate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_importing_ssl_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Function>()?;
+
+        if cfg.ingress != Ingress::Public || self.uses_custom_domain {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&cfg.id))
+        else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })
+        })?;
+
+        let issued_suffix = resource
+            .issued_at
+            .as_deref()
+            .unwrap_or("renewed")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(16)
+            .collect::<String>()
+            .to_lowercase();
+        let ssl_cert_name = format!("{}-{}-cert-{}", ctx.resource_prefix, cfg.id, issued_suffix);
+        let gcp_config = ctx.get_gcp_config()?;
+        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+
+        let ssl_certificate = SslCertificate::builder()
+            .name(ssl_cert_name.clone())
+            .description(format!("Renewed SSL certificate for function {}", cfg.id))
+            .r#type("SELF_MANAGED".to_string())
+            .self_managed(
+                SslCertificateSelfManaged::builder()
+                    .certificate(certificate_chain.clone())
+                    .private_key(private_key.clone())
+                    .build(),
+            )
+            .build();
+
+        compute_client
+            .insert_ssl_certificate(ssl_certificate)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to import renewed SSL certificate to GCP".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+
+        if let Some(proxy_name) = self.target_https_proxy_name.as_ref() {
+            let ssl_cert_url = format!(
+                "projects/{}/global/sslCertificates/{}",
+                gcp_config.project_id, ssl_cert_name
+            );
+            compute_client
+                .set_target_https_proxy_ssl_certificates(proxy_name.clone(), vec![ssl_cert_url])
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to bind renewed SSL certificate to target HTTPS proxy"
+                        .to_string(),
+                    resource_id: Some(cfg.id.clone()),
+                })?;
+        }
+
+        self.ssl_certificate_name = Some(ssl_cert_name);
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        Ok(HandlerAction::Continue {
+            state: UpdateStart,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
         state = UpdateStart,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Function>()?;
+        let previous_cfg = ctx.previous_resource_config::<Function>()?;
+        if cfg == previous_cfg {
+            return Ok(HandlerAction::Continue {
+                state: UpdateRunningReadinessProbe,
+                suggested_delay: None,
+            });
+        }
+
         let gcp_config = ctx.get_gcp_config()?;
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1691,8 +1857,7 @@ impl GcpFunctionController {
                     message: "Service URL not available for scheduler job".to_string(),
                 })
             })?;
-            let service_account_email =
-                self.get_service_account_email(ctx, &current_config)?;
+            let service_account_email = self.get_service_account_email(ctx, &current_config)?;
             let scheduler_client = ctx
                 .service_provider
                 .get_gcp_cloud_scheduler_client(gcp_config)?;
@@ -2690,6 +2855,39 @@ impl GcpFunctionController {
         })
     }
 
+    fn ensure_domain_info(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.fqdn.is_some()
+            && (self.certificate_id.is_some()
+                || self.ssl_certificate_name.is_some()
+                || self.uses_custom_domain)
+        {
+            return Ok(true);
+        }
+
+        match Self::resolve_domain_info(ctx, resource_id) {
+            Ok(domain_info) => {
+                self.fqdn = Some(domain_info.fqdn.clone());
+                self.certificate_id = domain_info.certificate_id;
+                self.ssl_certificate_name = domain_info.ssl_certificate_name;
+                self.uses_custom_domain = domain_info.uses_custom_domain;
+                if self.url.is_none() {
+                    self.url = ctx
+                        .deployment_config
+                        .public_urls
+                        .as_ref()
+                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                }
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     async fn build_cloud_run_service(
         &self,
         service_name: &str,
@@ -2730,7 +2928,10 @@ impl GcpFunctionController {
             alien_core::FunctionCode::Image { image } => image.clone(),
             alien_core::FunctionCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!("Function '{}' is configured with source code, but only pre-built images are supported in alien-infra.", cfg.id),
+                    message: format!(
+                        "Function '{}' is configured with source code, but only pre-built images are supported in alien-infra.",
+                        cfg.id
+                    ),
                     resource_id: Some(cfg.id.clone()),
                 }));
             }
@@ -2903,10 +3104,8 @@ impl GcpFunctionController {
         // Get the function's own binding params (may be None during initial creation)
         let self_binding_params = self.get_binding_params()?;
 
-        let env_vars = EnvironmentVariableBuilder::new(initial_env)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
-            .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
+        let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
+            .add_function_runtime_env_vars(ctx, &function_config.id)?
             .add_linked_resources(links, ctx, function_name_for_error_logging)
             .await?
             .add_self_function_binding(&function_config.id, self_binding_params.as_ref())?
@@ -3395,14 +3594,12 @@ impl GcpFunctionController {
                 &service_account_ref,
             )?;
 
-        service_account_state
-            .service_account_email
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: function_config.id().to_string(),
-                    dependency_id: service_account_id,
-                })
+        service_account_state.service_account_email.ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: function_config.id().to_string(),
+                dependency_id: service_account_id,
             })
+        })
     }
 
     /// Creates storage trigger infrastructure: Pub/Sub topic, GCS notification, and push subscription.
@@ -3576,18 +3773,9 @@ impl GcpFunctionController {
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
-                (
-                    "alien-function".to_string(),
-                    function_config.id.clone(),
-                ),
-                (
-                    "alien-stack".to_string(),
-                    ctx.resource_prefix.to_string(),
-                ),
-                (
-                    "alien-storage".to_string(),
-                    storage_ref.id.clone(),
-                ),
+                ("alien-function".to_string(), function_config.id.clone()),
+                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
+                ("alien-storage".to_string(), storage_ref.id.clone()),
             ])),
             enable_message_ordering: Some(false),
             expiration_policy: None,
@@ -3915,7 +4103,7 @@ mod tests {
         LongRunningOperation::builder()
             .name(format!("projects/test-project/locations/us-central1/operations/{}", operation_name))
             .done(true)
-            .result(OperationResult::Response { 
+            .result(OperationResult::Response {
                 response: serde_json::json!({
                     "name": format!("projects/test-project/locations/us-central1/services/test-{}", operation_name)
                 })

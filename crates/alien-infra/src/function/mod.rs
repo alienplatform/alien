@@ -1,11 +1,20 @@
 mod aws;
 pub use aws::*;
 
+mod aws_import;
+pub use aws_import::AwsFunctionImporter;
+
 mod gcp;
 pub use gcp::*;
 
+mod gcp_import;
+pub use gcp_import::GcpFunctionImporter;
+
 mod azure;
 pub use azure::*;
+
+mod azure_import;
+pub use azure_import::AzureFunctionImporter;
 
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
@@ -21,9 +30,6 @@ pub use local::*;
 mod test;
 #[cfg(feature = "test")]
 pub use test::*;
-
-mod templates;
-pub use templates::*;
 
 /// Re-export from alien-core (single source of truth).
 pub use alien_core::crontab_to_eventbridge;

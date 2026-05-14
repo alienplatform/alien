@@ -13,5 +13,5 @@ let value: SyncReconcileRequestPreparedStackLifecycle = "frozen";
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

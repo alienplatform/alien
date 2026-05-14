@@ -13,7 +13,7 @@ let value: CreateDeploymentTokenResponse = {
 
 ## Fields
 
-| Field                                       | Type                                        | Required                                    | Description                                 |
-| ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `token`                                     | *string*                                    | :heavy_check_mark:                          | The generated agent token (only shown once) |
-| `deploymentId`                              | *string*                                    | :heavy_check_mark:                          | The agent ID that this token is scoped to   |
+| Field                                            | Type                                             | Required                                         | Description                                      |
+| ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
+| `token`                                          | *string*                                         | :heavy_check_mark:                               | The generated deployment token (only shown once) |
+| `deploymentId`                                   | *string*                                         | :heavy_check_mark:                               | The deployment ID that this token is scoped to   |

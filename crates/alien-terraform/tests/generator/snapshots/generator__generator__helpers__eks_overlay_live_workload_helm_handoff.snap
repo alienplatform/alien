@@ -1,0 +1,265 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the manager IAM identity allowed to assume management roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  default     = ""
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  description = "Kubernetes namespace for runtime resources."
+  default     = "default"
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "aws"
+  deployment_target   = "eks"
+  deployment_region   = data.aws_region.current.region
+  deployment_management_config = {
+    platform        = "aws"
+    managingRoleArn = var.managing_role_arn
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources = [
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.data.bucket
+        bucketArn  = aws_s3_bucket.data.arn
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        roleName                = aws_iam_role.execution_sa.name
+        roleArn                 = aws_iam_role.execution_sa.arn
+        stackPermissionsApplied = true
+      }
+    }
+  ]
+  alien_kubernetes_namespace = var.kubernetes_namespace
+  helm_service_accounts = {
+    execution_sa = {
+      annotations = {
+        "eks.amazonaws.com/role-arn" = aws_iam_role.execution_sa.arn
+      }
+      labels = {}
+    }
+  }
+  helm_values = {
+    serviceAccounts = local.helm_service_accounts
+    stackSettings   = local.deployment_stack_settings
+  }
+}
+
+=== data.tf ===
+resource "aws_s3_bucket" "data" {
+  bucket        = "${var.stack_name}-data"
+  force_destroy = true
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "data"
+    AlienResourceType      = "storage"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket                  = aws_s3_bucket.data.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "data" {
+  bucket = aws_s3_bucket.data.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+=== execution_sa.tf ===
+resource "aws_iam_role" "execution_sa" {
+  name               = "${var.stack_name}-execution-sa"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "ec2.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "execution-sa"
+    AlienResourceType      = "service-account"
+  }
+}
+
+resource "aws_iam_role_policy" "execution_sa_set_0" {
+  name   = "storage-data-read-0"
+  role   = aws_iam_role.execution_sa.id
+  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${var.stack_name}-*", "arn:aws:s3:::${var.stack_name}-*/*"], Sid = "StorageDataRead" }], Version = "2012-10-17" })
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+  depends_on = [
+    aws_s3_bucket.data,
+    aws_s3_bucket_server_side_encryption_configuration.data,
+    aws_s3_bucket_ownership_controls.data,
+    aws_s3_bucket_public_access_block.data,
+    aws_s3_bucket_policy.data,
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "eks"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+output "helm_values" {
+  value       = jsonencode(local.helm_values)
+  description = "Helm values JSON for the manager-fetch Kubernetes install."
+  sensitive   = true
+}
+
+=== README.md ===
+# Terraform module - eks-live-workload
+
+Target: `eks`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=eks-live-workload' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

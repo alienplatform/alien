@@ -945,8 +945,8 @@ async fn retry_delay_is_honoured_on_retryable_error() -> Result<()> {
         }
     }
 
-    let delay_ms = observed_retry_delay
-        .expect("retry path must produce a non-None suggested_delay_ms");
+    let delay_ms =
+        observed_retry_delay.expect("retry path must produce a non-None suggested_delay_ms");
     assert!(
         delay_ms >= 1000,
         "first retry should announce ≥ 1s (got {} ms)",

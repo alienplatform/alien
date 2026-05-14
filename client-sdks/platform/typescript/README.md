@@ -98,7 +98,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile();
+  const result = await alien.user.getProfile();
 
   console.log(result);
 }
@@ -128,7 +128,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile();
+  const result = await alien.user.getProfile();
 
   console.log(result);
 }
@@ -155,7 +155,11 @@ run();
 
 ### [Auth](docs/sdks/auth/README.md)
 
-* [whoami](docs/sdks/auth/README.md#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+* [whoami](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
+
+### [Billing](docs/sdks/billing/README.md)
+
+* [listAuditLog](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 
 ### [Commands](docs/sdks/commands/README.md)
 
@@ -168,10 +172,10 @@ run();
 
 ### [Containers](docs/sdks/containers/README.md)
 
-* [getOverview](docs/sdks/containers/README.md#getoverview) - Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
-* [getAttention](docs/sdks/containers/README.md#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
-* [getDeployments](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
-* [getMachines](docs/sdks/containers/README.md#getmachines) - Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+* [getOverview](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+* [getAttention](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
+* [getDeployments](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
+* [getMachines](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
 * [getDeploymentCluster](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 * [listDeploymentContainers](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
 * [getDeploymentContainer](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
@@ -181,7 +185,7 @@ run();
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
-* [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both agent-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either agent or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+* [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
@@ -195,19 +199,20 @@ run();
 ### [Deployments](docs/sdks/deployments/README.md)
 
 * [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
-* [create](docs/sdks/deployments/README.md#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+* [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 * [listFilterPlatforms](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
-* [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
-* [get](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
-* [delete](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
+* [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
+* [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
+* [delete](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
-* [import](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
-* [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
+* [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
+* [acceptCloudFormationCallback](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+* [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
-* [retry](docs/sdks/deployments/README.md#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
-* [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
-* [createToken](docs/sdks/deployments/README.md#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
+* [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+* [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+* [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ### [Domains](docs/sdks/domains/README.md)
 
@@ -248,10 +253,10 @@ run();
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no agents.
+* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [update](docs/sdks/projects/README.md#update) - Update a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
-* [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying agents in this project.
+* [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
 
 ### [Releases](docs/sdks/releases/README.md)
@@ -269,11 +274,12 @@ run();
 ### [Sync](docs/sdks/sync/README.md)
 
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
-* [release](docs/sdks/sync/README.md#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+* [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### [User](docs/sdks/user/README.md)
 
+* [getProfile](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 * [updateProfile](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 * [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [createWorkspace](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
@@ -291,6 +297,7 @@ run();
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 * [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+* [dismissOnboarding](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 
 </details>
 <!-- End Available Resources and Operations [operations] -->
@@ -316,44 +323,46 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`apiKeysList`](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
 - [`apiKeysRevoke`](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 - [`apiKeysUpdate`](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
-- [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get current authenticated principal information (user or service account). Works with both session cookies and API keys.
+- [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
+- [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 - [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
-- [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments that need attention: crash loops, scheduling failures, unhealthy machines.
+- [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
 - [`containersGetDeploymentCluster`](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
 - [`containersGetDeploymentContainer`](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
-- [`containersGetDeployments`](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all deployments running this container.
-- [`containersGetMachines`](docs/sdks/containers/README.md#getmachines) - Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
-- [`containersGetOverview`](docs/sdks/containers/README.md#getoverview) - Bird's-eye view of all container definitions across all deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
+- [`containersGetDeployments`](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
+- [`containersGetMachines`](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+- [`containersGetOverview`](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
 - [`containersListDeploymentContainerInstanceEvents`](docs/sdks/containers/README.md#listdeploymentcontainerinstanceevents) - List orchestration events for a specific container in a deployment.
 - [`containersListDeploymentContainers`](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
 - [`containersListDeploymentEvents`](docs/sdks/containers/README.md#listdeploymentevents) - List orchestration events for a deployment's container cluster.
 - [`containersListDeploymentMachines`](docs/sdks/containers/README.md#listdeploymentmachines) - List all compute machines in a deployment's container cluster.
-- [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both agent-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either agent or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+- [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
-- [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new agent. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
-- [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create an agent token (agent-scoped API key) for this agent. The agent must exist before creating a token.
-- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete an agent by ID. This can be used to start deletion or retry failed deletions.
-- [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve an agent by ID.
+- [`deploymentsAcceptCloudFormationCallback`](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+- [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+- [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
+- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
+- [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
-- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import an agent from existing infrastructure (e.g., CloudFormation stack). The agent ID is automatically generated.
+- [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
-- [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with agent counts. Used for filter dropdowns.
+- [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
-- [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running agent with the same release and fresh environment variables. Sets status to update-pending.
-- [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed agent operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
-- [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update an agent's environment variables. If the agent is running and not locked, the status will be changed to update-pending to trigger a deployment.
+- [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+- [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 - [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain.
 - [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
 - [`domainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
@@ -378,10 +387,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
-- [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no agents.
+- [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
-- [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying agents in this project.
+- [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
@@ -391,9 +400,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
-- [`syncRelease`](docs/sdks/sync/README.md#release) - Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+- [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
+- [`userGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 - [`userListGitNamespaceRepositories`](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).
 - [`userListGitNamespaces`](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
 - [`userListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
@@ -401,6 +411,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`workspacesAddMember`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
+- [`workspacesDismissOnboarding`](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
 - [`workspacesList`](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 - [`workspacesListMembers`](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
@@ -425,7 +436,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile({
+  const result = await alien.user.getProfile({
     retries: {
       strategy: "backoff",
       backoff: {
@@ -464,7 +475,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile();
+  const result = await alien.user.getProfile();
 
   console.log(result);
 }
@@ -499,7 +510,7 @@ const alien = new Alien({
 
 async function run() {
   try {
-    const result = await alien.user.updateProfile();
+    const result = await alien.user.getProfile();
 
     console.log(result);
   } catch (error) {
@@ -529,7 +540,7 @@ run();
 ### Error Classes
 **Primary errors:**
 * [`AlienError`](./src/models/errors/alienerror.ts): The base class for HTTP error responses.
-  * [`APIError`](./src/models/errors/apierror.ts): Generic error.
+  * [`APIError`](./src/models/errors/apierror.ts): *
 
 <details><summary>Less common errors (6)</summary>
 
@@ -547,6 +558,8 @@ run();
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>
+
+\* Check [the method documentation](#available-resources-and-operations) to see if the error is applicable.
 <!-- End Error Handling [errors] -->
 
 <!-- Start Server Selection [server] -->
@@ -564,7 +577,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.updateProfile();
+  const result = await alien.user.getProfile();
 
   console.log(result);
 }

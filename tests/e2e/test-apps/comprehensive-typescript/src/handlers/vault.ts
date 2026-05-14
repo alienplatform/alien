@@ -50,13 +50,13 @@ app.post("/vault-test/:bindingName", async c => {
   }
 })
 
-app.get("/external-secret", async c => {
+app.get("/managed-secret", async c => {
   try {
-    const v = await vault("alien-vault")
-    const value = await v.get("EXTERNAL_TEST_SECRET")
+    const v = await vault("secrets")
+    const value = await v.get("MANAGED_TEST_SECRET")
     return c.json({ exists: !!value, value })
   } catch (error: unknown) {
-    const alienError = await toExternalOperationError(error, "external-secret")
+    const alienError = await toExternalOperationError(error, "managed-secret")
     return c.json({ exists: false, error: alienError.message, code: alienError.code })
   }
 })

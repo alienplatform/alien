@@ -26,7 +26,7 @@ export class Sync extends ClientSDK {
   }
 
   /**
-   * Reconcile agent deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies agent is unlocked. Accepts full DeploymentState after step() execution.
+   * Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
    */
   async reconcile(
     request?: operations.SyncReconcileRequest | undefined,
@@ -40,7 +40,7 @@ export class Sync extends ClientSDK {
   }
 
   /**
-   * Release an agent's deployment lock. Must be called after processing an acquired agent, even if processing failed. This is critical to avoid deadlocks.
+   * Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
    */
   async release(
     request?: operations.SyncReleaseRequest | undefined,

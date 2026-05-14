@@ -110,7 +110,7 @@ impl AwsRuntimePermissionsGenerator {
 
             let statement = AwsIamStatement {
                 sid: statement_id,
-                effect: "Allow".to_string(),
+                effect: platform_permission.effect.as_str().to_string(),
                 action: actions.clone(),
                 resource: resources,
                 condition: if conditions.is_empty() {
@@ -139,15 +139,19 @@ impl AwsRuntimePermissionsGenerator {
             let mut interpolated_conditions = IndexMap::new();
 
             for (condition_key, condition_values) in condition_template {
+                let condition_key =
+                    VariableInterpolator::interpolate_variables(condition_key, context)?;
                 let mut interpolated_values = IndexMap::new();
 
                 for (value_key, value_template) in condition_values {
+                    let value_key =
+                        VariableInterpolator::interpolate_variables(value_key, context)?;
                     let interpolated_value =
                         VariableInterpolator::interpolate_variables(value_template, context)?;
-                    interpolated_values.insert(value_key.clone(), interpolated_value);
+                    interpolated_values.insert(value_key, interpolated_value);
                 }
 
-                interpolated_conditions.insert(condition_key.clone(), interpolated_values);
+                interpolated_conditions.insert(condition_key, interpolated_values);
             }
 
             Ok(interpolated_conditions)

@@ -66,7 +66,7 @@ pub struct DeployArgs {
     pub no_heartbeat: bool,
 
     /// Telemetry / monitoring mode.
-    /// "auto" (default) uses the parent AM's built-in DeepStore or external OTLP integration.
+    /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
     /// "off" disables all monitoring.
     #[arg(long, value_enum, default_value_t = MonitoringMode::Auto)]
     pub monitoring: MonitoringMode,
@@ -672,12 +672,11 @@ async fn deploy_local_dev_task(args: DeployArgs, port: u16) -> Result<()> {
         snapshot.deployment_id
     );
     let live_state = fetch_dev_deployment_live_state(port, &snapshot.deployment_name).await?;
-    let stack_state = live_state.as_ref().and_then(|state| state.stack_state.as_ref());
+    let stack_state = live_state
+        .as_ref()
+        .and_then(|state| state.stack_state.as_ref());
     if snapshot.resources.is_empty() && stack_state.is_none() {
-        println!(
-            "{}",
-            dim_label("No resources were reported yet.")
-        );
+        println!("{}", dim_label("No resources were reported yet."));
     } else {
         println!("{}", dim_label("Resources"));
         let mut resource_names = std::collections::BTreeSet::new();
@@ -689,7 +688,8 @@ async fn deploy_local_dev_task(args: DeployArgs, port: u16) -> Result<()> {
         for name in resource_names {
             let public_resource = snapshot.resources.get(&name);
             let stack_resource = stack_state.and_then(|state| state.resources.get(&name));
-            let rendered_value = format_local_dev_resource_value(&name, public_resource, stack_resource);
+            let rendered_value =
+                format_local_dev_resource_value(&name, public_resource, stack_resource);
             let resource_type = public_resource
                 .and_then(|resource| resource.resource_type.as_ref().map(|value| value.as_str()))
                 .or_else(|| stack_resource.map(|resource| resource.resource_type.as_str()));

@@ -186,10 +186,7 @@ impl DeployProgress {
     ) {
         // Print deployment status changes
         if self.last_log_status.as_ref() != Some(&status) {
-            eprintln!(
-                "Deployment status: {}",
-                format_deployment_status(status)
-            );
+            eprintln!("Deployment status: {}", format_deployment_status(status));
         }
 
         // Print resource status changes
@@ -343,18 +340,11 @@ fn render_final(state: &DeployProgressState) {
     let _ = stderr.flush();
 }
 
-fn extract_resources(
-    stack_state: &StackState,
-) -> BTreeMap<String, (String, ResourceStatus)> {
+fn extract_resources(stack_state: &StackState) -> BTreeMap<String, (String, ResourceStatus)> {
     stack_state
         .resources
         .iter()
-        .map(|(name, res)| {
-            (
-                name.clone(),
-                (res.resource_type.clone(), res.status),
-            )
-        })
+        .map(|(name, res)| (name.clone(), (res.resource_type.clone(), res.status)))
         .collect()
 }
 

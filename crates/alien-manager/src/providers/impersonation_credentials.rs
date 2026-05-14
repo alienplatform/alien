@@ -13,7 +13,7 @@ use alien_core::{ClientConfig, DeploymentStatus, ManagementConfig, Platform};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
-use crate::traits::{CredentialResolver, DeploymentRecord};
+use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
 ///
@@ -94,6 +94,26 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         // Fallback: use management SA directly.
         let provider = self.provider_for_target(platform);
         impersonate_management_sa(&**provider, platform).await
+    }
+
+    async fn resolve_with_capability(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<ResolvedCredentials, AlienError> {
+        let client_config = self.resolve(deployment).await?;
+        let status = parse_status(&deployment.status);
+        let has_provision_capability = matches!(
+            deployment.platform,
+            Platform::Local | Platform::Test | Platform::Kubernetes
+        ) || !matches!(
+            status,
+            DeploymentStatus::Pending | DeploymentStatus::InitialSetup
+        );
+
+        Ok(ResolvedCredentials {
+            client_config,
+            has_provision_capability,
+        })
     }
 
     async fn resolve_management_config(

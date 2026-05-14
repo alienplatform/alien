@@ -7,10 +7,10 @@
 * [list](#list) - Retrieve all projects.
 * [create](#create) - Create a new project.
 * [get](#get) - Retrieve a project by ID or name.
-* [delete](#delete) - Delete a project. The project must have no agents.
+* [delete](#delete) - Delete a project. The project must have no deployments.
 * [update](#update) - Update a project.
 * [createFromTemplate](#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
-* [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying agents in this project.
+* [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
 
 ## list
@@ -255,7 +255,7 @@ run();
 
 ## delete
 
-Delete a project. The project must have no agents.
+Delete a project. The project must have no deployments.
 
 ### Example Usage
 
@@ -445,7 +445,7 @@ async function run() {
     requestBody: {
       name: "my-app",
       targetNamespace: "<value>",
-      templatePath: "examples/minimal-cloud-agent",
+      templatePath: "examples/remote-worker-ts",
     },
   });
 
@@ -475,7 +475,7 @@ async function run() {
     requestBody: {
       name: "my-app",
       targetNamespace: "<value>",
-      templatePath: "examples/minimal-cloud-agent",
+      templatePath: "examples/remote-worker-ts",
     },
   });
   if (res.ok) {
@@ -512,7 +512,7 @@ run();
 
 ## getTemplateUrls
 
-Get template URLs for deploying agents in this project.
+Get template URLs for deploying setup stacks in this project.
 
 ### Example Usage
 

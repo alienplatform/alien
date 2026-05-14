@@ -1,0 +1,304 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the manager IAM identity allowed to assume management roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "aws"
+  deployment_target   = "aws"
+  deployment_region   = data.aws_region.current.region
+  deployment_management_config = {
+    platform        = "aws"
+    managingRoleArn = var.managing_role_arn
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources = [
+    {
+      id   = "assets"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.assets.bucket
+        bucketArn  = aws_s3_bucket.assets.arn
+      }
+    },
+    {
+      id   = "jobs"
+      type = "queue"
+      importData = {
+        queueName = aws_sqs_queue.jobs.name
+        queueUrl  = aws_sqs_queue.jobs.url
+        queueArn  = aws_sqs_queue.jobs.arn
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        tableName = aws_dynamodb_table.metadata.name
+        tableArn  = aws_dynamodb_table.metadata.arn
+      }
+    },
+    {
+      id   = "secrets"
+      type = "vault"
+      importData = {
+        accountId       = data.aws_caller_identity.current.account_id
+        region          = data.aws_region.current.region
+        parameterPrefix = "${var.stack_name}-secrets"
+      }
+    }
+  ]
+}
+
+=== assets.tf ===
+resource "aws_s3_bucket" "assets" {
+  bucket        = "${var.stack_name}-assets"
+  force_destroy = true
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "assets"
+    AlienResourceType      = "storage"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "assets" {
+  bucket                  = aws_s3_bucket.assets.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "assets" {
+  bucket = aws_s3_bucket.assets.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.assets.arn, "${aws_s3_bucket.assets.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+resource "aws_s3_bucket_versioning" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+=== jobs.tf ===
+resource "aws_sqs_queue" "jobs" {
+  name                       = "${var.stack_name}-jobs"
+  sqs_managed_sse_enabled    = true
+  visibility_timeout_seconds = 30
+  message_retention_seconds  = 345600
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "jobs"
+    AlienResourceType      = "queue"
+  }
+}
+
+=== metadata.tf ===
+resource "aws_dynamodb_table" "metadata" {
+  name         = "${var.stack_name}-metadata"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "metadata"
+    AlienResourceType      = "kv"
+  }
+
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+  depends_on = [
+    aws_s3_bucket.assets,
+    aws_s3_bucket_server_side_encryption_configuration.assets,
+    aws_s3_bucket_ownership_controls.assets,
+    aws_s3_bucket_public_access_block.assets,
+    aws_s3_bucket_policy.assets,
+    aws_s3_bucket_versioning.assets,
+    aws_sqs_queue.jobs,
+    aws_dynamodb_table.metadata
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-data
+
+Target: `aws`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-data' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

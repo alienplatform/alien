@@ -133,10 +133,7 @@ impl CloudSchedulerApi for CloudSchedulerClient {
         job_id: String,
         job: SchedulerJob,
     ) -> Result<SchedulerJob> {
-        let path = format!(
-            "projects/{}/locations/{}/jobs",
-            self.project_id, location
-        );
+        let path = format!("projects/{}/locations/{}/jobs", self.project_id, location);
         // The job ID is set via the `name` field in the request body, not a query param.
         // Full resource name format: projects/{project}/locations/{location}/jobs/{jobId}
         let mut job_with_name = job;
@@ -168,13 +165,7 @@ impl CloudSchedulerApi for CloudSchedulerClient {
     /// See: https://cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs/get
     async fn get_job(&self, job_name: String) -> Result<SchedulerJob> {
         self.base
-            .execute_request(
-                Method::GET,
-                &job_name,
-                None,
-                Option::<()>::None,
-                &job_name,
-            )
+            .execute_request(Method::GET, &job_name, None, Option::<()>::None, &job_name)
             .await
     }
 }

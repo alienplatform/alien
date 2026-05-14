@@ -1,0 +1,163 @@
+use crate::ResourceLifecycle;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceOwnershipPolicy {
+    default_lifecycle: ResourceLifecycle,
+    allow_frozen: bool,
+    allow_live: bool,
+    emit_in_setup: bool,
+    frozen_management: bool,
+}
+
+impl ResourceOwnershipPolicy {
+    pub const fn new(
+        default_lifecycle: ResourceLifecycle,
+        allow_frozen: bool,
+        allow_live: bool,
+        emit_in_setup: bool,
+        frozen_management: bool,
+    ) -> Self {
+        Self {
+            default_lifecycle,
+            allow_frozen,
+            allow_live,
+            emit_in_setup,
+            frozen_management,
+        }
+    }
+
+    pub const fn default_lifecycle(self) -> ResourceLifecycle {
+        self.default_lifecycle
+    }
+
+    pub const fn allows_frozen(self) -> bool {
+        self.allow_frozen
+    }
+
+    pub const fn allows_live(self) -> bool {
+        self.allow_live
+    }
+
+    pub const fn allows_lifecycle(self, lifecycle: ResourceLifecycle) -> bool {
+        match lifecycle {
+            ResourceLifecycle::Frozen => self.allow_frozen,
+            ResourceLifecycle::Live => self.allow_live,
+        }
+    }
+
+    pub const fn should_emit_in_setup(self, lifecycle: ResourceLifecycle) -> bool {
+        self.emit_in_setup && matches!(lifecycle, ResourceLifecycle::Frozen)
+    }
+
+    pub const fn frozen_requires_management(self) -> bool {
+        self.frozen_management
+    }
+
+    pub fn allowed_lifecycles(self) -> &'static str {
+        match (self.allow_frozen, self.allow_live) {
+            (true, true) => "Frozen or Live",
+            (true, false) => "Frozen",
+            (false, true) => "Live",
+            (false, false) => "no lifecycle",
+        }
+    }
+}
+
+pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwnershipPolicy {
+    match resource_type {
+        "function" | "container" => live_only(),
+        "container-cluster" => frozen_with_management(),
+        "artifact-registry"
+        | "build"
+        | "network"
+        | "remote-stack-management"
+        | "service-account"
+        | "service_activation"
+        | "service-activation"
+        | "azure_resource_group"
+        | "azure-resource-group"
+        | "azure_storage_account"
+        | "azure-storage-account"
+        | "azure_container_apps_environment"
+        | "azure-container-apps-environment"
+        | "azure_service_bus_namespace"
+        | "azure-service-bus-namespace" => frozen_only(),
+        "storage" | "queue" | "kv" | "vault" => user_choice(),
+        _ => user_choice(),
+    }
+}
+
+const fn frozen_only() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, false)
+}
+
+const fn frozen_with_management() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true)
+}
+
+const fn live_only() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false)
+}
+
+const fn user_choice() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn functions_and_containers_are_live_only() {
+        for resource_type in ["function", "container"] {
+            let policy = ownership_policy_for_resource_type(resource_type);
+            assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Live);
+            assert!(!policy.allows_lifecycle(ResourceLifecycle::Frozen));
+            assert!(policy.allows_lifecycle(ResourceLifecycle::Live));
+            assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
+        }
+    }
+
+    #[test]
+    fn container_cluster_is_frozen_with_management() {
+        let policy = ownership_policy_for_resource_type("container-cluster");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.frozen_requires_management());
+    }
+
+    #[test]
+    fn data_resources_can_be_frozen_or_live() {
+        for resource_type in ["storage", "queue", "kv", "vault"] {
+            let policy = ownership_policy_for_resource_type(resource_type);
+            assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+            assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+            assert!(policy.allows_lifecycle(ResourceLifecycle::Live));
+            assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+            assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
+        }
+    }
+
+    #[test]
+    fn setup_resources_are_frozen_only() {
+        for resource_type in [
+            "artifact-registry",
+            "build",
+            "network",
+            "remote-stack-management",
+            "service-account",
+            "service_activation",
+            "azure_resource_group",
+            "azure_storage_account",
+            "azure_container_apps_environment",
+            "azure_service_bus_namespace",
+        ] {
+            let policy = ownership_policy_for_resource_type(resource_type);
+            assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+            assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+            assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        }
+    }
+}

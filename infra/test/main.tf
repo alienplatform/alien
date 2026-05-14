@@ -30,7 +30,7 @@ module "azure" {
   providers = {
     azurerm.management = azurerm.management
     azurerm.target     = azurerm.target
-    azuread            = azuread
+    azuread.management = azuread
   }
 
   management_subscription_id = var.azure_management_subscription_id

@@ -56,7 +56,7 @@ impl CompileTimeCheck for SingleExposedPortCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ContainerCode, ContainerPort, ExposeProtocol, ResourceSpec, Stack};
+    use alien_core::{ContainerCode, ExposeProtocol, ResourceSpec, Stack};
 
     #[tokio::test]
     async fn test_single_exposed_port_passes() {

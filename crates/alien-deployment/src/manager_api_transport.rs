@@ -44,17 +44,26 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         config: &alien_core::DeploymentConfig,
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
+        suggested_delay_ms: Option<u64>,
     ) -> Result<StepReconcileResult, AlienError> {
-        let state_json = serde_json::to_value(state)
-            .into_alien_error()
-            .context(alien_error::GenericError {
-                message: "Failed to serialize state for reconcile".to_string(),
-            })?;
+        let state_json =
+            serde_json::to_value(state)
+                .into_alien_error()
+                .context(alien_error::GenericError {
+                    message: "Failed to serialize state for reconcile".to_string(),
+                })?;
 
         let error_json = step_error.map(|e| {
             serde_json::to_value(e)
                 .unwrap_or_else(|_| serde_json::json!({ "message": e.to_string() }))
         });
+        let suggested_delay_ms = suggested_delay_ms
+            .map(i64::try_from)
+            .transpose()
+            .into_alien_error()
+            .context(alien_error::GenericError {
+                message: "suggested_delay_ms exceeded manager API integer range".to_string(),
+            })?;
 
         // POST state to the manager
         let resp = self
@@ -66,6 +75,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                 state: state_json,
                 update_heartbeat: Some(update_heartbeat),
                 error: error_json,
+                suggested_delay_ms,
             })
             .send()
             .await
@@ -185,6 +195,7 @@ pub async fn final_reconcile(
             state: state_json,
             update_heartbeat: Some(false),
             error: None,
+            suggested_delay_ms: None,
         })
         .send()
         .await

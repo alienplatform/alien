@@ -1,8 +1,13 @@
 use crate::error::{ErrorData, Result};
-use crate::{CheckResult, PreflightRegistry, PreflightSummary};
-use alien_core::{ClientConfig, DeploymentConfig, Platform, Stack, StackState};
+use crate::{PreflightRegistry, PreflightSummary};
+use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
+
+#[cfg(feature = "runtime-checks")]
+use crate::CheckResult;
+#[cfg(feature = "runtime-checks")]
+use alien_core::ClientConfig;
 
 /// Preflight runner that executes all checks and mutations
 pub struct PreflightRunner {
@@ -156,6 +161,56 @@ impl PreflightRunner {
         Ok(PreflightSummary::from_results(results))
     }
 
+    /// Run deployment prerequisite checks on the final stack/config.
+    pub async fn run_deployment_prerequisite_checks(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<PreflightSummary> {
+        info!(
+            "Running deployment prerequisite checks for platform {:?}",
+            stack_state.platform
+        );
+
+        let checks = self
+            .registry
+            .get_deployment_prerequisite_checks(stack, stack_state, config);
+        let mut results = Vec::new();
+
+        for check in checks {
+            debug!(
+                "Running deployment prerequisite check: {}",
+                check.description()
+            );
+
+            let mut result = check.check(stack, stack_state, config).await.context(
+                ErrorData::DeploymentPrerequisiteCheckFailed {
+                    check_name: check.description().to_string(),
+                    message: "Check execution failed".to_string(),
+                    platform: Some(stack_state.platform.to_string()),
+                },
+            )?;
+
+            result.check_description = Some(check.description().to_string());
+
+            if !result.success {
+                error!(check = %check.description(), "Deployment prerequisite check failed");
+                for msg in &result.errors {
+                    error!(check = %check.description(), "  {}", msg);
+                }
+            }
+
+            for warning in &result.warnings {
+                warn!(check = %check.description(), "  Warning: {}", warning);
+            }
+
+            results.push(result);
+        }
+
+        Ok(PreflightSummary::from_results(results))
+    }
+
     /// Apply all stack mutations to a stack.
     ///
     /// Mutations are evaluated incrementally: each mutation's `should_run()` is checked
@@ -195,11 +250,10 @@ impl PreflightRunner {
         Ok(current_stack)
     }
 
-    /// Run template-generation preflights (skips deployment prerequisite checks).
+    /// Run template-generation preflights.
     ///
-    /// Used by CloudFormation template generation where deployment-environment checks
-    /// (Horizon required, DNS/TLS required) are irrelevant — the platform provisions
-    /// that infrastructure separately.
+    /// Template generation uses only structural compile-time checks. Deployment
+    /// prerequisite checks run later with `DeploymentConfig`.
     pub async fn run_template_preflights(
         &self,
         stack: &Stack,
@@ -288,13 +342,14 @@ impl PreflightRunner {
         Ok(check_summary)
     }
 
-    /// Run deployment-time preflights (compile-time checks + mutations + compatibility checks + runtime checks)
+    /// Run deployment-time preflights (compile-time checks + mutations + prerequisite checks + compatibility checks + runtime checks)
     ///
     /// The order is critical:
     /// 1. Compile-time checks on user-provided stack (fast validation)
     /// 2. Apply mutations to add infrastructure resources
-    /// 3. Compatibility checks on mutated stacks (detects frozen resource changes)
-    /// 4. Runtime checks on mutated stack (cloud API validation)
+    /// 3. Deployment prerequisite checks on mutated stack/config
+    /// 4. Compatibility checks on mutated stacks (detects frozen resource changes)
+    /// 5. Runtime checks on mutated stack (cloud API validation)
     #[cfg(feature = "runtime-checks")]
     pub async fn run_deployment_time_preflights(
         &self,
@@ -320,6 +375,11 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
+
+        let prerequisite_summary = self
+            .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
+            .await?;
+        all_results.extend(prerequisite_summary.results);
 
         // Run compatibility checks on mutated stack if old stack is provided
         // This detects if mutations added frozen resources during updates

@@ -22,7 +22,7 @@ const value: models.SyncReconcileResponseTargetRelease = {
             type: "<value>",
           },
         ],
-        lifecycle: "live",
+        lifecycle: "frozen",
       },
     },
   },

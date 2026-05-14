@@ -1,0 +1,1534 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: aws full stack
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - DeploymentGroupToken
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - VpcCidr
+      - AvailabilityZones
+    - Label:
+        default: Domains
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
+      CertificateArn:
+        default: Certificate ARN
+      DeploymentGroupToken:
+        default: Deployment group token
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager AWS account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+      VpcCidr:
+        default: VPC CIDR
+Parameters:
+  DeploymentGroupToken:
+    Type: String
+    Description: Deployment-group token used when registering the resolved stack import.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Default: ''
+  VpcCidr:
+    Type: String
+    Description: CIDR for created VPCs. Empty uses the generated default.
+    Default: 10.44.0.0/16
+  AvailabilityZones:
+    Type: Number
+    Description: Number of availability zones to use when creating a VPC.
+    Default: 2
+    AllowedValues:
+    - 1
+    - 2
+    - 3
+  DomainName:
+    Type: String
+    Description: Optional domain name for public endpoints. Empty disables custom domains.
+  HostedZoneId:
+    Type: String
+    Description: Optional Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: Optional ACM certificate ARN for the domain.
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: approval-required
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - "off"
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  NetworkCreateUseAz2:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: AvailabilityZones
+      - 1
+  NetworkCreateUseAz3:
+    Fn::Equals:
+    - Ref: AvailabilityZones
+    - 3
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Resources:
+  DefaultNetworkVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::If:
+        - HasVpcCidr
+        - Ref: VpcCidr
+        - 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkVpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      InternetGatewayId:
+        Ref: DefaultNetworkInternetGateway
+  DefaultNetworkPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 0
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 3
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 1
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 4
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 2
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 5
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: DefaultNetworkInternetGateway
+    DependsOn:
+    - DefaultNetworkVpcGatewayAttachment
+  DefaultNetworkPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkNatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  DefaultNetworkNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - DefaultNetworkNatEip
+        - AllocationId
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  DefaultNetworkPrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: DefaultNetworkNatGateway
+    DependsOn:
+    - DefaultNetworkNatGateway
+  DefaultNetworkPublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+  DefaultNetworkPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+  DefaultNetworkPublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private workload security group
+      VpcId:
+        Ref: DefaultNetworkVpc
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: default-network
+      - Key: AlienResourceType
+        Value: network
+  ExecutionSaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-execution-sa
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: alien-managed-policy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Action:
+            - s3:GetObject
+            - s3:GetObjectAcl
+            - s3:GetObjectVersion
+            - s3:ListBucket
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
+            - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*/*
+            Sid: StorageDataRead
+          - Action:
+            - sqs:ChangeMessageVisibility
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:GetQueueUrl
+            - sqs:SendMessage
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
+            Sid: QueueDataWrite
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: execution-sa
+      - Key: AlienResourceType
+        Value: service-account
+  ManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-management
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowManagingRole
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: ManagingRoleArn
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:PrincipalArn:
+                Ref: ManagingRoleArn
+      Policies:
+      - PolicyName: alien-management-policy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Action:
+            - lambda:CreateFunction
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+            Sid: FunctionProvision1
+          - Action:
+            - lambda:AddPermission
+            - lambda:CreateAlias
+            - lambda:CreateEventSourceMapping
+            - lambda:CreateFunctionUrlConfig
+            - lambda:DeleteAlias
+            - lambda:DeleteEventSourceMapping
+            - lambda:DeleteFunction
+            - lambda:DeleteFunctionConcurrency
+            - lambda:DeleteFunctionEventInvokeConfig
+            - lambda:DeleteFunctionUrlConfig
+            - lambda:GetCodeSigningConfig
+            - lambda:GetEventSourceMapping
+            - lambda:GetFunction
+            - lambda:GetFunctionConfiguration
+            - lambda:GetFunctionEventInvokeConfig
+            - lambda:GetFunctionUrlConfig
+            - lambda:GetPolicy
+            - lambda:ListAliases
+            - lambda:ListEventSourceMappings
+            - lambda:ListTags
+            - lambda:ListVersionsByFunction
+            - lambda:PublishVersion
+            - lambda:PutFunctionConcurrency
+            - lambda:PutFunctionEventInvokeConfig
+            - lambda:RemovePermission
+            - lambda:TagResource
+            - lambda:UntagResource
+            - lambda:UpdateAlias
+            - lambda:UpdateCodeSigningConfig
+            - lambda:UpdateEventSourceMapping
+            - lambda:UpdateFunctionCode
+            - lambda:UpdateFunctionConfiguration
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+            Sid: FunctionProvision2
+          - Action:
+            - iam:PassRole
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+            Sid: FunctionProvision3
+          - Action:
+            - iam:GetRolePolicy
+            - iam:ListRolePolicies
+            - iam:PutRolePolicy
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+            Sid: FunctionProvision4
+          - Action:
+            - ecr:GetAuthorizationToken
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: FunctionProvision5
+          - Action:
+            - ecr:BatchGetImage
+            - ecr:GetDownloadUrlForLayer
+            - ecr:GetRepositoryPolicy
+            - ecr:SetRepositoryPolicy
+            Effect: Allow
+            Resource:
+            - Fn::Sub:
+              - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+              - ManagingAccountId:
+                  Fn::Select:
+                  - 4
+                  - Fn::Split:
+                    - ':'
+                    - Ref: ManagingRoleArn
+            Sid: FunctionProvision6
+          - Action:
+            - apigateway:POST
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+            Sid: FunctionProvision7
+          - Action:
+            - apigateway:POST
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            Sid: FunctionProvision8
+          - Action:
+            - apigateway:TagResource
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+            Sid: FunctionProvision9
+          - Action:
+            - apigateway:DELETE
+            - apigateway:GET
+            - apigateway:PATCH
+            - apigateway:PUT
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+            Sid: FunctionProvision10
+          - Action:
+            - events:PutRule
+            - events:TagResource
+            Condition:
+              StringEquals:
+                aws:RequestTag/alien.dev/managed-by: alien
+                aws:RequestTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+            Sid: FunctionProvision11
+          - Action:
+            - events:DeleteRule
+            - events:DescribeRule
+            - events:PutTargets
+            - events:RemoveTargets
+            Condition:
+              StringEquals:
+                aws:ResourceTag/alien.dev/managed-by: alien
+                aws:ResourceTag/alien.dev/stack:
+                  Fn::Sub: ${AWS::StackName}
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+            Sid: FunctionProvision12
+          - Action:
+            - s3:GetBucketAcl
+            - s3:GetBucketLocation
+            - s3:GetBucketPolicy
+            - s3:GetBucketPublicAccessBlock
+            - s3:GetBucketVersioning
+            - s3:GetEncryptionConfiguration
+            - s3:GetLifecycleConfiguration
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
+            Sid: StorageHeartbeat
+          - Action:
+            - sqs:GetQueueAttributes
+            - sqs:ListQueueTags
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
+            Sid: QueueHeartbeat
+          - Action:
+            - dynamodb:DescribeContinuousBackups
+            - dynamodb:DescribeTable
+            - dynamodb:DescribeTimeToLive
+            - dynamodb:ListTables
+            - dynamodb:ListTagsOfResource
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
+            Sid: KvHeartbeat
+          - Action:
+            - ssm:DeleteParameter
+            - ssm:PutParameter
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+            Sid: VaultDataWrite
+          - Sid: ReadOwnManagementRole
+            Effect: Allow
+            Action: iam:GetRole
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: management
+      - Key: AlienResourceType
+        Value: remote-stack-management
+  Assets:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-assets
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: assets
+      - Key: AlienResourceType
+        Value: storage
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: Assets
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: DenyInsecureTransport
+          Effect: Deny
+          Principal: '*'
+          Action: s3:*
+          Resource:
+          - Fn::GetAtt:
+            - Assets
+            - Arn
+          - Fn::Sub: arn:${AWS::Partition}:s3:::${Assets}/*
+          Condition:
+            Bool:
+              aws:SecureTransport: 'false'
+  Jobs:
+    Type: AWS::SQS::Queue
+    Properties:
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 1080
+      MessageRetentionPeriod: 345600
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: jobs
+      - Key: AlienResourceType
+        Value: queue
+  Metadata:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      - AttributeName: sk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+      - AttributeName: sk
+        KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: metadata
+      - Key: AlienResourceType
+        Value: kv
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RegistryRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName:
+        Fn::Sub: ${AWS::StackName}-registry
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText:
+          Fn::ToJsonString:
+            rules:
+            - rulePriority: 1
+              description: Retain the 100 most recent images
+              selection:
+                tagStatus: any
+                countType: imageCountMoreThan
+                countNumber: 100
+              action:
+                type: expire
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: registry
+      - Key: AlienResourceType
+        Value: artifact-registry
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RegistryPullRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-registry-pull
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+              Fn::GetAtt:
+              - ExecutionSaRole
+              - Arn
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: ecr-pull
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Sid: GetAuthorizationToken
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: RepositoryAccess
+            Effect: Allow
+            Action:
+            - ecr:BatchCheckLayerAvailability
+            - ecr:BatchGetImage
+            - ecr:DescribeImages
+            - ecr:DescribeRepositories
+            - ecr:GetDownloadUrlForLayer
+            - ecr:ListImages
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: registry
+      - Key: AlienResourceType
+        Value: artifact-registry
+    DependsOn:
+    - RegistryRepository
+  RegistryPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-registry-push
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+              Fn::GetAtt:
+              - ExecutionSaRole
+              - Arn
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: ecr-push-pull
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Sid: GetAuthorizationToken
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: RepositoryAccess
+            Effect: Allow
+            Action:
+            - ecr:BatchCheckLayerAvailability
+            - ecr:BatchGetImage
+            - ecr:DescribeImages
+            - ecr:DescribeRepositories
+            - ecr:GetDownloadUrlForLayer
+            - ecr:ListImages
+            - ecr:CompleteLayerUpload
+            - ecr:CreateRepository
+            - ecr:DeleteRepository
+            - ecr:InitiateLayerUpload
+            - ecr:PutImage
+            - ecr:UploadLayerPart
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: registry
+      - Key: AlienResourceType
+        Value: artifact-registry
+    DependsOn:
+    - RegistryRepository
+  BuilderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/codebuild/${AWS::StackName}-builder
+      RetentionInDays: 30
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  Builder:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-builder
+      ServiceRole:
+        Fn::GetAtt:
+        - ExecutionSaRole
+        - Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Build project is ready for runtime-provided commands"
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:7.0
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        PrivilegedMode: true
+        EnvironmentVariables:
+        - Name: PROFILE
+          Value: release
+          Type: PLAINTEXT
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName:
+            Ref: BuilderLogGroup
+      Tags:
+      - Key: alien.dev/managed-by
+        Value: alien
+      - Key: alien.dev/stack
+        Value:
+          Ref: AWS::StackName
+      - Key: alien.dev/resource
+        Value: builder
+      - Key: AlienResourceType
+        Value: build
+    DependsOn:
+    - BuilderLogGroup
+  DeploymentStackImport:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
+      DeploymentGroupToken:
+        Ref: DeploymentGroupToken
+      DeploymentName:
+        Ref: AWS::StackName
+      StackPrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupFingerprint: test
+      SetupFingerprintVersion: '1'
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          type: create
+          cidr:
+            Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - Ref: AWS::NoValue
+          availabilityZones:
+            Ref: AvailabilityZones
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+      Resources:
+      - id: default-network
+        type: network
+        importData:
+          vpcId:
+            Ref: DefaultNetworkVpc
+          cidrBlock:
+            Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          internetGatewayId:
+            Ref: DefaultNetworkInternetGateway
+          natGatewayId:
+            Ref: DefaultNetworkNatGateway
+          eipAllocationId:
+            Fn::GetAtt:
+            - DefaultNetworkNatEip
+            - AllocationId
+          publicSubnetIds:
+          - Ref: DefaultNetworkPublicSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPublicSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPublicSubnet3
+            - Ref: AWS::NoValue
+          privateSubnetIds:
+          - Ref: DefaultNetworkPrivateSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPrivateSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPrivateSubnet3
+            - Ref: AWS::NoValue
+          publicRouteTableId:
+            Ref: DefaultNetworkPublicRouteTable
+          privateRouteTableId:
+            Ref: DefaultNetworkPrivateRouteTable
+          securityGroupId:
+            Ref: DefaultNetworkSecurityGroup
+          availabilityZones:
+          - Fn::Select:
+            - 0
+            - Fn::GetAZs:
+                Ref: AWS::Region
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Fn::Select:
+              - 1
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Fn::Select:
+              - 2
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          isByoVpc: false
+      - id: execution-sa
+        type: service-account
+        importData:
+          roleName:
+            Ref: ExecutionSaRole
+          roleArn:
+            Fn::GetAtt:
+            - ExecutionSaRole
+            - Arn
+          stackPermissionsApplied: true
+      - id: management
+        type: remote-stack-management
+        importData:
+          roleName:
+            Ref: ManagementRole
+          roleArn:
+            Fn::GetAtt:
+            - ManagementRole
+            - Arn
+          managementPermissionsApplied: true
+      - id: assets
+        type: storage
+        importData:
+          bucketName:
+            Ref: Assets
+          bucketArn:
+            Fn::GetAtt:
+            - Assets
+            - Arn
+      - id: jobs
+        type: queue
+        importData:
+          queueName:
+            Fn::GetAtt:
+            - Jobs
+            - QueueName
+          queueUrl:
+            Ref: Jobs
+          queueArn:
+            Fn::GetAtt:
+            - Jobs
+            - Arn
+      - id: metadata
+        type: kv
+        importData:
+          tableName:
+            Ref: Metadata
+          tableArn:
+            Fn::GetAtt:
+            - Metadata
+            - Arn
+      - id: secrets
+        type: vault
+        importData:
+          accountId:
+            Ref: AWS::AccountId
+          region:
+            Ref: AWS::Region
+          parameterPrefix:
+            Fn::Sub: ${AWS::StackName}-secrets
+      - id: registry
+        type: artifact-registry
+        importData:
+          accountId:
+            Ref: AWS::AccountId
+          region:
+            Ref: AWS::Region
+          registryId:
+            Fn::Sub: ${AWS::AccountId}:${AWS::Region}
+          registryEndpoint:
+            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
+          repositoryPrefix:
+            Fn::Sub: ${AWS::StackName}-registry
+          pullRoleArn:
+            Fn::GetAtt:
+            - RegistryPullRole
+            - Arn
+          pushRoleArn:
+            Fn::GetAtt:
+            - RegistryPushRole
+            - Arn
+      - id: builder
+        type: build
+        importData:
+          projectName:
+            Ref: Builder
+          projectArn:
+            Fn::GetAtt:
+            - Builder
+            - Arn
+          buildEnvVars:
+            PROFILE: release
+    DependsOn:
+    - DefaultNetworkVpc
+    - DefaultNetworkInternetGateway
+    - DefaultNetworkVpcGatewayAttachment
+    - DefaultNetworkPublicSubnet1
+    - DefaultNetworkPrivateSubnet1
+    - DefaultNetworkPublicRouteTable
+    - DefaultNetworkPublicDefaultRoute
+    - DefaultNetworkPrivateRouteTable
+    - DefaultNetworkNatEip
+    - DefaultNetworkNatGateway
+    - DefaultNetworkPrivateDefaultRoute
+    - DefaultNetworkPublicSubnet1RouteTableAssociation
+    - DefaultNetworkPrivateSubnet1RouteTableAssociation
+    - DefaultNetworkSecurityGroup
+    - ExecutionSaRole
+    - ManagementRole
+    - Assets
+    - AssetsBucketPolicy
+    - Jobs
+    - Metadata
+    - RegistryRepository
+    - RegistryPullRole
+    - RegistryPushRole
+    - BuilderLogGroup
+    - Builder
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentStackPrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Physical stack prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupFingerprintVersion:
+    Value: '1'
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Manager import ManagementConfig JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          type: create
+          cidr:
+            Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - Ref: AWS::NoValue
+          availabilityZones:
+            Ref: AvailabilityZones
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+    Description: Manager import StackSettings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: default-network
+        type: network
+        importData:
+          vpcId:
+            Ref: DefaultNetworkVpc
+          cidrBlock:
+            Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          internetGatewayId:
+            Ref: DefaultNetworkInternetGateway
+          natGatewayId:
+            Ref: DefaultNetworkNatGateway
+          eipAllocationId:
+            Fn::GetAtt:
+            - DefaultNetworkNatEip
+            - AllocationId
+          publicSubnetIds:
+          - Ref: DefaultNetworkPublicSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPublicSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPublicSubnet3
+            - Ref: AWS::NoValue
+          privateSubnetIds:
+          - Ref: DefaultNetworkPrivateSubnet1
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Ref: DefaultNetworkPrivateSubnet2
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Ref: DefaultNetworkPrivateSubnet3
+            - Ref: AWS::NoValue
+          publicRouteTableId:
+            Ref: DefaultNetworkPublicRouteTable
+          privateRouteTableId:
+            Ref: DefaultNetworkPrivateRouteTable
+          securityGroupId:
+            Ref: DefaultNetworkSecurityGroup
+          availabilityZones:
+          - Fn::Select:
+            - 0
+            - Fn::GetAZs:
+                Ref: AWS::Region
+          - Fn::If:
+            - NetworkCreateUseAz2
+            - Fn::Select:
+              - 1
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - NetworkCreateUseAz3
+            - Fn::Select:
+              - 2
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Ref: AWS::NoValue
+          isByoVpc: false
+      - id: execution-sa
+        type: service-account
+        importData:
+          roleName:
+            Ref: ExecutionSaRole
+          roleArn:
+            Fn::GetAtt:
+            - ExecutionSaRole
+            - Arn
+          stackPermissionsApplied: true
+      - id: management
+        type: remote-stack-management
+        importData:
+          roleName:
+            Ref: ManagementRole
+          roleArn:
+            Fn::GetAtt:
+            - ManagementRole
+            - Arn
+          managementPermissionsApplied: true
+      - id: assets
+        type: storage
+        importData:
+          bucketName:
+            Ref: Assets
+          bucketArn:
+            Fn::GetAtt:
+            - Assets
+            - Arn
+      - id: jobs
+        type: queue
+        importData:
+          queueName:
+            Fn::GetAtt:
+            - Jobs
+            - QueueName
+          queueUrl:
+            Ref: Jobs
+          queueArn:
+            Fn::GetAtt:
+            - Jobs
+            - Arn
+      - id: metadata
+        type: kv
+        importData:
+          tableName:
+            Ref: Metadata
+          tableArn:
+            Fn::GetAtt:
+            - Metadata
+            - Arn
+      - id: secrets
+        type: vault
+        importData:
+          accountId:
+            Ref: AWS::AccountId
+          region:
+            Ref: AWS::Region
+          parameterPrefix:
+            Fn::Sub: ${AWS::StackName}-secrets
+      - id: registry
+        type: artifact-registry
+        importData:
+          accountId:
+            Ref: AWS::AccountId
+          region:
+            Ref: AWS::Region
+          registryId:
+            Fn::Sub: ${AWS::AccountId}:${AWS::Region}
+          registryEndpoint:
+            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
+          repositoryPrefix:
+            Fn::Sub: ${AWS::StackName}-registry
+          pullRoleArn:
+            Fn::GetAtt:
+            - RegistryPullRole
+            - Arn
+          pushRoleArn:
+            Fn::GetAtt:
+            - RegistryPushRole
+            - Arn
+      - id: builder
+        type: build
+        importData:
+          projectName:
+            Ref: Builder
+          projectArn:
+            Fn::GetAtt:
+            - Builder
+            - Arn
+          buildEnvVars:
+            PROFILE: release
+    Description: Manager import resources JSON.

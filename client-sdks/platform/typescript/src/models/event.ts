@@ -12,6 +12,470 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export type DataDeploymentDeletionRequested = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  type: "DeploymentDeletionRequested";
+};
+
+export type DataDeploymentEnvironmentUpdated = {
+  /**
+   * Names of the environment variables that changed (added, removed, or modified)
+   */
+  changedKeys: Array<string>;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  type: "DeploymentEnvironmentUpdated";
+};
+
+export type DataDeploymentReleaseUnpinned = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that was previously pinned
+   */
+  previousPinnedReleaseId: string;
+  type: "DeploymentReleaseUnpinned";
+};
+
+export type DataDeploymentReleasePinned = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that is now pinned
+   */
+  pinnedReleaseId: string;
+  /**
+   * ID of the previously pinned release, if any
+   */
+  previousPinnedReleaseId?: string | null | undefined;
+  type: "DeploymentReleasePinned";
+};
+
+export type DataDeploymentRedeployRequested = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release being redeployed
+   */
+  releaseId: string;
+  type: "DeploymentRedeployRequested";
+};
+
+/**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type PreviousError = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type PreviousErrorUnion = PreviousError | any;
+
+export type DataDeploymentRetryRequested = {
+  /**
+   * ID of the release that the failed attempt was targeting, if known
+   */
+  attemptedReleaseId?: string | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  previousError?: PreviousError | any | null | undefined;
+  type: "DeploymentRetryRequested";
+};
+
+export type DataDeploymentDeleted = {
+  /**
+   * ID of the deployment that was deleted
+   */
+  deploymentId: string;
+  type: "DeploymentDeleted";
+};
+
+export type DataDeploymentRecovered = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that is now live
+   */
+  releaseId: string;
+  type: "DeploymentRecovered";
+};
+
+/**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type DataError2 = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type DataDeploymentDegraded = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * Canonical error container that provides a structured way to represent errors
+   *
+   * @remarks
+   * with rich metadata including error codes, human-readable messages, context,
+   * and chaining capabilities for error propagation.
+   *
+   * This struct is designed to be both machine-readable and user-friendly,
+   * supporting serialization for API responses and detailed error reporting
+   * in distributed systems.
+   */
+  error: DataError2;
+  type: "DeploymentDegraded";
+};
+
+/**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type DataError1 = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+/**
+ * Phase of a deployment at which a failure occurred.
+ *
+ * @remarks
+ *
+ * Derived from the source deployment status: `provisioning-failed` →
+ * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+ * `refresh-failed` is modelled separately via `DeploymentDegraded`.
+ */
+export const Phase = {
+  Provisioning: "provisioning",
+  Updating: "updating",
+  Deleting: "deleting",
+} as const;
+/**
+ * Phase of a deployment at which a failure occurred.
+ *
+ * @remarks
+ *
+ * Derived from the source deployment status: `provisioning-failed` →
+ * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+ * `refresh-failed` is modelled separately via `DeploymentDegraded`.
+ */
+export type Phase = ClosedEnum<typeof Phase>;
+
+export type DataDeploymentFailed = {
+  /**
+   * ID of the release the platform was trying to deploy, if known
+   */
+  attemptedReleaseId?: string | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * Canonical error container that provides a structured way to represent errors
+   *
+   * @remarks
+   * with rich metadata including error codes, human-readable messages, context,
+   * and chaining capabilities for error propagation.
+   *
+   * This struct is designed to be both machine-readable and user-friendly,
+   * supporting serialization for API responses and detailed error reporting
+   * in distributed systems.
+   */
+  error: DataError1;
+  /**
+   * Phase of a deployment at which a failure occurred.
+   *
+   * @remarks
+   *
+   * Derived from the source deployment status: `provisioning-failed` →
+   * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+   * `refresh-failed` is modelled separately via `DeploymentDegraded`.
+   */
+  phase: Phase;
+  type: "DeploymentFailed";
+};
+
+export type DataDeploymentReleased = {
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that was previously live, if any
+   */
+  previousReleaseId?: string | null | undefined;
+  /**
+   * ID of the release that is now live
+   */
+  releaseId: string;
+  type: "DeploymentReleased";
+};
+
+export type DataDeploymentCreated = {
+  /**
+   * ID of the deployment group this slot belongs to
+   */
+  deploymentGroupId: string;
+  /**
+   * ID of the deployment that was created
+   */
+  deploymentId: string;
+  /**
+   * Initial release the slot was created with, if any
+   */
+  releaseId?: string | null | undefined;
+  type: "DeploymentCreated";
+};
+
 export type DataEmptyingBuckets = {
   /**
    * Names of the S3 buckets being emptied
@@ -240,7 +704,7 @@ export type EventDependency = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type DataError = {
+export type ErrorNextState = {
   /**
    * A unique identifier for the type of error.
    *
@@ -315,7 +779,7 @@ export type DataError = {
   source?: any | null | undefined;
 };
 
-export type DataErrorUnion = DataError | any;
+export type NextStateErrorUnion = ErrorNextState | any;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -404,7 +868,7 @@ export type EventResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventDependency> | undefined;
-  error?: DataError | any | null | undefined;
+  error?: ErrorNextState | any | null | undefined;
   /**
    * True if the resource was provisioned by an external system (e.g., CloudFormation).
    *
@@ -621,9 +1085,6 @@ export type DataLoadingConfiguration = {
   type: "LoadingConfiguration";
 };
 
-/**
- * Represents all possible events in the Alien system
- */
 export type Data =
   | DataLoadingConfiguration
   | DataFinished
@@ -655,7 +1116,19 @@ export type Data =
   | DataAssumingRole
   | DataImportingStackStateFromCloudFormation
   | DataDeletingCloudFormationStack
-  | DataEmptyingBuckets;
+  | DataEmptyingBuckets
+  | DataDeploymentCreated
+  | DataDeploymentReleased
+  | DataDeploymentFailed
+  | DataDeploymentDegraded
+  | DataDeploymentRecovered
+  | DataDeploymentDeleted
+  | DataDeploymentRetryRequested
+  | DataDeploymentRedeployRequested
+  | DataDeploymentReleasePinned
+  | DataDeploymentReleaseUnpinned
+  | DataDeploymentEnvironmentUpdated
+  | DataDeploymentDeletionRequested;
 
 export const StateSuccess = {
   Success: "success",
@@ -796,9 +1269,6 @@ export type Event = {
    * Unique identifier for the debug session.
    */
   debugSessionId?: string | null | undefined;
-  /**
-   * Represents all possible events in the Alien system
-   */
   data:
     | DataLoadingConfiguration
     | DataFinished
@@ -830,7 +1300,19 @@ export type Event = {
     | DataAssumingRole
     | DataImportingStackStateFromCloudFormation
     | DataDeletingCloudFormationStack
-    | DataEmptyingBuckets;
+    | DataEmptyingBuckets
+    | DataDeploymentCreated
+    | DataDeploymentReleased
+    | DataDeploymentFailed
+    | DataDeploymentDegraded
+    | DataDeploymentRecovered
+    | DataDeploymentDeleted
+    | DataDeploymentRetryRequested
+    | DataDeploymentRedeployRequested
+    | DataDeploymentReleasePinned
+    | DataDeploymentReleaseUnpinned
+    | DataDeploymentEnvironmentUpdated
+    | DataDeploymentDeletionRequested;
   /**
    * Represents the state of an event
    */
@@ -845,6 +1327,340 @@ export type Event = {
    */
   workspaceId: string;
 };
+
+/** @internal */
+export const DataDeploymentDeletionRequested$inboundSchema: z.ZodType<
+  DataDeploymentDeletionRequested,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  type: z.literal("DeploymentDeletionRequested"),
+});
+
+export function dataDeploymentDeletionRequestedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentDeletionRequested, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentDeletionRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDeletionRequested' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
+  DataDeploymentEnvironmentUpdated,
+  unknown
+> = z.object({
+  changedKeys: z.array(z.string()),
+  deploymentId: z.string(),
+  type: z.literal("DeploymentEnvironmentUpdated"),
+});
+
+export function dataDeploymentEnvironmentUpdatedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentEnvironmentUpdated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentEnvironmentUpdated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentEnvironmentUpdated' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
+  DataDeploymentReleaseUnpinned,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  previousPinnedReleaseId: z.string(),
+  type: z.literal("DeploymentReleaseUnpinned"),
+});
+
+export function dataDeploymentReleaseUnpinnedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentReleaseUnpinned, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentReleaseUnpinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleaseUnpinned' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentReleasePinned$inboundSchema: z.ZodType<
+  DataDeploymentReleasePinned,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  pinnedReleaseId: z.string(),
+  previousPinnedReleaseId: z.nullable(z.string()).optional(),
+  type: z.literal("DeploymentReleasePinned"),
+});
+
+export function dataDeploymentReleasePinnedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentReleasePinned, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentReleasePinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleasePinned' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentRedeployRequested$inboundSchema: z.ZodType<
+  DataDeploymentRedeployRequested,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  releaseId: z.string(),
+  type: z.literal("DeploymentRedeployRequested"),
+});
+
+export function dataDeploymentRedeployRequestedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentRedeployRequested, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentRedeployRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRedeployRequested' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreviousError$inboundSchema: z.ZodType<PreviousError, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
+
+export function previousErrorFromJSON(
+  jsonString: string,
+): SafeParseResult<PreviousError, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreviousError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreviousError' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreviousErrorUnion$inboundSchema: z.ZodType<
+  PreviousErrorUnion,
+  unknown
+> = z.union([z.lazy(() => PreviousError$inboundSchema), z.any()]);
+
+export function previousErrorUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreviousErrorUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreviousErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreviousErrorUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentRetryRequested$inboundSchema: z.ZodType<
+  DataDeploymentRetryRequested,
+  unknown
+> = z.object({
+  attemptedReleaseId: z.nullable(z.string()).optional(),
+  deploymentId: z.string(),
+  previousError: z.nullable(
+    z.union([z.lazy(() => PreviousError$inboundSchema), z.any()]),
+  ).optional(),
+  type: z.literal("DeploymentRetryRequested"),
+});
+
+export function dataDeploymentRetryRequestedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentRetryRequested, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentRetryRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRetryRequested' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentDeleted$inboundSchema: z.ZodType<
+  DataDeploymentDeleted,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  type: z.literal("DeploymentDeleted"),
+});
+
+export function dataDeploymentDeletedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentDeleted, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentDeleted$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDeleted' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentRecovered$inboundSchema: z.ZodType<
+  DataDeploymentRecovered,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  releaseId: z.string(),
+  type: z.literal("DeploymentRecovered"),
+});
+
+export function dataDeploymentRecoveredFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentRecovered, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentRecovered$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRecovered' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataError2$inboundSchema: z.ZodType<DataError2, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
+
+export function dataError2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataError2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataError2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataError2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentDegraded$inboundSchema: z.ZodType<
+  DataDeploymentDegraded,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  error: z.lazy(() => DataError2$inboundSchema),
+  type: z.literal("DeploymentDegraded"),
+});
+
+export function dataDeploymentDegradedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentDegraded, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentDegraded$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDegraded' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataError1$inboundSchema: z.ZodType<DataError1, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
+
+export function dataError1FromJSON(
+  jsonString: string,
+): SafeParseResult<DataError1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataError1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataError1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Phase$inboundSchema: z.ZodEnum<typeof Phase> = z.enum(Phase);
+
+/** @internal */
+export const DataDeploymentFailed$inboundSchema: z.ZodType<
+  DataDeploymentFailed,
+  unknown
+> = z.object({
+  attemptedReleaseId: z.nullable(z.string()).optional(),
+  deploymentId: z.string(),
+  error: z.lazy(() => DataError1$inboundSchema),
+  phase: Phase$inboundSchema,
+  type: z.literal("DeploymentFailed"),
+});
+
+export function dataDeploymentFailedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentFailed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentFailed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentFailed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentReleased$inboundSchema: z.ZodType<
+  DataDeploymentReleased,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  previousReleaseId: z.nullable(z.string()).optional(),
+  releaseId: z.string(),
+  type: z.literal("DeploymentReleased"),
+});
+
+export function dataDeploymentReleasedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentReleased, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentReleased$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleased' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataDeploymentCreated$inboundSchema: z.ZodType<
+  DataDeploymentCreated,
+  unknown
+> = z.object({
+  deploymentGroupId: z.string(),
+  deploymentId: z.string(),
+  releaseId: z.nullable(z.string()).optional(),
+  type: z.literal("DeploymentCreated"),
+});
+
+export function dataDeploymentCreatedFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentCreated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentCreated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentCreated' from JSON`,
+  );
+}
 
 /** @internal */
 export const DataEmptyingBuckets$inboundSchema: z.ZodType<
@@ -1247,38 +2063,41 @@ export function eventDependencyFromJSON(
 }
 
 /** @internal */
-export const DataError$inboundSchema: z.ZodType<DataError, unknown> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
+export const ErrorNextState$inboundSchema: z.ZodType<ErrorNextState, unknown> =
+  z.object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
 
-export function dataErrorFromJSON(
+export function errorNextStateFromJSON(
   jsonString: string,
-): SafeParseResult<DataError, SDKValidationError> {
+): SafeParseResult<ErrorNextState, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataError$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataError' from JSON`,
+    (x) => ErrorNextState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ErrorNextState' from JSON`,
   );
 }
 
 /** @internal */
-export const DataErrorUnion$inboundSchema: z.ZodType<DataErrorUnion, unknown> =
-  z.union([z.lazy(() => DataError$inboundSchema), z.any()]);
+export const NextStateErrorUnion$inboundSchema: z.ZodType<
+  NextStateErrorUnion,
+  unknown
+> = z.union([z.lazy(() => ErrorNextState$inboundSchema), z.any()]);
 
-export function dataErrorUnionFromJSON(
+export function nextStateErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<DataErrorUnion, SDKValidationError> {
+): SafeParseResult<NextStateErrorUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataErrorUnion' from JSON`,
+    (x) => NextStateErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NextStateErrorUnion' from JSON`,
   );
 }
 
@@ -1390,8 +2209,9 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     config: z.lazy(() => EventConfig$inboundSchema),
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
-    error: z.nullable(z.union([z.lazy(() => DataError$inboundSchema), z.any()]))
-      .optional(),
+    error: z.nullable(
+      z.union([z.lazy(() => ErrorNextState$inboundSchema), z.any()]),
+    ).optional(),
     isExternallyProvisioned: z.boolean().optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(z.union([EventLifecycleEnum$inboundSchema, z.any()]))
@@ -1756,6 +2576,18 @@ export const Data$inboundSchema: z.ZodType<Data, unknown> = z.union([
   z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
   z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
   z.lazy(() => DataEmptyingBuckets$inboundSchema),
+  z.lazy(() => DataDeploymentCreated$inboundSchema),
+  z.lazy(() => DataDeploymentReleased$inboundSchema),
+  z.lazy(() => DataDeploymentFailed$inboundSchema),
+  z.lazy(() => DataDeploymentDegraded$inboundSchema),
+  z.lazy(() => DataDeploymentRecovered$inboundSchema),
+  z.lazy(() => DataDeploymentDeleted$inboundSchema),
+  z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
+  z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
+  z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
+  z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
+  z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
+  z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
 ]);
 
 export function dataFromJSON(
@@ -1908,6 +2740,18 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
     z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
     z.lazy(() => DataEmptyingBuckets$inboundSchema),
+    z.lazy(() => DataDeploymentCreated$inboundSchema),
+    z.lazy(() => DataDeploymentReleased$inboundSchema),
+    z.lazy(() => DataDeploymentFailed$inboundSchema),
+    z.lazy(() => DataDeploymentDegraded$inboundSchema),
+    z.lazy(() => DataDeploymentRecovered$inboundSchema),
+    z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
+    z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
+    z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
+    z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
+    z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
   ]),
   state: z.union([
     z.lazy(() => EventState$inboundSchema),

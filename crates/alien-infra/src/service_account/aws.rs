@@ -4,12 +4,12 @@ use tracing::{info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{
-    CreateRoleRequest, TrustPolicyDocument, TrustPolicyPrincipal, TrustPolicyPrincipalValue,
-    TrustPolicyStatement,
+    CreateRoleRequest, CreateRoleTag, TrustPolicyDocument, TrustPolicyPrincipal,
+    TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    Build, Container, ContainerCluster, Function, ResourceOutputs, ResourceStatus, ServiceAccount,
-    ServiceAccountOutputs,
+    standard_resource_tags, Build, Container, ContainerCluster, Function, ResourceOutputs,
+    ResourceStatus, ServiceAccount, ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
@@ -71,6 +71,12 @@ impl AwsServiceAccountController {
                 "Service account role for Alien resource {}",
                 config.id
             ))
+            .tags(
+                standard_resource_tags(ctx.resource_prefix, &config.id)
+                    .into_iter()
+                    .map(|(key, value)| CreateRoleTag { key, value })
+                    .collect(),
+            )
             .build();
 
         let created_role =

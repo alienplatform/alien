@@ -6,13 +6,29 @@ Agent sync and state reconciliation
 
 ### Available Operations
 
-* [initialize](#initialize)
-* [agentSync](#agentsync)
-* [acquire](#acquire)
-* [reconcile](#reconcile)
-* [release](#release)
+* [initialize](#initialize) - `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+or workspace bearer for self-hosted operator workflows. New deployments
+are created via `DeploymentStore::create_deployment(caller, …)` so
+embedders that proxy to an upstream API write the row in the dg's
+workspace, not the manager's.
+* [agentSync](#agentsync) - `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+path; `caller: &Subject` is threaded into the store so embedders see
+the agent's own scope.
+* [acquire](#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::acquire` so
+embedders can authorize against the inbound caller's scope.
+* [reconcile](#reconcile) - `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+* [release](#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::release`.
 
 ## initialize
+
+`POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+or workspace bearer for self-hosted operator workflows. New deployments
+are created via `DeploymentStore::create_deployment(caller, …)` so
+embedders that proxy to an upstream API write the row in the dg's
+workspace, not the manager's.
 
 ### Example Usage
 
@@ -82,6 +98,10 @@ run();
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## agentSync
+
+`POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+path; `caller: &Subject` is threaded into the store so embedders see
+the agent's own scope.
 
 ### Example Usage
 
@@ -156,6 +176,10 @@ run();
 
 ## acquire
 
+`POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::acquire` so
+embedders can authorize against the inbound caller's scope.
+
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="acquire" method="post" path="/v1/sync/acquire" -->
@@ -228,6 +252,9 @@ run();
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## reconcile
+
+`POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 
 ### Example Usage
 
@@ -453,6 +480,9 @@ run();
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## release
+
+`POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+`caller: &Subject` is threaded into `DeploymentStore::release`.
 
 ### Example Usage
 

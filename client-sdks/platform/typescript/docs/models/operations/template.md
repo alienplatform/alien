@@ -8,7 +8,7 @@ import { Template } from "@alienplatform/platform-api/models/operations";
 let value: Template = {
   sourceRepository: "alienplatform/alien",
   forkRepository: "<value>",
-  templatePath: "examples/endpoint-agent",
+  templatePath: "examples/github-agent/packages/remote-agent",
   resolvedRootDirectory: "<value>",
 };
 ```

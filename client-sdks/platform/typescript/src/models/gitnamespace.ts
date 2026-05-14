@@ -14,10 +14,10 @@ export const GitNamespaceType = {
 } as const;
 export type GitNamespaceType = ClosedEnum<typeof GitNamespaceType>;
 
-export const Provider = {
+export const ProviderEnum = {
   Github: "github",
 } as const;
-export type Provider = ClosedEnum<typeof Provider>;
+export type ProviderEnum = ClosedEnum<typeof ProviderEnum>;
 
 export type GitNamespace = {
   id: number | null;
@@ -25,7 +25,7 @@ export type GitNamespace = {
   slug: string;
   installationId: number | null;
   type: GitNamespaceType;
-  provider: Provider;
+  provider: ProviderEnum;
   createdAt: Date;
 };
 
@@ -35,9 +35,8 @@ export const GitNamespaceType$inboundSchema: z.ZodEnum<
 > = z.enum(GitNamespaceType);
 
 /** @internal */
-export const Provider$inboundSchema: z.ZodEnum<typeof Provider> = z.enum(
-  Provider,
-);
+export const ProviderEnum$inboundSchema: z.ZodEnum<typeof ProviderEnum> = z
+  .enum(ProviderEnum);
 
 /** @internal */
 export const GitNamespace$inboundSchema: z.ZodType<GitNamespace, unknown> = z
@@ -47,7 +46,7 @@ export const GitNamespace$inboundSchema: z.ZodType<GitNamespace, unknown> = z
     slug: z.string(),
     installationId: z.nullable(z.number()),
     type: GitNamespaceType$inboundSchema,
-    provider: Provider$inboundSchema,
+    provider: ProviderEnum$inboundSchema,
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   });
 

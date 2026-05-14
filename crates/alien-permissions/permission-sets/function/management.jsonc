@@ -25,6 +25,8 @@
             "lambda:GetFunctionUrlConfig",
             "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig",
+            "lambda:AddPermission",
+            "lambda:RemovePermission",
             "lambda:GetEventSourceMapping",
             "lambda:ListEventSourceMappings",
             "lambda:UpdateEventSourceMapping"
@@ -32,14 +34,30 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
       {
+        // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
+        // the role being passed and does not give us the same reliable
+        // resource-tag boundary as EC2/ELB/Lambda resources.
         "grant": {
           "actions": ["iam:PassRole"]
         },
@@ -75,6 +93,253 @@
           },
           "resource": {
             "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["acm:ImportCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 API/domain creation. The request must carry boundary tags.
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/domainnames",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/domainnames",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 child creates run under already-tagged APIs/domains.
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        "grant": {
+          "actions": ["apigateway:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        // EventBridge schedule rules are created with Alien boundary tags.
+        "grant": {
+          "actions": ["events:PutRule", "events:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "events:DeleteRule",
+            "events:DescribeRule",
+            "events:PutTargets",
+            "events:RemoveTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       }
@@ -114,6 +379,13 @@
             "run.services.deleteTagBinding",
             "run.jobs.createTagBinding",
             "run.jobs.deleteTagBinding",
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
             "iam.serviceAccounts.actAs",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
@@ -128,6 +400,38 @@
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
           }
+        }
+      },
+      {
+        "grant": {
+          "permissions": [
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
+            "compute.networkEndpointGroups.create",
+            "compute.networkEndpointGroups.delete",
+            "compute.networkEndpointGroups.get",
+            "compute.backendServices.create",
+            "compute.backendServices.delete",
+            "compute.backendServices.get",
+            "compute.backendServices.update",
+            "compute.urlMaps.create",
+            "compute.urlMaps.delete",
+            "compute.urlMaps.get",
+            "compute.targetHttpsProxies.create",
+            "compute.targetHttpsProxies.delete",
+            "compute.targetHttpsProxies.get",
+            "compute.globalAddresses.create",
+            "compute.globalAddresses.delete",
+            "compute.globalAddresses.get",
+            "compute.globalForwardingRules.create",
+            "compute.globalForwardingRules.delete",
+            "compute.globalForwardingRules.get"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
         }
       }
     ],
@@ -153,9 +457,19 @@
             "Microsoft.App/managedEnvironments/join/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete"
           ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+          "dataActions": [
+            "Microsoft.ServiceBus/namespaces/messages/send/action",
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
+          ]
         },
         "binding": {
           "stack": {

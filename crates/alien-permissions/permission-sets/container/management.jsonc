@@ -1,6 +1,6 @@
 {
   "id": "container/management",
-  "description": "Allows managing containers and inspecting their cloud infrastructure (LB targets, volumes). Container orchestration itself is via Horizon API.",
+  "description": "Allows managing containers and inspecting their cloud infrastructure (LB targets, volumes). Container orchestration itself is via the managed container API.",
   "platforms": {
     "aws": [
       // Read-only inspection of LB health and volume status for operational visibility
@@ -22,6 +22,58 @@
             "resources": ["*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["acm:ImportCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["acm:DeleteCertificate", "acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
       }
     ],
     "gcp": [
@@ -30,6 +82,9 @@
         "grant": {
           "permissions": [
             "compute.backendServices.get",
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
             "compute.healthChecks.get",
             "compute.globalForwardingRules.get",
             "compute.disks.get"
@@ -53,6 +108,10 @@
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/publicIPAddresses/read",
             "Microsoft.Compute/disks/read"
+          ],
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
           ]
         },
         "binding": {

@@ -13,5 +13,5 @@ let value: DeploymentDetailResponsePreparedStackLifecycle = "frozen";
 ## Values
 
 ```typescript
-"frozen" | "live" | "live-on-setup"
+"frozen" | "live"
 ```

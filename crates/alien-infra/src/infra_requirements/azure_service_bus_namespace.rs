@@ -2,7 +2,7 @@ use alien_azure_clients::AzureClientConfig;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::azure_utils::get_resource_group_name;
+use crate::azure_utils::{azure_service_bus_namespace_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::models::queue_namespace::*;
@@ -17,6 +17,8 @@ use alien_macros::{controller, flow_entry, handler, terminal_state};
 pub struct AzureServiceBusNamespaceController {
     /// The actual Azure namespace name (may differ from config.id).
     pub(crate) namespace_name: Option<String>,
+    /// The Azure resource group containing the namespace.
+    pub(crate) resource_group_name: Option<String>,
     /// The Azure resource ID of the namespace.
     pub(crate) resource_id: Option<String>,
     /// The fully qualified domain name of the namespace.
@@ -44,6 +46,7 @@ impl AzureServiceBusNamespaceController {
             &desired_config.id,
         ));
         let resource_group_name = get_resource_group_name(ctx.state)?;
+        self.resource_group_name = Some(resource_group_name.clone());
 
         // Create the Service Bus namespace
         let client = ctx
@@ -93,13 +96,13 @@ impl AzureServiceBusNamespaceController {
         debug!(namespace_name=%namespace_name, "Checking namespace creation status");
 
         let azure_config = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
 
         match client
-            .get_namespace(resource_group_name, namespace_name.clone())
+            .get_namespace(resource_group_name.clone(), namespace_name.clone())
             .await
         {
             Ok(namespace) => {
@@ -107,7 +110,11 @@ impl AzureServiceBusNamespaceController {
                     match properties.status.as_deref() {
                         Some("Active") => {
                             info!(namespace_name=%namespace_name, "Namespace creation completed");
-                            self.handle_creation_completed(&namespace);
+                            self.handle_creation_completed(
+                                &namespace,
+                                azure_config,
+                                &resource_group_name,
+                            );
 
                             // Always go to ApplyingResourcePermissions next
                             Ok(HandlerAction::Continue {
@@ -212,7 +219,7 @@ impl AzureServiceBusNamespaceController {
 
         // Heartbeat check: verify namespace provisioning state
         if let Some(namespace_name) = &self.namespace_name {
-            let resource_group_name = get_resource_group_name(ctx.state)?;
+            let resource_group_name = self.resource_group_name(ctx)?;
             let client = ctx
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
@@ -271,7 +278,7 @@ impl AzureServiceBusNamespaceController {
         info!(namespace_name=%namespace_name, "Initiating Azure Service Bus Namespace deletion");
 
         let azure_config = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
@@ -329,7 +336,7 @@ impl AzureServiceBusNamespaceController {
         debug!(namespace_name=%namespace_name, "Checking namespace deletion status");
 
         let azure_config = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
             .service_provider
             .get_azure_service_bus_management_client(azure_config)?;
@@ -400,8 +407,21 @@ impl AzureServiceBusNamespaceController {
 // Separate impl block for helper methods
 impl AzureServiceBusNamespaceController {
     // ─────────────── HELPER METHODS ────────────────────────────
-    fn handle_creation_completed(&mut self, namespace: &SbNamespace) {
-        self.resource_id = namespace.id.clone();
+    fn handle_creation_completed(
+        &mut self,
+        namespace: &SbNamespace,
+        azure_config: &AzureClientConfig,
+        resource_group_name: &str,
+    ) {
+        self.resource_group_name = Some(resource_group_name.to_string());
+        self.resource_id = namespace.id.clone().or_else(|| {
+            let namespace_name = self.namespace_name.as_ref()?;
+            Some(azure_service_bus_namespace_resource_id(
+                &azure_config.subscription_id,
+                resource_group_name,
+                namespace_name,
+            ))
+        });
         self.fqdn = namespace
             .properties
             .as_ref()
@@ -411,9 +431,20 @@ impl AzureServiceBusNamespaceController {
 
     fn clear_state(&mut self) {
         self.namespace_name = None;
+        self.resource_group_name = None;
         self.resource_id = None;
         self.fqdn = None;
         self.endpoint = None;
+    }
+
+    pub(crate) fn resource_group_name(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<String> {
+        self.resource_group_name
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| get_resource_group_name(ctx.state))
     }
 
     fn build_namespace_properties(
@@ -444,7 +475,7 @@ impl AzureServiceBusNamespaceController {
         let config = ctx.desired_resource_config::<AzureServiceBusNamespace>()?;
 
         let resource_scope = Scope::Resource {
-            resource_group_name: get_resource_group_name(ctx.state)?,
+            resource_group_name: self.resource_group_name(ctx)?,
             resource_provider: "Microsoft.ServiceBus".to_string(),
             parent_resource_path: None,
             resource_type: "namespaces".to_string(),
@@ -468,6 +499,7 @@ impl AzureServiceBusNamespaceController {
         Self {
             state: AzureServiceBusNamespaceState::Ready,
             namespace_name: Some(namespace_name.to_string()),
+            resource_group_name: Some("mock-rg".to_string()),
             resource_id: Some(format!("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.ServiceBus/namespaces/{}", namespace_name)),
             fqdn: Some(format!("{}.servicebus.windows.net", namespace_name)),
             endpoint: Some(format!("https://{}.servicebus.windows.net/", namespace_name)),

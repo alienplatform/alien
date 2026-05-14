@@ -3,25 +3,92 @@
   "description": "Allows creating and managing ContainerCluster compute infrastructure. Derived from AwsContainerClusterController, GcpContainerClusterController, AzureContainerClusterController API calls.",
   "platforms": {
     "aws": [
-      // Launch template create/delete + tagging (CreateLaunchTemplate with TagSpecifications)
+      // Launch template creation must include Alien boundary tags in the request.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:DeleteLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
-      // ASG create/delete/update/scale — scoped to stack-prefixed ASG names
+      // Existing launch templates can be deleted only when they carry Alien boundary tags.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteLaunchTemplate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // ASG creation is name-scoped and must include Alien boundary tags.
+      {
+        "grant": {
+          "actions": ["autoscaling:CreateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "alien"
+              }
+            }
+          }
+        }
+      },
+      // Existing ASGs can be changed only when they carry Alien boundary tags.
       {
         "grant": {
           "actions": [
-            "autoscaling:CreateAutoScalingGroup",
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity"
@@ -31,17 +98,28 @@
           "stack": {
             "resources": [
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
       // Describe actions — AWS requires Resource: "*" for these read-only APIs.
-      // Includes instance-level inspection for operational visibility.
       {
         "grant": {
           "actions": [
@@ -49,7 +127,6 @@
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags",
-            "ec2:GetConsoleOutput",
             "autoscaling:DescribeAutoScalingGroups"
           ]
         },
@@ -59,6 +136,32 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      // Instance console output can be read only from Alien-tagged workers.
+      {
+        "grant": {
+          "actions": ["ec2:GetConsoleOutput"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "alien"
+              }
+            }
           }
         }
       },
@@ -126,7 +229,7 @@
           }
         }
       },
-      // Secret Manager for machine token storage
+      // Secret Manager for worker runtime secrets
       {
         "grant": {
           "permissions": [
@@ -207,12 +310,14 @@
           }
         }
       },
-      // Key Vault for machine token
+      // Key Vault for worker runtime secrets
       {
         "grant": {
           "actions": [
             "Microsoft.KeyVault/vaults/secrets/write",
-            "Microsoft.KeyVault/vaults/secrets/read",
+            "Microsoft.KeyVault/vaults/secrets/read"
+          ],
+          "dataActions": [
             "Microsoft.KeyVault/vaults/secrets/delete"
           ]
         },

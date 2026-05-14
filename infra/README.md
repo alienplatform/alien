@@ -90,6 +90,33 @@ terraform apply
 
 In CI, `cloud-tests.yml` and `e2e-cloud.yml` both run `terraform apply` automatically. Variables are injected from GitHub secrets.
 
+### Rotating the GCP target project
+
+`infra/test` does not create GCP projects. To move tests to a fresh target
+project, first create the project manually and link billing. Then bootstrap the
+service account Terraform will use for the target provider:
+
+```bash
+PROJECT=<new-gcp-target-project-id>
+SA=alien-terraform-bootstrap@$PROJECT.iam.gserviceaccount.com
+
+gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com --project "$PROJECT"
+gcloud iam service-accounts create alien-terraform-bootstrap --project "$PROJECT"
+
+for role in roles/serviceusage.serviceUsageAdmin roles/iam.serviceAccountAdmin roles/iam.serviceAccountKeyAdmin roles/iam.serviceAccountUser roles/iam.roleAdmin roles/resourcemanager.projectIamAdmin roles/artifactregistry.admin roles/run.admin roles/cloudfunctions.admin roles/pubsub.admin roles/storage.admin roles/secretmanager.admin roles/cloudbuild.builds.editor roles/datastore.owner roles/compute.admin roles/cloudscheduler.admin; do
+  gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role "$role" --condition=None
+done
+
+gcloud iam service-accounts keys create target-bootstrap.json --iam-account "$SA" --project "$PROJECT"
+gh secret set TEST_GCP_TARGET_SA_KEY --repo alienplatform/alien < target-bootstrap.json
+gh variable set TEST_GCP_TARGET_PROJECT_ID --repo alienplatform/alien --body "$PROJECT"
+```
+
+When replacing an existing target project in the same Terraform Cloud workspace,
+remove the old target-project GCP resources from state before the next apply.
+The next CI setup run will recreate them in the new project and regenerate
+`.env.test` from Terraform outputs.
+
 ### Generating .env.test and alien-manager.test.toml
 
 After applying, generate the test configuration files from live Terraform outputs:

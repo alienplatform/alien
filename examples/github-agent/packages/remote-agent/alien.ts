@@ -17,7 +17,7 @@ const agent = new alien.Function("agent")
   .build()
 
 export default new alien.Stack("github-agent")
-  .platforms(["aws", "gcp", "azure"])
+  .platforms(["aws", "gcp", "azure", "kubernetes"])
   .add(integrations, "frozen")
   .add(agent, "live")
   .permissions({

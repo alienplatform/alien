@@ -26,11 +26,11 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Cross-deployment machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
+ * Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
  */
 export function containersGetMachines(
   client: AlienCore,
-  request?: operations.GetContainerMachinesRequest | undefined,
+  request: operations.GetContainerMachinesRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -55,7 +55,7 @@ export function containersGetMachines(
 
 async function $do(
   client: AlienCore,
-  request?: operations.GetContainerMachinesRequest | undefined,
+  request: operations.GetContainerMachinesRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -77,9 +77,7 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.GetContainerMachinesRequest$outboundSchema.optional().parse(
-        value,
-      ),
+      operations.GetContainerMachinesRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
@@ -91,9 +89,9 @@ async function $do(
   const path = pathToFunc("/v1/containers/machines")();
 
   const query = encodeFormQuery({
-    "deploymentGroupId": payload?.deploymentGroupId,
-    "project": payload?.project,
-    "workspace": payload?.workspace,
+    "deploymentGroupId": payload.deploymentGroupId,
+    "project": payload.project,
+    "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({
@@ -137,7 +135,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["4XX", "500", "5XX"],
+    errorCodes: ["404", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -163,6 +161,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, operations.GetContainerMachinesResponse$inboundSchema),
+    M.jsonErr(404, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

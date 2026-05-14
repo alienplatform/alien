@@ -4,6 +4,9 @@
 
 import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
  * Use an existing VNet (Azure).
@@ -154,6 +157,22 @@ export type NetworkSettings =
   | NetworkSettingsByoVnetAzure;
 
 /** @internal */
+export const NetworkSettingsByoVnetAzure$inboundSchema: z.ZodType<
+  NetworkSettingsByoVnetAzure,
+  unknown
+> = z.object({
+  private_subnet_name: z.string(),
+  public_subnet_name: z.string(),
+  type: z.literal("byo-vnet-azure"),
+  vnet_resource_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "private_subnet_name": "privateSubnetName",
+    "public_subnet_name": "publicSubnetName",
+    "vnet_resource_id": "vnetResourceId",
+  });
+});
+/** @internal */
 export type NetworkSettingsByoVnetAzure$Outbound = {
   private_subnet_name: string;
   public_subnet_name: string;
@@ -187,7 +206,31 @@ export function networkSettingsByoVnetAzureToJSON(
     ),
   );
 }
+export function networkSettingsByoVnetAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettingsByoVnetAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettingsByoVnetAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettingsByoVnetAzure' from JSON`,
+  );
+}
 
+/** @internal */
+export const NetworkSettingsByoVpcGcp$inboundSchema: z.ZodType<
+  NetworkSettingsByoVpcGcp,
+  unknown
+> = z.object({
+  network_name: z.string(),
+  region: z.string(),
+  subnet_name: z.string(),
+  type: z.literal("byo-vpc-gcp"),
+}).transform((v) => {
+  return remap$(v, {
+    "network_name": "networkName",
+    "subnet_name": "subnetName",
+  });
+});
 /** @internal */
 export type NetworkSettingsByoVpcGcp$Outbound = {
   network_name: string;
@@ -219,7 +262,34 @@ export function networkSettingsByoVpcGcpToJSON(
     NetworkSettingsByoVpcGcp$outboundSchema.parse(networkSettingsByoVpcGcp),
   );
 }
+export function networkSettingsByoVpcGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettingsByoVpcGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettingsByoVpcGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettingsByoVpcGcp' from JSON`,
+  );
+}
 
+/** @internal */
+export const NetworkSettingsByoVpcAws$inboundSchema: z.ZodType<
+  NetworkSettingsByoVpcAws,
+  unknown
+> = z.object({
+  private_subnet_ids: z.array(z.string()),
+  public_subnet_ids: z.array(z.string()),
+  security_group_ids: z.array(z.string()).optional(),
+  type: z.literal("byo-vpc-aws"),
+  vpc_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "private_subnet_ids": "privateSubnetIds",
+    "public_subnet_ids": "publicSubnetIds",
+    "security_group_ids": "securityGroupIds",
+    "vpc_id": "vpcId",
+  });
+});
 /** @internal */
 export type NetworkSettingsByoVpcAws$Outbound = {
   private_subnet_ids: Array<string>;
@@ -255,7 +325,29 @@ export function networkSettingsByoVpcAwsToJSON(
     NetworkSettingsByoVpcAws$outboundSchema.parse(networkSettingsByoVpcAws),
   );
 }
+export function networkSettingsByoVpcAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettingsByoVpcAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettingsByoVpcAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettingsByoVpcAws' from JSON`,
+  );
+}
 
+/** @internal */
+export const NetworkSettingsCreate$inboundSchema: z.ZodType<
+  NetworkSettingsCreate,
+  unknown
+> = z.object({
+  availability_zones: z.int().optional(),
+  cidr: z.nullable(z.string()).optional(),
+  type: z.literal("create"),
+}).transform((v) => {
+  return remap$(v, {
+    "availability_zones": "availabilityZones",
+  });
+});
 /** @internal */
 export type NetworkSettingsCreate$Outbound = {
   availability_zones?: number | undefined;
@@ -284,7 +376,23 @@ export function networkSettingsCreateToJSON(
     NetworkSettingsCreate$outboundSchema.parse(networkSettingsCreate),
   );
 }
+export function networkSettingsCreateFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettingsCreate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettingsCreate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettingsCreate' from JSON`,
+  );
+}
 
+/** @internal */
+export const NetworkSettingsUseDefault$inboundSchema: z.ZodType<
+  NetworkSettingsUseDefault,
+  unknown
+> = z.object({
+  type: z.literal("use-default"),
+});
 /** @internal */
 export type NetworkSettingsUseDefault$Outbound = {
   type: "use-default";
@@ -305,7 +413,27 @@ export function networkSettingsUseDefaultToJSON(
     NetworkSettingsUseDefault$outboundSchema.parse(networkSettingsUseDefault),
   );
 }
+export function networkSettingsUseDefaultFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettingsUseDefault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettingsUseDefault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettingsUseDefault' from JSON`,
+  );
+}
 
+/** @internal */
+export const NetworkSettings$inboundSchema: z.ZodType<
+  NetworkSettings,
+  unknown
+> = z.union([
+  z.lazy(() => NetworkSettingsUseDefault$inboundSchema),
+  z.lazy(() => NetworkSettingsCreate$inboundSchema),
+  z.lazy(() => NetworkSettingsByoVpcAws$inboundSchema),
+  z.lazy(() => NetworkSettingsByoVpcGcp$inboundSchema),
+  z.lazy(() => NetworkSettingsByoVnetAzure$inboundSchema),
+]);
 /** @internal */
 export type NetworkSettings$Outbound =
   | NetworkSettingsUseDefault$Outbound
@@ -330,4 +458,13 @@ export function networkSettingsToJSON(
   networkSettings: NetworkSettings,
 ): string {
   return JSON.stringify(NetworkSettings$outboundSchema.parse(networkSettings));
+}
+export function networkSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<NetworkSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => NetworkSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NetworkSettings' from JSON`,
+  );
 }

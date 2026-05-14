@@ -19,5 +19,8 @@ export const TelemetryMode = {
 export type TelemetryMode = ClosedEnum<typeof TelemetryMode>;
 
 /** @internal */
-export const TelemetryMode$outboundSchema: z.ZodEnum<typeof TelemetryMode> = z
+export const TelemetryMode$inboundSchema: z.ZodEnum<typeof TelemetryMode> = z
   .enum(TelemetryMode);
+/** @internal */
+export const TelemetryMode$outboundSchema: z.ZodEnum<typeof TelemetryMode> =
+  TelemetryMode$inboundSchema;

@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Container status in Horizon.
+ * @description Container status in the managed container backend.
  */
-export const ContainerStatusSchema = z.enum(["pending", "running", "stopped", "failing"]).describe("Container status in Horizon.")
+export const ContainerStatusSchema = z.enum(["pending", "running", "stopped", "failing"]).describe("Container status in the managed container backend.")
 
 export type ContainerStatus = z.infer<typeof ContainerStatusSchema>

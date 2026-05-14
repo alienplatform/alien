@@ -1,0 +1,25 @@
+[package]
+name = "alien-cloudformation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "CloudFormation generation for Alien stacks"
+license-file.workspace = true
+
+[features]
+default = []
+test-utils = []
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-permissions = { workspace = true }
+indexmap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+alien-permissions = { workspace = true }
+insta = { workspace = true, features = ["yaml"] }

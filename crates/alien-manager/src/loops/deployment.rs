@@ -18,6 +18,8 @@ use tracing::{debug, error, info, warn};
 use alien_core::{
     DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
+    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYMENT_ID,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -210,60 +212,62 @@ impl DeploymentLoop {
             return Ok(());
         }
 
-        // Cloud push deployments: skip setup and delete phases.
-        //
-        // For cloud platforms (AWS, GCP, Azure), these phases require target-environment
-        // credentials that only the push client (alien deploy) has. The manager has
-        // management credentials which would create resources in the wrong account.
-        // The push client drives pending → initial-setup → provisioning, then the
-        // manager takes over at provisioning with cross-account credentials.
-        //
-        // For push-mode local platform deployments, the manager IS the target
-        // environment — no credential gap, no bootstrap needed. The manager drives
-        // the entire lifecycle directly. Currently the only push + local scenario
-        // is `alien dev` (embedded manager on the developer's machine).
-        //
-        // See docs/02-manager/10-deployment-protocol.md for the full protocol.
         let status = parse_status(&deployment.status);
-        if deployment.platform != alien_core::Platform::Local
-            && matches!(
-                status,
-                DeploymentStatus::Pending
-                    | DeploymentStatus::InitialSetup
-                    | DeploymentStatus::DeletePending
-                    | DeploymentStatus::Deleting
-                    | DeploymentStatus::DeleteFailed
-            )
-        {
-            debug!(
-                deployment_id = %deployment_id,
-                status = ?status,
-                platform = ?deployment.platform,
-                "Skipping setup/delete phase — handled by push client (cloud platform)"
-            );
-            return Ok(());
-        }
 
         // 1. Get the release for this deployment.
-        let desired_release_id = deployment.desired_release_id.as_ref().ok_or_else(|| {
-            AlienError::new(GenericError {
-                message: format!("Deployment {} has no desired_release_id", deployment_id),
-            })
-        })?;
+        let target_release_id = deployment
+            .desired_release_id
+            .as_ref()
+            .or(deployment.current_release_id.as_ref())
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Deployment {} has neither desired_release_id nor current_release_id",
+                        deployment_id
+                    ),
+                })
+            })?;
 
         let system = crate::auth::Subject::system();
         let release = self
             .release_store
-            .get_release(&system, desired_release_id)
+            .get_release(&system, target_release_id)
             .await?
             .ok_or_else(|| {
                 AlienError::new(GenericError {
-                    message: format!("Release {} not found", desired_release_id),
+                    message: format!("Release {} not found", target_release_id),
                 })
             })?;
 
-        // 2. Resolve credentials for the target platform.
-        let client_config = self.credential_resolver.resolve(&deployment).await?;
+        // 2. Resolve credentials for the target platform and lifecycle phase.
+        let resolved_credentials = match self
+            .credential_resolver
+            .resolve_with_capability(&deployment)
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    status = ?status,
+                    platform = ?deployment.platform,
+                    error = %e,
+                    "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
+                );
+                return Ok(());
+            }
+        };
+
+        if needs_provision_capability(status) && !resolved_credentials.has_provision_capability {
+            debug!(
+                deployment_id = %deployment_id,
+                status = ?status,
+                platform = ?deployment.platform,
+                "Skipping bootstrap phase because resolved credentials cannot provision"
+            );
+            return Ok(());
+        }
+        let client_config = resolved_credentials.client_config;
 
         // 3. Extract the stack for this deployment's platform from the release.
         let deployment_stack = release
@@ -274,14 +278,14 @@ impl DeploymentLoop {
                 AlienError::new(GenericError {
                     message: format!(
                         "Release {} does not contain a stack for platform {}",
-                        desired_release_id, deployment.platform
+                        target_release_id, deployment.platform
                     ),
                 })
             })?;
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
-            release_id: desired_release_id.clone(),
+            release_id: target_release_id.clone(),
             version: None,
             description: None,
             stack: deployment_stack.clone(),
@@ -508,7 +512,7 @@ impl DeploymentLoop {
 
         // 1. ALIEN_DEPLOYMENT_ID — always included.
         vars.push(EnvironmentVariable {
-            name: "ALIEN_DEPLOYMENT_ID".to_string(),
+            name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
             value: deployment_id.to_string(),
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
@@ -549,13 +553,13 @@ impl DeploymentLoop {
         if needs_polling {
             let commands_base = self.config.commands_base_url();
             vars.push(EnvironmentVariable {
-                name: "ALIEN_COMMANDS_POLLING_ENABLED".to_string(),
+                name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
                 value: "true".to_string(),
                 var_type: EnvironmentVariableType::Plain,
                 target_resources: None,
             });
             vars.push(EnvironmentVariable {
-                name: "ALIEN_COMMANDS_POLLING_URL".to_string(),
+                name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
                 value: commands_base,
                 var_type: EnvironmentVariableType::Plain,
                 target_resources: None,
@@ -564,7 +568,7 @@ impl DeploymentLoop {
             // The manager is the sole injector of ALIEN_COMMANDS_TOKEN.
             if let Some(ref token) = deployment.deployment_token {
                 vars.push(EnvironmentVariable {
-                    name: "ALIEN_COMMANDS_TOKEN".to_string(),
+                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
                     value: token.clone(),
                     var_type: EnvironmentVariableType::Secret,
                     target_resources: None,
@@ -603,7 +607,10 @@ impl DeploymentLoop {
 
 #[cfg(test)]
 mod tests {
-    use super::{active_work_statuses, get_or_create_local_bindings_provider, parse_status};
+    use super::{
+        active_work_statuses, get_or_create_local_bindings_provider, needs_provision_capability,
+        parse_status,
+    };
     use alien_core::DeploymentStatus;
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use std::collections::HashMap;
@@ -680,6 +687,26 @@ mod tests {
     }
 
     #[test]
+    fn only_bootstrap_statuses_need_provision_capability() {
+        assert!(needs_provision_capability(DeploymentStatus::Pending));
+        assert!(needs_provision_capability(DeploymentStatus::InitialSetup));
+
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::DeletePending,
+            DeploymentStatus::Deleting,
+            DeploymentStatus::DeleteFailed,
+        ] {
+            assert!(
+                !needs_provision_capability(status),
+                "{status:?} should run with management credentials"
+            );
+        }
+    }
+
+    #[test]
     fn manager_skip_logic_matches_contract() {
         let skipped_for_push = [
             DeploymentStatus::Pending,
@@ -737,6 +764,13 @@ mod tests {
         provider_a.shutdown().await;
         provider_b.shutdown().await;
     }
+}
+
+fn needs_provision_capability(status: DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Pending | DeploymentStatus::InitialSetup
+    )
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.

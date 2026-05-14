@@ -1,7 +1,7 @@
 //! Container binding definitions for container-to-container communication
 //!
 //! This module defines the binding parameters for container resources:
-//! - Horizon containers (AWS/GCP/Azure - using internal DNS and optional public URL)
+//! - Managed cloud containers (AWS/GCP/Azure - using internal DNS and optional public URL)
 //! - Local containers (Docker - using localhost URL)
 
 use super::BindingValue;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "service", rename_all = "lowercase")]
 pub enum ContainerBinding {
-    /// Horizon-managed container binding (AWS/GCP/Azure)
+    /// Managed cloud container binding (AWS/GCP/Azure)
     Horizon(HorizonContainerBinding),
     /// Kubernetes container binding
     Kubernetes(KubernetesContainerBinding),
@@ -19,11 +19,11 @@ pub enum ContainerBinding {
     Local(LocalContainerBinding),
 }
 
-/// Horizon container binding configuration (for cloud platforms)
+/// Managed cloud container binding configuration (for cloud platforms)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonContainerBinding {
-    /// Container name in Horizon
+    /// Container name in the managed container backend
     pub container_name: BindingValue<String>,
     /// Internal URL (e.g., "http://api.svc:8080")
     pub internal_url: BindingValue<String>,
@@ -63,7 +63,7 @@ pub struct LocalContainerBinding {
 }
 
 impl ContainerBinding {
-    /// Creates a Horizon container binding
+    /// Creates a managed cloud container binding
     pub fn horizon(
         container_name: impl Into<BindingValue<String>>,
         internal_url: impl Into<BindingValue<String>>,
@@ -75,7 +75,7 @@ impl ContainerBinding {
         })
     }
 
-    /// Creates a Horizon container binding with public URL
+    /// Creates a managed cloud container binding with public URL
     pub fn horizon_with_public_url(
         container_name: impl Into<BindingValue<String>>,
         internal_url: impl Into<BindingValue<String>>,

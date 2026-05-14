@@ -1,0 +1,325 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this module."
+}
+
+variable "deployment_name" {
+  type        = string
+  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  default     = ""
+}
+
+variable "deployment_group_token" {
+  type        = string
+  description = "Deployment group token used when registering the resolved stack import."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.42.0.0/16\",\"availability_zones\":2}}"
+  sensitive   = true
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the manager IAM identity allowed to assume management roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== locals.tf ===
+locals {
+  deployment_platform = "aws"
+  deployment_target   = "aws"
+  deployment_region   = data.aws_region.current.region
+  deployment_management_config = {
+    platform        = "aws"
+    managingRoleArn = var.managing_role_arn
+  }
+  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = aws_vpc.default_network.id
+        cidrBlock           = aws_vpc.default_network.cidr_block
+        internetGatewayId   = aws_internet_gateway.default_network.id
+        natGatewayId        = aws_nat_gateway.default_network.id
+        eipAllocationId     = aws_eip.default_network_nat.id
+        publicSubnetIds     = aws_subnet.default_network_public[*].id
+        privateSubnetIds    = aws_subnet.default_network_private[*].id
+        publicRouteTableId  = aws_route_table.default_network_public.id
+        privateRouteTableId = aws_route_table.default_network_private.id
+        securityGroupId     = aws_security_group.default_network_workload.id
+        availabilityZones   = slice(data.aws_availability_zones.available.names, 0, 2)
+        isByoVpc            = false
+      }
+    }
+  ]
+}
+
+=== default_network.tf ===
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "default_network" {
+  cidr_block           = "10.42.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_internet_gateway" "default_network" {
+  vpc_id = aws_vpc.default_network.id
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_subnet" "default_network_public" {
+  count                   = 2
+  vpc_id                  = aws_vpc.default_network.id
+  cidr_block              = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_subnet" "default_network_private" {
+  count             = 2
+  vpc_id            = aws_vpc.default_network.id
+  cidr_block        = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index + 2)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_eip" "default_network_nat" {
+  domain = "vpc"
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_nat_gateway" "default_network" {
+  allocation_id = aws_eip.default_network_nat.id
+  subnet_id     = aws_subnet.default_network_public[0].id
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_route_table" "default_network_public" {
+  vpc_id = aws_vpc.default_network.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.default_network.id
+  }
+
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_route_table" "default_network_private" {
+  vpc_id = aws_vpc.default_network.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.default_network.id
+  }
+
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+resource "aws_route_table_association" "default_network_public" {
+  count          = 2
+  subnet_id      = aws_subnet.default_network_public[count.index].id
+  route_table_id = aws_route_table.default_network_public.id
+}
+
+resource "aws_route_table_association" "default_network_private" {
+  count          = 2
+  subnet_id      = aws_subnet.default_network_private[count.index].id
+  route_table_id = aws_route_table.default_network_private.id
+}
+
+resource "aws_security_group" "default_network_workload" {
+  name_prefix = "${var.stack_name}-workload-"
+  description = "Private workload security group"
+  vpc_id      = aws_vpc.default_network.id
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    cidr_blocks = [
+      "0.0.0.0/0"
+    ]
+  }
+
+  tags = {
+    "alien.dev/managed-by" = "alien"
+    "alien.dev/stack"      = var.stack_name
+    "alien.dev/resource"   = "default-network"
+    AlienResourceType      = "network"
+  }
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_stack_import" {
+  input = {
+    platform               = local.deployment_platform
+    deployment_group_token = var.deployment_group_token
+    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix           = var.stack_name
+    manager_url            = var.manager_url
+    management_config      = local.deployment_management_config
+    stack_settings         = local.deployment_stack_settings
+    resources              = local.deployment_resources
+  }
+  depends_on = [
+    aws_vpc.default_network,
+    aws_internet_gateway.default_network,
+    aws_subnet.default_network_public,
+    aws_subnet.default_network_private,
+    aws_eip.default_network_nat,
+    aws_nat_gateway.default_network,
+    aws_route_table.default_network_public,
+    aws_route_table.default_network_private,
+    aws_route_table_association.default_network_public,
+    aws_route_table_association.default_network_private,
+    aws_security_group.default_network_workload
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "deployment_stack_prefix" {
+  value       = var.stack_name
+  description = "Physical stack prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_stack_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+=== README.md ===
+# Terraform module - acme-net
+
+Target: `aws`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='stack_name=acme-net' -var='deployment_group_token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

@@ -13,7 +13,9 @@ use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
-use alien_aws_clients::eventbridge::{EventBridgeTarget, PutRuleRequest, PutTargetsRequest};
+use alien_aws_clients::eventbridge::{
+    EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
+};
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
     UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
@@ -21,8 +23,8 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress, Network,
-    ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
+    standard_resource_tags, CertificateStatus, DnsRecordStatus, Function, FunctionOutputs, Ingress,
+    Network, ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -30,6 +32,13 @@ use alien_macros::controller;
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_function_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
+    standard_resource_tags(prefix, resource_id)
+        .into_iter()
+        .map(|(key, value)| EventBridgeTag { key, value })
+        .collect()
 }
 
 impl AwsFunctionController {
@@ -88,6 +97,41 @@ impl AwsFunctionController {
             certificate_arn: None,
             uses_custom_domain: false,
         })
+    }
+
+    fn ensure_domain_info(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.fqdn.is_some()
+            && self.domain_name.is_some()
+            && (self.certificate_id.is_some()
+                || self.certificate_arn.is_some()
+                || self.uses_custom_domain)
+        {
+            return Ok(true);
+        }
+
+        match Self::resolve_domain_info(ctx, resource_id) {
+            Ok(domain_info) => {
+                self.fqdn = Some(domain_info.fqdn.clone());
+                self.domain_name = Some(domain_info.fqdn.clone());
+                self.certificate_id = domain_info.certificate_id;
+                self.certificate_arn = domain_info.certificate_arn;
+                self.uses_custom_domain = domain_info.uses_custom_domain;
+                if self.url.is_none() {
+                    self.url = ctx
+                        .deployment_config
+                        .public_urls
+                        .as_ref()
+                        .and_then(|urls| urls.get(resource_id).cloned())
+                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                }
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
     }
 }
 
@@ -177,8 +221,7 @@ impl AwsFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    cfg.id,
-                    queue_trigger_count
+                    cfg.id, queue_trigger_count
                 ),
                 resource_id: Some(cfg.id.clone()),
             }));
@@ -235,6 +278,8 @@ impl AwsFunctionController {
 
         let code = FunctionCode::builder().image_uri(image_uri).build();
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &cfg.id);
+        let mut function_tags = standard_resource_tags(ctx.resource_prefix, &cfg.id);
+        function_tags.insert("Name".to_string(), aws_function_name.clone());
 
         if cfg.ingress == Ingress::Public {
             match Self::resolve_domain_info(ctx, &cfg.id) {
@@ -291,6 +336,7 @@ impl AwsFunctionController {
             .timeout(cfg.timeout_seconds as i32)
             .memory_size(cfg.memory_mb as i32)
             .publish(false)
+            .tags(function_tags)
             .maybe_environment(environment)
             .architectures(vec!["arm64".to_string()])
             .maybe_vpc_config(vpc_config)
@@ -392,6 +438,18 @@ impl AwsFunctionController {
             .and_then(|meta| meta.resources.get(&function_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
+        if !self.ensure_domain_info(ctx, &function_config.id)? {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiGateway,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+        if self.uses_custom_domain && self.certificate_arn.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiGateway,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
 
         match status {
             Some(CertificateStatus::Issued) => Ok(HandlerAction::Continue {
@@ -421,6 +479,7 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let function_config = ctx.desired_resource_config::<Function>()?;
+        self.ensure_domain_info(ctx, &function_config.id)?;
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -451,12 +510,17 @@ impl AwsFunctionController {
 
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        let tags = standard_resource_tags(ctx.resource_prefix, &function_config.id)
+            .into_iter()
+            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+            .collect();
         let response = acm_client
             .import_certificate(
                 alien_aws_clients::acm::ImportCertificateRequest::builder()
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
+                    .tags(tags)
                     .build(),
             )
             .await
@@ -485,12 +549,20 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.api_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiIntegration,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
             .get_aws_apigatewayv2_client(aws_cfg)
             .await?;
         let function_config = ctx.desired_resource_config::<Function>()?;
+        let api_tags = standard_resource_tags(ctx.resource_prefix, &function_config.id);
 
         let api = client
             .create_api(
@@ -500,6 +572,7 @@ impl AwsFunctionController {
                         ctx.resource_prefix, function_config.id
                     ))
                     .protocol_type("HTTP".to_string())
+                    .tags(api_tags)
                     .build(),
             )
             .await
@@ -532,6 +605,13 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.integration_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiRoute,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
@@ -592,6 +672,13 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.route_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiStage,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
@@ -644,12 +731,38 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let function_config = ctx.desired_resource_config::<Function>()?;
+
+        if self.stage_name.is_some() {
+            if self.fqdn.is_some() {
+                return Ok(HandlerAction::Continue {
+                    state: CreatingApiDomain,
+                    suggested_delay: Some(Duration::from_secs(1)),
+                });
+            }
+
+            let aws_cfg = ctx.get_aws_config()?;
+            let api_id = self.api_id.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "API ID missing for default endpoint".to_string(),
+                    resource_id: Some(function_config.id.clone()),
+                })
+            })?;
+            self.url = Some(format!(
+                "https://{}.execute-api.{}.amazonaws.com",
+                api_id, aws_cfg.region
+            ));
+            return Ok(HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
             .get_aws_apigatewayv2_client(aws_cfg)
             .await?;
-        let function_config = ctx.desired_resource_config::<Function>()?;
 
         let api_id = self.api_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -664,6 +777,10 @@ impl AwsFunctionController {
                 CreateStageRequest::builder()
                     .stage_name("$default".to_string())
                     .auto_deploy(true)
+                    .tags(standard_resource_tags(
+                        ctx.resource_prefix,
+                        &function_config.id,
+                    ))
                     .build(),
             )
             .await
@@ -707,6 +824,13 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.load_balancer.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiMapping,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
@@ -737,6 +861,10 @@ impl AwsFunctionController {
                         .endpoint_type("REGIONAL".to_string())
                         .security_policy("TLS_1_2".to_string())
                         .build()])
+                    .tags(standard_resource_tags(
+                        ctx.resource_prefix,
+                        &function_config.id,
+                    ))
                     .build(),
             )
             .await
@@ -775,6 +903,13 @@ impl AwsFunctionController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if self.api_mapping_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
@@ -1110,8 +1245,7 @@ impl AwsFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    config.id,
-                    queue_trigger_count
+                    config.id, queue_trigger_count
                 ),
                 resource_id: Some(config.id.clone()),
             }));
@@ -1144,23 +1278,18 @@ impl AwsFunctionController {
                 info!(function=%config.id, storage=%storage_ref.id, "Configuring S3 storage trigger");
 
                 // Get storage controller to access bucket name
-                let storage_controller = ctx
-                    .require_dependency::<crate::storage::AwsStorageController>(storage_ref)?;
-                let bucket_name =
-                    storage_controller
-                        .bucket_name
-                        .as_deref()
-                        .ok_or_else(|| {
-                            AlienError::new(ErrorData::DependencyNotReady {
-                                resource_id: config.id.clone(),
-                                dependency_id: storage_ref.id.clone(),
-                            })
-                        })?;
+                let storage_controller =
+                    ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)?;
+                let bucket_name = storage_controller.bucket_name.as_deref().ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: config.id.clone(),
+                        dependency_id: storage_ref.id.clone(),
+                    })
+                })?;
 
                 // Add Lambda permission for S3 to invoke this function
                 let statement_id = format!("{}-s3-{}", function_name, storage_ref.id);
-                let lambda_client =
-                    ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction".to_string())
@@ -1202,14 +1331,14 @@ impl AwsFunctionController {
                     })
                     .collect();
 
-                notification_config
-                    .lambda_function_configurations
-                    .push(LambdaFunctionConfiguration {
+                notification_config.lambda_function_configurations.push(
+                    LambdaFunctionConfiguration {
                         id: Some(statement_id.clone()),
                         lambda_function_arn: function_arn.to_string(),
                         events: s3_events,
                         filter: None,
-                    });
+                    },
+                );
 
                 s3_client
                     .put_bucket_notification_configuration(bucket_name, &notification_config)
@@ -1253,15 +1382,12 @@ impl AwsFunctionController {
         let aws_cfg = ctx.get_aws_config()?;
 
         let function_name = self.function_name.as_deref().unwrap_or("unknown");
-        let function_arn = self
-            .arn
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Function ARN not available for schedule trigger".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        let function_arn = self.arn.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Function ARN not available for schedule trigger".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
         for (index, trigger) in config.triggers.iter().enumerate() {
             if let alien_core::FunctionTrigger::Schedule { cron } = trigger {
@@ -1271,16 +1397,14 @@ impl AwsFunctionController {
 
                 // Convert standard 5-field cron to EventBridge format
                 let schedule_expression =
-                    crate::function::crontab_to_eventbridge::crontab_to_eventbridge(cron)
-                        .map_err(|e| {
+                    crate::function::crontab_to_eventbridge::crontab_to_eventbridge(cron).map_err(
+                        |e| {
                             AlienError::new(ErrorData::ResourceConfigInvalid {
-                                message: format!(
-                                    "Invalid cron expression '{}': {}",
-                                    cron, e
-                                ),
+                                message: format!("Invalid cron expression '{}': {}", cron, e),
                                 resource_id: Some(config.id.clone()),
                             })
-                        })?;
+                        },
+                    )?;
 
                 // Create EventBridge rule
                 let eventbridge_client = ctx
@@ -1297,13 +1421,11 @@ impl AwsFunctionController {
                             "Alien schedule trigger for function '{}'",
                             config.id
                         )),
+                        tags: Some(eventbridge_tags(ctx.resource_prefix, &config.id)),
                     })
                     .await
                     .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create EventBridge rule '{}'",
-                            rule_name
-                        ),
+                        message: format!("Failed to create EventBridge rule '{}'", rule_name),
                         resource_id: Some(config.id.clone()),
                     })?;
 
@@ -1311,8 +1433,7 @@ impl AwsFunctionController {
 
                 // Add Lambda permission for EventBridge
                 let statement_id = format!("{}-eb-{}", function_name, index);
-                let lambda_client =
-                    ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction".to_string())
@@ -1448,7 +1569,7 @@ impl AwsFunctionController {
                                     "Certificate renewed, triggering update"
                                 );
                                 return Ok(HandlerAction::Continue {
-                                    state: UpdateStart,
+                                    state: UpdateImportingCertificate,
                                     suggested_delay: None,
                                 });
                             }
@@ -1473,16 +1594,107 @@ impl AwsFunctionController {
     // ─────────────── UPDATE FLOW ──────────────────────────────
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
-        state = UpdateStart,
+        state = UpdateImportingCertificate,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
     )]
-    async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn update_importing_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let function_config = ctx.desired_resource_config::<Function>()?;
+
+        if function_config.ingress != Ingress::Public || self.uses_custom_domain {
+            return Ok(HandlerAction::Continue {
+                state: UpdateCodeStart,
+                suggested_delay: None,
+            });
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&function_config.id))
+        else {
+            return Ok(HandlerAction::Continue {
+                state: UpdateCodeStart,
+                suggested_delay: None,
+            });
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(HandlerAction::Continue {
+                state: UpdateCodeStart,
+                suggested_delay: None,
+            });
+        }
+
+        let certificate_arn = self.certificate_arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: function_config.id.clone(),
+                message: "Certificate ARN missing for certificate renewal".to_string(),
+            })
+        })?;
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(function_config.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(function_config.id.clone()),
+            })
+        })?;
+
+        let (leaf, chain) = split_certificate_chain(certificate_chain);
+        let aws_cfg = ctx.get_aws_config()?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        let tags = standard_resource_tags(ctx.resource_prefix, &function_config.id)
+            .into_iter()
+            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+            .collect();
+
+        acm_client
+            .reimport_certificate(
+                alien_aws_clients::acm::ReimportCertificateRequest::builder()
+                    .certificate_arn(certificate_arn)
+                    .certificate(leaf)
+                    .private_key(private_key.clone())
+                    .maybe_certificate_chain(chain)
+                    .tags(tags)
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import renewed certificate to ACM".to_string(),
+                resource_id: Some(function_config.id.clone()),
+            })?;
+
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        Ok(HandlerAction::Continue {
+            state: UpdateCodeStart,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdateCodeStart,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_code_start(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Function>()?;
         let previous_config = ctx.previous_resource_config::<Function>()?;
         let code_changed = current_config.code != previous_config.code;
 
-        // UpdateStart only handles code updates if needed
+        // UpdateCodeStart only handles code updates if needed
         if code_changed {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
@@ -1597,6 +1809,20 @@ impl AwsFunctionController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Function>()?;
+        let previous_config = ctx.previous_resource_config::<Function>()?;
+        let config_changed = current_config.permissions != previous_config.permissions
+            || current_config.memory_mb != previous_config.memory_mb
+            || current_config.timeout_seconds != previous_config.timeout_seconds
+            || current_config.environment != previous_config.environment
+            || current_config.links != previous_config.links;
+
+        if !config_changed {
+            return Ok(HandlerAction::Continue {
+                state: UpdateConfigWaitForActive,
+                suggested_delay: None,
+            });
+        }
+
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_function_name = get_aws_function_name(ctx.resource_prefix, &current_config.id);
@@ -1785,8 +2011,7 @@ impl AwsFunctionController {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "Function '{}' has {} queue triggers, but only one queue trigger per function is currently supported",
-                    current_config.id,
-                    queue_trigger_count
+                    current_config.id, queue_trigger_count
                 ),
                 resource_id: Some(current_config.id.clone()),
             }));
@@ -1845,14 +2070,11 @@ impl AwsFunctionController {
                     ..
                 } = trigger
                 {
-                    if let Ok(storage_controller) = ctx
-                        .require_dependency::<crate::storage::AwsStorageController>(
-                            storage_ref,
-                        )
+                    if let Ok(storage_controller) =
+                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
                     {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
-                            let s3_client =
-                                ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
+                            let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::default();
                             if let Err(e) = s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
@@ -1914,23 +2136,17 @@ impl AwsFunctionController {
                 } = trigger
                 {
                     let storage_controller = ctx
-                        .require_dependency::<crate::storage::AwsStorageController>(
-                            storage_ref,
-                        )?;
+                        .require_dependency::<crate::storage::AwsStorageController>(storage_ref)?;
                     let bucket_name =
-                        storage_controller
-                            .bucket_name
-                            .as_deref()
-                            .ok_or_else(|| {
-                                AlienError::new(ErrorData::DependencyNotReady {
-                                    resource_id: current_config.id.clone(),
-                                    dependency_id: storage_ref.id.clone(),
-                                })
-                            })?;
+                        storage_controller.bucket_name.as_deref().ok_or_else(|| {
+                            AlienError::new(ErrorData::DependencyNotReady {
+                                resource_id: current_config.id.clone(),
+                                dependency_id: storage_ref.id.clone(),
+                            })
+                        })?;
 
                     let statement_id = format!("{}-s3-{}", function_name, storage_ref.id);
-                    let lambda_client =
-                        ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                     let permission_request = AddPermissionRequest::builder()
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction".to_string())
@@ -1970,14 +2186,14 @@ impl AwsFunctionController {
                         })
                         .collect();
 
-                    notification_config
-                        .lambda_function_configurations
-                        .push(LambdaFunctionConfiguration {
+                    notification_config.lambda_function_configurations.push(
+                        LambdaFunctionConfiguration {
                             id: Some(statement_id.clone()),
                             lambda_function_arn: function_arn.to_string(),
                             events: s3_events,
                             filter: None,
-                        });
+                        },
+                    );
 
                     s3_client
                         .put_bucket_notification_configuration(bucket_name, &notification_config)
@@ -2002,10 +2218,7 @@ impl AwsFunctionController {
                         crate::function::crontab_to_eventbridge::crontab_to_eventbridge(cron)
                             .map_err(|e| {
                                 AlienError::new(ErrorData::ResourceConfigInvalid {
-                                    message: format!(
-                                        "Invalid cron expression '{}': {}",
-                                        cron, e
-                                    ),
+                                    message: format!("Invalid cron expression '{}': {}", cron, e),
                                     resource_id: Some(current_config.id.clone()),
                                 })
                             })?;
@@ -2024,20 +2237,17 @@ impl AwsFunctionController {
                                 "Alien schedule trigger for function '{}'",
                                 current_config.id
                             )),
+                            tags: Some(eventbridge_tags(ctx.resource_prefix, &current_config.id)),
                         })
                         .await
                         .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to create EventBridge rule '{}'",
-                                rule_name
-                            ),
+                            message: format!("Failed to create EventBridge rule '{}'", rule_name),
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", function_name, index);
-                    let lambda_client =
-                        ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                     let permission_request = AddPermissionRequest::builder()
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction".to_string())
@@ -2184,7 +2394,7 @@ impl AwsFunctionController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: "Failed to delete API mapping".to_string(),
                         resource_id: Some(function_config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -2211,7 +2421,7 @@ impl AwsFunctionController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: "Failed to delete custom domain".to_string(),
                         resource_id: Some(function_config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -2239,7 +2449,7 @@ impl AwsFunctionController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: "Failed to delete API Gateway".to_string(),
                         resource_id: Some(function_config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -2313,14 +2523,11 @@ impl AwsFunctionController {
                     ..
                 } = trigger
                 {
-                    if let Ok(storage_controller) = ctx
-                        .require_dependency::<crate::storage::AwsStorageController>(
-                            storage_ref,
-                        )
+                    if let Ok(storage_controller) =
+                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
                     {
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
-                            let s3_client =
-                                ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
+                            let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::default();
                             if let Err(e) = s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
@@ -2535,7 +2742,7 @@ impl AwsFunctionController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: "Failed to delete ACM certificate".to_string(),
                         resource_id: Some(function_config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -2791,10 +2998,8 @@ impl AwsFunctionController {
         // Get the function's own binding params (may be None during initial creation)
         let self_binding_params = self.get_binding_params()?;
 
-        let env_vars = EnvironmentVariableBuilder::new(initial_env)
-            .add_standard_alien_env_vars(ctx)
-            .add_function_transport_env_vars(ctx.platform)
-            .add_env_var("ALIEN_RUNTIME_SEND_OTLP".to_string(), "true".to_string())
+        let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
+            .add_function_runtime_env_vars(ctx, &function_config.id)?
             .add_linked_resources(links, ctx, function_name_for_error_logging)
             .await?
             .add_self_function_binding(&function_config.id, self_binding_params.as_ref())?
@@ -3155,7 +3360,6 @@ mod tests {
                         &function_name_for_config_update,
                     ))
                 });
-
         }
 
         // Mock concurrency operations (may or may not be called depending on function config)
@@ -3462,16 +3666,15 @@ mod tests {
     ) {
         let function_name = format!("test-{}", function.id);
         let has_url = function.ingress == Ingress::Public;
-        let mock_lambda = setup_mock_client_for_best_effort_deletion(
-            &function_name,
-            function_missing,
-        );
+        let mock_lambda =
+            setup_mock_client_for_best_effort_deletion(&function_name, function_missing);
         let mock_provider = setup_mock_service_provider(mock_lambda, None, None);
 
         // Start with a ready controller
         let mut ready_controller = AwsFunctionController::mock_ready(&function_name);
         if has_url {
-            ready_controller.url = Some("https://example.execute-api.us-east-1.amazonaws.com".to_string());
+            ready_controller.url =
+                Some("https://example.execute-api.us-east-1.amazonaws.com".to_string());
         }
 
         let mut executor = SingleControllerExecutor::builder()

@@ -9,6 +9,7 @@ export type ReconcileRequest = {
   error?: any | undefined;
   session: string;
   state: any;
+  suggestedDelayMs?: number | null | undefined;
   updateHeartbeat?: boolean | undefined;
 };
 
@@ -18,6 +19,7 @@ export type ReconcileRequest$Outbound = {
   error?: any | undefined;
   session: string;
   state: any;
+  suggestedDelayMs?: number | null | undefined;
   updateHeartbeat?: boolean | undefined;
 };
 
@@ -30,6 +32,7 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   error: z.any().optional(),
   session: z.string(),
   state: z.any(),
+  suggestedDelayMs: z.nullable(z.int()).optional(),
   updateHeartbeat: z.boolean().optional(),
 });
 

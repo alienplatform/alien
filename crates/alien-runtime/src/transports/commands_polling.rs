@@ -93,12 +93,17 @@ impl CommandsPolling {
         })?;
 
         // Token can come from secrets (managed mode) or plain env vars (dev/standalone mode)
-        let token = secrets.get("ALIEN_COMMANDS_TOKEN")
+        let token = secrets
+            .get("ALIEN_COMMANDS_TOKEN")
             .or_else(|| env_vars.get("ALIEN_COMMANDS_TOKEN"))
-            .ok_or_else(|| AlienError::new(ErrorData::ConfigurationInvalid {
-                message: "ALIEN_COMMANDS_TOKEN required when ALIEN_COMMANDS_POLLING_ENABLED=true".to_string(),
-                field: Some("ALIEN_COMMANDS_TOKEN".to_string()),
-            }))?;
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationInvalid {
+                    message:
+                        "ALIEN_COMMANDS_TOKEN required when ALIEN_COMMANDS_POLLING_ENABLED=true"
+                            .to_string(),
+                    field: Some("ALIEN_COMMANDS_TOKEN".to_string()),
+                })
+            })?;
 
         let url = Url::parse(url_str).map_err(|e| {
             AlienError::new(ErrorData::ConfigurationInvalid {

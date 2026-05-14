@@ -17,6 +17,10 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-manager-api = { workspace = true }
 alien-build = { workspace = true }
+alien-preflights = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-terraform = { workspace = true }
+alien-helm = { workspace = true }
 alien-permissions = { workspace = true }
 alien-aws-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
@@ -35,6 +39,7 @@ reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

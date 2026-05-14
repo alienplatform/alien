@@ -25,8 +25,73 @@ use crate::manager::TestManager;
 pub enum DeploymentModel {
     /// Serverless / function-based deployment (Lambda, Cloud Run function, etc.)
     Push,
-    /// Container-based deployment (Horizon, Kubernetes, local Docker)
+    /// Container-based deployment (managed cloud, Kubernetes, local Docker)
     Pull,
+}
+
+/// Infrastructure artifact used for initial setup in distribution E2E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributionFlow {
+    /// CloudFormation creates AWS infrastructure and registers the stack.
+    CloudFormationAwsPush,
+    /// Terraform creates AWS infrastructure and registers the stack.
+    TerraformAwsPush,
+    /// Terraform creates GCP infrastructure and registers the stack.
+    TerraformGcpPush,
+    /// Terraform creates Azure infrastructure and registers the stack.
+    TerraformAzurePush,
+    /// Terraform creates AWS-side infra, Helm installs the K8s runtime on EKS.
+    TerraformEksHelmPull,
+    /// Terraform creates GCP-side infra, Helm installs the K8s runtime on GKE.
+    TerraformGkeHelmPull,
+    /// Terraform creates Azure-side infra, Helm installs the K8s runtime on AKS.
+    TerraformAksHelmPull,
+    /// Terraform/external values feed Helm's local-import path for on-prem K8s.
+    TerraformOnpremHelmPull,
+}
+
+impl DistributionFlow {
+    /// Platform used by the running deployment after import.
+    pub fn platform(self) -> Platform {
+        match self {
+            DistributionFlow::CloudFormationAwsPush | DistributionFlow::TerraformAwsPush => {
+                Platform::Aws
+            }
+            DistributionFlow::TerraformGcpPush => Platform::Gcp,
+            DistributionFlow::TerraformAzurePush => Platform::Azure,
+            DistributionFlow::TerraformEksHelmPull
+            | DistributionFlow::TerraformGkeHelmPull
+            | DistributionFlow::TerraformAksHelmPull
+            | DistributionFlow::TerraformOnpremHelmPull => Platform::Kubernetes,
+        }
+    }
+
+    /// Deployment model used by the running deployment after import.
+    pub fn deployment_model(self) -> DeploymentModel {
+        match self {
+            DistributionFlow::CloudFormationAwsPush
+            | DistributionFlow::TerraformAwsPush
+            | DistributionFlow::TerraformGcpPush
+            | DistributionFlow::TerraformAzurePush => DeploymentModel::Push,
+            DistributionFlow::TerraformEksHelmPull
+            | DistributionFlow::TerraformGkeHelmPull
+            | DistributionFlow::TerraformAksHelmPull
+            | DistributionFlow::TerraformOnpremHelmPull => DeploymentModel::Pull,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DistributionFlow::CloudFormationAwsPush => "cloudformation_aws_push",
+            DistributionFlow::TerraformAwsPush => "terraform_aws_push",
+            DistributionFlow::TerraformGcpPush => "terraform_gcp_push",
+            DistributionFlow::TerraformAzurePush => "terraform_azure_push",
+            DistributionFlow::TerraformEksHelmPull => "terraform_eks_helm_pull",
+            DistributionFlow::TerraformGkeHelmPull => "terraform_gke_helm_pull",
+            DistributionFlow::TerraformAksHelmPull => "terraform_aks_helm_pull",
+            DistributionFlow::TerraformOnpremHelmPull => "terraform_onprem_helm_pull",
+        }
+    }
 }
 
 impl std::fmt::Display for DeploymentModel {
@@ -81,8 +146,8 @@ pub enum Binding {
     Environment,
     /// Request echo (POST /inspect)
     Inspect,
-    /// External secret retrieval (cloud only)
-    ExternalSecret,
+    /// Managed secret retrieval from the internal `secrets` vault (cloud only)
+    ManagedSecret,
     /// Event handler verification
     Events,
     /// Build execution (CodeBuild, Cloud Build, ACA Jobs)
@@ -108,7 +173,7 @@ impl std::fmt::Display for Binding {
             Binding::Sse => write!(f, "sse"),
             Binding::Environment => write!(f, "environment"),
             Binding::Inspect => write!(f, "inspect"),
-            Binding::ExternalSecret => write!(f, "external-secret"),
+            Binding::ManagedSecret => write!(f, "managed-secret"),
             Binding::Events => write!(f, "events"),
             Binding::Build => write!(f, "build"),
             Binding::ArtifactRegistry => write!(f, "artifact-registry"),
@@ -146,11 +211,11 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             bindings.push(Binding::Build);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
-            // Test infrastructure limitation: in pull mode the test harness can't
-            // provision User Vault secrets from the management account. In real
-            // deployments the agent has vault access via its own credentials.
+            // Test infrastructure limitation: in pull mode the manager does not
+            // seed the internal `secrets` vault; the runtime path manages its
+            // own secret sync.
             if model == DeploymentModel::Push {
-                bindings.push(Binding::ExternalSecret);
+                bindings.push(Binding::ManagedSecret);
             }
         }
         Platform::Kubernetes => {
@@ -193,7 +258,7 @@ pub fn exclusion_reason(
 ) -> Option<&'static str> {
     match binding {
         Binding::Function => Some("Function binding test app endpoint not yet implemented"),
-        Binding::Container => Some("Container binding requires Horizon (not OSS)"),
+        Binding::Container => Some("Container binding requires managed container infrastructure"),
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
             Some("Local service account binding not yet wired up")
@@ -217,7 +282,7 @@ pub fn exclusion_reason(
 // ---------------------------------------------------------------------------
 
 /// Returns the relative path to the test app directory for a given language.
-pub fn test_app_path(language: Language) -> &'static str {
+pub(crate) fn test_app_path(language: Language) -> &'static str {
     match language {
         Language::Rust => "test-apps/comprehensive-rust",
         Language::TypeScript => "test-apps/comprehensive-typescript",
@@ -264,6 +329,9 @@ pub struct TestContext {
     pub language: Language,
     /// Alien-agent handle (pull model only).
     pub agent: Option<crate::agent::TestAlienAgent>,
+    /// Distribution artifacts that must be destroyed outside the native
+    /// deployment state machine (Terraform state, CFN stack, Helm release).
+    pub distribution_cleanups: Vec<crate::distribution::DistributionArtifactCleanup>,
 }
 
 impl TestContext {
@@ -287,12 +355,36 @@ impl TestContext {
         }
 
         // 2. Mark the deployment as delete-pending via the manager API.
-        if let Err(e) = self.deployment.destroy().await {
-            tracing::warn!(
-                deployment = %self.deployment.id,
-                error = %e,
-                "cleanup: failed to trigger destroy (may already be destroyed)"
-            );
+        // Distribution flows import setup-owned resources from TF/CF/Helm. In
+        // those flows Alien should delete only Live resources; the setup tool
+        // cleanup below owns Frozen resources.
+        let delete_scope = if self.distribution_cleanups.is_empty() {
+            alien_manager_api::types::DeleteScope::Full
+        } else {
+            alien_manager_api::types::DeleteScope::LiveOnly
+        };
+        let destroy_enqueued = match self.deployment.destroy_with_scope(delete_scope).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    error = %e,
+                    "cleanup: failed to trigger destroy (may already be destroyed)"
+                );
+                false
+            }
+        };
+
+        if !destroy_enqueued {
+            // Still run setup artifact cleanup below. It is the owner of
+            // setup-created resources and should not depend on manager cleanup.
+            self.deployment.kill_foreground_agent().await;
+
+            for cleanup in self.distribution_cleanups {
+                cleanup.cleanup().await;
+            }
+
+            info!(deployment = %self.deployment.id, "cleanup: complete");
             return;
         }
 
@@ -325,6 +417,10 @@ impl TestContext {
         // This prevents orphaned agent processes from spamming logs after the test.
         self.deployment.kill_foreground_agent().await;
 
+        for cleanup in self.distribution_cleanups {
+            cleanup.cleanup().await;
+        }
+
         info!(deployment = %self.deployment.id, "cleanup: complete");
     }
 }
@@ -338,7 +434,7 @@ impl TestContext {
 /// The config file (alien.ts) uses the `@alienplatform/core` SDK to define
 /// stacks. This function evaluates it via bun and captures the serialized
 /// JSON output.
-pub async fn load_stack_json(
+pub(crate) async fn load_stack_json(
     app_dir: &std::path::Path,
     config_file: &str,
     platform: Platform,
@@ -381,6 +477,93 @@ console.log(JSON.stringify(stack));
     Ok(stack_by_platform)
 }
 
+async fn start_generated_helm_agent(
+    manager: &Arc<TestManager>,
+    deployment: &TestDeployment,
+    stack: &Stack,
+    agent_image: &str,
+) -> anyhow::Result<crate::agent::TestAlienAgent> {
+    let chart_dir = tempfile::tempdir().context("failed to create generated Helm chart dir")?;
+    let registry = alien_helm::HelmRegistry::built_in();
+    let mut stack_settings = alien_core::StackSettings::default();
+    stack_settings.deployment_model = alien_core::DeploymentModel::Pull;
+    let chart = alien_helm::generate_helm_chart(
+        stack,
+        alien_helm::HelmOptions {
+            registry: &registry,
+            stack_settings,
+            chart_name: format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("failed to generate Helm agent chart: {error}"))?;
+
+    for (path, contents) in chart.files {
+        let path = chart_dir.path().join(path);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, contents).await?;
+    }
+
+    let (repository, tag) = split_image_tag(agent_image)?;
+    let values = serde_json::json!({
+        "management": {
+            "token": deployment.token.clone(),
+            "name": deployment.name.clone(),
+            "url": manager.url.clone(),
+            "deploymentId": deployment.id.clone(),
+            "updates": "auto",
+            "telemetry": "auto",
+            "healthChecks": "on",
+        },
+        "runtime": {
+            "image": {
+                "repository": repository,
+                "tag": tag,
+                "pullPolicy": "IfNotPresent",
+            }
+        },
+        "stackSettings": {
+            "deploymentModel": "pull",
+            "updates": "auto",
+            "telemetry": "auto",
+            "heartbeats": "on",
+        },
+        "infrastructure": null,
+    });
+    let values_path = chart_dir.path().join("values.e2e.yaml");
+    tokio::fs::write(&values_path, serde_yaml::to_string(&values)?).await?;
+
+    crate::agent::TestAlienAgent::helm_install_with_values(
+        chart_dir.path(),
+        &values_path,
+        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        "alien-test",
+        None,
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!("Failed to start alien-agent via generated Helm chart: {error}")
+    })
+}
+
+fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
+    if image.contains('@') {
+        anyhow::bail!(
+            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
+        );
+    }
+    let last_slash = image.rfind('/');
+    let last_colon = image.rfind(':');
+    if let Some(colon) =
+        last_colon.filter(|colon| last_slash.map(|slash| *colon > slash).unwrap_or(true))
+    {
+        Ok((image[..colon].to_string(), image[colon + 1..].to_string()))
+    } else {
+        Ok((image.to_string(), "latest".to_string()))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tracing
 // ---------------------------------------------------------------------------
@@ -404,7 +587,7 @@ pub fn init_tracing() {
 ///
 /// Uses `CARGO_MANIFEST_DIR` (which points to `crates/alien-test/`) and walks
 /// up two levels to the workspace root, then joins `tests/e2e/`.
-fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
+pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         // crates/alien-test/ → workspace root
         let workspace_root = PathBuf::from(&manifest)
@@ -436,7 +619,7 @@ fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 /// Deploy a test app to the given platform with the specified model and language.
 ///
 /// Extract ECR image tags from a pushed stack's function resources.
-fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
+pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
     use alien_core::Function;
 
     stack
@@ -628,14 +811,14 @@ pub async fn deploy_test_app(
 }
 
 // ---------------------------------------------------------------------------
-// Developer + customer flow (mirrors real alien-deploy up)
+// Developer + customer flow (mirrors real alien-deploy deploy)
 // ---------------------------------------------------------------------------
 
 /// Result of the developer-side setup.
 pub struct DeveloperSetupResult {
     /// Deployment group ID.
     pub group_id: String,
-    /// Deployment group token (the token the customer uses with `alien-deploy up`).
+    /// Deployment group token (the token the customer uses with `alien-deploy deploy`).
     pub dg_token: String,
 }
 
@@ -644,7 +827,7 @@ pub struct DeveloperSetupResult {
 /// This mirrors what the developer does before handing off to a customer:
 /// `alien build` → `alien release` → `alien onboard` (creates DG + token).
 ///
-/// The customer then uses the DG token with `alien-deploy up`.
+/// The customer then uses the DG token with `alien-deploy deploy`.
 pub async fn developer_setup(
     manager: &Arc<TestManager>,
     platform: Platform,
@@ -843,9 +1026,9 @@ fn workspace_root() -> Option<std::path::PathBuf> {
     })
 }
 
-/// Run `alien-deploy up` as the customer would, then discover the deployment ID.
+/// Run `alien-deploy deploy` as the customer would, then discover the deployment ID.
 ///
-/// This is the real customer flow: `alien-deploy up --token <dg_token> --platform <platform>`.
+/// This is the real customer flow: `alien-deploy deploy --token <dg_token> --platform <platform>`.
 /// For push model, it reads cloud credentials from the environment.
 /// For local pull, it installs alien-agent as an OS service.
 pub async fn run_alien_deploy_up(
@@ -878,7 +1061,7 @@ pub async fn run_alien_deploy_up(
     } else {
         tokio::process::Command::new(&deploy_binary)
     };
-    cmd.arg("up")
+    cmd.arg("deploy")
         .arg("--token")
         .arg(dg_token)
         .arg("--manager-url")
@@ -922,7 +1105,7 @@ pub async fn run_alien_deploy_up(
         platform = %platform.as_str(),
         manager_url = %manager.url,
         foreground = %foreground,
-        "Running alien-deploy up"
+        "Running alien-deploy deploy"
     );
 
     // In foreground mode, the agent runs as a child process that never exits.
@@ -931,9 +1114,9 @@ pub async fn run_alien_deploy_up(
     let _foreground_child = if foreground {
         let mut child = cmd
             .spawn()
-            .context("Failed to spawn alien-deploy up in foreground mode")?;
+            .context("Failed to spawn alien-deploy deploy in foreground mode")?;
 
-        // Wait for the deployment to be created. alien-deploy up initializes
+        // Wait for the deployment to be created. alien-deploy deploy initializes
         // with the manager first (creates the deployment record), then starts
         // the agent loop. Poll the manager until the deployment appears.
         let max_wait = std::time::Duration::from_secs(60);
@@ -944,7 +1127,7 @@ pub async fn run_alien_deploy_up(
             // Check if the process died early (error in initialization)
             if let Some(status) = child.try_wait()? {
                 anyhow::bail!(
-                    "alien-deploy up exited early ({}). Check test output above for agent logs.",
+                    "alien-deploy deploy exited early ({}). Check test output above for agent logs.",
                     status,
                 );
             }
@@ -971,25 +1154,25 @@ pub async fn run_alien_deploy_up(
 
         Some(child)
     } else {
-        // Service mode: alien-deploy up installs the service and exits.
+        // Service mode: alien-deploy deploy installs the service and exits.
         let output = cmd
             .output()
             .await
-            .context("Failed to execute alien-deploy up")?;
+            .context("Failed to execute alien-deploy deploy")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if !stdout.is_empty() {
-            info!("alien-deploy up stdout:\n{}", stdout);
+            info!("alien-deploy deploy stdout:\n{}", stdout);
         }
         if !stderr.is_empty() {
-            info!("alien-deploy up stderr:\n{}", stderr);
+            info!("alien-deploy deploy stderr:\n{}", stderr);
         }
 
         if !output.status.success() {
             anyhow::bail!(
-                "alien-deploy up failed (exit {})\nstdout:\n{}\nstderr:\n{}",
+                "alien-deploy deploy failed (exit {})\nstdout:\n{}\nstderr:\n{}",
                 output.status,
                 stdout,
                 stderr,
@@ -1012,15 +1195,15 @@ pub async fn run_alien_deploy_up(
     let dep = deployments
         .items
         .first()
-        .context("No deployment found in group after alien-deploy up")?;
+        .context("No deployment found in group after alien-deploy deploy")?;
 
     let deployment_id = dep.id.clone();
     let deployment_name = dep.name.clone();
-    info!(%deployment_id, %deployment_name, "Discovered deployment created by alien-deploy up");
+    info!(%deployment_id, %deployment_name, "Discovered deployment created by alien-deploy deploy");
 
     // The deployment token was created during deployment creation and is stored
     // on the record. Create a fresh one for test usage since we can't access
-    // the original (it was returned to alien-deploy up).
+    // the original (it was returned to alien-deploy deploy).
     let dep_token = manager
         .create_deployment_token(group_id, &deployment_id)
         .await
@@ -1082,20 +1265,20 @@ pub fn is_platform_available(
 }
 
 // ---------------------------------------------------------------------------
-// External secret provisioning
+// Managed test secret provisioning
 // ---------------------------------------------------------------------------
 
-/// Provision the `EXTERNAL_TEST_SECRET` in the deployment's `alien-vault` vault
-/// via the manager's vault API. This must be called after the deployment reaches
-/// Running (so the vault resource is provisioned in the cloud).
-async fn provision_external_secret(
+/// Provision the `MANAGED_TEST_SECRET` in the deployment's preflight-managed
+/// `secrets` vault via the manager's vault API. This is an Alien-managed test
+/// secret, not a customer-owned external vault secret.
+async fn provision_managed_test_secret(
     manager: &Arc<TestManager>,
     deployment: &TestDeployment,
 ) -> anyhow::Result<()> {
     let http = manager.http_client();
-    let vault_name = "alien-vault";
-    let secret_key = "EXTERNAL_TEST_SECRET";
-    let secret_value = "e2e-test-external-secret-value";
+    let vault_name = "secrets";
+    let secret_key = "MANAGED_TEST_SECRET";
+    let secret_value = "e2e-test-managed-secret-value";
 
     let url = format!(
         "{}/v1/deployments/{}/vault/{}/secrets/{}",
@@ -1106,7 +1289,7 @@ async fn provision_external_secret(
         deployment_id = %deployment.id,
         vault_name,
         secret_key,
-        "Provisioning external test secret via manager vault API"
+        "Provisioning managed test secret via manager vault API"
     );
 
     let resp = http
@@ -1119,12 +1302,16 @@ async fn provision_external_secret(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to provision external secret ({}): {}", status, body);
+        anyhow::bail!(
+            "Failed to provision managed test secret ({}): {}",
+            status,
+            body
+        );
     }
 
     info!(
         deployment_id = %deployment.id,
-        "External test secret provisioned"
+        "Managed test secret provisioned"
     );
 
     Ok(())
@@ -1195,32 +1382,31 @@ pub async fn setup(
 
     // ── Route to the correct flow based on platform + model ─────────
     //
-    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy up` flow.
+    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy deploy` flow.
     //   Developer role: build, push, release, create DG + token.
-    //   Customer role: `alien-deploy up --token <dg_token> --platform <platform>`.
+    //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
     //
-    // Cloud pull (AWS/GCP/Azure pull) and K8s pull: use existing direct flows.
-    //   These match the real customer flow (deploy Docker image / helm install).
+    // K8s pull uses the direct Terraform+Helm flow.
 
-    // Only local pull uses `alien-deploy up` for now.
-    // Push model has an auth issue: alien-deploy up uses the DG token for
+    // Only local pull uses `alien-deploy deploy` for now.
+    // Push model has an auth issue: alien-deploy deploy uses the DG token for
     // sync/acquire, but the manager only accepts admin/deployment tokens there.
     // TODO: fix alien-deploy-cli to re-create client with deployment token
     // after initialize, then enable push model here too.
     let uses_alien_deploy_up = model == DeploymentModel::Pull && platform == Platform::Local;
 
     let (mut deployment, agent) = if uses_alien_deploy_up {
-        // ── alien-deploy up flow (local pull) ─────────────────────────
+        // ── alien-deploy deploy flow (local pull) ─────────────────────────
         //
         // Developer side: build, push, release, create DG + DG token.
         let dev = developer_setup(&manager, platform, language).await?;
 
-        // Customer side: alien-deploy up installs alien-agent as OS service.
+        // Customer side: alien-deploy deploy installs alien-agent as OS service.
         let deployment =
             run_alien_deploy_up(&manager, &dev.dg_token, platform, &dev.group_id).await?;
         info!(
             deployment_id = %deployment.id,
-            "Deployment created via alien-deploy up"
+            "Deployment created via alien-deploy deploy"
         );
 
         // Track agent for cleanup. In foreground mode the agent runs as a
@@ -1239,14 +1425,19 @@ pub async fn setup(
 
         (deployment, agent)
     } else {
-        // ── Direct flow (push + cloud pull + K8s pull) ───────────────
+        // ── Direct flow (push + K8s pull) ───────────────────────────
         //
         // Push model: test harness calls push_initial_setup() directly
-        // with the admin token (alien-deploy up auth not yet supported).
+        // with the admin token (alien-deploy deploy auth not yet supported).
         //
-        // Cloud pull: deploy alien-agent Docker image with injected creds.
         // K8s pull: helm install alien-agent chart.
-        let (deployment, _stack) = deploy_test_app(&manager, platform, model, language).await?;
+        if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
+            anyhow::bail!(
+                "direct cloud pull is not supported by the e2e harness; use local pull or Terraform+Helm Kubernetes pull"
+            );
+        }
+
+        let (deployment, stack) = deploy_test_app(&manager, platform, model, language).await?;
         info!(
             deployment_id = %deployment.id,
             "Deployment created, waiting for running status"
@@ -1267,6 +1458,7 @@ pub async fn setup(
                     &config,
                     platform,
                     &deployment,
+                    &stack,
                     &manager,
                     management_config,
                 )
@@ -1274,54 +1466,16 @@ pub async fn setup(
             }
         }
 
-        // Pull model: start agent
-        let agent = if model == DeploymentModel::Pull {
+        // Pull model: start the agent for supported pull flows.
+        let agent = if model == DeploymentModel::Pull && platform == Platform::Kubernetes {
             let agent_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
-                .unwrap_or_else(|_| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+                .ok()
+                .filter(|image| !image.is_empty())
+                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
 
-            match platform {
-                Platform::Kubernetes => {
-                    let agent = crate::agent::TestAlienAgent::helm_install(
-                        &manager,
-                        "charts/alien-agent",
-                        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-                        "alien-test",
-                        None,
-                    )
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start alien-agent via Helm: {}", e))?;
-                    Some(agent)
-                }
-                _ => {
-                    // Docker container for cloud pull (AWS/GCP/Azure pull)
-                    let agent = crate::agent::TestAlienAgent::start_container(
-                        &manager,
-                        &agent_image,
-                        platform,
-                        Some(&config),
-                    )
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start alien-agent container: {}", e))?;
-
-                    // Give the agent a moment to start, then verify it's still running
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    if let Some(ref cid) = agent.container_id {
-                        let status = crate::agent::docker_container_status(cid).await;
-                        if status != "running" {
-                            let logs = crate::agent::docker_container_logs(cid).await;
-                            anyhow::bail!(
-                                "Agent container {} exited (status: {}). Logs:\n{}",
-                                cid,
-                                status,
-                                logs
-                            );
-                        }
-                        info!(container_id = %cid, %status, "Agent container health check passed");
-                    }
-
-                    Some(agent)
-                }
-            }
+            let agent =
+                start_generated_helm_agent(&manager, &deployment, &stack, &agent_image).await?;
+            Some(agent)
         } else {
             None
         };
@@ -1334,7 +1488,7 @@ pub async fn setup(
     let agent_container_id = agent.as_ref().and_then(|a| a.container_id.clone());
 
     // Wait for the deployment to be running (populates URL).
-    // For push: the manager's deployment loop drives this after alien-deploy up completes.
+    // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
     // For pull: the alien-agent drives this via sync + deployment loop.
     let wait_result = deployment
         .wait_until_running(Duration::from_secs(600))
@@ -1369,13 +1523,13 @@ pub async fn setup(
         "Deployment is running"
     );
 
-    // Provision the external test secret via the manager vault API.
+    // Provision the managed test secret via the manager vault API.
     // Only for push mode — pull-mode agents manage secrets directly.
     if model == DeploymentModel::Push
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
-        if let Err(e) = provision_external_secret(&manager, &deployment).await {
-            tracing::warn!(error = %e, "Failed to provision external secret, cleaning up");
+        if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
+            tracing::warn!(error = %e, "Failed to provision managed test secret, cleaning up");
             cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
             return Err(e);
         }
@@ -1388,7 +1542,22 @@ pub async fn setup(
         model,
         language,
         agent,
+        distribution_cleanups: Vec::new(),
     })
+}
+
+/// Run the full distribution E2E setup for a given artifact flow.
+///
+/// This intentionally does not call [`setup`]. Distribution tests must not
+/// silently fall back to native controller provisioning; each flow has to prove
+/// its own initial infrastructure path before reusing the common assertions.
+pub async fn setup_distribution(
+    flow: DistributionFlow,
+    language: Language,
+) -> anyhow::Result<TestContext> {
+    init_tracing();
+
+    crate::distribution::setup_distribution(flow, language).await
 }
 
 /// Best-effort cleanup when setup() fails after creating a deployment/agent.
