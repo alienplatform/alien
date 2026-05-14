@@ -8,8 +8,8 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, Container, ContainerCluster, DeploymentConfig, ExposeProtocol, Function,
-    Ingress, Platform, Stack, StackState,
+    ComputeBackend, Container, ContainerCluster, DeploymentConfig, ExposeProtocol, Platform, Stack,
+    StackState,
 };
 
 fn is_cloud_platform(platform: Platform) -> bool {
@@ -27,12 +27,6 @@ fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
     let mut resources = Vec::new();
 
     for (resource_id, entry) in stack.resources() {
-        if let Some(function) = entry.config.downcast_ref::<Function>() {
-            if function.ingress == Ingress::Public {
-                resources.push(format!("function '{}' (public HTTPS ingress)", resource_id));
-            }
-        }
-
         if let Some(container) = entry.config.downcast_ref::<Container>() {
             if container
                 .ports
@@ -97,13 +91,13 @@ impl DeploymentPrerequisiteCheck for ManagedContainerBackendRequiredCheck {
     }
 }
 
-/// Validates that cloud public ingress deployments have domain metadata.
+/// Validates that cloud public HTTP container deployments have domain metadata.
 pub struct DomainMetadataRequiredCheck;
 
 #[async_trait::async_trait]
 impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
     fn description(&self) -> &'static str {
-        "Cloud public ingress deployments require domain metadata"
+        "Cloud public HTTP container deployments require domain metadata"
     }
 
     fn should_run(
@@ -128,8 +122,8 @@ impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
 
         let resource_list = resources_requiring_domain_metadata(stack).join(", ");
         Ok(CheckResult::failed(vec![format!(
-            "Cloud public ingress deployments require domain metadata. \
-             Found resources with public ingress: {resource_list}. \
+            "Cloud public HTTP container deployments require domain metadata. \
+             Found containers with exposed HTTP ports: {resource_list}. \
              The deployment config must include domainMetadata for cloud platforms."
         )]))
     }
@@ -142,8 +136,8 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
-        DomainMetadata, EnvironmentVariablesSnapshot, Resource, ResourceDomainInfo, ResourceEntry,
-        ResourceLifecycle, ResourceSpec,
+        DomainMetadata, EnvironmentVariablesSnapshot, Function, FunctionCode, Ingress, Resource,
+        ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -266,6 +260,23 @@ mod tests {
         }
     }
 
+    fn create_public_function_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Function::new(id.to_string())
+                    .code(FunctionCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .ingress(Ingress::Public)
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
     #[tokio::test]
     async fn managed_container_backend_fails_without_compute_backend_on_cloud() {
         let mut resources = IndexMap::new();
@@ -346,6 +357,17 @@ mod tests {
         assert!(!result.success);
         assert!(result.errors[0].contains("domain metadata"));
         assert!(result.errors[0].contains("web"));
+    }
+
+    #[tokio::test]
+    async fn domain_metadata_not_required_for_public_functions_on_cloud() {
+        let mut resources = IndexMap::new();
+        resources.insert("web".to_string(), create_public_function_entry("web"));
+        let stack = create_stack(resources);
+        let config = deployment_config();
+        let check = DomainMetadataRequiredCheck;
+
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
     }
 
     #[tokio::test]

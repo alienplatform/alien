@@ -1291,8 +1291,8 @@ fn terraform_import_request_from_outputs(
         serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
     let setup_target = terraform_output_string(output, "deployment_setup_target")?;
     let setup_fingerprint = terraform_output_string(output, "deployment_setup_fingerprint")?;
-    let setup_fingerprint_version: u32 =
-        terraform_output_string(output, "deployment_setup_fingerprint_version")?.parse()?;
+    let setup_fingerprint_version =
+        terraform_output_u32(output, "deployment_setup_fingerprint_version")?;
 
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
@@ -1646,6 +1646,26 @@ fn terraform_output_string(outputs: &Value, key: &str) -> anyhow::Result<String>
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .with_context(|| format!("terraform output {key} missing or not a string"))
+}
+
+fn terraform_output_u32(outputs: &Value, key: &str) -> anyhow::Result<u32> {
+    let value = outputs
+        .get(key)
+        .and_then(|output| output.get("value"))
+        .with_context(|| format!("terraform output {key} missing"))?;
+
+    if let Some(number) = value.as_u64() {
+        return u32::try_from(number)
+            .with_context(|| format!("terraform output {key} is too large for u32"));
+    }
+
+    if let Some(string) = value.as_str() {
+        return string
+            .parse()
+            .with_context(|| format!("terraform output {key} is not a valid u32"));
+    }
+
+    anyhow::bail!("terraform output {key} is not a number or string")
 }
 
 fn terraform_tfvars(
