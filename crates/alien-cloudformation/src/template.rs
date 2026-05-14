@@ -23,12 +23,17 @@ pub struct CfTemplate {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub parameters: IndexMap<String, CfParameter>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub mappings: IndexMap<String, CfMapping>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub conditions: IndexMap<String, CfExpression>,
     #[serde(default)]
     pub resources: IndexMap<String, CfResource>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub outputs: IndexMap<String, CfOutput>,
 }
+
+/// CloudFormation mapping declaration.
+pub type CfMapping = IndexMap<String, IndexMap<String, CfExpression>>;
 
 /// CloudFormation parameter declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,6 +145,21 @@ impl CfExpression {
             Self::List(vec![
                 Self::String(logical_id.into()),
                 Self::String(attribute.into()),
+            ]),
+        )])
+    }
+
+    pub fn find_in_map(
+        mapping_name: impl Into<String>,
+        top_level_key: CfExpression,
+        second_level_key: impl Into<String>,
+    ) -> Self {
+        Self::object([(
+            "Fn::FindInMap",
+            Self::List(vec![
+                Self::String(mapping_name.into()),
+                top_level_key,
+                Self::String(second_level_key.into()),
             ]),
         )])
     }

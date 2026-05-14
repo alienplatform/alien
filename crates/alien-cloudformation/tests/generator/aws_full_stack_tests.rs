@@ -112,6 +112,7 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         settings,
         RegistrationMode::Both {
             lambda_arn: LAMBDA_ARN.to_string(),
+            callback_url: None,
         },
         "aws full stack",
     );

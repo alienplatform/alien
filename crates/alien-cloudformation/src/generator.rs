@@ -1,6 +1,6 @@
 use crate::{
     registry::CfRegistry,
-    template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate},
+    template::{CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfTemplate},
 };
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Function,
@@ -49,32 +49,72 @@ const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 9;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
+const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
+const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 
 /// Registration behavior for the generated CloudFormation template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationMode {
     /// Register through a CloudFormation custom resource.
-    CustomResource { lambda_arn: String },
+    CustomResource {
+        lambda_arn: String,
+        callback_url: Option<String>,
+    },
+    /// Register through a same-region CloudFormation custom resource.
+    RegionalCustomResource {
+        lambda_arns_by_region: IndexMap<String, String>,
+        callback_url: Option<String>,
+    },
     /// Emit stack outputs that can be registered out of band.
     OutputsFallback,
     /// Emit both the custom resource and stack outputs.
-    Both { lambda_arn: String },
+    Both {
+        lambda_arn: String,
+        callback_url: Option<String>,
+    },
+    /// Emit both a same-region custom resource and stack outputs.
+    RegionalBoth {
+        lambda_arns_by_region: IndexMap<String, String>,
+        callback_url: Option<String>,
+    },
 }
 
 impl RegistrationMode {
-    fn lambda_arn(&self) -> Option<&str> {
+    fn service_token(&self, template: &mut CfTemplate) -> Result<Option<CfExpression>> {
         match self {
-            RegistrationMode::CustomResource { lambda_arn }
-            | RegistrationMode::Both { lambda_arn } => Some(lambda_arn.as_str()),
-            RegistrationMode::OutputsFallback => None,
+            RegistrationMode::CustomResource { lambda_arn, .. }
+            | RegistrationMode::Both { lambda_arn, .. } => {
+                Ok(Some(CfExpression::from(lambda_arn.clone())))
+            }
+            RegistrationMode::RegionalCustomResource {
+                lambda_arns_by_region,
+                ..
+            }
+            | RegistrationMode::RegionalBoth {
+                lambda_arns_by_region,
+                ..
+            } => regional_service_token(template, lambda_arns_by_region).map(Some),
+            RegistrationMode::OutputsFallback => Ok(None),
         }
     }
 
     fn emits_outputs(&self) -> bool {
         matches!(
             self,
-            RegistrationMode::OutputsFallback | RegistrationMode::Both { .. }
+            RegistrationMode::OutputsFallback
+                | RegistrationMode::Both { .. }
+                | RegistrationMode::RegionalBoth { .. }
         )
+    }
+
+    fn callback_url(&self) -> Option<&str> {
+        match self {
+            RegistrationMode::CustomResource { callback_url, .. }
+            | RegistrationMode::RegionalCustomResource { callback_url, .. }
+            | RegistrationMode::Both { callback_url, .. }
+            | RegistrationMode::RegionalBoth { callback_url, .. } => callback_url.as_deref(),
+            RegistrationMode::OutputsFallback => None,
+        }
     }
 }
 
@@ -112,6 +152,7 @@ pub fn generate_cloudformation_template(
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
+        mappings: IndexMap::new(),
         conditions: IndexMap::new(),
         resources: IndexMap::new(),
         outputs: IndexMap::new(),
@@ -168,14 +209,15 @@ pub fn generate_cloudformation_template(
 
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
-    if let Some(lambda_arn) = options.registration.lambda_arn() {
+    if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
             &mut template,
-            lambda_arn,
+            service_token,
             management_config.clone(),
             stack_settings.clone(),
             &options,
             resources.clone(),
+            options.registration.callback_url(),
         );
     }
 
@@ -190,6 +232,39 @@ pub fn generate_cloudformation_template(
     }
 
     Ok(template)
+}
+
+fn regional_service_token(
+    template: &mut CfTemplate,
+    lambda_arns_by_region: &IndexMap<String, String>,
+) -> Result<CfExpression> {
+    if lambda_arns_by_region.is_empty() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate_cloudformation_template".to_string(),
+            reason: "regional custom resource registration requires at least one region"
+                .to_string(),
+        }));
+    }
+
+    let mut mapping = CfMapping::new();
+    for (region, lambda_arn) in lambda_arns_by_region {
+        mapping.insert(
+            region.clone(),
+            indexmap! {
+                MAPPING_SERVICE_TOKEN_KEY.to_string() => CfExpression::from(lambda_arn.clone()),
+            },
+        );
+    }
+    template.mappings.insert(
+        MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS.to_string(),
+        mapping,
+    );
+
+    Ok(CfExpression::find_in_map(
+        MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS,
+        CfExpression::ref_("AWS::Region"),
+        MAPPING_SERVICE_TOKEN_KEY,
+    ))
 }
 
 /// Serialize a CloudFormation template to YAML.
@@ -691,11 +766,12 @@ fn insert_parameter_label(
 
 fn add_custom_resource(
     template: &mut CfTemplate,
-    lambda_arn: &str,
+    service_token: CfExpression,
     management_config: CfExpression,
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: CfExpression,
+    callback_url: Option<&str>,
 ) {
     let depends_on = template
         .resources
@@ -716,7 +792,7 @@ fn add_custom_resource(
     // customers who want a different identity can rewire the property
     // post-rendering.
     resource.properties = indexmap! {
-        "ServiceToken".to_string() => CfExpression::from(lambda_arn),
+        "ServiceToken".to_string() => service_token,
         "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_DEPLOYMENT_GROUP_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
         "StackPrefix".to_string() => CfExpression::ref_("AWS::StackName"),
@@ -730,6 +806,12 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
+        resource.properties.insert(
+            "CallbackUrl".to_string(),
+            CfExpression::from(callback_url.to_string()),
+        );
+    }
     template
         .resources
         .insert(resource.logical_id.clone(), resource);
