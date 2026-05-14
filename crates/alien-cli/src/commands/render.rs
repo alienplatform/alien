@@ -223,6 +223,7 @@ fn registration_mode(args: &RenderArgs) -> Result<alien_cloudformation::Registra
         RenderRegistrationMode::Auto => match &args.notification_lambda_arn {
             Some(lambda_arn) => Ok(alien_cloudformation::RegistrationMode::CustomResource {
                 lambda_arn: lambda_arn.clone(),
+                callback_url: None,
             }),
             None => Ok(alien_cloudformation::RegistrationMode::OutputsFallback),
         },
@@ -234,7 +235,10 @@ fn registration_mode(args: &RenderArgs) -> Result<alien_cloudformation::Registra
                         .to_string(),
                 })
             })?;
-            Ok(alien_cloudformation::RegistrationMode::Both { lambda_arn })
+            Ok(alien_cloudformation::RegistrationMode::Both {
+                lambda_arn,
+                callback_url: None,
+            })
         }
     }
 }
