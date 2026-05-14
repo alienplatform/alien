@@ -2,6 +2,7 @@
   "files": {
     "ignore": [
       ".wrangler/*.js",
+      ".pnpm-store/**",
       ".turbo/**",
       "**/.alien/**",
       "**/alien-data/**",
@@ -17,6 +18,7 @@
       "generated/**",
       "shim.mjs",
       "target/**",
+      "infra/test/.terraform/**",
       "examples/**/github-agent/packages/dashboard/**"
     ]
   },

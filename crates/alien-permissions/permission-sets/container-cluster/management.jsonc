@@ -32,10 +32,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateLaunchTemplateVersion",
-            "ec2:DeleteLaunchTemplate"
-          ]
+          "actions": ["ec2:CreateLaunchTemplateVersion", "ec2:DeleteLaunchTemplate"]
         },
         "binding": {
           "stack": {
@@ -194,10 +191,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"]
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"
+            ]
           }
         }
       },

@@ -317,7 +317,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -348,7 +350,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

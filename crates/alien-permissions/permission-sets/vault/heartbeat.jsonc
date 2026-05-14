@@ -12,9 +12,7 @@
             "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
           }
         }
       }
