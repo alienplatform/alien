@@ -514,7 +514,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
         PARAM_DOMAIN_NAME.to_string(),
         string_parameter(
             "Optional domain name for public endpoints. Empty disables custom domains.",
-            domain_defaults.domain_name,
+            Some(domain_defaults.domain_name.unwrap_or_default()),
             None,
             false,
         ),
@@ -523,7 +523,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
         PARAM_HOSTED_ZONE_ID.to_string(),
         string_parameter(
             "Optional Route 53 hosted zone ID for the domain.",
-            None,
+            Some(String::new()),
             None,
             false,
         ),
@@ -532,7 +532,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
         PARAM_CERTIFICATE_ARN.to_string(),
         string_parameter(
             "Optional ACM certificate ARN for the domain.",
-            domain_defaults.certificate_arn,
+            Some(domain_defaults.certificate_arn.unwrap_or_default()),
             None,
             false,
         ),

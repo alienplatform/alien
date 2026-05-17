@@ -5,8 +5,6 @@ docker-access-tests = { max-threads = 1 }
 otlp-tests = { max-threads = 1 }
 # Define a group for Lambda tests that spawn cargo lambda watch processes
 lambda-tests = { max-threads = 1 }
-# Define a group for function integration tests that run bun install (race condition on concurrent installs)
-function-integration-tests = { max-threads = 1 }
 # E2E tests deploy to real cloud infrastructure and must run serially to avoid
 # resource conflicts and credential race conditions (env vars are process-global).
 e2e-tests = { max-threads = 1 }
@@ -26,11 +24,6 @@ test-group = 'otlp-tests'
 # The test() predicate matches test names, not module paths, so we match any test starting with test_lambda
 filter = 'package(alien-runtime) and test(test_lambda)'
 test-group = 'lambda-tests'
-
-[[profile.default.overrides]]
-# Function integration tests must run serially - they run bun install which has race conditions on concurrent installs
-filter = 'binary(function_integration)'
-test-group = 'function-integration-tests'
 
 [[profile.default.overrides]]
 # E2E tests deploy to real cloud infrastructure and must run serially to avoid
