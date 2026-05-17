@@ -3,9 +3,9 @@ use crate::{
     template::{CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfTemplate},
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Worker,
-    WorkerCode, HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
-    TelemetryMode, UpdatesMode,
+    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData,
+    HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
+    TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -801,7 +801,7 @@ fn add_custom_resource(
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
         "SetupTarget".to_string() => CfExpression::from(options.setup_target.clone()),
         "SetupFingerprint".to_string() => CfExpression::from(options.setup_fingerprint.clone()),
-        "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version.to_string()),
+        "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version),
         "ManagementConfig".to_string() => management_config,
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
@@ -864,7 +864,7 @@ fn add_outputs(
         OUTPUT_SETUP_FINGERPRINT_VERSION.to_string(),
         output(
             "Setup fingerprint algorithm version.",
-            CfExpression::from(options.setup_fingerprint_version.to_string()),
+            CfExpression::from(options.setup_fingerprint_version),
         ),
     );
     template.outputs.insert(
