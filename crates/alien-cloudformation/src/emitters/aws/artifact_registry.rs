@@ -48,8 +48,8 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
         repository.deletion_policy = Some("Retain".to_string());
         repository.update_replace_policy = Some("Retain".to_string());
 
-        let mut pull_role = ecr_access_role(ctx, &pull_role_id, registry, "pull", false)?;
-        let mut push_role = ecr_access_role(ctx, &push_role_id, registry, "push", true)?;
+        let mut pull_role = ecr_access_role(ctx, &pull_role_id, "registry-pull", false)?;
+        let mut push_role = ecr_access_role(ctx, &push_role_id, "registry-push", true)?;
         pull_role.depends_on.push(repository_id.clone());
         push_role.depends_on.push(repository_id);
 
@@ -95,15 +95,12 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
 fn ecr_access_role(
     ctx: &EmitContext<'_>,
     role_id: &str,
-    registry: &ArtifactRegistry,
-    suffix: &str,
+    role_name_suffix: &str,
     push: bool,
 ) -> Result<CfResource> {
     let mut role = CfResource::new(role_id.to_string(), "AWS::IAM::Role".to_string());
-    role.properties.insert(
-        "RoleName".to_string(),
-        stack_name(&format!("{}-{suffix}", registry.id())),
-    );
+    role.properties
+        .insert("RoleName".to_string(), stack_name(role_name_suffix));
     role.properties.insert(
         "AssumeRolePolicyDocument".to_string(),
         ecr_role_trust_policy(ctx),
