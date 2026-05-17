@@ -105,9 +105,7 @@ fn find_cycle(graph: &HashMap<String, Vec<String>>, start: &str) -> Option<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        Worker, WorkerCode, ResourceEntry, ResourceLifecycle, ResourceRef, Storage,
-    };
+    use alien_core::{ResourceEntry, ResourceLifecycle, ResourceRef, Storage, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     #[tokio::test]

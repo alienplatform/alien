@@ -5,9 +5,9 @@ use alien_core::{
     Result, StackResourceState,
 };
 
-use crate::worker::{AwsWorkerController, AwsWorkerState};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
+use crate::worker::{AwsWorkerController, AwsWorkerState};
 
 /// AWS Lambda worker importer.
 ///

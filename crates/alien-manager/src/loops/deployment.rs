@@ -53,6 +53,25 @@ fn active_work_statuses() -> Vec<String> {
     .collect()
 }
 
+fn retryable_failed_statuses() -> Vec<String> {
+    vec![
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn manager_candidate_statuses() -> Vec<String> {
+    let mut statuses = active_work_statuses();
+    statuses.extend(retryable_failed_statuses());
+    statuses
+}
+
 fn get_or_create_local_bindings_provider(
     cache: &Mutex<HashMap<String, Arc<LocalBindingsProvider>>>,
     state_dir: &Path,
@@ -133,7 +152,7 @@ impl DeploymentLoop {
 
         // Acquire deployments that need work.
         let filter = DeploymentFilter {
-            statuses: Some(active_work_statuses()),
+            statuses: Some(manager_candidate_statuses()),
             platforms: if self.config.targets.is_empty() {
                 None
             } else {
@@ -310,17 +329,6 @@ impl DeploymentLoop {
             retry_requested: deployment.retry_requested,
             protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
-
-        // Clear retry_requested flag before running. Loop context — no
-        // inbound caller; `Subject::system()` is the documented synthetic
-        // operator for these calls.
-        if deployment.retry_requested {
-            let caller = Subject::system();
-            self.deployment_store
-                .set_retry_requested(&caller, &deployment_id)
-                .await?;
-            state.retry_requested = true;
-        }
 
         // 4. Build environment variables.
         let environment_variables = self
@@ -608,8 +616,8 @@ impl DeploymentLoop {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, get_or_create_local_bindings_provider, needs_provision_capability,
-        parse_status,
+        active_work_statuses, get_or_create_local_bindings_provider, manager_candidate_statuses,
+        needs_provision_capability, parse_status, retryable_failed_statuses,
     };
     use alien_core::DeploymentStatus;
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
@@ -646,13 +654,44 @@ mod tests {
             "deleted",
             "initial-setup-failed",
             "provisioning-failed",
+            "refresh-failed",
             "update-failed",
             "delete-failed",
-            "refresh-failed",
         ] {
             assert!(
                 !statuses.iter().any(|s| s == excluded),
                 "{excluded} should NOT be in active_work_statuses"
+            );
+        }
+    }
+
+    #[test]
+    fn retryable_failed_statuses_include_manual_retry_candidates() {
+        let statuses = retryable_failed_statuses();
+        for included in [
+            "initial-setup-failed",
+            "provisioning-failed",
+            "refresh-failed",
+            "update-failed",
+            "delete-failed",
+        ] {
+            assert!(
+                statuses.iter().any(|s| s == included),
+                "{included} should be a retryable failed status"
+            );
+        }
+    }
+
+    #[test]
+    fn manager_candidate_statuses_are_active_plus_retryable_failed() {
+        let active = active_work_statuses();
+        let retryable = retryable_failed_statuses();
+        let candidates = manager_candidate_statuses();
+
+        for status in active.iter().chain(retryable.iter()) {
+            assert!(
+                candidates.iter().any(|candidate| candidate == status),
+                "{status} should be a manager acquisition candidate"
             );
         }
     }

@@ -63,7 +63,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Worker, WorkerCode, ResourceEntry, ResourceLifecycle, Storage};
+    use alien_core::{ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     #[tokio::test]

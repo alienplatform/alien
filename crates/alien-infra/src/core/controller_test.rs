@@ -253,9 +253,9 @@ use alien_core::ClientConfig;
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
-    EnvironmentVariablesSnapshot, Worker, WorkerCode, ManagementConfig, Platform, Resource,
-    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
-    ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
+    EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource, ResourceDefinition,
+    ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack,
+    StackResourceState, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};

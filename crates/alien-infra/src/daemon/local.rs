@@ -104,13 +104,12 @@ impl LocalDaemonController {
             .await?
             .build();
 
-        manager
-            .start_daemon(&config.id, env_vars)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        manager.start_daemon(&config.id, env_vars).await.context(
+            ErrorData::CloudPlatformError {
                 message: "Failed to start daemon runtime".to_string(),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
         Ok(HandlerAction::Continue {
             state: Ready,

@@ -7,7 +7,6 @@ pub mod container_lifecycle;
 pub mod daemon_platform;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
-pub mod worker_memory;
 pub mod live_provision_permissions;
 pub mod network_required;
 pub mod permission_profiles_exist;
@@ -21,6 +20,7 @@ pub mod single_queue_trigger;
 pub mod trigger_edge_ownership;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
+pub mod worker_memory;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
 pub use capacity_group_profile::CapacityGroupProfileCheck;
@@ -28,7 +28,6 @@ pub use container_lifecycle::ContainerLifecycleCheck;
 pub use daemon_platform::DaemonPlatformCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
-pub use worker_memory::WorkerMemoryCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
@@ -44,3 +43,4 @@ pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
 pub use unique_resources::UniqueResourcesCheck;
 pub use valid_resource_dependencies::ValidResourceDependenciesCheck;
+pub use worker_memory::WorkerMemoryCheck;

@@ -18,7 +18,7 @@ use alien_core::{NetworkSettings, Platform, Stack};
 /// Resources that *optionally* use a network (e.g., workers) are NOT listed
 /// here — they use the network if it exists but don't require one.
 const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
-    "container",         // Triggers ComputeClusterMutation -> needs VPC
+    "container",       // Triggers ComputeClusterMutation -> needs VPC
     "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
 ];
 
@@ -135,8 +135,7 @@ impl PublicSubnetsRequiredCheck {
 
             match resource_type_str {
                 "worker" => {
-                    if let Some(worker) =
-                        resource_entry.config.downcast_ref::<alien_core::Worker>()
+                    if let Some(worker) = resource_entry.config.downcast_ref::<alien_core::Worker>()
                     {
                         if matches!(worker.ingress, alien_core::Ingress::Public) {
                             return true;
@@ -211,9 +210,9 @@ impl CompileTimeCheck for NetworkSettingsPlatformCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        permissions::PermissionsConfig, CapacityGroup, Container, ComputeCluster, ContainerCode,
-        Worker, WorkerCode, Ingress, Network, NetworkSettings, ResourceEntry,
-        ResourceLifecycle, ResourceSpec,
+        permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
+        Ingress, Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Worker,
+        WorkerCode,
     };
     use indexmap::IndexMap;
 

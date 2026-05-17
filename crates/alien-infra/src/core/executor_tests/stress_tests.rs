@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::helpers::*;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage, Worker,
 };
 use alien_error::AlienError;
 use rand::{seq::IndexedRandom, Rng};

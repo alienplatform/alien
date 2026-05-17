@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, Daemon, DeploymentConfig, Worker, RemoteStackManagement, ResourceEntry,
-    ResourceLifecycle, ResourceRef, Stack, StackState, Vault,
+    Container, Daemon, DeploymentConfig, RemoteStackManagement, ResourceEntry, ResourceLifecycle,
+    ResourceRef, Stack, StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -289,9 +289,9 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Worker,
-        WorkerCode, Platform, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
-        StackState,
+        Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Worker,
+        WorkerCode,
     };
     use indexmap::IndexMap;
 

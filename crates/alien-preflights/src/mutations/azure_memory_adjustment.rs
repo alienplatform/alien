@@ -7,7 +7,7 @@
 use crate::azure;
 use crate::error::Result;
 use crate::StackMutation;
-use alien_core::{DeploymentConfig, Worker, Platform, Stack, StackState};
+use alien_core::{DeploymentConfig, Platform, Stack, StackState, Worker};
 use async_trait::async_trait;
 use tracing::{info, warn};
 

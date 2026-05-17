@@ -2,9 +2,9 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
-    worker_runtime_environment_contract, passthrough_transport_runtime_environment_plan,
-    render_runtime_environment_entries, render_runtime_environment_plan,
-    standard_runtime_environment_plan, validate_prepared_runtime_environment_map, ResourceRef,
+    passthrough_transport_runtime_environment_plan, render_runtime_environment_entries,
+    render_runtime_environment_plan, standard_runtime_environment_plan,
+    validate_prepared_runtime_environment_map, worker_runtime_environment_contract, ResourceRef,
     ResourceStatus, RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer,
     RuntimeEnvironmentValue, ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
     ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,

@@ -91,7 +91,7 @@ fn profile_scope_contains_permission(
 mod tests {
     use super::*;
     use alien_core::{
-        Worker, WorkerCode, PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle,
+        PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 

@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Worker, WorkerTrigger, Platform, ResourceLifecycle, Stack, Storage};
+use alien_core::{Platform, ResourceLifecycle, Stack, Storage, Worker, WorkerTrigger};
 
 /// Validates trigger edges whose source resource is setup-owned.
 ///
@@ -67,7 +67,7 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        WorkerCode, PermissionProfile, PermissionsConfig, Resource, ResourceEntry, Storage,
+        PermissionProfile, PermissionsConfig, Resource, ResourceEntry, Storage, WorkerCode,
     };
     use indexmap::IndexMap;
 

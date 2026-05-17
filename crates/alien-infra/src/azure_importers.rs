@@ -11,13 +11,12 @@
 
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Worker, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, Kv, Network, Platform, Queue, RemoteStackManagement,
+    ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 use crate::artifact_registry::AzureArtifactRegistryImporter;
 use crate::build::AzureBuildImporter;
-use crate::worker::AzureWorkerImporter;
 use crate::kv::AzureKvImporter;
 use crate::network::AzureNetworkImporter;
 use crate::queue::AzureQueueImporter;
@@ -29,6 +28,7 @@ use crate::storage::{
     AzureServiceBusNamespaceImporter, AzureStorageAccountImporter, AzureStorageImporter,
 };
 use crate::vault::AzureVaultImporter;
+use crate::worker::AzureWorkerImporter;
 use crate::ImporterRegistry;
 
 /// Register every OSS Azure importer with `registry`.
@@ -64,11 +64,7 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Azure,
             AzureArtifactRegistryImporter,
         )
-        .register(
-            Worker::RESOURCE_TYPE,
-            Platform::Azure,
-            AzureWorkerImporter,
-        )
+        .register(Worker::RESOURCE_TYPE, Platform::Azure, AzureWorkerImporter)
         .register(
             ServiceActivation::RESOURCE_TYPE,
             Platform::Azure,

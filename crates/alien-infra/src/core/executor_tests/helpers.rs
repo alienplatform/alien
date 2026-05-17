@@ -3,8 +3,9 @@
 use crate::core::StackExecutor;
 use crate::error::Result;
 use alien_core::{
-    ClientConfig, Worker, WorkerCode, Platform, Resource, ResourceDefinition, ResourceEntry,
-    ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState, StackState, Storage,
+    ClientConfig, Platform, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceRef, ResourceStatus, Stack, StackResourceState, StackState, Storage, Worker,
+    WorkerCode,
 };
 
 /// Create a test function with default settings.

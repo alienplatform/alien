@@ -23,8 +23,8 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, CertificateStatus, DnsRecordStatus, Worker, WorkerOutputs, Ingress,
-    Network, ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
+    standard_resource_tags, CertificateStatus, DnsRecordStatus, Ingress, Network,
+    ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -567,10 +567,7 @@ impl AwsWorkerController {
         let api = client
             .create_api(
                 CreateApiRequest::builder()
-                    .name(format!(
-                        "{}-{}-api",
-                        ctx.resource_prefix, worker_config.id
-                    ))
+                    .name(format!("{}-{}-api", ctx.resource_prefix, worker_config.id))
                     .protocol_type("HTTP".to_string())
                     .tags(api_tags)
                     .build(),
@@ -2797,7 +2794,7 @@ impl AwsWorkerController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, WorkerBinding, LambdaWorkerBinding};
+        use alien_core::bindings::{BindingValue, LambdaWorkerBinding, WorkerBinding};
 
         if let (Some(worker_name), Some(arn)) = (&self.worker_name, &self.arn) {
             // Extract region from ARN: arn:aws:lambda:us-east-1:123456789:function:name
@@ -3058,8 +3055,8 @@ mod tests {
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Worker, WorkerOutputs, Ingress,
-        Platform, ResourceDomainInfo, ResourceStatus,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Ingress, Platform, ResourceDomainInfo,
+        ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -3068,8 +3065,7 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::{
-        fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
-        AwsWorkerController,
+        fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
     };
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
@@ -3263,11 +3259,9 @@ mod tests {
         // Mock successful worker creation
         let worker_name = worker_name.to_string();
         let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        mock_lambda
+            .expect_create_function()
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         // Mock worker status checks - first pending, then active
         let worker_name_for_get = worker_name.clone();
@@ -3332,11 +3326,9 @@ mod tests {
         // Mock successful worker creation
         let worker_name = worker_name.to_string();
         let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        mock_lambda
+            .expect_create_function()
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         // Mock worker status checks
         let worker_name_for_get = worker_name.clone();
@@ -3544,10 +3536,7 @@ mod tests {
     #[case::readiness_probe(function_with_readiness_probe(), true)]
     #[case::complete_test(function_complete_test(), true)]
     #[tokio::test]
-    async fn test_create_and_delete_flow_succeeds(
-        #[case] worker: Worker,
-        #[case] _has_url: bool,
-    ) {
+    async fn test_create_and_delete_flow_succeeds(#[case] worker: Worker, #[case] _has_url: bool) {
         let worker_name = format!("test-{}", worker.id);
         let (mock_provider, _mock_server, domain_metadata, public_urls) =
             setup_mocks_for_function(&worker, &worker_name, true);
@@ -3599,10 +3588,7 @@ mod tests {
     #[case::public_to_complete(function_public_ingress(), function_complete_test())]
     #[case::complete_to_basic(function_complete_test(), basic_function())]
     #[tokio::test]
-    async fn test_update_flow_succeeds(
-        #[case] from_function: Worker,
-        #[case] to_function: Worker,
-    ) {
+    async fn test_update_flow_succeeds(#[case] from_function: Worker, #[case] to_function: Worker) {
         // Ensure both workers have the same ID for valid updates
         let worker_id = "test-update-worker".to_string();
         let mut from_function = from_function;
@@ -3714,11 +3700,9 @@ mod tests {
 
         // Mock worker creation
         let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        mock_lambda
+            .expect_create_function()
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
@@ -3869,11 +3853,9 @@ mod tests {
 
         // Mock worker creation
         let worker_name_for_create = worker_name.clone();
-        mock_lambda.expect_create_function().returning(move |_| {
-            Ok(create_successful_function_response(
-                &worker_name_for_create,
-            ))
-        });
+        mock_lambda
+            .expect_create_function()
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
@@ -3941,11 +3923,7 @@ mod tests {
                         .map(|a| a.contains(&"arm64".to_string()))
                         .unwrap_or(false)
             })
-            .returning(move |_| {
-                Ok(create_successful_function_response(
-                    &worker_name_for_create,
-                ))
-            });
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda
@@ -4008,11 +3986,7 @@ mod tests {
                     false
                 }
             })
-            .returning(move |_| {
-                Ok(create_successful_function_response(
-                    &worker_name_for_create,
-                ))
-            });
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
 
         let worker_name_for_get = worker_name.clone();
         mock_lambda

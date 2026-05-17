@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Worker, WorkerTrigger, Platform, Stack};
+use alien_core::{Platform, Stack, Worker, WorkerTrigger};
 
 /// Ensures Workers have at most one queue trigger each.
 ///
@@ -16,9 +16,9 @@ impl CompileTimeCheck for SingleQueueTriggerCheck {
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
         // Check if stack contains any Worker resources
-        stack.resources().any(|(_, resource_entry)| {
-            resource_entry.config.resource_type().0.as_ref() == "worker"
-        })
+        stack
+            .resources()
+            .any(|(_, resource_entry)| resource_entry.config.resource_type().0.as_ref() == "worker")
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
@@ -55,9 +55,7 @@ impl CompileTimeCheck for SingleQueueTriggerCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        Worker, WorkerCode, WorkerTrigger, Queue, ResourceEntry, ResourceLifecycle,
-    };
+    use alien_core::{Queue, ResourceEntry, ResourceLifecycle, Worker, WorkerCode, WorkerTrigger};
     use indexmap::IndexMap;
 
     #[tokio::test]

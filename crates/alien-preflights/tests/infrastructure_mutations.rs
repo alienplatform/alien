@@ -1,14 +1,74 @@
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Worker, WorkerCode,
-    PermissionsConfig, Platform, ResourceLifecycle, Stack, StackSettings, StackState, Storage,
+    AwsManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+    ManagementConfig, PermissionsConfig, Platform, RemoteStackManagement, ResourceLifecycle, Stack,
+    StackSettings, StackState, Storage, Worker, WorkerCode,
 };
-use alien_preflights::PreflightRegistry;
+use alien_preflights::{runner::PreflightRunner, PreflightRegistry};
 
 fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
     EnvironmentVariablesSnapshot {
         variables: Vec::new(),
         hash: String::new(),
         created_at: "2024-01-01T00:00:00Z".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn test_remote_management_dependency_is_wired_after_all_mutations() {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
+            image: "test-image:latest".to_string(),
+        })
+        .permissions("test-permissions".to_string())
+        .build();
+
+    let storage = Storage::new("test-storage".to_string()).build();
+
+    let stack = Stack::new("test-stack".to_string())
+        .add(function, ResourceLifecycle::Live)
+        .add(storage, ResourceLifecycle::Frozen)
+        .permissions(PermissionsConfig::new())
+        .build();
+
+    let stack_state = StackState::new(Platform::Aws);
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .management_config(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "arn:aws:iam::111122223333:role/alien-management".to_string(),
+        }))
+        .environment_variables(empty_env_snapshot())
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+
+    let result = PreflightRunner::new()
+        .apply_mutations(stack, &stack_state, &config)
+        .await
+        .unwrap();
+
+    let remote_management = alien_core::ResourceRef::new(
+        RemoteStackManagement::RESOURCE_TYPE,
+        "remote-stack-management",
+    );
+
+    assert!(
+        result.resources.contains_key("remote-stack-management"),
+        "remote management should be added for managed AWS deployments"
+    );
+
+    for (resource_id, entry) in &result.resources {
+        if resource_id == "remote-stack-management" {
+            assert!(
+                !entry.dependencies.contains(&remote_management),
+                "remote management should not depend on itself"
+            );
+            continue;
+        }
+
+        assert!(
+            entry.dependencies.contains(&remote_management),
+            "{resource_id} should depend on remote management"
+        );
     }
 }
 

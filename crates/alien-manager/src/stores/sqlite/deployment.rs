@@ -716,6 +716,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let failed_statuses = [
             "initial-setup-failed",
             "provisioning-failed",
+            "refresh-failed",
             "update-failed",
             "delete-failed",
         ];
@@ -798,7 +799,17 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .table(Deployments::Table)
                     .value(Deployments::LockedBy, session)
                     .value(Deployments::LockedAt, now.to_rfc3339())
+                    .value(Deployments::RetryRequested, 0i64)
                     .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()))
+                    .cond_where(
+                        sea_query::Cond::any()
+                            .add(Expr::col(Deployments::Status).is_in(work_statuses))
+                            .add(
+                                sea_query::Cond::all()
+                                    .add(Expr::col(Deployments::Status).is_in(failed_statuses))
+                                    .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                            ),
+                    )
                     .cond_where(
                         sea_query::Cond::any()
                             .add(Expr::col(Deployments::LockedBy).is_null())

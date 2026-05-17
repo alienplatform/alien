@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{Worker, WorkerOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{ResourceOutputs, ResourceStatus, Worker, WorkerOutputs};
 use alien_macros::controller;
 
 pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests

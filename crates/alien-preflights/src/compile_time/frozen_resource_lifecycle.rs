@@ -49,8 +49,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ArtifactRegistry, Build, CapacityGroup, Container, ComputeCluster, ContainerCode,
-        Worker, WorkerCode, ResourceEntry, ResourceLifecycle, ResourceSpec, Storage,
+        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 

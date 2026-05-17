@@ -31,10 +31,11 @@ use alien_core::import::{
 use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
     AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
-    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build, Worker,
+    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build,
     GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
     ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
+    Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;

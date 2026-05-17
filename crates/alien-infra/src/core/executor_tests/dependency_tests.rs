@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::helpers::*;
 use crate::error::Result;
 use alien_core::{
-    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage, Worker,
 };
 
 /// Tests that a function waits for its storage dependency to be Running.

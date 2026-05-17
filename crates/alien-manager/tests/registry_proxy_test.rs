@@ -19,9 +19,7 @@ use bollard::image::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
 
-use alien_core::{
-    Worker, WorkerCode, Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack,
-};
+use alien_core::{Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack, Worker, WorkerCode};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::stores::sqlite::{

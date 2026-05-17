@@ -3,9 +3,10 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Worker, WorkerCode, Platform,
-    ReleaseInfo, ResourceEntry, ResourceLifecycle, Stack, StackSettings, Storage,
+    ClientConfig, DeleteScope, DeploymentConfig, DeploymentState, DeploymentStatus,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+    ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
@@ -107,6 +108,9 @@ fn start_update(state: &mut DeploymentState, new_release: ReleaseInfo) {
 /// Helper to start a delete
 fn start_delete(state: &mut DeploymentState) {
     state.status = DeploymentStatus::DeletePending;
+    let mut runtime_metadata = state.runtime_metadata.clone().unwrap_or_default();
+    runtime_metadata.delete_scope = Some(DeleteScope::Full);
+    state.runtime_metadata = Some(runtime_metadata);
     // Keep target_release when starting delete - it's needed for preflight/mutation steps
     if state.target_release.is_none() && state.current_release.is_some() {
         state.target_release = state.current_release.clone();
@@ -752,6 +756,67 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         !result.state.retry_requested,
         "retry flag should be cleared"
     );
+}
+
+async fn assert_failed_retry_transition(
+    failed_status: DeploymentStatus,
+    retried_status: DeploymentStatus,
+) {
+    let stack = create_test_stack("test-stack", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack);
+    state.status = failed_status;
+    state.stack_state = Some(StackState::new(Platform::Test));
+
+    if failed_status == DeploymentStatus::DeleteFailed {
+        state.runtime_metadata = Some(RuntimeMetadata {
+            delete_scope: Some(DeleteScope::Full),
+            ..Default::default()
+        });
+    }
+
+    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("failed status without retry should remain terminal");
+    assert_eq!(result.state.status, failed_status);
+    assert!(
+        !result.state.retry_requested,
+        "retry flag should remain false when no retry was requested"
+    );
+
+    request_retry(&mut state);
+    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect("failed status with retry should transition");
+    assert_eq!(result.state.status, retried_status);
+    assert!(
+        !result.state.retry_requested,
+        "retry flag should be cleared after retry transition"
+    );
+}
+
+#[tokio::test]
+async fn test_initial_setup_failed_retry_gate_returns_to_initial_setup() {
+    assert_failed_retry_transition(
+        DeploymentStatus::InitialSetupFailed,
+        DeploymentStatus::InitialSetup,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_provisioning_failed_retry_gate_returns_to_provisioning() {
+    assert_failed_retry_transition(
+        DeploymentStatus::ProvisioningFailed,
+        DeploymentStatus::Provisioning,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_delete_failed_retry_gate_returns_to_deleting() {
+    assert_failed_retry_transition(DeploymentStatus::DeleteFailed, DeploymentStatus::Deleting)
+        .await;
 }
 
 /// E) Delete flow tests

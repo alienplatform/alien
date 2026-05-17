@@ -9,7 +9,7 @@
 use crate::azure;
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Worker, Platform, Stack};
+use alien_core::{Platform, Stack, Worker};
 
 pub struct WorkerMemoryCheck;
 
@@ -87,7 +87,7 @@ impl CompileTimeCheck for WorkerMemoryCheck {
 mod tests {
     use super::*;
     use alien_core::permissions::PermissionsConfig;
-    use alien_core::{Worker, WorkerCode, Resource, ResourceEntry, ResourceLifecycle, Stack};
+    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Stack, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     fn make_stack_with_function(memory_mb: u32) -> Stack {

@@ -92,7 +92,7 @@ pub async fn run_readiness_probe(ctx: &ResourceControllerContext<'_>, url: &str)
 pub mod test_utils {
     //! Test utilities for readiness probe mocking
 
-    use alien_core::{Worker, HttpMethod};
+    use alien_core::{HttpMethod, Worker};
     use httpmock::{prelude::*, MockServer};
 
     /// Creates a mock HTTP server for readiness probe testing.
@@ -147,10 +147,7 @@ pub mod test_utils {
     ///
     /// # Returns
     /// * `MockServer` - A running mock server that will fail the readiness probe
-    pub fn create_failing_readiness_probe_mock(
-        worker: &Worker,
-        status_code: u16,
-    ) -> MockServer {
+    pub fn create_failing_readiness_probe_mock(worker: &Worker, status_code: u16) -> MockServer {
         let server = MockServer::start();
 
         if let Some(probe_config) = &worker.readiness_probe {

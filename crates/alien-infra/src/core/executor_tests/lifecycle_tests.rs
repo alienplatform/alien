@@ -3,7 +3,7 @@
 use super::helpers::*;
 use crate::error::Result;
 use alien_core::{
-    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage, Worker,
 };
 
 /// Tests that filtering to Frozen only processes Frozen resources.

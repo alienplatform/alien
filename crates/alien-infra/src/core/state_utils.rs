@@ -387,10 +387,10 @@ fn prepare_for_destroy_matching(
 mod tests {
     use super::*;
     use crate::worker::{TestWorkerController, TestWorkerState};
-    use alien_core::{Worker, WorkerCode};
     use alien_core::{
         Platform, Resource, ResourceStatus, StackResourceState, StackSettings, StackState,
     };
+    use alien_core::{Worker, WorkerCode};
 
     #[tokio::test]
     async fn test_prepare_for_destroy_provision_failed() {

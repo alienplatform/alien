@@ -8,8 +8,8 @@ use alien_aws_clients::iam::{
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    standard_resource_tags, Build, Container, ComputeCluster, Worker, ResourceOutputs,
-    ResourceStatus, ServiceAccount, ServiceAccountOutputs,
+    standard_resource_tags, Build, ComputeCluster, Container, ResourceOutputs, ResourceStatus,
+    ServiceAccount, ServiceAccountOutputs, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};

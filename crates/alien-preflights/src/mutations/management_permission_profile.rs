@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, DeploymentConfig, Worker, Platform, ResourceLifecycle,
-    Stack, StackState,
+    ownership_policy_for_resource_type, DeploymentConfig, Platform, ResourceLifecycle, Stack,
+    StackState, Worker,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -197,10 +197,10 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        CapacityGroup, Container, ComputeCluster, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, Worker, WorkerCode, HeartbeatsMode,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage,
-        TelemetryMode,
+        CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
+        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, ResourceEntry,
+        ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage, TelemetryMode, Worker,
+        WorkerCode,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {

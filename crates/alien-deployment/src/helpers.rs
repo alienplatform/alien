@@ -277,10 +277,7 @@ fn inject_into_compute_resource(
             .downcast_mut::<alien_core::Worker>()
             .ok_or_else(|| {
                 AlienError::new(ErrorData::InternalError {
-                    message: format!(
-                        "Failed to downcast resource '{}' to Worker",
-                        resource_name
-                    ),
+                    message: format!("Failed to downcast resource '{}' to Worker", resource_name),
                 })
             })?
             .environment
@@ -612,7 +609,7 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, Worker, WorkerCode, ResourceEntry, ResourceLifecycle, StackSettings,
+        ExternalBindings, ResourceEntry, ResourceLifecycle, StackSettings, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 

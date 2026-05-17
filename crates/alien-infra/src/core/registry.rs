@@ -7,8 +7,8 @@ use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Container, ComputeCluster, Daemon, Worker, Kv, Network,
-    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, ComputeCluster, Container, Daemon, Kv, Network,
+    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;
@@ -153,18 +153,14 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             Worker::RESOURCE_TYPE,
             Platform::Aws,
-            Box::new(DefaultControllerFactory::<
-                crate::worker::AwsWorkerController,
-            >::new()),
+            Box::new(DefaultControllerFactory::<crate::worker::AwsWorkerController>::new()),
         );
 
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(
             Worker::RESOURCE_TYPE,
             Platform::Gcp,
-            Box::new(DefaultControllerFactory::<
-                crate::worker::GcpWorkerController,
-            >::new()),
+            Box::new(DefaultControllerFactory::<crate::worker::GcpWorkerController>::new()),
         );
 
         #[cfg(feature = "azure")]

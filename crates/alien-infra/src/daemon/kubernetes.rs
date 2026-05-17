@@ -76,7 +76,8 @@ impl KubernetesDaemonController {
 
         let deployment_name = kubernetes_daemon_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
-        let service_account_name = service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name =
+            service_account_name(&ctx.resource_prefix, config.get_permissions());
 
         let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
@@ -102,8 +103,14 @@ impl KubernetesDaemonController {
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(&secrets_client, &namespace, &secret_name, proxy_host, token)
-                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                &namespace,
+                &secret_name,
+                proxy_host,
+                token,
+            )
+            .await?;
             Some(secret_name)
         } else {
             None
@@ -215,12 +222,16 @@ impl KubernetesDaemonController {
             .get_deployment(namespace, deployment_name)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get deployment '{}' before update", deployment_name),
+                message: format!(
+                    "Failed to get deployment '{}' before update",
+                    deployment_name
+                ),
                 resource_id: Some(config.id.clone()),
             })?;
         let resource_version = existing.metadata.resource_version.clone();
 
-        let service_account_name = service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name =
+            service_account_name(&ctx.resource_prefix, config.get_permissions());
         let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
             if ctx.deployment_config.deployment_token.is_none() {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -406,12 +417,12 @@ impl KubernetesDaemonController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        self.deployment_name
-            .as_ref()
-            .map(|deployment_name| ResourceOutputs::new(DaemonOutputs {
+        self.deployment_name.as_ref().map(|deployment_name| {
+            ResourceOutputs::new(DaemonOutputs {
                 daemon_name: deployment_name.clone(),
                 running: true,
-            }))
+            })
+        })
     }
 }
 

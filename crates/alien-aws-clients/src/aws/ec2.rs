@@ -488,13 +488,14 @@ impl Ec2Client {
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
-            "InvalidVpcState" | "InvalidSubnetID.DuplicateSubnet" | "InvalidGroup.Duplicate" => {
-                ErrorData::RemoteResourceConflict {
-                    message,
-                    resource_type: "EC2 Resource".into(),
-                    resource_name: resource.into(),
-                }
-            }
+            "InvalidVpcState"
+            | "InvalidSubnetID.DuplicateSubnet"
+            | "InvalidGroup.Duplicate"
+            | "InvalidPermission.Duplicate" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
             "DependencyViolation" | "ResourceInUse" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "EC2 Resource".into(),

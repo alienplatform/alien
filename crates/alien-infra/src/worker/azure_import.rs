@@ -5,9 +5,9 @@ use alien_core::{
     Result, StackResourceState,
 };
 
-use crate::worker::{AzureWorkerController, AzureWorkerState};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
+use crate::worker::{AzureWorkerController, AzureWorkerState};
 
 /// Azure Container App worker importer.
 ///

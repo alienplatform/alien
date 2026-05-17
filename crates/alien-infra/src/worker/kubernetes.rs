@@ -6,7 +6,7 @@ use crate::core::EnvironmentVariableBuilder;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Worker, WorkerCode, WorkerOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{ResourceOutputs, ResourceStatus, Worker, WorkerCode, WorkerOutputs};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 

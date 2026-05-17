@@ -2,7 +2,9 @@
 
 use crate::error::Result;
 use crate::StackMutation;
-use alien_core::{DeploymentConfig, Platform, ResourceRef, Stack, StackState};
+use alien_core::{
+    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
+};
 use async_trait::async_trait;
 use tracing::{debug, info};
 
@@ -23,15 +25,17 @@ impl StackMutation for InfrastructureDependenciesMutation {
 
     fn should_run(
         &self,
-        _stack: &Stack,
+        stack: &Stack,
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        // Always run for platforms that have infrastructure dependencies
+        // Always run for platforms that have infrastructure dependencies, and
+        // for stacks with remote management so every resource waits for the
+        // cross-account access bridge before create/delete work.
         matches!(
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
-        )
+        ) || stack.resources.contains_key("remote-stack-management")
     }
 
     async fn mutate(
@@ -47,7 +51,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
         );
 
         // Get global dependencies that all resources should have
-        let global_deps = self.get_global_dependencies(platform);
+        let global_deps = self.get_global_dependencies(&stack, platform);
 
         // Process each resource in the stack
         let resource_ids: Vec<_> = stack.resources.keys().cloned().collect();
@@ -102,17 +106,28 @@ impl StackMutation for InfrastructureDependenciesMutation {
 
 impl InfrastructureDependenciesMutation {
     /// Get global dependencies that all resources should have for a platform
-    fn get_global_dependencies(&self, platform: Platform) -> Vec<ResourceRef> {
+    fn get_global_dependencies(&self, stack: &Stack, platform: Platform) -> Vec<ResourceRef> {
+        let mut dependencies = Vec::new();
+
+        if stack.resources.contains_key("remote-stack-management") {
+            dependencies.push(ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "remote-stack-management",
+            ));
+        }
+
         match platform {
             Platform::Azure => {
-                vec![ResourceRef::new(
+                dependencies.push(ResourceRef::new(
                     alien_core::AzureResourceGroup::RESOURCE_TYPE,
                     "default-resource-group",
-                )]
+                ));
             }
             // Kubernetes: namespace is created by Helm, not as a dependency
-            _ => Vec::new(),
+            _ => {}
         }
+
+        dependencies
     }
 
     /// Get resource-specific dependencies for a resource type and platform

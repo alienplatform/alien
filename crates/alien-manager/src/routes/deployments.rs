@@ -10,8 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, WorkerOutputs,
-    Platform, StackSettings,
+    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, Platform,
+    StackSettings, WorkerOutputs,
 };
 
 use crate::error::ErrorData;
@@ -681,6 +681,21 @@ async fn retry_deployment(
     };
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot retry deployment").into_response();
+    }
+
+    let retryable_failed_statuses = [
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ];
+    if !retryable_failed_statuses.contains(&deployment.status.as_str()) {
+        return ErrorData::bad_request(format!(
+            "Deployment '{}' is in status '{}' and cannot be retried",
+            deployment.id, deployment.status
+        ))
+        .into_response();
     }
 
     if let Err(e) = state

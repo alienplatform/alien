@@ -10,8 +10,7 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ComputeCluster, ComputeClusterOutputs, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus,
+    ComputeCluster, ComputeClusterOutputs, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;

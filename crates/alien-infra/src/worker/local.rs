@@ -5,7 +5,7 @@ use tracing::{debug, error, info};
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Worker, WorkerCode, WorkerOutputs, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker, WorkerCode, WorkerOutputs,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -136,13 +136,12 @@ impl LocalWorkerController {
             .build();
 
         // Start the worker with complete environment
-        let worker_url = func_mgr
-            .start_worker(&config.id, env_vars)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let worker_url = func_mgr.start_worker(&config.id, env_vars).await.context(
+            ErrorData::CloudPlatformError {
                 message: "Failed to start worker runtime".to_string(),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )?;
 
         self.worker_url = Some(worker_url);
 

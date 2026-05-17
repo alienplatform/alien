@@ -12,7 +12,8 @@ use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    NetworkSettings, Platform, ReleaseInfo, StackSettings, TelemetryMode, UpdatesMode,
+    ManagementConfig, NetworkSettings, Platform, ReleaseInfo, StackSettings, TelemetryMode,
+    UpdatesMode,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome},
@@ -52,8 +53,9 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: Option<String>,
 
-    /// Manager URL override. When set, skips platform API discovery and talks
-    /// to the manager directly. Required for OSS standalone mode.
+    /// Manager URL override for pull-model platforms.
+    /// Cloud push deployments resolve their manager and install context from
+    /// the platform API so setup has the management configuration it needs.
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
 
@@ -191,6 +193,25 @@ impl From<DeployConfigNetwork> for NetworkSettings {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloud_push_platforms_require_install_context() {
+        assert!(requires_install_context(Platform::Aws));
+        assert!(requires_install_context(Platform::Gcp));
+        assert!(requires_install_context(Platform::Azure));
+    }
+
+    #[test]
+    fn pull_model_platforms_do_not_require_install_context() {
+        assert!(!requires_install_context(Platform::Kubernetes));
+        assert!(!requires_install_context(Platform::Local));
+        assert!(!requires_install_context(Platform::Test));
+    }
+}
+
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
     let deploy_config = load_deploy_config(&args)?;
     // Resolve token and platform from args, embedded config, or tracked deployment
@@ -228,12 +249,29 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         other => other,
     };
 
-    // Resolve manager URL: explicit override → tracked → platform API discovery
-    let manager_url = match resolved.manager_url {
-        Some(url) => url,
-        None => {
-            output::info("Discovering manager via platform API...");
-            discover_manager_url(&resolved.base_url, &token, &platform_str).await?
+    let (manager_url, install_management_config) = if requires_install_context(platform) {
+        output::info("Resolving deployment install context via platform API...");
+        let context =
+            discover_manager_install_context(&resolved.base_url, &token, &platform_str).await?;
+        let management_config = context.management_config.ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Platform API did not return installContext.managementConfig for {} deployment",
+                    platform.as_str()
+                ),
+            })
+        })?;
+        (context.manager_url, Some(management_config))
+    } else {
+        match resolved.manager_url {
+            Some(url) => (url, None),
+            None => {
+                output::info("Discovering manager via platform API...");
+                let context =
+                    discover_manager_install_context(&resolved.base_url, &token, &platform_str)
+                        .await?;
+                (context.manager_url, context.management_config)
+            }
         }
     };
 
@@ -316,6 +354,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 platform,
                 &manager_url,
                 &effective_token,
+                install_management_config,
                 &args.network,
                 Some(on_progress),
             )
@@ -345,6 +384,10 @@ struct ResolvedInfo {
     base_url: String,
     platform: String,
     name: String,
+}
+
+fn requires_install_context(platform: Platform) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
 }
 
 fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
@@ -516,12 +559,21 @@ fn load_stack_settings(
     Ok(settings)
 }
 
-/// Discover the manager URL via the platform API.
+struct ManagerInstallContext {
+    manager_url: String,
+    management_config: Option<ManagementConfig>,
+}
+
+/// Discover the manager URL and platform-managed install context via the platform API.
 ///
 /// Calls GET /v1/resolve?platform=X to resolve the manager.
 /// The token's scope (DG, project, etc.) provides the project context
 /// to the server — no need to call whoami first.
-async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Result<String> {
+async fn discover_manager_install_context(
+    base_url: &str,
+    token: &str,
+    platform: &str,
+) -> Result<ManagerInstallContext> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 
@@ -575,6 +627,13 @@ async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Re
     #[serde(rename_all = "camelCase")]
     struct ResolveResponse {
         manager_url: String,
+        install_context: Option<ResolveInstallContext>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ResolveInstallContext {
+        management_config: ManagementConfig,
     }
 
     let resolved: ResolveResponse =
@@ -585,7 +644,12 @@ async fn discover_manager_url(base_url: &str, token: &str, platform: &str) -> Re
                 message: "Failed to parse /v1/resolve response".to_string(),
             })?;
 
-    Ok(resolved.manager_url)
+    Ok(ManagerInstallContext {
+        manager_url: resolved.manager_url,
+        management_config: resolved
+            .install_context
+            .map(|context| context.management_config),
+    })
 }
 
 pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerClient> {
@@ -1019,6 +1083,7 @@ async fn run_push_model(
     platform: Platform,
     manager_url: &str,
     deployment_token: &str,
+    management_config: Option<ManagementConfig>,
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
 ) -> Result<()> {
@@ -1036,7 +1101,7 @@ async fn run_push_model(
         deployment_id,
         platform,
         client_config,
-        None,
+        management_config,
         manager_url,
         deployment_token,
         Some(network_args),

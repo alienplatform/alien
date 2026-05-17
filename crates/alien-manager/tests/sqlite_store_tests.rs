@@ -378,6 +378,110 @@ async fn acquire_and_release() {
 }
 
 #[tokio::test]
+async fn acquire_does_not_pick_failed_status_without_retry_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'delete-failed', retry_requested = 0 WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["delete-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        acquired.is_empty(),
+        "failed deployments without retry_requested must not be acquired"
+    );
+}
+
+#[tokio::test]
+async fn acquire_picks_failed_status_with_retry_request_once() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'delete-failed', retry_requested = 1 WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["delete-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+    assert!(
+        acquired[0].deployment.retry_requested,
+        "the acquired record must tell the state machine this tick is a retry"
+    );
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !fetched.retry_requested,
+        "acquisition must consume the persisted retry request"
+    );
+}
+
+#[tokio::test]
+async fn acquire_picks_active_status_without_retry_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["pending".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+    assert!(!acquired[0].deployment.retry_requested);
+}
+
+#[tokio::test]
 async fn concurrent_acquire() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);

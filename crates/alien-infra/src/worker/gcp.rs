@@ -25,8 +25,8 @@ use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Worker, WorkerOutputs, Ingress, Network,
-    ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
+    CertificateStatus, DnsRecordStatus, Ingress, Network, ResourceDefinition, ResourceOutputs,
+    ResourceRef, ResourceStatus, Worker, WorkerOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -468,10 +468,7 @@ impl GcpWorkerController {
 
         let ssl_certificate = SslCertificate::builder()
             .name(ssl_cert_name.clone())
-            .description(format!(
-                "SSL certificate for worker {}",
-                worker_config.id
-            ))
+            .description(format!("SSL certificate for worker {}", worker_config.id))
             .r#type("SELF_MANAGED".to_string())
             .self_managed(
                 SslCertificateSelfManaged::builder()
@@ -544,10 +541,7 @@ impl GcpWorkerController {
 
         let neg = NetworkEndpointGroup::builder()
             .name(neg_name.clone())
-            .description(format!(
-                "Serverless NEG for worker {}",
-                worker_config.id
-            ))
+            .description(format!("Serverless NEG for worker {}", worker_config.id))
             .network_endpoint_type(NetworkEndpointType::Serverless)
             .cloud_run(cloud_run_config)
             .build();
@@ -601,8 +595,7 @@ impl GcpWorkerController {
             })
         })?;
 
-        let backend_service_name =
-            format!("{}-{}-backend", ctx.resource_prefix, worker_config.id);
+        let backend_service_name = format!("{}-{}-backend", ctx.resource_prefix, worker_config.id);
 
         let neg_url = format!(
             "projects/{}/regions/{}/networkEndpointGroups/{}",
@@ -612,10 +605,7 @@ impl GcpWorkerController {
         // Create backend service with serverless NEG (no health check for serverless)
         let backend_service = BackendService::builder()
             .name(backend_service_name.clone())
-            .description(format!(
-                "Backend service for worker {}",
-                worker_config.id
-            ))
+            .description(format!("Backend service for worker {}", worker_config.id))
             .protocol(BackendServiceProtocol::Https)
             .load_balancing_scheme(LoadBalancingScheme::External)
             .backends(vec![Backend::builder()
@@ -896,10 +886,7 @@ impl GcpWorkerController {
         // Create forwarding rule exposing HTTPS endpoint
         let forwarding_rule = ForwardingRule::builder()
             .name(forwarding_rule_name.clone())
-            .description(format!(
-                "Forwarding rule for worker {}",
-                worker_config.id
-            ))
+            .description(format!("Forwarding rule for worker {}", worker_config.id))
             .ip_address(ip_address)
             .ip_protocol(ForwardingRuleProtocol::Tcp)
             .port_range("443-443".to_string())
@@ -3979,8 +3966,8 @@ mod tests {
 
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Worker, WorkerOutputs, HttpMethod,
-        Ingress, Platform, ResourceDomainInfo, ResourceStatus,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Ingress, Platform,
+        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
@@ -4558,10 +4545,7 @@ mod tests {
     #[case::public_to_complete(function_public_ingress(), function_complete_test())]
     #[case::complete_to_basic(function_complete_test(), basic_function())]
     #[tokio::test]
-    async fn test_update_flow_succeeds(
-        #[case] from_function: Worker,
-        #[case] to_function: Worker,
-    ) {
+    async fn test_update_flow_succeeds(#[case] from_function: Worker, #[case] to_function: Worker) {
         // Ensure both workers have the same ID for valid updates
         let worker_id = "test-update-worker".to_string();
         let mut from_function = from_function;

@@ -7,7 +7,7 @@ use alien_commands::{
     server::CommandDispatcher,
     Envelope,
 };
-use alien_core::{Worker, WorkerOutputs, Platform};
+use alien_core::{Platform, Worker, WorkerOutputs};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -148,11 +148,12 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             })
         })?;
 
-        let worker_outputs: &WorkerOutputs = stack_state
-            .get_resource_outputs(&worker_id)
-            .context(CmdErrorData::Other {
-                message: format!("Failed to get worker outputs for '{}'", worker_id),
-            })?;
+        let worker_outputs: &WorkerOutputs =
+            stack_state
+                .get_resource_outputs(&worker_id)
+                .context(CmdErrorData::Other {
+                    message: format!("Failed to get worker outputs for '{}'", worker_id),
+                })?;
 
         let push_target = worker_outputs
             .commands_push_target

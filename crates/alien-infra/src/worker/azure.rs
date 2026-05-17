@@ -10,8 +10,8 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Worker, WorkerOutputs, Ingress, ResourceOutputs,
-    ResourceRef, ResourceStatus, ENV_AZURE_CLIENT_ID,
+    CertificateStatus, DnsRecordStatus, Ingress, ResourceOutputs, ResourceRef, ResourceStatus,
+    Worker, WorkerOutputs, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
@@ -22,12 +22,12 @@ use tracing::{debug, error, info, warn};
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::{ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name,
 };
+use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
 /// Generates a deterministic Azure Container Apps name for a worker.
@@ -3728,7 +3728,7 @@ mod tests {
         },
     };
     use alien_client_core::ErrorData as CloudClientErrorData;
-    use alien_core::{Worker, WorkerOutputs, Ingress, Platform, ResourceStatus};
+    use alien_core::{Ingress, Platform, ResourceStatus, Worker, WorkerOutputs};
     use alien_error::{AlienError, ContextError};
     use httpmock::MockServer;
     use rstest::rstest;
@@ -4311,9 +4311,7 @@ mod tests {
 
         let mut executor = executor_for_wait_state(controller).await;
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Provisioning);
         assert_eq!(
@@ -4339,9 +4337,7 @@ mod tests {
 
         let mut executor = executor_for_wait_state(controller).await;
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Provisioning);
         assert_eq!(
@@ -4364,9 +4360,7 @@ mod tests {
 
         let mut executor = executor_for_wait_state(controller).await;
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Provisioning);
         assert_eq!(controller.state, AzureWorkerState::RunningReadinessProbe);
@@ -4374,9 +4368,7 @@ mod tests {
         assert_eq!(controller.ready_rbac_wait_until_epoch_secs, None);
 
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(controller.state, AzureWorkerState::Ready);
@@ -4393,9 +4385,7 @@ mod tests {
 
         let mut executor = executor_for_wait_state(controller).await;
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Updating);
         assert_eq!(
@@ -4414,9 +4404,7 @@ mod tests {
             Some(current_unix_timestamp_secs().saturating_sub(1));
         let mut executor = executor_for_wait_state(controller).await;
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Updating);
         assert_eq!(
@@ -4428,9 +4416,7 @@ mod tests {
         assert!(!controller.update_rbac_wait_required);
 
         let step_result = executor.step().await.unwrap();
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(controller.state, AzureWorkerState::Ready);
@@ -4497,10 +4483,7 @@ mod tests {
     #[case::public_to_complete(function_public_ingress(), function_complete_test())]
     #[case::complete_to_basic(function_complete_test(), basic_function())]
     #[tokio::test]
-    async fn test_update_flow_succeeds(
-        #[case] from_function: Worker,
-        #[case] to_function: Worker,
-    ) {
+    async fn test_update_flow_succeeds(#[case] from_function: Worker, #[case] to_function: Worker) {
         // Ensure both workers have the same ID for valid updates
         let worker_id = "test-update-worker".to_string();
         let mut from_function = from_function;
@@ -4617,9 +4600,7 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
 
         // Verify the controller went through LRO states
-        let controller = executor
-            .internal_state::<AzureWorkerController>()
-            .unwrap();
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
         assert!(controller.container_app_name.is_some());
         assert!(controller.resource_id.is_some());
     }

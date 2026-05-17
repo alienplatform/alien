@@ -120,8 +120,8 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        Worker, WorkerCode, Ingress, PermissionProfile, PermissionsConfig, ResourceEntry,
-        ResourceLifecycle,
+        Ingress, PermissionProfile, PermissionsConfig, ResourceEntry, ResourceLifecycle, Worker,
+        WorkerCode,
     };
     use indexmap::IndexMap;
 

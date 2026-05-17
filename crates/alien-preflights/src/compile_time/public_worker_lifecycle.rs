@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Worker, Platform, ResourceLifecycle, Stack};
+use alien_core::{Platform, ResourceLifecycle, Stack, Worker};
 
 /// Ensures workers have Live lifecycle.
 ///
@@ -49,7 +49,7 @@ impl CompileTimeCheck for PublicWorkerLifecycleCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Worker, WorkerCode, Ingress, Resource, ResourceEntry, ResourceLifecycle};
+    use alien_core::{Ingress, Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     fn create_public_function(id: &str) -> Worker {

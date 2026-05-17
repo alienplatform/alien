@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, Container, ComputeCluster, DeploymentConfig, MachineProfile, Network,
-    Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
+    CapacityGroup, ComputeCluster, Container, DeploymentConfig, MachineProfile, Network, Platform,
+    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;

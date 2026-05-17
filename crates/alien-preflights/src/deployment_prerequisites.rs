@@ -8,7 +8,7 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, Container, ComputeCluster, DeploymentConfig, ExposeProtocol, Platform, Stack,
+    ComputeBackend, ComputeCluster, Container, DeploymentConfig, ExposeProtocol, Platform, Stack,
     StackState,
 };
 
@@ -136,8 +136,8 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
-        DomainMetadata, EnvironmentVariablesSnapshot, Worker, WorkerCode, Ingress, Resource,
-        ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
+        DomainMetadata, EnvironmentVariablesSnapshot, Ingress, Resource, ResourceDomainInfo,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;

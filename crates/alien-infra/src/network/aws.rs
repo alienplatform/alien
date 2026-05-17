@@ -27,9 +27,9 @@ use alien_aws_clients::ec2::{
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
     DeleteRouteRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
-    DescribeRouteTablesRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
-    DetachInternetGatewayRequest, Ec2Api, Filter, IpPermission, IpRange, ModifyVpcAttributeRequest,
-    Tag, TagSpecification,
+    DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest,
+    DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Api, Filter, IpPermission, IpRange,
+    ModifyVpcAttributeRequest, Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -48,6 +48,25 @@ use tracing::{debug, info, warn};
 
 use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
 use crate::error::{ErrorData, Result};
+
+fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+            if message.contains("InvalidGroup.Duplicate")
+                || message.contains("already exists")
+    )
+}
+
+fn is_security_group_rule_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+            if message.contains("InvalidPermission.Duplicate")
+                || message.contains("specified rule")
+                || message.contains("already exists")
+    )
+}
 
 /// AWS Network Controller state machine.
 ///
@@ -83,6 +102,42 @@ pub struct AwsNetworkController {
 }
 
 impl AwsNetworkController {
+    async fn find_security_group_id_by_name(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        group_name: &str,
+        resource_id: &str,
+    ) -> Result<Option<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let response = client
+            .describe_security_groups(
+                DescribeSecurityGroupsRequest::builder()
+                    .filters(vec![
+                        Filter {
+                            name: "vpc-id".to_string(),
+                            values: vec![vpc_id.to_string()],
+                        },
+                        Filter {
+                            name: "group-name".to_string(),
+                            values: vec![group_name.to_string()],
+                        },
+                    ])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to describe existing security group".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        Ok(response
+            .security_group_info
+            .and_then(|set| set.items.into_iter().find_map(|sg| sg.group_id)))
+    }
+
     /// Find an available CIDR block for the VPC.
     ///
     /// This method queries existing VPCs and finds a non-overlapping CIDR block.
@@ -1100,11 +1155,13 @@ impl AwsNetworkController {
 
         info!("Creating security group");
 
+        let group_name = format!("{}-sg", ctx.resource_prefix);
+
         // Create security group
-        let sg_response = client
+        let sg_result = client
             .create_security_group(
                 CreateSecurityGroupRequest::builder()
-                    .group_name(format!("{}-sg", ctx.resource_prefix))
+                    .group_name(group_name.clone())
                     .description(
                         "Alien managed security group for VPC internal communication".to_string(),
                     )
@@ -1116,18 +1173,43 @@ impl AwsNetworkController {
                     ))
                     .build(),
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create security group".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
 
-        let sg_id = sg_response.group_id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Security group created but no ID returned".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        let sg_id = match sg_result {
+            Ok(sg_response) => sg_response.group_id.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "Security group created but no ID returned".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?,
+            Err(error) if is_security_group_duplicate(&error) => {
+                let sg_id = self
+                    .find_security_group_id_by_name(ctx, vpc_id, &group_name, &config.id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Security group '{}' already exists but could not be resolved",
+                                group_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+
+                info!(
+                    sg_id = %sg_id,
+                    group_name = %group_name,
+                    "Security group already exists; continuing create flow"
+                );
+                sg_id
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to create security group".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
 
         info!(sg_id = %sg_id, "Security group created, adding ingress rules");
 
@@ -1139,7 +1221,7 @@ impl AwsNetworkController {
             })
         })?;
 
-        client
+        if let Err(e) = client
             .authorize_security_group_ingress(
                 AuthorizeSecurityGroupIngressRequest::builder()
                     .group_id(sg_id.clone())
@@ -1157,10 +1239,16 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to add ingress rule to security group".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            if is_security_group_rule_duplicate(&e) {
+                debug!("Ingress rule already exists (duplicate), skipping");
+            } else {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: "Failed to add ingress rule to security group".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
 
         // Add egress rule: allow all outbound traffic (default rule, but we make it explicit).
         // Only ignore duplicate-rule errors; propagate everything else.
@@ -1183,8 +1271,7 @@ impl AwsNetworkController {
             )
             .await
         {
-            let is_duplicate = e.message.contains("InvalidPermission.Duplicate");
-            if is_duplicate {
+            if is_security_group_rule_duplicate(&e) {
                 debug!("Egress rule already exists (duplicate), skipping");
             } else {
                 return Err(e.context(ErrorData::CloudPlatformError {

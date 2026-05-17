@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::core::controller_test::{test_storage_1, test_storage_2};
 use alien_core::{
-    Worker, WorkerCode, WorkerTrigger, HttpMethod, Ingress, Queue, ReadinessProbe,
-    ResourceRef, Storage,
+    HttpMethod, Ingress, Queue, ReadinessProbe, ResourceRef, Storage, Worker, WorkerCode,
+    WorkerTrigger,
 };
 use rstest::fixture;
 

@@ -1,7 +1,7 @@
 use alien_aws_clients::AwsClientConfig;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Worker, WorkerCode,
-    LifecycleRule, ResourceLifecycle, Stack, StackSettings, StackState, Storage,
+    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, LifecycleRule,
+    ResourceLifecycle, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
 use std::collections::HashMap;
 use std::time::Duration;

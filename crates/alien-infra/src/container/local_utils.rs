@@ -8,8 +8,8 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
-    binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, WorkerBinding,
-    KvBinding, StorageBinding, VaultBinding,
+    binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, KvBinding,
+    StorageBinding, VaultBinding, WorkerBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::debug;

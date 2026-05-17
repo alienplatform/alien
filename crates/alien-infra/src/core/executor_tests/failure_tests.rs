@@ -9,8 +9,8 @@ use crate::core::StackExecutor;
 use crate::error::Result;
 use crate::worker::{TestWorkerController, TestWorkerState};
 use alien_core::{
-    Worker, WorkerCode, Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
-    Stack, StackSettings, StackState, Storage,
+    Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 
 /// Helper to create a function that will fail on first attempt (memory > 4GB).

@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    DeploymentModel, DeploymentState, DeploymentStatus, Worker, WorkerCode, Ingress, Platform,
-    ReadinessProbe, ReleaseInfo, Stack, StackSettings,
+    DeploymentModel, DeploymentState, DeploymentStatus, Ingress, Platform, ReadinessProbe,
+    ReleaseInfo, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
